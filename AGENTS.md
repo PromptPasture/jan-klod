@@ -2,11 +2,11 @@
 
 ## Session Start
 
-Before any work, read `.agents/memory/MEMORY.md` and `.agents/memory/$(date -u +%Y-%m-%d).md`. Create missing files or the `.agents/memory/` directory if needed; never overwrite existing memory.
+Before any work, read `docs/index.md` for the current wiki state.
 
-- `MEMORY.md` — durable project facts. Treat as low-confidence; verify against repo before acting.
-- `YYYY-MM-DD.md` — daily task notes (UTC dates). Use for checklists and completed implementation notes.
-- For substantial work needing durable documentation, create `docs/YYYY-MM-DD-task-name/` instead.
+- Wiki location: `docs/`
+- For wiki operations use the `wiki` skill.
+- For substantial work needing durable documentation, create `docs/decisions/YYYY-MM-DD-task-name/`.
 
 ## Repository Behavior
 
