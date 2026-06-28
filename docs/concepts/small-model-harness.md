@@ -23,7 +23,10 @@ Small instruction-tuned models (9–12B parameters) fail in agent loops for pred
 3. **External state management** — maintain a working memory dict outside the model; compress/summarise history before it bloats context.
 4. **Tiny, surgical prompts** — few-shot examples per tool, rewritten per step by the controller.
 5. **ReAct loop** preferred over Plan-and-Execute for small models.
-6. **Deterministic router** — classify simple intents without LLM; only route complex cases into the agent loop.
+6. **Layered router** — classify intents in two tiers before entering the agent loop:
+   - **Language detection** (microseconds) — pure-Go library (`whatlanggo` or similar, no model). If non-English → skip to tier 2 directly.
+   - **Tier 1: heuristics** (English only, microseconds) — up to ~50 rules grouped by category (greetings, farewells, affirmations, meta-queries, clarifications, short inputs). Catches obvious simple intents at zero model cost. Rules are grouped, not a flat pile — adding one rule means one line in the right category.
+   - **Tier 2: LLM classifier** — everything that passes through goes to the active `llm-provider` with a single constrained-decoding call; output is one token: `simple` | `agentic`. Handles all languages naturally. No separate embedding model; reuses the already-loaded provider.
 7. **Retry/correction** — on malformed output, inject a correction hint and retry (up to N times) before failing.
 
 ## Recommended models

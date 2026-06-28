@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-28 (session 9)
+
+- **Update**: Revised [concepts/small-model-harness.md](concepts/small-model-harness.md) — layered router design: tier-1 heuristics (~50 grouped rules, microseconds) + tier-2 LLM classifier (one constrained token, reuses active provider, no embedding model).
+
 ## 2026-06-28 (session 8)
 
 - **Update**: Revised [concepts/architecture.md](concepts/architecture.md) — `agent-*` category for ACP delegation; ACP bidirectional (client + server); config hot-reload; deployment targets table (desktop, ARM NAS, Docker, Kubernetes).
