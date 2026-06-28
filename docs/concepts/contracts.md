@@ -1,31 +1,94 @@
 ---
 type: concept
 title: Contracts
-description: Stable Java interfaces that form the boundary between core and extensions
-tags: [contracts, interfaces, extensions, api]
+description: Stable WIT interfaces that form the boundary between core and extensions
+tags: [contracts, wit, interfaces, extensions, wasm]
 created: 2026-06-28T00:00:00Z
 updated: 2026-06-28T00:00:00Z
 ---
 
-Contracts are the stable interfaces that the core exposes and extensions consume or implement. They must be versioned carefully — a breaking change here breaks all extensions.
+Contracts are the stable interfaces that the core exposes and extensions consume or implement. They are the API surface that must not break — a breaking change here breaks all extensions.
 
-## Core contracts
+Jan-Klod has two classes of contract:
 
-| Interface | Responsibility |
-|---|---|
-| `LlmProvider` | Sends prompts to a language model; returns completions (optionally constrained) |
-| `ContextManager` | Manages conversation history; compresses/summarises as context grows |
-| `AgentManager` | Drives the agent loop (intent routing → step controller → LLM → tool → answer) |
-| `MemoryStore` | Persistent key-value or vector store for long-term agent memory |
-| `SkillRegistry` | Registers and resolves reusable agent skills |
-| `McpRegistry` | Manages MCP server connections and tool discovery |
+- **WIT interfaces** — for WASM extensions (sandboxed, language-agnostic)
+- **Native Go interfaces** — for extensions that need OS access and cannot run in the WASM sandbox (UI only)
 
-## Design rules
+## WIT interface overview
 
-- Core only depends on contracts, never on extension implementations.
-- Extensions declare which contracts they require and which they provide.
+| WIT interface | Responsibility | Implemented by |
+|---|---|---|
+| `llm-provider` | Send prompts; return completions (streaming + constrained) | `provider-*` extensions |
+| `context-manager` | Manage conversation history; compress as context grows | `manager-context` |
+| `agent-manager` | Drive the agent loop (router → step controller → LLM → tool → answer) | `manager-agent-loop` |
+| `memory-store` | Persistent key-value or vector store for long-term memory | `store-*` extensions |
+| `skill-registry` | Register and resolve reusable agent skills | `registry-skills` |
+| `mcp-registry` | Manage MCP server connections and tool discovery | `registry-mcp` |
+
+## WIT world structure
+
+Each extension declares a WIT world — what it imports from the host and what it exports:
+
+```wit
+package jan-klod:contracts;
+
+// Example: an LLM provider extension
+world llm-provider-extension {
+    import jan-klod:host/http-client;   // host-granted outbound HTTP
+    import jan-klod:host/logging;       // host-granted logging
+    import jan-klod:host/config;        // own config section (read-only)
+
+    export jan-klod:contracts/llm-provider;  // what this extension provides
+}
+```
+
+## Core design rules
+
+- Core only depends on WIT interfaces, never on extension implementations.
+- Extensions declare which interfaces they require and which they provide.
 - Optional dependencies must degrade gracefully (feature off, not crash).
+- The host validates the dependency graph at boot and refuses to start with unsatisfied hard dependencies.
+
+## Extension lifecycle (WIT)
+
+Every extension exposes a standard lifecycle interface:
+
+```wit
+interface extension-lifecycle {
+    init: func(ctx: extension-context) -> result<_, string>;
+    start: func() -> result<_, string>;
+    stop: func();
+    health: func() -> health-status;
+}
+
+enum health-status { up, degraded, down }
+```
+
+## Native Go interface
+
+`UIProvider` is the only native Go contract. It is implemented by `ui-tui`, `ui-web`, and `ui-gui` — all compiled into the binary.
+
+```go
+type UIProvider interface {
+    Start(ctx context.Context, api AgentAPI) error
+    Stop() error
+    Health() HealthStatus
+}
+```
+
+Native extensions follow the same lifecycle and config conventions as WASM extensions. They are declared in `jan-klod.yaml` under `extensions:` and selected at runtime via CLI flag.
+
+## MemoryStore implementations
+
+Three planned `memory-store` implementations — see [Architecture](architecture.md#storage) for the comparison table.
 
 ## Status
 
-Contracts are **not yet designed**. The natural next step is defining Java interface signatures precisely enough to scaffold the Maven multi-module project. See the open question in [decisions/2026-06-16-jan-klod/Handoff.md](../decisions/2026-06-16-jan-klod/Handoff.md).
+WIT interface signatures are **not yet designed**. The natural next step is writing the `.wit` files precisely enough to scaffold the Go multi-module project and generate host/guest bindings via `wit-bindgen-go`.
+
+Resolve these open questions first as they shape the interface signatures directly:
+1. Can multiple `llm-provider` extensions be active simultaneously, or only one?
+2. Does `llm-provider` expose a streaming function, or is streaming a capability flag?
+3. Do extensions version independently, or does a Jan-Klod release version all together?
+
+See [decisions/2026-06-28-go-wasm-stack/Handoff.md](../decisions/2026-06-28-go-wasm-stack/Handoff.md) for the full stack decision record.
