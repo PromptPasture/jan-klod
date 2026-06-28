@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-28 (session 12)
+
+- **Update**: Revised [concepts/architecture.md](concepts/architecture.md) — task routing with 10 built-in types + user-defined extension; parallel decomposition for file-edit, web-search, research, code-review.
+
+## 2026-06-28 (session 11)
+
+- **Update**: Revised [concepts/architecture.md](concepts/architecture.md) — two-level provider fallback (model within provider → next provider → error); handles rate limits, context overflow, local OOM, cost routing.
+
+## 2026-06-28 (session 10)
+
+- **Update**: Revised [concepts/architecture.md](concepts/architecture.md) — KISS/YAGNI as standing design rules; provider fallback with priority list; MCP fault tolerance (mark down, remove tools, backoff reconnect, UI warning).
+- **Update**: Revised [decisions/2026-06-28-go-wasm-stack/Handoff.md](decisions/2026-06-28-go-wasm-stack/Handoff.md) — resolved last open question (MCP fault tolerance). All 8 open questions now closed.
+
 ## 2026-06-28 (session 9)
 
 - **Update**: Revised [concepts/small-model-harness.md](concepts/small-model-harness.md) — layered router design: tier-1 heuristics (~50 grouped rules, microseconds) + tier-2 LLM classifier (one constrained token, reuses active provider, no embedding model).

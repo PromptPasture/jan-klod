@@ -88,7 +88,7 @@ The session explored these options in order before landing on Go:
 1. ~~Can multiple `llm-provider` extensions be active simultaneously, or only one?~~ **Resolved:** multiple active; `manager-agent-loop` selects per-request.
 2. ~~Does `llm-provider` expose a streaming function, or is streaming a capability flag?~~ **Resolved:** streaming is first-class and mandatory; no synchronous path.
 3. ~~Do extensions version independently, or does a Jan-Klod release version all together?~~ **Resolved:** independent versioning.
-4. **Open:** How does `registry-mcp` handle MCP server restarts / crashes?
+4. ~~How does `registry-mcp` handle MCP server restarts / crashes?~~ **Resolved:** mark server down, remove its tools from active set, emit event to UI, reconnect on exponential backoff. No crash propagates to core.
 5. ~~Config hot-reload: can extensions pick up YAML changes without restart?~~ **Resolved:** yes; core watches config file, notifies extensions via event bus.
 6. ~~Configurator hosting: self-hosted only, or a public `start.janklod.dev`?~~ **Resolved:** public; GitHub Pages first, `start.janklod.dev` later.
 7. ~~Target deployment environment?~~ **Resolved:** desktop (macOS/Windows/Linux), ARM home server/NAS, Docker, Kubernetes.

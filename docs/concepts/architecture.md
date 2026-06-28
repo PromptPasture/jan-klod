@@ -11,6 +11,10 @@ updated: 2026-06-28T00:00:00Z
 
 Linux kernel model: the **core** is a minimal container with no domain logic. All agent behaviour is provided by **extensions** loaded at runtime.
 
+**Design rules (standing):**
+- **KISS** — every extension does one thing. If it grows a second responsibility, split it.
+- **YAGNI** — do not add capability until there is a concrete use case. Pluggability is not an excuse to over-engineer.
+
 ## Core responsibilities
 
 - Extension lifecycle management (load, enable, disable, unload)
@@ -181,6 +185,104 @@ Only one `memory-store` is active at a time; selected via `jan-klod.yaml`.
 - **Unit:** standard Go `testing` package
 - **Integration:** Go test with real SQLite + embedded Wazero
 - **Extension:** WASM component loaded in test harness, WIT interface verified
+
+## Provider fallback
+
+When a provider or model fails (unavailable, rate-limited, quota exceeded, local OOM), `manager-agent-loop` falls back through a two-level priority list defined in `jan-klod.yaml`:
+
+```yaml
+providers:
+  - provider: provider-anthropic
+    models:
+      - claude-sonnet-4-6
+      - claude-haiku-4-5        # cheaper fallback within same provider
+  - provider: provider-openai
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+  - provider: provider-ollama   # local, always available
+    models:
+      - qwen2.5:14b
+      - qwen2.5:7b              # smaller if 14b OOM
+```
+
+Fallback order: try each model within the current provider → move to next provider → if all exhausted, surface error to user (no silent retry spiral).
+
+Fallback is per-request — if the primary recovers, the next request uses it again. This also enables cost routing: cheap tasks naturally route to smaller/cheaper models without a separate configuration.
+
+## Task routing
+
+`manager-agent-loop` classifies each request into a task type and routes it to the configured provider/model. Jan-Klod ships built-in task types as sensible defaults; users extend or override in `jan-klod.yaml`.
+
+**Built-in task types:**
+
+| Task type | Default use |
+|---|---|
+| `code-generation` | Generate new code |
+| `code-review` | Review existing code |
+| `file-edit` | Edit one or more files |
+| `web-search` | Search and retrieve web content |
+| `research` | Multi-step information gathering |
+| `reasoning` | Complex analysis or planning |
+| `planning` | Break down goals into steps |
+| `chat` | General conversation |
+| `clarification` | Resolve ambiguity |
+| `agent-delegation` | Delegate to another AI agent via ACP |
+
+User-defined types can be added to `jan-klod.yaml` — the LLM classifier receives the full list at runtime and picks the closest match. No code changes needed to add a type.
+
+```yaml
+routing:
+  code-generation:   provider-ollama/qwen2.5:14b
+  code-review:       provider-ollama/qwen2.5:14b
+  file-edit:         provider-ollama/qwen2.5:14b
+  reasoning:         provider-anthropic/claude-sonnet-4-6
+  planning:          provider-anthropic/claude-sonnet-4-6
+  web-search:        provider-openai/gpt-4o-mini
+  chat:              provider-anthropic/claude-haiku-4-5
+  clarification:     provider-anthropic/claude-haiku-4-5
+  agent-delegation:  provider-anthropic/claude-sonnet-4-6
+  # user-defined:
+  data-analysis:     provider-openai/gpt-4o
+```
+
+## Parallel decomposition
+
+For tasks where subtasks are independent, `manager-agent-loop` decomposes and dispatches in parallel:
+
+- **`file-edit`** — each file edited in parallel, results merged
+- **`web-search`** — multiple queries in parallel, results merged before LLM synthesis
+- **`research`** — multiple sources fetched in parallel
+- **`code-review`** — each module reviewed independently
+
+Single-subtask requests skip decomposition and route directly. The decomposer and merger live inside `manager-agent-loop` — no new extension needed.
+
+```
+Task
+  │
+  ▼
+Decomposer ──→ single subtask? route directly
+  │
+  ▼ multiple independent subtasks
+Parallel dispatch → [model A]  [model B]  [model C]
+  │
+  ▼
+Merger (assembles results into coherent context)
+  │
+  ▼
+Final LLM call (synthesis / answer)
+```
+
+## MCP fault tolerance
+
+`registry-mcp` monitors connected MCP servers. On crash or disconnect:
+
+1. Mark the server as `down`.
+2. Remove its tools from the active tool set — `manager-agent-loop` will not offer them.
+3. Emit an event on the bus — `ui-*` extensions display a warning to the user.
+4. Attempt reconnect on an exponential backoff timer.
+
+No crash propagates to core. The agent loop continues with the remaining tools.
 
 ## Config hot-reload
 
