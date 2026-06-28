@@ -1,25 +1,25 @@
 .PHONY: all build ext run test lint wit clean
 
-EXT_DIR   := ext
-SRC_DIR   := src
-GUEST_DIR := src/extensions/store-memory
+EXT_DIR := ext
+SRC_DIR := src
 
 all: ext build
 
 build:
 	go -C $(SRC_DIR) build -o ../bin/jan-klod ./cmd/jan-klod
 
-ext: $(EXT_DIR)/store-memory.wasm
+ext: $(EXT_DIR)/store-memory.wasm $(EXT_DIR)/probe-host.wasm $(EXT_DIR)/provider-openai.wasm
 
-$(EXT_DIR)/store-memory.wasm: $(GUEST_DIR)/main.go $(GUEST_DIR)/go.mod
+# Build a guest extension to wasip1. $* is the extension name.
+$(EXT_DIR)/%.wasm: $(SRC_DIR)/extensions/%/main.go $(SRC_DIR)/extensions/%/go.mod
 	@mkdir -p $(EXT_DIR)
 	GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 \
-		go -C $(GUEST_DIR) build -buildmode=c-shared -o ../../../$(EXT_DIR)/store-memory.wasm .
+		go -C $(SRC_DIR)/extensions/$* build -buildmode=c-shared -o ../../../$(EXT_DIR)/$*.wasm .
 
 run: all
 	./bin/jan-klod
 
-test:
+test: ext
 	go -C $(SRC_DIR) test ./...
 
 lint:

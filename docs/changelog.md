@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-06-29 (session 18)
+
+- **Create**: MVP slice 3 — `provider-openai` extension (`src/extensions/provider-openai/`), an OpenAI-compatible `llm-provider` (works against OpenAI, Ollama, vLLM, LM Studio via `base-url`). Reads `base-url`/`api-key`/`model` from host-config at start (start fails if `base-url` unset); `complete` op builds a non-streaming `/chat/completions` request, calls host-http, parses `choices[0].message.content` + `finish_reason`; `info` op returns id + configured model. HTTP status mapped to `provider-error` (401/403→auth-failed, 404→model-not-found, 429→rate-limited, else transient). Streaming and tool-calling deferred.
+- **Create**: Added `internal/host/provider_openai_test.go` — mock `/chat/completions` (httptest): completion happy path (asserts non-streaming, bearer auth, config default model), 401→auth-failed, start-without-base-url failure.
+- **Update**: `Makefile` ext list now builds provider-openai.wasm.
+- **Verify**: `go test ./...` pass, `go vet` clean, golangci-lint 0 issues.
+
+## 2026-06-28 (session 17)
+
+- **Create**: MVP slice 2 — wired `host-config` and `host-http` into the `jan-klod` host module (`internal/host/hostfuncs.go`). `config_get` serves each extension its own config section (identified by `m.Name()`), value returned JSON-encoded per `wit/host-config.wit`. `http_fetch` performs sandboxed outbound HTTP via host `net/http`; completed exchanges (incl. 4xx/5xx) return ok+status+body so callers can read API error payloads, transport failures return ok=false (ABI encoding of `wit/host-http.wit`). Bodies base64-encoded; host-returned data allocated in guest memory via its `alloc` export (`returnJSON` helper).
+- **Create**: Added `probe-host` test-fixture extension (`src/extensions/probe-host/`) that exercises host-log/host-config/host-http over the ABI; not shipped.
+- **Create**: Added `internal/host/host_test.go` — integration tests (httptest, no external network): config get, missing-key error, HTTP POST body round-trip, connection-refused.
+- **Update**: `Makefile` — pattern rule builds any `extensions/%`; `ext` builds store-memory + probe-host; `test` depends on `ext`.
+- **Verify**: `go test ./...` (config + host packages) pass, `go vet` clean, golangci-lint 0 issues.
+
+## 2026-06-28 (session 16)
+
+- **Create**: MVP slice 1 — config-driven extension loader. Added `internal/config` (parses `jan-klod.yaml`: per-extension sections, `enabled` bool/map shorthand, `${ENV}` expansion) and `internal/host/loader.go` (`LoadConfigured` scans `ext/`, loads enabled extensions, runs lifecycle init→start→health, registry-tracked). Lifecycle (`init`/`start`/`stop`/`health` from `wit/extension-lifecycle.wit`) routed through the existing `invoke` ABI via reserved `lifecycle.*` ops, keeping the guest export surface at alloc/free/invoke. `store-memory` guest now handles lifecycle ops; `Host.Close` stops all extensions.
+- **Create**: Added root `jan-klod.yaml` (sample config: `store-memory` on, `provider-openai` declared but disabled until slice 3).
+- **Create**: Added `internal/config/config_test.go` (bool/map shorthand, env expansion, default-enabled, missing-file).
+- **Verify**: `make run` (provider-openai skipped as disabled, store-memory init→start→health=up→roundtrip→stop), `go test ./...` pass, `go vet` clean, golangci-lint 0 issues.
+
 ## 2026-06-28 (session 15)
 
 - **Create**: First MVP code slice under `src/` — wazero host (`internal/host`), JSON-over-memory ABI (`internal/abi`), `jan-klod` host module with `host-log`, and `store-memory.wasm` guest extension. `make run` proves the host↔guest contract roundtrip end to end (set/get/list-keys/recent + host-log forwarding). Verified with `go vet`, golangci-lint v2 (0 issues), and `wasm-tools`.

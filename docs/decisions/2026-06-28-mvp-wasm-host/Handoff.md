@@ -85,10 +85,23 @@ Host module `jan-klod` (imported by the guest):
 | Import | Signature | Maps to |
 |---|---|---|
 | `log` | `(level u32, ptr u32, len u32)` | `wit/host-log.wit` |
+| `config_get` | `(keyPtr u32, keyLen u32) -> u64` | `wit/host-config.wit` |
+| `http_fetch` | `(reqPtr u32, reqLen u32) -> u64` | `wit/host-http.wit` |
 
-Only `host-log` is wired in this slice. The remaining host interfaces
-(`host-http`, `host-config`, `host-event`, `host-storage`) follow the same
-pattern as extensions are built.
+Host functions that return data write the result into the **caller's** linear
+memory via the guest's own `alloc` export and return `Pack(ptr, len)`; the guest
+reads the bytes and `free`s the buffer. `config_get` and `http_fetch` exchange
+JSON envelopes; HTTP request/response bodies are base64-encoded. `config_get`
+identifies the calling extension by `m.Name()` and serves only that extension's
+config section.
+
+**ABI deviation from WIT (http-error).** `wit/host-http.wit` models 4xx/5xx as
+error variants. The ABI instead returns `ok=true` with `status`+`body` for any
+completed exchange (so callers can read API error payloads) and `ok=false` only
+for transport failures (`invalid-url`, `connection-failed`, `timeout`).
+
+Remaining host interfaces (`host-event`, `host-storage`) follow the same pattern
+as extensions are built.
 
 Key implementation note: Go's `wasip1` `-buildmode=c-shared` output is a
 **reactor** (`_initialize`, not `_start`), so wazero must be configured with
@@ -103,12 +116,18 @@ and `ext/` at the repo root.
 
 | Path | Role |
 |---|---|
-| `src/cmd/jan-klod/` | Entry point; boots host, loads ext, runs roundtrip smoke test |
-| `src/internal/host/runtime.go` | wazero runtime + WASI + `jan-klod` host module |
-| `src/internal/host/extension.go` | load / instantiate / call an extension |
+| `src/cmd/jan-klod/` | Entry point; boots host, loads configured extensions, runs roundtrip smoke test |
+| `src/internal/config/` | parses `jan-klod.yaml` (per-extension sections, env expansion) |
+| `src/internal/host/runtime.go` | wazero runtime + WASI + `jan-klod` host module registration |
+| `src/internal/host/hostfuncs.go` | host-config + host-http implementations + guest-return helper |
+| `src/internal/host/loader.go` | config-driven load + lifecycle + extension registry |
+| `src/internal/host/extension.go` | load / instantiate / call / lifecycle of an extension |
 | `src/internal/abi/abi.go` | pointer+length packing convention |
 | `src/extensions/store-memory/` | in-memory `memory-store` guest (separate module) |
-| `Makefile` | `make all` builds the guest `.wasm` + host; `make run` runs the roundtrip |
+| `src/extensions/provider-openai/` | OpenAI-compatible `llm-provider` guest (non-streaming) |
+| `src/extensions/probe-host/` | test-fixture guest exercising host-log/config/http |
+| `jan-klod.yaml` | runtime config: which extensions load + their settings |
+| `Makefile` | `make all` builds guests `.wasm` + host; `make run`; `make test` |
 
 ---
 

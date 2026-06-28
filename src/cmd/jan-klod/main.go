@@ -1,6 +1,7 @@
-// Command jan-klod is the core runtime. For this MVP slice it boots the WASM
-// host, loads the store-memory extension, and runs a roundtrip smoke test that
-// proves the host<->guest contract works end to end.
+// Command jan-klod is the core runtime. It boots the WASM host, loads the
+// extensions declared in jan-klod.yaml, and runs each through its lifecycle.
+// As a temporary sign of life it exercises the store-memory extension when
+// present, proving the host<->guest contract still works through the loader.
 package main
 
 import (
@@ -10,10 +11,15 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/PromptPasture/jan-klod/internal/config"
 	"github.com/PromptPasture/jan-klod/internal/host"
 )
 
-const extPath = "ext/store-memory.wasm"
+const (
+	configPath = "jan-klod.yaml"
+	extDir     = "ext"
+	version    = "0.1.0"
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -26,18 +32,31 @@ func run() error {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+
 	h, err := host.New(ctx, logger)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = h.Close(ctx) }()
 
-	ext, err := h.Load(ctx, "store-memory", extPath)
-	if err != nil {
+	if err := h.LoadConfigured(ctx, extDir, cfg, version); err != nil {
 		return err
 	}
-	logger.Info("extension loaded", "name", ext.Name())
 
+	if ext, ok := h.Extension("store-memory"); ok {
+		if err := storeSmokeTest(ctx, ext); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// storeSmokeTest exercises the store-memory contract end to end.
+func storeSmokeTest(ctx context.Context, ext *host.Extension) error {
 	steps := []storeRequest{
 		{Op: "set", Namespace: "demo", Key: "greeting", Value: "hello"},
 		{Op: "set", Namespace: "demo", Key: "farewell", Value: "goodbye"},

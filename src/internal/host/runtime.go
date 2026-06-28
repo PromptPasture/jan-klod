@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -14,8 +15,11 @@ import (
 // Host owns the WASM runtime and the host-provided capability modules that
 // every extension may import.
 type Host struct {
-	runtime wazero.Runtime
-	logger  *slog.Logger
+	runtime    wazero.Runtime
+	logger     *slog.Logger
+	exts       map[string]*Extension
+	configs    map[string]map[string]any
+	httpClient *http.Client
 }
 
 // New creates a runtime with WASI and the "jan-klod" host module registered.
@@ -25,15 +29,23 @@ func New(ctx context.Context, logger *slog.Logger) (*Host, error) {
 		return nil, fmt.Errorf("instantiate wasi: %w", err)
 	}
 
-	h := &Host{runtime: rt, logger: logger}
+	h := &Host{
+		runtime:    rt,
+		logger:     logger,
+		exts:       map[string]*Extension{},
+		configs:    map[string]map[string]any{},
+		httpClient: &http.Client{},
+	}
 	if err := h.registerHostModule(ctx); err != nil {
 		return nil, err
 	}
 	return h, nil
 }
 
-// registerHostModule exposes the host-provided interfaces extensions import.
-// For this MVP slice only host-log is implemented (see wit/host-log.wit).
+// registerHostModule exposes the host-provided interfaces extensions import:
+// host-log, host-config, and host-http (see wit/host-*.wit). Functions that
+// return data write the result into the caller's linear memory via the guest's
+// own alloc export and return Pack(ptr, len); the guest reads and frees it.
 func (h *Host) registerHostModule(ctx context.Context) error {
 	_, err := h.runtime.NewHostModuleBuilder("jan-klod").
 		NewFunctionBuilder().
@@ -47,6 +59,18 @@ func (h *Host) registerHostModule(ctx context.Context) error {
 			h.forwardLog(level, msg)
 		}).
 		Export("log").
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, m api.Module, keyPtr, keyLen uint32) uint64 {
+			key := readGuestString(m, keyPtr, keyLen)
+			return h.returnJSON(ctx, m, h.configGet(m.Name(), key))
+		}).
+		Export("config_get").
+		NewFunctionBuilder().
+		WithFunc(func(ctx context.Context, m api.Module, reqPtr, reqLen uint32) uint64 {
+			req, _ := m.Memory().Read(reqPtr, reqLen)
+			return h.returnJSON(ctx, m, h.httpFetch(ctx, req))
+		}).
+		Export("http_fetch").
 		Instantiate(ctx)
 	if err != nil {
 		return fmt.Errorf("register host module: %w", err)
@@ -68,7 +92,9 @@ func (h *Host) forwardLog(level uint32, msg string) {
 	}
 }
 
-// Close releases the runtime and all instantiated modules.
+// Close stops every loaded extension, then releases the runtime and all
+// instantiated modules.
 func (h *Host) Close(ctx context.Context) error {
+	h.stopAll(ctx)
 	return h.runtime.Close(ctx)
 }

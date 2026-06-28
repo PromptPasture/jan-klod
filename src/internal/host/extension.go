@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -61,7 +62,75 @@ func (h *Host) Load(ctx context.Context, name, path string) (*Extension, error) 
 	if ext.alloc == nil || ext.free == nil || ext.invoke == nil {
 		return nil, fmt.Errorf("%s: missing required exports (alloc/free/invoke)", name)
 	}
+	h.exts[name] = ext
 	return ext, nil
+}
+
+// Lifecycle ops are reserved invoke requests that map to the
+// extension-lifecycle WIT interface (see wit/extension-lifecycle.wit). They
+// share the single invoke entry point so every guest keeps the same three
+// exports (alloc/free/invoke).
+type lifecycleRequest struct {
+	Op      string `json:"op"`
+	ID      string `json:"id,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+type lifecycleResponse struct {
+	Ok     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+// Init runs the extension's lifecycle init hook with its host-injected identity.
+func (e *Extension) Init(ctx context.Context, version string) error {
+	return e.lifecycle(ctx, lifecycleRequest{Op: "lifecycle.init", ID: e.name, Version: version})
+}
+
+// Start runs the extension's lifecycle start hook.
+func (e *Extension) Start(ctx context.Context) error {
+	return e.lifecycle(ctx, lifecycleRequest{Op: "lifecycle.start"})
+}
+
+// Stop runs the extension's lifecycle stop hook. Errors are best-effort.
+func (e *Extension) Stop(ctx context.Context) error {
+	return e.lifecycle(ctx, lifecycleRequest{Op: "lifecycle.stop"})
+}
+
+// Health polls the extension's reported liveness ("up"|"degraded"|"down").
+func (e *Extension) Health(ctx context.Context) (string, error) {
+	resp, err := e.callLifecycle(ctx, lifecycleRequest{Op: "lifecycle.health"})
+	if err != nil {
+		return "down", err
+	}
+	if resp.Status == "" {
+		return "up", nil
+	}
+	return resp.Status, nil
+}
+
+func (e *Extension) lifecycle(ctx context.Context, req lifecycleRequest) error {
+	_, err := e.callLifecycle(ctx, req)
+	return err
+}
+
+func (e *Extension) callLifecycle(ctx context.Context, req lifecycleRequest) (lifecycleResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return lifecycleResponse{}, fmt.Errorf("%s %s: marshal: %w", e.name, req.Op, err)
+	}
+	out, err := e.Call(ctx, payload)
+	if err != nil {
+		return lifecycleResponse{}, fmt.Errorf("%s %s: %w", e.name, req.Op, err)
+	}
+	var resp lifecycleResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return lifecycleResponse{}, fmt.Errorf("%s %s: unmarshal: %w", e.name, req.Op, err)
+	}
+	if !resp.Ok {
+		return resp, fmt.Errorf("%s %s: %s", e.name, req.Op, resp.Error)
+	}
+	return resp, nil
 }
 
 // Call sends a request payload to the extension and returns its response bytes.

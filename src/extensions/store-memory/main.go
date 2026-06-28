@@ -90,6 +90,7 @@ type entry struct {
 type response struct {
 	Ok      bool    `json:"ok"`
 	Error   string  `json:"error,omitempty"`
+	Status  string  `json:"status,omitempty"`
 	Entry   *entry  `json:"entry,omitempty"`
 	Entries []entry `json:"entries,omitempty"`
 }
@@ -107,6 +108,13 @@ func dispatch(in []byte) []byte {
 	logInfo("store-memory op=" + req.Op + " ns=" + req.Namespace)
 
 	switch req.Op {
+	case "lifecycle.init", "lifecycle.start":
+		return reply(response{Ok: true})
+	case "lifecycle.stop":
+		data = map[string]map[string]entry{}
+		return reply(response{Ok: true})
+	case "lifecycle.health":
+		return reply(response{Ok: true, Status: "up"})
 	case "set":
 		return reply(opSet(req))
 	case "get":

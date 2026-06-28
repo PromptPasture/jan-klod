@@ -1,0 +1,18 @@
+# jan-klod configuration.
+#
+# Each key under `extensions` is one extension. The host reads only `enabled`;
+# every other key is opaque to the core and served back to the extension via the
+# host-config interface. ${VAR} references are expanded from the environment.
+
+extensions:
+  # In-memory store used to validate the host<->guest contract.
+  store-memory: true
+
+  # OpenAI-compatible LLM provider. Disabled until the extension is built
+  # (slice 3). Works against any OpenAI-compatible endpoint (OpenAI, Ollama,
+  # vLLM, LM Studio, …) by overriding base-url.
+  provider-openai:
+    enabled: false
+    base-url: https://api.openai.com/v1
+    api-key: ${OPENAI_API_KEY}
+    model: gpt-4o-mini
