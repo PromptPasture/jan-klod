@@ -85,12 +85,14 @@ The session explored these options in order before landing on Go:
 
 ## Open questions (carried forward, still unresolved)
 
-1. Can multiple `llm-provider` extensions be active simultaneously, or only one?
-2. Does `llm-provider` expose a streaming function, or is streaming a capability flag?
-3. Do extensions version independently, or does a Jan-Klod release version all together?
-4. How does `registry-mcp` handle MCP server restarts / crashes?
-5. Config hot-reload: can extensions pick up YAML changes without restart?
-6. Configurator hosting: self-hosted only, or a public `start.janklod.dev`?
+1. ~~Can multiple `llm-provider` extensions be active simultaneously, or only one?~~ **Resolved:** multiple active; `manager-agent-loop` selects per-request.
+2. ~~Does `llm-provider` expose a streaming function, or is streaming a capability flag?~~ **Resolved:** streaming is first-class and mandatory; no synchronous path.
+3. ~~Do extensions version independently, or does a Jan-Klod release version all together?~~ **Resolved:** independent versioning.
+4. **Open:** How does `registry-mcp` handle MCP server restarts / crashes?
+5. ~~Config hot-reload: can extensions pick up YAML changes without restart?~~ **Resolved:** yes; core watches config file, notifies extensions via event bus.
+6. ~~Configurator hosting: self-hosted only, or a public `start.janklod.dev`?~~ **Resolved:** public; GitHub Pages first, `start.janklod.dev` later.
+7. ~~Target deployment environment?~~ **Resolved:** desktop (macOS/Windows/Linux), ARM home server/NAS, Docker, Kubernetes.
+8. ~~ACP — separate category or under `provider-*`?~~ **Resolved:** new `agent-*` category; `agent-delegate` WIT interface; jan-klod speaks ACP as client and server.
 
 ---
 

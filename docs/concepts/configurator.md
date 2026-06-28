@@ -9,7 +9,7 @@ updated: 2026-06-28T00:00:00Z
 
 The Configurator is a Spring Initializr-style web UI. Users select extensions and provide settings; the UI generates a ready-to-run archive containing the core binary, selected `.wasm` extensions, and a pre-filled `jan-klod.yaml`.
 
-Aspirational public hosting: `start.janklod.dev`. Self-hosted mode is always supported.
+Hosted publicly. Launch on **GitHub Pages**; migrate to `start.janklod.dev` once the domain is set up. Self-hosted mode always supported.
 
 ## UI flow
 

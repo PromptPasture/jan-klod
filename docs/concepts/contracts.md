@@ -18,12 +18,38 @@ Jan-Klod has two classes of contract:
 
 | WIT interface | Responsibility | Implemented by |
 |---|---|---|
-| `llm-provider` | Send prompts; return completions (streaming + constrained) | `provider-*` extensions |
+| `llm-provider` | Send prompts; return token streams (streaming is mandatory) | `provider-*` extensions |
 | `context-manager` | Manage conversation history; compress as context grows | `manager-context` |
 | `agent-manager` | Drive the agent loop (router → step controller → LLM → tool → answer) | `manager-agent-loop` |
 | `memory-store` | Persistent key-value or vector store for long-term memory | `store-*` extensions |
 | `skill-registry` | Register and resolve reusable agent skills | `registry-skills` |
 | `mcp-registry` | Manage MCP server connections and tool discovery | `registry-mcp` |
+| `agent-delegate` | Delegate a full task to another AI agent via ACP; receive structured result | `agent-*` extensions |
+
+## Streaming
+
+Streaming is first-class and mandatory in `llm-provider`. There is no synchronous completion path — providers that don't natively stream return a single-token stream. This ensures consistent UX (no blank-screen waits) across local models (llama.cpp, MLX, Ollama) and cloud APIs (OpenAI, Claude).
+
+```wit
+interface llm-provider {
+    record completion-request {
+        messages: list<message>,
+        tools: list<tool-definition>,
+        max-tokens: u32,
+        grammar: option<string>,   // constrained decoding schema
+    }
+
+    complete: func(req: completion-request) -> stream<completion-chunk>;
+}
+```
+
+## Multi-provider
+
+Multiple `llm-provider` extensions can be active simultaneously. `manager-agent-loop` selects the provider per-request based on routing rules in `jan-klod.yaml` (e.g. route code tasks to `provider-ollama`, reasoning to `provider-anthropic`).
+
+## ACP — agent delegation
+
+`agent-*` extensions implement `agent-delegate`. From `manager-agent-loop`'s perspective, delegating to another agent looks like calling a tool — but the sub-agent runs its own full loop and returns a structured result. Jan-Klod also exposes itself as an ACP server, allowing other orchestrators to call it.
 
 ## WIT world structure
 
@@ -84,11 +110,6 @@ Three planned `memory-store` implementations — see [Architecture](architecture
 
 ## Status
 
-WIT interface signatures are **not yet designed**. The natural next step is writing the `.wit` files precisely enough to scaffold the Go multi-module project and generate host/guest bindings via `wit-bindgen-go`.
-
-Resolve these open questions first as they shape the interface signatures directly:
-1. Can multiple `llm-provider` extensions be active simultaneously, or only one?
-2. Does `llm-provider` expose a streaming function, or is streaming a capability flag?
-3. Do extensions version independently, or does a Jan-Klod release version all together?
+WIT interface signatures are **not yet written**. The decisions that were blocking this work are now resolved (multi-provider, streaming, independent versioning). The natural next step is writing the `.wit` files and generating host/guest bindings via `wit-bindgen-go`.
 
 See [decisions/2026-06-28-go-wasm-stack/Handoff.md](../decisions/2026-06-28-go-wasm-stack/Handoff.md) for the full stack decision record.

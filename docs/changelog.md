@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-28 (session 8)
+
+- **Update**: Revised [concepts/architecture.md](concepts/architecture.md) — `agent-*` category for ACP delegation; ACP bidirectional (client + server); config hot-reload; deployment targets table (desktop, ARM NAS, Docker, Kubernetes).
+- **Update**: Revised [concepts/contracts.md](concepts/contracts.md) — streaming mandatory in `llm-provider`; WIT sketch with `completion-request` + `stream<completion-chunk>`; multi-provider routing; `agent-delegate` WIT interface; resolved blocking open questions.
+- **Update**: Revised [concepts/configurator.md](concepts/configurator.md) — GitHub Pages as launch hosting.
+- **Update**: Revised [decisions/2026-06-28-go-wasm-stack/Handoff.md](decisions/2026-06-28-go-wasm-stack/Handoff.md) — closed 7 of 8 open questions; one remaining (MCP fault tolerance).
+
 ## 2026-06-28 (session 7)
 
 - **Update**: Revised [concepts/architecture.md](concepts/architecture.md) — full extension taxonomy table; `chat-*` category for Slack/Telegram/WhatsApp/Mattermost; `api-*` as pluggable native extensions; core as Go module; single `~/.jan-klod/` config folder.

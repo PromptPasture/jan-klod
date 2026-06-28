@@ -50,11 +50,14 @@ Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are
 | `store-*` | Persistence backends | WASM | `store-sqlite`, `store-postgres`, `store-supabase` |
 | `registry-*` | Capability catalogues | WASM | `registry-skills`, `registry-mcp` |
 | `tool-*` | Discrete callable tools | WASM | `tool-web-search` |
+| `agent-*` | AI agent delegation via ACP | WASM | `agent-claude-code`, `agent-opencode`, `agent-codex` |
 | `api-*` | Network API surfaces | Native Go | `api-rest`, `api-grpc`, `api-graphql` |
 | `ui-*` | User interfaces | Native Go | `ui-tui`, `ui-web`, `ui-gui` |
 | `chat-*` | Chat platform integrations | Native Go | `chat-slack`, `chat-telegram`, `chat-whatsapp`, `chat-mattermost` |
 
 WASM extensions are sandboxed and language-agnostic. Native Go extensions are compiled into the binary and have OS access (ports, terminal, window system, long-lived connections).
+
+Jan-Klod speaks ACP both ways — as a client (`agent-*` extensions call other agents) and as a server (it can be called by other ACP orchestrators).
 
 ### Extension dependency graph
 
@@ -77,6 +80,9 @@ registry-skills       implements skill-registry WIT interface
 registry-mcp          implements mcp-registry WIT interface
 
 tool-web-search       requires: agent-manager
+
+agent-claude-code     requires: agent-manager (delegates tasks via ACP)
+agent-opencode        requires: agent-manager
 
 api-rest              requires: agent-manager (exposes it over HTTP + SSE)
 api-grpc              requires: agent-manager
@@ -175,6 +181,19 @@ Only one `memory-store` is active at a time; selected via `jan-klod.yaml`.
 - **Unit:** standard Go `testing` package
 - **Integration:** Go test with real SQLite + embedded Wazero
 - **Extension:** WASM component loaded in test harness, WIT interface verified
+
+## Config hot-reload
+
+Extensions can pick up `jan-klod.yaml` changes without restart. Core watches the config file and notifies affected extensions via the event bus. Extensions opt in to hot-reload by implementing the reload lifecycle hook.
+
+## Deployment targets
+
+| Target | Notes |
+|---|---|
+| Desktop (macOS, Windows, Linux) | Primary target; all UI modes available |
+| ARM home server / NAS | Low memory footprint (Go + WASM); headless, `api-rest` + `chat-*` extensions |
+| Docker | Single container; config via environment variables or mounted `jan-klod.yaml` |
+| Kubernetes | Enterprise; horizontal scaling of stateless API layer; shared `store-postgres` or `store-supabase` |
 
 ## Deployment modes
 
