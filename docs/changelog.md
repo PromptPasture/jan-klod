@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-06-28 (session 15)
+
+- **Create**: First MVP code slice under `src/` — wazero host (`internal/host`), JSON-over-memory ABI (`internal/abi`), `jan-klod` host module with `host-log`, and `store-memory.wasm` guest extension. `make run` proves the host↔guest contract roundtrip end to end (set/get/list-keys/recent + host-log forwarding). Verified with `go vet`, golangci-lint v2 (0 issues), and `wasm-tools`.
+- **Create**: Added `Makefile` (build/ext/run/test/lint/wit targets) and `.golangci.yml` (golangci-lint v2 config).
+- **Create**: Added [decisions/2026-06-28-mvp-wasm-host/Handoff.md](decisions/2026-06-28-mvp-wasm-host/Handoff.md) — MVP findings: wazero has no component model → core-module JSON ABI; no CGo anywhere in MVP; SQLite runs host-side (not in the wasm guest), library choice deferred (`modernc/sqlite` vs `ncruces/go-sqlite3`).
+- **Update**: [decisions/index.md](decisions/index.md) — added MVP WASM Host entry.
+
+## 2026-06-28 (session 14)
+
+- **Fix**: Reviewed and corrected all `wit/` interfaces — now pass `wasm-tools component wit wit/`. Changes: `http-error` enum→`variant` (had payloaded cases); `list`→`list-keys` (reserved keyword) in `memory-store`/`host-storage`; same-package refs switched from fully-qualified `jan-klod:interfaces/x@0.1.0` to short form (was self-cycle); `completion-chunk` case `tool-call`→`tool-call-request` (name clash with record).
+- **Create**: Added `wit/types.wit` (`llm-types`, `store-types`) — single source for cross-interface records, decoupling `context-manager` from `llm-provider` and `host-storage` from `memory-store`.
+- **Create**: Added `wit/extension-lifecycle.wit` — now exported by every extension world; defined the previously-undefined `extension-context`.
+- **Update**: `agent-manager-world` now imports `tool-callable` and `agent-delegate` (orchestrator could not reach them before).
+- **Update**: Replaced non-standard `wit/wit.toml` with `wit/README.md` (toolchain ignored the manifest).
+- **Update**: Revised [concepts/contracts.md](concepts/contracts.md) — shared interfaces section; poll-based streaming sketch; lifecycle and world examples corrected to validated form.
+
+## 2026-06-28 (session 13)
+
+- **Create**: Added `wit/` — 13 WIT interface files under `jan-klod:interfaces@0.1.0`; 8 extension-exported (`llm-provider`, `context-manager`, `agent-manager`, `memory-store`, `skill-registry`, `mcp-registry`, `agent-delegate`, `tool-callable`) + 5 host-provided (`host-http`, `host-log`, `host-config`, `host-event`, `host-storage`).
+- **Update**: Revised [concepts/contracts.md](concepts/contracts.md) — full interface table with file references; world structure example updated to match real `.wit` files; removed "not yet written" status note.
+
 ## 2026-06-28 (session 12)
 
 - **Update**: Revised [concepts/architecture.md](concepts/architecture.md) — task routing with 10 built-in types + user-defined extension; parallel decomposition for file-edit, web-search, research, code-review.

@@ -4,7 +4,7 @@ title: Contracts
 description: Stable WIT interfaces that form the boundary between core and extensions
 tags: [contracts, wit, interfaces, extensions, wasm]
 created: 2026-06-28T00:00:00Z
-updated: 2026-06-28T00:00:00Z
+updated: 2026-06-28T15:00:00Z
 ---
 
 Contracts are the stable interfaces that the core exposes and extensions consume or implement. They are the API surface that must not break — a breaking change here breaks all extensions.
@@ -16,30 +16,75 @@ Jan-Klod has two classes of contract:
 
 ## WIT interface overview
 
-| WIT interface | Responsibility | Implemented by |
+All interfaces live in `wit/` under the package `jan-klod:interfaces@0.1.0`. The
+package is validated with `wasm-tools component wit wit/`.
+
+### Shared interfaces
+
+Type-only and lifecycle interfaces consumed across the package.
+
+| File | Interface | Purpose |
 |---|---|---|
-| `llm-provider` | Send prompts; return token streams (streaming is mandatory) | `provider-*` extensions |
-| `context-manager` | Manage conversation history; compress as context grows | `manager-context` |
-| `agent-manager` | Drive the agent loop (router → step controller → LLM → tool → answer) | `manager-agent-loop` |
-| `memory-store` | Persistent key-value or vector store for long-term memory | `store-*` extensions |
-| `skill-registry` | Register and resolve reusable agent skills | `registry-skills` |
-| `mcp-registry` | Manage MCP server connections and tool discovery | `registry-mcp` |
-| `agent-delegate` | Delegate a full task to another AI agent via ACP; receive structured result | `agent-*` extensions |
+| `types.wit` | `llm-types`, `store-types` | Single canonical source for cross-interface records (`message`, `role`, `tool-call`, `entry`, …) so consumers version independently |
+| `extension-lifecycle.wit` | `extension-lifecycle` | `init` / `start` / `stop` / `health` — exported by **every** extension world so the host manages them uniformly |
+
+### Extension-exported interfaces
+
+Extensions implement these and the host routes calls between them.
+
+| File | Interface | Responsibility | Implemented by |
+|---|---|---|---|
+| `llm-provider.wit` | `llm-provider` | Streaming completions, constrained decoding | `provider-*` |
+| `context-manager.wit` | `context-manager` | Conversation history + compression | `manager-context` |
+| `agent-manager.wit` | `agent-manager` | Agent loop, routing, decomposition, fallback | `manager-agent-loop` |
+| `memory-store.wit` | `memory-store` | Persistent key-value storage | `store-*` |
+| `skill-registry.wit` | `skill-registry` | Skill catalog and dispatch | `registry-skills` |
+| `mcp-registry.wit` | `mcp-registry` | MCP server management + tool catalog | `registry-mcp` |
+| `agent-delegate.wit` | `agent-delegate` | ACP agent delegation (streaming) | `agent-*` |
+| `tool-callable.wit` | `tool-callable` | Discrete callable tool | `tool-*` |
+
+### Host-provided interfaces
+
+Core grants these capabilities to every extension.
+
+| File | Interface | Purpose |
+|---|---|---|
+| `host-http.wit` | `host-http` | Outbound HTTP (only network access extensions have) |
+| `host-log.wit` | `host-log` | Structured logging forwarded to core pipeline |
+| `host-config.wit` | `host-config` | Read own section of `jan-klod.yaml` |
+| `host-event.wit` | `host-event` | Event bus publish/subscribe |
+| `host-storage.wit` | `host-storage` | Proxy to active `memory-store` (subset: no purge/search) |
 
 ## Streaming
 
 Streaming is first-class and mandatory in `llm-provider`. There is no synchronous completion path — providers that don't natively stream return a single-token stream. This ensures consistent UX (no blank-screen waits) across local models (llama.cpp, MLX, Ollama) and cloud APIs (OpenAI, Claude).
 
+Streaming uses a **poll-based handle** model rather than native WIT `stream<>`, which is not yet mature in Wazero / wit-bindgen-go. `complete` returns an opaque `stream-handle`; the host polls `next-chunk` until it yields `done`, then calls `close-stream`. The same pattern is used by `agent-manager` (`run-handle`) and `agent-delegate` (`delegate-handle`).
+
 ```wit
 interface llm-provider {
-    record completion-request {
-        messages: list<message>,
-        tools: list<tool-definition>,
-        max-tokens: u32,
-        grammar: option<string>,   // constrained decoding schema
+    use llm-types.{role, message, tool-definition, tool-call};
+
+    type stream-handle = u32;
+
+    variant completion-chunk {
+        text-delta(string),
+        tool-call-request(tool-call),
+        done(string),              // reason: "stop" | "tool-calls" | "length" | "error"
     }
 
-    complete: func(req: completion-request) -> stream<completion-chunk>;
+    record completion-request {
+        model: string,
+        messages: list<message>,
+        tools: list<tool-definition>,
+        grammar: option<string>,   // constrained decoding schema
+        max-tokens: option<u32>,
+        temperature: option<f32>,
+    }
+
+    complete: func(request: completion-request) -> result<stream-handle, provider-error>;
+    next-chunk: func(handle: stream-handle) -> option<completion-chunk>;
+    close-stream: func(handle: stream-handle);
 }
 ```
 
@@ -53,20 +98,22 @@ Multiple `llm-provider` extensions can be active simultaneously. `manager-agent-
 
 ## WIT world structure
 
-Each extension declares a WIT world — what it imports from the host and what it exports:
+Each `.wit` file defines a `world` — what the extension imports from the host and what it exports. Example from `llm-provider.wit`:
 
 ```wit
-package jan-klod:contracts;
+world provider-world {
+    import host-log;
+    import host-config;
+    import host-http;
 
-// Example: an LLM provider extension
-world llm-provider-extension {
-    import jan-klod:host/http-client;   // host-granted outbound HTTP
-    import jan-klod:host/logging;       // host-granted logging
-    import jan-klod:host/config;        // own config section (read-only)
-
-    export jan-klod:contracts/llm-provider;  // what this extension provides
+    export extension-lifecycle;
+    export llm-provider;
 }
 ```
+
+Same-package references use the short, unversioned form (`import host-log;`); the fully-qualified `jan-klod:interfaces/host-log@0.1.0` form would make the package depend on itself and fail validation.
+
+The full world for each extension type is in its respective `.wit` file.
 
 ## Core design rules
 
@@ -77,17 +124,22 @@ world llm-provider-extension {
 
 ## Extension lifecycle (WIT)
 
-Every extension exposes a standard lifecycle interface:
+Every extension world exports `extension-lifecycle` (`extension-lifecycle.wit`) so the host can initialise, start, stop, and health-check any extension uniformly:
 
 ```wit
 interface extension-lifecycle {
+    enum health-status { up, degraded, down }
+
+    record extension-context {
+        id: string,       // e.g. "provider-openai"
+        version: string,  // semver of this build
+    }
+
     init: func(ctx: extension-context) -> result<_, string>;
     start: func() -> result<_, string>;
     stop: func();
     health: func() -> health-status;
 }
-
-enum health-status { up, degraded, down }
 ```
 
 ## Native Go interface
@@ -107,9 +159,5 @@ Native extensions follow the same lifecycle and config conventions as WASM exten
 ## MemoryStore implementations
 
 Three planned `memory-store` implementations — see [Architecture](architecture.md#storage) for the comparison table.
-
-## Status
-
-WIT interface signatures are **not yet written**. The decisions that were blocking this work are now resolved (multi-provider, streaming, independent versioning). The natural next step is writing the `.wit` files and generating host/guest bindings via `wit-bindgen-go`.
 
 See [decisions/2026-06-28-go-wasm-stack/Handoff.md](../decisions/2026-06-28-go-wasm-stack/Handoff.md) for the full stack decision record.

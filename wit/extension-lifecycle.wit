@@ -1,0 +1,32 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Standard lifecycle every extension exports so the host can initialise,
+/// start, stop, and health-check it uniformly.
+interface extension-lifecycle {
+    /// Liveness reported by an extension.
+    enum health-status {
+        up,
+        degraded,
+        down,
+    }
+
+    /// Identity the host injects at load time.
+    record extension-context {
+        /// Unique extension id, e.g. "provider-openai".
+        id: string,
+        /// Semver of this extension build.
+        version: string,
+    }
+
+    /// Called once after load, before start. Error string aborts loading.
+    init: func(ctx: extension-context) -> result<_, string>;
+
+    /// Begin serving. Error string marks the extension failed.
+    start: func() -> result<_, string>;
+
+    /// Graceful shutdown. Must not block indefinitely.
+    stop: func();
+
+    /// Current liveness — polled by the host.
+    health: func() -> health-status;
+}

@@ -1,0 +1,15 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Storage proxy — routes to the active memory-store extension.
+/// Used by extensions that need persistence but are not the store themselves
+/// (e.g. manager-context, registry-skills).
+/// The interface is a strict subset of memory-store — no purge, no search.
+interface host-storage {
+    use store-types.{entry, store-error};
+
+    set: func(namespace: string, key: string, value: string) -> result<entry, store-error>;
+    get: func(namespace: string, key: string) -> result<entry, store-error>;
+    delete: func(namespace: string, key: string) -> result<_, store-error>;
+    list-keys: func(namespace: string) -> result<list<entry>, store-error>;
+    recent: func(namespace: string, limit: u32) -> result<list<entry>, store-error>;
+}

@@ -1,0 +1,36 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Persistent key-value and structured storage.
+/// Implemented by: store-sqlite, store-postgres, store-supabase
+interface memory-store {
+    use store-types.{entry, store-error};
+
+    /// Upsert a key in a namespace. Returns the stored entry.
+    set: func(namespace: string, key: string, value: string) -> result<entry, store-error>;
+
+    /// Retrieve by namespace + key.
+    get: func(namespace: string, key: string) -> result<entry, store-error>;
+
+    /// Delete by namespace + key. No-op if absent.
+    delete: func(namespace: string, key: string) -> result<_, store-error>;
+
+    /// List all keys in a namespace. Returns entries without value payload.
+    list-keys: func(namespace: string) -> result<list<entry>, store-error>;
+
+    /// Retrieve the N most recent entries across a namespace, ordered newest-first.
+    recent: func(namespace: string, limit: u32) -> result<list<entry>, store-error>;
+
+    /// Full-text search within a namespace (best-effort; falls back to prefix scan).
+    search: func(namespace: string, query: string, limit: u32) -> result<list<entry>, store-error>;
+
+    /// Purge all entries in a namespace.
+    purge-namespace: func(namespace: string) -> result<_, store-error>;
+}
+
+world store-world {
+    import host-log;
+    import host-config;
+
+    export extension-lifecycle;
+    export memory-store;
+}

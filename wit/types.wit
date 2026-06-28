@@ -1,0 +1,65 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Shared types — single canonical source for records crossing interface
+/// boundaries. Splitting these out keeps interfaces independently versionable:
+/// e.g. adding a field to `message` here touches one place, not every consumer.
+
+/// LLM conversation types, shared by llm-provider and context-manager.
+interface llm-types {
+    /// Role of a message in the conversation.
+    enum role {
+        system,
+        user,
+        assistant,
+        tool,
+    }
+
+    /// A single message in the conversation history.
+    record message {
+        role: role,
+        content: string,
+        /// Non-empty only when role == tool.
+        tool-call-id: option<string>,
+    }
+
+    /// A tool the model may call.
+    record tool-definition {
+        name: string,
+        description: string,
+        /// JSON Schema string describing the parameters.
+        parameters-schema: string,
+    }
+
+    /// A tool call emitted by the model.
+    record tool-call {
+        id: string,
+        name: string,
+        /// JSON-encoded arguments.
+        arguments: string,
+    }
+}
+
+/// Storage types, shared by memory-store and host-storage.
+interface store-types {
+    enum store-error {
+        not-found,
+        conflict,
+        serialization,
+        backend,
+    }
+
+    /// Opaque row identifier.
+    type row-id = string;
+
+    /// A memory entry — arbitrary JSON payload with metadata.
+    record entry {
+        id: row-id,
+        namespace: string,
+        key: string,
+        /// JSON-encoded value.
+        value: string,
+        /// Unix timestamp (seconds).
+        created-at: u64,
+        updated-at: u64,
+    }
+}

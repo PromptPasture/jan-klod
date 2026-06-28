@@ -1,0 +1,76 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Streaming LLM completion provider.
+/// Implemented by: provider-openai, provider-anthropic, provider-ollama
+interface llm-provider {
+    use llm-types.{role, message, tool-definition, tool-call};
+
+    /// Opaque handle to an in-progress stream.
+    type stream-handle = u32;
+
+    /// One streamed chunk from the model.
+    variant completion-chunk {
+        /// Partial text delta.
+        text-delta(string),
+        /// Model wants to invoke a tool.
+        tool-call-request(tool-call),
+        /// Stream finished; reason: "stop" | "tool-calls" | "length" | "error".
+        done(string),
+    }
+
+    /// Completion request parameters.
+    record completion-request {
+        model: string,
+        messages: list<message>,
+        tools: list<tool-definition>,
+        /// Optional BNF/GBNF grammar string for constrained decoding.
+        grammar: option<string>,
+        max-tokens: option<u32>,
+        temperature: option<f32>,
+    }
+
+    /// Errors the provider can surface.
+    enum provider-error {
+        /// API key missing or rejected.
+        auth-failed,
+        /// Model not available on this provider.
+        model-not-found,
+        /// Rate limit or quota exceeded.
+        rate-limited,
+        /// Local model ran out of memory.
+        out-of-memory,
+        /// Context window exceeded.
+        context-overflow,
+        /// Any other transient error.
+        transient,
+    }
+
+    /// Provider metadata — returned once at startup.
+    record provider-info {
+        id: string,
+        supported-models: list<string>,
+    }
+
+    /// Begin a streaming completion. Returns a stream handle.
+    /// The host polls next-chunk() until done.
+    complete: func(
+        request: completion-request,
+    ) -> result<stream-handle, provider-error>;
+
+    /// Poll the next chunk from an open stream.
+    next-chunk: func(handle: stream-handle) -> option<completion-chunk>;
+
+    /// Release a stream handle (call after done or on cancel).
+    close-stream: func(handle: stream-handle);
+
+    info: func() -> provider-info;
+}
+
+world provider-world {
+    import host-log;
+    import host-config;
+    import host-http;
+
+    export extension-lifecycle;
+    export llm-provider;
+}

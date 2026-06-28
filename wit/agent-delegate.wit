@@ -1,0 +1,61 @@
+package jan-klod:interfaces@0.1.0;
+
+/// ACP agent delegation — call another AI agent and stream its response.
+/// Implemented by: agent-claude-code, agent-opencode, agent-codex
+interface agent-delegate {
+    enum delegate-error {
+        /// Remote agent endpoint unreachable.
+        unreachable,
+        /// Remote agent rejected the request.
+        rejected,
+        /// Delegation timed out (default: 30 seconds).
+        timeout,
+        /// Protocol or serialization error.
+        protocol,
+        backend,
+    }
+
+    /// One streamed chunk from the remote agent.
+    variant delegate-chunk {
+        text-delta(string),
+        done(string),
+        error(string),
+    }
+
+    /// Opaque stream handle.
+    type delegate-handle = u32;
+
+    /// Delegate a task to the remote agent. Returns a stream handle.
+    delegate: func(
+        /// Natural language task description.
+        task: string,
+        /// Optional JSON context payload passed to the remote agent.
+        context: option<string>,
+    ) -> result<delegate-handle, delegate-error>;
+
+    /// Poll next chunk from the delegation stream.
+    next-chunk: func(handle: delegate-handle) -> option<delegate-chunk>;
+
+    /// Cancel an in-progress delegation.
+    cancel: func(handle: delegate-handle);
+
+    /// Release handle.
+    close: func(handle: delegate-handle);
+
+    /// Remote agent identity (name + ACP endpoint).
+    record agent-info {
+        id: string,
+        endpoint: string,
+    }
+
+    info: func() -> agent-info;
+}
+
+world agent-delegate-world {
+    import host-log;
+    import host-config;
+    import host-http;
+
+    export extension-lifecycle;
+    export agent-delegate;
+}

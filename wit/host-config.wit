@@ -1,0 +1,20 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Configuration access — extension reads only its own section of jan-klod.yaml.
+interface host-config {
+    enum config-error {
+        key-not-found,
+        type-mismatch,
+        backend,
+    }
+
+    /// Read a config value by dot-separated key path within the extension's section.
+    /// Returns the raw JSON-encoded value so extensions can deserialise freely.
+    get: func(key: string) -> result<string, config-error>;
+
+    /// Check whether a key is present without reading its value.
+    has: func(key: string) -> bool;
+
+    /// Dump the entire extension config section as a JSON string.
+    all: func() -> result<string, config-error>;
+}

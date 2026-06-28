@@ -1,0 +1,79 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Agent loop orchestration — routing, decomposition, provider selection, fallback.
+/// Implemented by: manager-agent-loop
+interface agent-manager {
+    use context-manager.{session-id};
+
+    enum agent-error {
+        /// All providers exhausted.
+        no-provider,
+        /// Session not found.
+        session-not-found,
+        /// LLM returned malformed output after max retries.
+        max-retries-exceeded,
+        /// Request was cancelled by caller.
+        cancelled,
+        backend,
+    }
+
+    /// Task type label — built-in or user-defined.
+    /// Built-in: "code-generation" | "code-review" | "file-edit" |
+    ///           "web-search" | "research" | "reasoning" | "planning" |
+    ///           "chat" | "clarification" | "agent-delegation"
+    type task-type = string;
+
+    /// One streamed event from the agent loop.
+    variant agent-event {
+        /// Partial text from the model.
+        text-delta(string),
+        /// Agent is about to call a tool.
+        tool-invoked(string),
+        /// Tool returned a result.
+        tool-result(string),
+        /// A subtask was dispatched in parallel.
+        subtask-dispatched(string),
+        /// A subtask completed.
+        subtask-done(string),
+        /// Loop finished; full answer follows.
+        done(string),
+        /// Non-fatal warning (e.g. MCP server down, provider fallback used).
+        warning(string),
+    }
+
+    /// Opaque handle to a running agent invocation.
+    type run-handle = u32;
+
+    /// Start an agent run. Returns a handle to poll.
+    run: func(
+        session: session-id,
+        user-message: string,
+        /// Override task type; empty string = auto-classify.
+        task-type-hint: string,
+    ) -> result<run-handle, agent-error>;
+
+    /// Poll the next event from a running agent.
+    next-event: func(handle: run-handle) -> option<agent-event>;
+
+    /// Cancel a running agent.
+    cancel: func(handle: run-handle);
+
+    /// Release a completed or cancelled handle.
+    close: func(handle: run-handle);
+}
+
+world agent-manager-world {
+    import host-log;
+    import host-config;
+    import host-event;
+    import host-storage;
+    import llm-provider;
+    import context-manager;
+    import skill-registry;
+    import mcp-registry;
+    import tool-callable;
+    import agent-delegate;
+
+    export extension-lifecycle;
+    export agent-manager;
+}

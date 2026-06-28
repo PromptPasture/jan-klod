@@ -1,0 +1,26 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Structured logging — forwarded to core's log pipeline.
+interface host-log {
+    enum log-level {
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    record log-field {
+        key: string,
+        /// JSON-encoded value.
+        value: string,
+    }
+
+    /// Emit a structured log entry.
+    /// `component` is the extension name, e.g. "provider-openai".
+    log: func(
+        level: log-level,
+        component: string,
+        message: string,
+        fields: list<log-field>,
+    );
+}

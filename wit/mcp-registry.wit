@@ -1,0 +1,57 @@
+package jan-klod:interfaces@0.1.0;
+
+/// MCP server management — discovers tools, handles crashes, reconnects.
+/// Implemented by: registry-mcp
+interface mcp-registry {
+    enum mcp-error {
+        server-not-found,
+        server-down,
+        tool-not-found,
+        invocation-failed,
+        backend,
+    }
+
+    enum server-status {
+        connected,
+        down,
+        reconnecting,
+    }
+
+    record server-info {
+        id: string,
+        status: server-status,
+        /// Transport: "stdio" | "sse" | "streamable-http"
+        transport: string,
+        tool-count: u32,
+    }
+
+    record tool-info {
+        name: string,
+        description: string,
+        server-id: string,
+        /// JSON Schema string for arguments.
+        input-schema: string,
+    }
+
+    /// List all currently connected MCP servers.
+    list-servers: func() -> result<list<server-info>, mcp-error>;
+
+    /// List all tools from all connected (non-down) servers.
+    list-tools: func() -> result<list<tool-info>, mcp-error>;
+
+    /// Invoke an MCP tool by name. Arguments and result are JSON-encoded.
+    invoke-tool: func(name: string, arguments: string) -> result<string, mcp-error>;
+
+    /// Manually trigger reconnect for a server that is down.
+    reconnect: func(server-id: string) -> result<_, mcp-error>;
+}
+
+world mcp-registry-world {
+    import host-log;
+    import host-config;
+    import host-http;
+    import host-event;
+
+    export extension-lifecycle;
+    export mcp-registry;
+}

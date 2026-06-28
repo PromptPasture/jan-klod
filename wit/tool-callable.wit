@@ -1,0 +1,35 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Generic discrete callable tool.
+/// Implemented by: tool-web-search, any future tool-* extension.
+interface tool-callable {
+    enum tool-error {
+        invalid-arguments,
+        execution-failed,
+        rate-limited,
+        backend,
+    }
+
+    /// Metadata the agent-manager uses to offer this tool to the LLM.
+    record tool-meta {
+        name: string,
+        description: string,
+        /// JSON Schema string for the arguments object.
+        arguments-schema: string,
+    }
+
+    /// Describe this tool.
+    meta: func() -> tool-meta;
+
+    /// Invoke the tool with JSON-encoded arguments. Returns JSON-encoded result.
+    invoke: func(arguments: string) -> result<string, tool-error>;
+}
+
+world tool-world {
+    import host-log;
+    import host-config;
+    import host-http;
+
+    export extension-lifecycle;
+    export tool-callable;
+}

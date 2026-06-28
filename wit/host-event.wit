@@ -1,0 +1,28 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Event bus — extensions publish and subscribe to system events.
+interface host-event {
+    /// Publish an event on the bus.
+    /// `topic` is a dot-separated string, e.g. "mcp.server.down".
+    /// `payload` is a JSON-encoded value.
+    publish: func(topic: string, payload: string);
+
+    /// Subscribe to a topic pattern (prefix match, e.g. "mcp." catches all MCP events).
+    /// Returns a subscription handle used to poll events.
+    subscribe: func(topic-prefix: string) -> subscription-handle;
+
+    /// Poll the next event for a subscription. Returns none if the queue is empty.
+    next-event: func(handle: subscription-handle) -> option<event>;
+
+    /// Unsubscribe and release the handle.
+    unsubscribe: func(handle: subscription-handle);
+
+    record event {
+        topic: string,
+        payload: string,
+        /// Unix timestamp (milliseconds).
+        timestamp: u64,
+    }
+
+    type subscription-handle = u32;
+}
