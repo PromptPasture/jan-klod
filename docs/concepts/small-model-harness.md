@@ -4,7 +4,7 @@ title: Small-Model Harness
 description: Design principles for running reliable agentic loops on 9-12B parameter models
 tags: [llm, small-model, constrained-decoding, agent-loop]
 created: 2026-06-28T00:00:00Z
-updated: 2026-06-28T00:00:00Z
+updated: 2026-06-29T00:00:00Z
 ---
 
 Small instruction-tuned models (9–12B parameters) fail in agent loops for predictable reasons. The harness mitigates these systematically.
@@ -24,7 +24,7 @@ Small instruction-tuned models (9–12B parameters) fail in agent loops for pred
 4. **Tiny, surgical prompts** — few-shot examples per tool, rewritten per step by the controller.
 5. **ReAct loop** preferred over Plan-and-Execute for small models.
 6. **Layered router** — classify intents in two tiers before entering the agent loop:
-   - **Language detection** (microseconds) — pure-Go library (`whatlanggo` or similar, no model). If non-English → skip to tier 2 directly.
+   - **Language detection** (microseconds) — pure-Rust library (`whatlang`, no model). If non-English → skip to tier 2 directly.
    - **Tier 1: heuristics** (English only, microseconds) — up to ~50 rules grouped by category (greetings, farewells, affirmations, meta-queries, clarifications, short inputs). Catches obvious simple intents at zero model cost. Rules are grouped, not a flat pile — adding one rule means one line in the right category.
    - **Tier 2: LLM classifier** — everything that passes through goes to the active `llm-provider` with a single constrained-decoding call; output is one token: `simple` | `agentic`. Handles all languages naturally. No separate embedding model; reuses the already-loaded provider.
 7. **Retry/correction** — on malformed output, inject a correction hint and retry (up to N times) before failing.

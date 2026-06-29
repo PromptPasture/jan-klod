@@ -4,15 +4,15 @@ title: Contracts
 description: Stable WIT interfaces that form the boundary between core and extensions
 tags: [contracts, wit, interfaces, extensions, wasm]
 created: 2026-06-28T00:00:00Z
-updated: 2026-06-28T15:00:00Z
+updated: 2026-06-29T00:00:00Z
 ---
 
 Contracts are the stable interfaces that the core exposes and extensions consume or implement. They are the API surface that must not break — a breaking change here breaks all extensions.
 
-Jan-Klod has two classes of contract:
-
-- **WIT interfaces** — for WASM extensions (sandboxed, language-agnostic)
-- **Native Go interfaces** — for extensions that need OS access and cannot run in the WASM sandbox (UI only)
+Every extension is a sandboxed WASM component, so **WIT interfaces are the only
+extension contract** — there is no native/in-core extension tier. (UIs are not
+extensions; they connect to core over an `api-*` network surface — see
+[UI ↔ core](#ui--core-client-surface) below.)
 
 ## WIT interface overview
 
@@ -49,17 +49,24 @@ Core grants these capabilities to every extension.
 
 | File | Interface | Purpose |
 |---|---|---|
-| `host-http.wit` | `host-http` | Outbound HTTP (only network access extensions have) |
+| `host-http.wit` | `host-http` | Outbound HTTP **requests** (outbound-request access) |
+| `host-serve.wit` | `host-serve` | **Inbound** listener — lets `api-*` bind a port and serve REST/gRPC *(planned)* |
+| `host-socket.wit` | `host-socket` | Long-lived bidirectional socket — lets `chat-*` hold a Telegram/Slack connection *(planned)* |
 | `host-log.wit` | `host-log` | Structured logging forwarded to core pipeline |
 | `host-config.wit` | `host-config` | Read own section of `jan-klod.yaml` |
 | `host-event.wit` | `host-event` | Event bus publish/subscribe |
 | `host-storage.wit` | `host-storage` | Proxy to active `memory-store` (subset: no purge/search) |
 
+`host-serve` and `host-socket` are **planned** capabilities: they are what keep
+`api-*` (inbound listeners) and `chat-*` (long-lived connections) fully
+sandboxed instead of needing raw OS access. Today's `host-http` is
+outbound-request-only and does not cover either case.
+
 ## Streaming
 
 Streaming is first-class and mandatory in `llm-provider`. There is no synchronous completion path — providers that don't natively stream return a single-token stream. This ensures consistent UX (no blank-screen waits) across local models (llama.cpp, MLX, Ollama) and cloud APIs (OpenAI, Claude).
 
-Streaming uses a **poll-based handle** model rather than native WIT `stream<>`, which is not yet mature in Wazero / wit-bindgen-go. `complete` returns an opaque `stream-handle`; the host polls `next-chunk` until it yields `done`, then calls `close-stream`. The same pattern is used by `agent-manager` (`run-handle`) and `agent-delegate` (`delegate-handle`).
+Streaming uses a **poll-based handle** model rather than native WIT `stream<>`. (This was forced by `wit-bindgen-go` immaturity in the Go MVP; under Wasmtime + `wit-bindgen` the native `stream<>`/async path should be re-evaluated, but the poll-based handle remains the safe default until proven.) `complete` returns an opaque `stream-handle`; the host polls `next-chunk` until it yields `done`, then calls `close-stream`. The same pattern is used by `agent-manager` (`run-handle`) and `agent-delegate` (`delegate-handle`).
 
 ```wit
 interface llm-provider {
@@ -142,22 +149,20 @@ interface extension-lifecycle {
 }
 ```
 
-## Native Go interface
+## UI ↔ core (client surface)
 
-`UIProvider` is the only native Go contract. It is implemented by `ui-tui`, `ui-web`, and `ui-gui` — all compiled into the binary.
+There is **no native UI contract.** UIs are not extensions and run in their own
+processes; they reach core the same way any external client does — over an
+`api-*` surface (REST + SSE), the LSP/server model. The shape of that surface is
+the `api-*` extension's published API (e.g. `api-rest`'s HTTP routes + SSE event
+stream), not a WIT extension boundary and not a Rust trait baked into core.
 
-```go
-type UIProvider interface {
-    Start(ctx context.Context, api AgentAPI) error
-    Stop() error
-    Health() HealthStatus
-}
-```
-
-Native extensions follow the same lifecycle and config conventions as WASM extensions. They are declared in `jan-klod.yaml` under `extensions:` and selected at runtime via CLI flag.
+*(Open: whether core also exposes a minimal built-in local control endpoint so a
+UI client can attach to a bare core with no `api-*` enabled. Current lean: a UI
+deployment includes `api-rest`.)*
 
 ## MemoryStore implementations
 
 Three planned `memory-store` implementations — see [Architecture](architecture.md#storage) for the comparison table.
 
-See [decisions/2026-06-28-go-wasm-stack/Handoff.md](../decisions/2026-06-28-go-wasm-stack/Handoff.md) for the full stack decision record.
+See [decisions/2026-06-29-component-model-rust/Handoff.md](../decisions/2026-06-29-component-model-rust/Handoff.md) for the current foundation decision (Rust + Wasmtime + Component Model), which supersedes the host language and runtime of the earlier [2026-06-28 Go + Wazero stack](../decisions/2026-06-28-go-wasm-stack/Handoff.md). The WIT contracts on this page are unchanged by that pivot.

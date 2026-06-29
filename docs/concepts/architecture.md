@@ -2,10 +2,20 @@
 type: concept
 title: Architecture
 description: High-level architecture of the Jan-Klod agent runtime
-tags: [architecture, core, extensions, go, wasm, wazero]
+tags: [architecture, core, extensions, rust, wasm, wasmtime]
 created: 2026-06-28T00:00:00Z
-updated: 2026-06-28T00:00:00Z
+updated: 2026-06-29T00:00:00Z
 ---
+
+> **Foundation:** the core is **Rust + Wasmtime** running WebAssembly
+> **Components** (WIT contracts), and runs as a standalone, user-privilege
+> process — see
+> [decisions/2026-06-29-component-model-rust](../decisions/2026-06-29-component-model-rust/Handoff.md).
+> The agent loop, taxonomy, and contracts are unchanged from the Go + Wazero
+> design; what moved is the host language/runtime, and — because **nothing is
+> trusted** — the removal of the native/in-core extension tier (`api-*`/`chat-*`
+> are now sandboxed WASM; UIs are separate clients). Items still being re-decided
+> for Rust are marked **(TBD)**.
 
 ## Philosophy
 
@@ -15,28 +25,32 @@ Linux kernel model: the **core** is a minimal container with no domain logic. Al
 - **KISS** — every extension does one thing. If it grows a second responsibility, split it.
 - **YAGNI** — do not add capability until there is a concrete use case. Pluggability is not an excuse to over-engineer.
 
-## Core responsibilities
+Core runs as a **standalone process under the user's own privileges** (not a
+system daemon) and is **headless-capable** — on a Raspberry Pi or in a container
+it is the only thing you run. It contains:
 
 - Extension lifecycle management (load, enable, disable, unload)
 - Configuration loading (`jan-klod.yaml`)
-- WASM component host (Wazero)
-- HTTP API (REST + SSE for streaming)
+- WASM component host (Wasmtime) — the capability sandbox every extension runs in
 - Event bus (extension-to-extension communication)
 - Observability (structured logging, Prometheus metrics, OpenTelemetry traces)
 
-Zero agent behaviour in core. A core-only boot starts up and does nothing.
+Zero agent behaviour in core. A core-only boot starts up and does nothing — the
+agent loop itself is the `manager-agent-loop` **extension**, not core. The HTTP
+API, UIs, and chat integrations are likewise extensions or external clients,
+never built in.
 
 ## Extension model
 
-Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are loaded at runtime by Wazero and sandboxed — they can only do what the WIT interface explicitly grants.
+Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are loaded at runtime by Wasmtime and sandboxed — they can only do what the WIT interface explicitly grants. Because they are Component-Model components, each can be authored in **any `wit-bindgen` language** (Rust, JS, Python, Go, …) and all are interchangeable against the same WIT contract.
 
 ### What the host grants extensions
 
-- Outbound HTTP (to call LLM APIs, web search, etc.)
-- Storage read/write via the `MemoryStore` WIT interface
-- Logging
-- Config read (own section only)
-- Event bus publish/subscribe
+- Outbound HTTP requests (to call LLM APIs, web search, etc.) — `host-http`
+- **Inbound network listeners** (so `api-*` can serve REST/gRPC) — `host-serve` *(planned)*
+- **Long-lived sockets** (so `chat-*` can hold a Telegram/Slack connection) — `host-socket` *(planned)*
+- Storage read/write via the `memory-store` contract
+- Logging, config read (own section only), event bus publish/subscribe
 
 ### What extensions cannot do
 
@@ -55,11 +69,12 @@ Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are
 | `registry-*` | Capability catalogues | WASM | `registry-skills`, `registry-mcp` |
 | `tool-*` | Discrete callable tools | WASM | `tool-web-search` |
 | `agent-*` | AI agent delegation via ACP | WASM | `agent-claude-code`, `agent-opencode`, `agent-codex` |
-| `api-*` | Network API surfaces | Native Go | `api-rest`, `api-grpc`, `api-graphql` |
-| `ui-*` | User interfaces | Native Go | `ui-tui`, `ui-web`, `ui-gui` |
-| `chat-*` | Chat platform integrations | Native Go | `chat-slack`, `chat-telegram`, `chat-whatsapp`, `chat-mattermost` |
+| `api-*` | Network API surfaces | WASM (`host-serve`) | `api-rest`, `api-grpc`, `api-graphql` |
+| `chat-*` | Chat platform integrations | WASM (`host-socket`) | `chat-slack`, `chat-telegram`, `chat-whatsapp`, `chat-mattermost` |
 
-WASM extensions are sandboxed and language-agnostic. Native Go extensions are compiled into the binary and have OS access (ports, terminal, window system, long-lived connections).
+**Every extension is a sandboxed, language-agnostic WASM component — nothing is trusted and nothing is compiled into core.** Extensions that need the network (`provider-*`, `tool-*`, `api-*`, `chat-*`) get it *only* through host-granted capabilities, never raw OS access. `api-*` and `chat-*` are therefore ordinary plugins: the user enables whichever `api-*` surface they want (or none) and any `chat-*` integrations they want (or none).
+
+**User interfaces are not extensions.** TUI/GUI/web are optional, *separate client processes* that connect to core over an `api-*` HTTP+SSE surface (the LSP model: core is the server, the UI is a thin client). They are covered in [User interfaces](#user-interfaces-separate-clients) below.
 
 Jan-Klod speaks ACP both ways — as a client (`agent-*` extensions call other agents) and as a server (it can be called by other ACP orchestrators).
 
@@ -88,40 +103,39 @@ tool-web-search       requires: agent-manager
 agent-claude-code     requires: agent-manager (delegates tasks via ACP)
 agent-opencode        requires: agent-manager
 
-api-rest              requires: agent-manager (exposes it over HTTP + SSE)
-api-grpc              requires: agent-manager
-api-graphql           requires: agent-manager
+api-rest              requires: agent-manager; uses host-serve (exposes core over HTTP + SSE)
+api-grpc              requires: agent-manager; uses host-serve
+api-graphql           requires: agent-manager; uses host-serve
 
-ui-tui                requires: agent-manager (via internal Go interface)
-ui-web                requires: api-rest
-ui-gui                requires: agent-manager (via internal Go interface)
+chat-slack            requires: agent-manager; uses host-socket
+chat-telegram         requires: agent-manager; uses host-socket
+chat-whatsapp         requires: agent-manager; uses host-socket
 
-chat-slack            requires: agent-manager (via internal Go interface)
-chat-telegram         requires: agent-manager (via internal Go interface)
-chat-whatsapp         requires: agent-manager (via internal Go interface)
+# UIs are NOT extensions — separate client processes that connect over api-rest (HTTP+SSE)
 ```
 
-### UI extensions (native)
+### User interfaces (separate clients)
 
-UI components need OS-level access (terminal, window system) and cannot run inside the WASM sandbox. They are **native Go extensions** — compiled into the binary, but following the same extension conventions (naming, config, lifecycle) as WASM extensions. They implement the `UIProvider` native Go interface rather than a WIT interface.
+UIs are **not extensions and are not part of core.** They are optional, separate
+**client processes** that connect to a running core over an `api-*` HTTP+SSE
+surface — the same way an editor talks to a language server. Core never embeds a
+UI; a headless deployment (Raspberry Pi, container, Telegram-only) runs no UI
+client at all.
 
-| Extension | Mode | Technology |
+A single client binary presents either a terminal or a graphical UI depending on
+how it is launched:
+
+| Launch | Surface | Technology |
 |---|---|---|
-| `ui-tui` | `jan-klod` (default) | Bubble Tea |
-| `ui-web` | `jan-klod --web` | Embedded HTTP server, opens browser tab |
-| `ui-gui` | `jan-klod --gui` | Wails native WebView window (CGo) |
+| `jan-klod-ui` (default) | Terminal UI | Rust TUI toolkit **(TBD — e.g. `ratatui`)** |
+| `jan-klod-ui --gui` | Native window | Rust desktop/WebView shell **(TBD — e.g. Tauri)** |
+| browser → `api-rest` | Web UI | served by the `api-rest` extension; open a browser tab |
 
-Configured in `jan-klod.yaml` like any other extension:
-
-```yaml
-extensions:
-  ui-tui: true
-  ui-web:
-    port: 8080
-  ui-gui: false
-```
-
-Only one UI extension is active at a time, selected by flag. All modes speak the same internal REST API and load the same `.wasm` extensions.
+All three are clients of the same `api-*` surface, so they share one backend and
+carry no agent logic. *(Open: whether core also exposes a small built-in local
+control endpoint so a UI client can attach to a bare core with no `api-*`
+enabled, or whether a UI deployment always includes `api-rest`. Current lean:
+require `api-rest`, matching the LSP/server model.)*
 
 ## Agent loop architecture
 
@@ -151,39 +165,49 @@ See [Small-Model Harness](small-model-harness.md) for mitigation strategies.
 
 ## Transport
 
-REST via Go `net/http` + `chi` router. Streaming agent responses use **Server-Sent Events (SSE)**. Curl-debuggable, browser-compatible, no stub generation.
+The HTTP surface is **not in core** — it is provided by an `api-*` extension
+(e.g. `api-rest`) that binds a listener through the host `host-serve` capability
+and exposes core over **REST + Server-Sent Events (SSE)**. UI clients, browsers,
+and remote ACP callers all consume this surface. Curl-debuggable,
+browser-compatible, no stub generation. Rust HTTP framework inside the extension
+**(TBD — e.g. `axum`)**.
 
 ## Storage
 
 | Extension | Backend | Notes |
 |---|---|---|
-| `store-sqlite.wasm` | SQLite (`modernc/sqlite`) | Default — pure Go, no CGo, zero-ops |
-| `store-postgres.wasm` | PostgreSQL (`pgx`) | Self-hosted, multi-user |
-| `store-supabase.wasm` | Supabase | Hosted Postgres + realtime + auth |
+| `store-sqlite` | SQLite | Default — zero-ops; Rust SQLite library **(TBD — `rusqlite` bundled vs. pure options)** |
+| `store-postgres` | PostgreSQL | Self-hosted, multi-user; Rust driver **(TBD — e.g. `sqlx`/`tokio-postgres`)** |
+| `store-supabase` | Supabase | Hosted Postgres + realtime + auth |
 
-SQL layer: **sqlc** — type-safe Go generated from `.sql` files.
+SQL layer: type-safe Rust SQL **(TBD — e.g. `sqlx` compile-time-checked queries)**.
 
-Only one `memory-store` is active at a time; selected via `jan-klod.yaml`.
+The persistent store is a **host-side capability** the core exposes through the
+`memory-store` / `host-storage` contract — it is *not* SQLite-in-wasm (which the
+Go MVP confirmed does not work). Only one `memory-store` is active at a time;
+selected via `jan-klod.yaml`.
 
 ## Stack
 
 | Layer | Technology |
 |---|---|
-| Core language | Go |
-| WASM host | Wazero (pure Go, no CGo) |
-| Extension format | WASM component model + WIT interfaces |
-| HTTP | `chi` + `net/http` (REST + SSE) |
-| SQL | `sqlc` + `modernc/sqlite` (default) |
-| UI (native Go) | `ui-tui` (Bubble Tea), `ui-web` (HTTP server), `ui-gui` (Wails WebView) |
-| Build | Wails (CGo required for `ui-gui`; pure Go sufficient without it) |
-| Linting | `golangci-lint` |
+| Core language | Rust |
+| Process model | `core` = standalone process under the user's privileges, hosting the WASM sandbox; UI clients connect over an `api-*` HTTP+SSE surface |
+| WASM host | Wasmtime (Rust-native, no CGo) |
+| Extension format | WASM Component Model + WIT interfaces (`wit-bindgen`) — every extension, incl. `api-*`/`chat-*` |
+| HTTP surface | provided by `api-*` extensions (REST + SSE) via the `host-serve` capability; framework **(TBD — e.g. `axum`)** |
+| SQL (host-side) | type-safe Rust SQL **(TBD — e.g. `sqlx`)** |
+| UI clients (separate, optional) | one client binary: TUI default, GUI by launch flag, web via browser — toolkits **(TBD)** |
+| Build | Cargo (native binary; no CGo in the core) |
+| Linting | Clippy (Rust core); `golangci-lint` for any Go-language tooling/guests |
 | Observability | Structured logging + Prometheus + OpenTelemetry |
 | Config | YAML (`jan-klod.yaml`) |
+| Updater/supervisor | TinyGo standalone binary (blue/green flip + rollback) |
 
 ## Testing
 
-- **Unit:** standard Go `testing` package
-- **Integration:** Go test with real SQLite + embedded Wazero
+- **Unit:** standard Rust `cargo test`
+- **Integration:** Rust tests with real SQLite + embedded Wasmtime
 - **Extension:** WASM component loaded in test harness, WIT interface verified
 
 ## Provider fallback
@@ -293,13 +317,13 @@ Extensions can pick up `jan-klod.yaml` changes without restart. Core watches the
 | Target | Notes |
 |---|---|
 | Desktop (macOS, Windows, Linux) | Primary target; all UI modes available |
-| ARM home server / NAS | Low memory footprint (Go + WASM); headless, `api-rest` + `chat-*` extensions |
+| ARM home server / NAS | Low memory footprint (Rust + WASM); **headless core, no UI client** — e.g. `chat-telegram` for access, optionally `api-rest` |
 | Docker | Single container; config via environment variables or mounted `jan-klod.yaml` |
 | Kubernetes | Enterprise; horizontal scaling of stateless API layer; shared `store-postgres` or `store-supabase` |
 
 ## Deployment modes
 
-- **Standard:** single Go binary + `ext/*.wasm` + `jan-klod.yaml`
-- **Bundle:** pre-packaged ZIP with binary + curated `.wasm` set + pre-filled config
+- **Standard:** the `core` binary + `ext/*.wasm` + `jan-klod.yaml` (the deploy unit). A UI client binary is a separate, optional artifact.
+- **Bundle:** pre-packaged ZIP with core + a curated `.wasm` set + pre-filled config; UI-oriented bundles also include the UI client binary.
 
 See [Blue/Green Deployment](blue-green-deployment.md) for the update strategy.

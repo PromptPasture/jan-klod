@@ -8,11 +8,12 @@ generated: 2026-06-16
 
 A brainstorm session for **Jan-Klod** — a minimal, stable AI agent core built on Java/Quarkus, extensible via a typed plugin system, with curated native bundles and a Spring-Initializr-style configurator.
 
-The primary output artifact from this session is:
+The session artifacts in this folder:
 
-- `BRAINSTORM.md` — full architecture decisions, artifact map, config schema, bundle strategy, blue/green deployment design, and open questions. _(presented to user as a download — ask them for the file path if needed)_
+- [`BRAINSTORM.md`](BRAINSTORM.md) — distilled architecture decisions, artifact map, config schema, bundle strategy, blue/green deployment design, and open questions.
+- [`CONVERSATION.md`](CONVERSATION.md) — the full verbatim brainstorm transcript this folder distills (the primary source).
 
-Do not re-derive decisions already captured there. Reference it as the source of truth.
+Do not re-derive decisions already captured there. Reference them as the source of truth for the original (Java/Quarkus) design.
 
 ---
 

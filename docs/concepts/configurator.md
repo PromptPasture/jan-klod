@@ -4,7 +4,7 @@ title: Configurator
 description: Web UI for generating Jan-Klod configuration and deployment archives
 tags: [configurator, ui, zip, setup]
 created: 2026-06-28T00:00:00Z
-updated: 2026-06-28T00:00:00Z
+updated: 2026-06-29T00:00:00Z
 ---
 
 The Configurator is a Spring Initializr-style web UI. Users select extensions and provide settings; the UI generates a ready-to-run archive containing the core binary, selected `.wasm` extensions, and a pre-filled `jan-klod.yaml`.
@@ -22,28 +22,35 @@ Hosted publicly. Launch on **GitHub Pages**; migrate to `start.janklod.dev` once
 
 ```
 jan-klod-<version>-<os>-<arch>/
-  jan-klod              ← Go binary (platform-specific)
+  jan-klod              ← Rust core binary (platform-specific)
+  jan-klod-ui           ← UI client binary (UI bundles only; TUI/GUI by launch flag)
   jan-klod.yaml         ← pre-filled from selections
   ext/
     provider-openai.wasm
     manager-agent-loop.wasm
     store-sqlite.wasm
+    api-rest.wasm
     …selected extensions…
   README.md
 ```
 
 ## Bundle presets
 
-All bundles ship the same `jan-klod` binary (built with Wails). Presets differ only in which `.wasm` extensions are included and what `jan-klod.yaml` is pre-filled with.
+All bundles ship the same `jan-klod` **core** binary (built with Cargo) plus a
+selected `.wasm` extension set. UI-oriented bundles additionally include the
+separate **UI client** binary and enable an `api-rest` extension for it to
+connect to. Presets differ only in which `.wasm` extensions are included, whether
+the UI client is bundled, and what `jan-klod.yaml` is pre-filled with.
 
-| Bundle | Included extensions | Default UI mode |
+| Bundle | Included extensions | UI client |
 |---|---|---|
-| `tui` | all providers + managers + stores + registries + tools | TUI |
-| `gui` | same | GUI (`--gui`) |
-| `full` | everything | TUI |
+| `tui` | providers + managers + stores + registries + tools + `api-rest` | included (launches in TUI mode) |
+| `gui` | same | included (launches with `--gui`) |
+| `full` | everything | included |
 
-Users can always switch mode at runtime: `jan-klod`, `jan-klod --web`, `jan-klod --gui`.
+Core runs headless; the UI client selects its mode at launch: `jan-klod-ui`
+(TUI), `jan-klod-ui --gui`, or a browser pointed at the `api-rest` surface.
 
 ## Extension registry
 
-The registry is a simple HTTP file server: a directory of `.wasm` files with a metadata index. No Maven Central, no npm. Extensions are downloaded at Configurator generation time and bundled into the ZIP.
+The registry is a simple HTTP file server: a directory of `.wasm` files with a metadata index. No crates.io, no npm. Extensions are downloaded at Configurator generation time and bundled into the ZIP.
