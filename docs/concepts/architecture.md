@@ -42,7 +42,7 @@ never built in.
 
 ## Extension model
 
-Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are loaded at runtime by Wasmtime and sandboxed — they can only do what the WIT interface explicitly grants. Because they are Component-Model components, each can be authored in **any `wit-bindgen` language** (Rust, JS, Python, Go, …) and all are interchangeable against the same WIT contract.
+Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are loaded at runtime by Wasmtime and sandboxed — they can only do what the WIT interface explicitly grants. Because they are Component-Model components, each can be authored in **any `wit-bindgen` language** (Rust, JS, Python, Go, …) and all are interchangeable against the same WIT contract. See [Contracts](contracts.md) for the interface definitions.
 
 ### What the host grants extensions
 
@@ -326,4 +326,4 @@ Extensions can pick up `jan-klod.yaml` changes without restart. Core watches the
 - **Standard:** the `core` binary + `ext/*.wasm` + `jan-klod.yaml` (the deploy unit). A UI client binary is a separate, optional artifact.
 - **Bundle:** pre-packaged ZIP with core + a curated `.wasm` set + pre-filled config; UI-oriented bundles also include the UI client binary.
 
-See [Blue/Green Deployment](blue-green-deployment.md) for the update strategy.
+See [Configurator](configurator.md) for generating these archives and [Blue/Green Deployment](blue-green-deployment.md) for the update strategy.

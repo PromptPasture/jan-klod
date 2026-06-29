@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-29 (session 21)
+
+- **Fix (wiki lint)**: Normalized frontmatter across all `decisions/` files to the wiki convention (`type`/`title`/`description`/`tags`/`created`/`updated`). `2026-06-26-small-model-harness/Handoff.md` had **no frontmatter** (now `type: decision`); the four `generated:`-only handoffs and `BRAINSTORM.md`'s `status:/last-updated:` scheme replaced; `CONVERSATION.md` gained `tags`/`updated`. Dates preserved.
+- **Fix (wiki lint)**: De-orphaned two concept pages by adding the missing cross-links from [architecture.md](concepts/architecture.md) → [contracts.md](concepts/contracts.md) (interface definitions) and → [configurator.md](concepts/configurator.md) (archive generation).
+- **Create**: Added [decisions/2026-06-16-jan-klod/index.md](decisions/2026-06-16-jan-klod/index.md) cataloging that folder's three files (Handoff, Brainstorm, Conversation).
+- **Note**: Left intentionally — the centralized root `changelog.md` (no per-directory changelogs) and the `Handoff.md`/`BRAINSTORM.md` filename pattern (folder name carries the title); single-file decision folders keep no `index.md` (parent `decisions/index.md` + filesystem scan suffice).
+
 ## 2026-06-29 (session 20)
 
 - **Decision**: Settled runtime topology & trust after re-grounding on the exported original brainstorm ([decisions/2026-06-16-jan-klod/CONVERSATION.md](decisions/2026-06-16-jan-klod/CONVERSATION.md)). **Nothing is trusted** → every extension is a sandboxed WASM component; **the native/in-core extension tier is removed** (it was a Go-era conflation of "needs OS access" with "compiled into core"). **`core` runs as a standalone process under the user's privileges**, headless-capable, as the deploy unit. **Agent loop stays an extension** (`manager-agent-loop`) — Option A, confirmed from the brainstorm. **`api-*`/`chat-*` become ordinary sandboxed WASM extensions** reaching the network via planned `host-serve`/`host-socket` capabilities. **UIs are not extensions** — optional separate client processes connecting over an `api-*` HTTP+SSE surface (LSP model); one client binary, TUI/GUI by launch mode.

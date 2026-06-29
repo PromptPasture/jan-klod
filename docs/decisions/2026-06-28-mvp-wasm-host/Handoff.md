@@ -1,5 +1,10 @@
 ---
-generated: 2026-06-28
+type: decision
+title: MVP WASM Host — ABI, no-CGo, SQLite placement (superseded)
+description: Wazero has no Component Model → core-module JSON ABI; no CGo anywhere; SQLite runs host-side not in-guest. Superseded by 2026-06-29.
+tags: [decision, wasm, wazero, abi, sqlite, superseded]
+created: 2026-06-28
+updated: 2026-06-28
 ---
 
 # Handoff — MVP WASM Host: ABI, no-CGo, SQLite placement

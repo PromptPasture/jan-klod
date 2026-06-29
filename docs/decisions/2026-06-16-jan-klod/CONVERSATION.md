@@ -2,7 +2,9 @@
 type: source
 title: Jan-Klod — Original Brainstorm Conversation (verbatim)
 description: Full transcript of the 2026-06-15 brainstorm that produced the 2026-06-16 Jan-Klod design. Java/Quarkus era — superseded by later decisions, kept as the primary source.
+tags: [source, transcript, brainstorm, jan-klod, java, quarkus, superseded]
 created: 2026-06-15
+updated: 2026-06-29
 ---
 
 # Jan-Klod — Full Brainstorm Conversation

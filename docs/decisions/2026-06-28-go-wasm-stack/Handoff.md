@@ -1,5 +1,10 @@
 ---
-generated: 2026-06-28
+type: decision
+title: Go + Wazero + WASM Stack (superseded)
+description: Replaced Java/Quarkus with Go + Wazero + WASM; locked stack, storage, UI, and deployment. Host language/runtime later superseded by 2026-06-29 (Rust + Wasmtime).
+tags: [decision, stack, go, wazero, wasm, superseded]
+created: 2026-06-28
+updated: 2026-06-28
 ---
 
 # Handoff — Stack Decision: Go + Wazero + WASM

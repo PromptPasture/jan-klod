@@ -1,3 +1,12 @@
+---
+type: decision
+title: Small-Model Harness Design
+description: Mitigations for reliable agent loops on small (9–12B) LLMs — constrained decoding, dynamic tool injection, layered router, retry/correction.
+tags: [decision, llm, small-model, agent-loop, constrained-decoding]
+created: 2026-06-26
+updated: 2026-06-26
+---
+
 # Handoff Document
 
 **Date:** 2026-06-26

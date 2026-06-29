@@ -1,6 +1,10 @@
 ---
-status: draft
-last-updated: 2026-06-16
+type: decision
+title: Jan-Klod Brainstorm — Original Design (Java/Quarkus era)
+description: Distilled architecture, artifact map, contracts sketch, config schema, bundle strategy, and blue/green design from the 2026-06-15 brainstorm. Superseded; kept for history.
+tags: [decision, brainstorm, architecture, java, quarkus, superseded]
+created: 2026-06-16
+updated: 2026-06-16
 ---
 
 # Brainstorm

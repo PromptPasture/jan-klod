@@ -1,5 +1,10 @@
 ---
-generated: 2026-06-29
+type: decision
+title: Component Model on Rust + Wasmtime
+description: Untrusted extensions ⇒ in-process WASM sandbox; adopt the WebAssembly Component Model; host moves Go→Rust + Wasmtime. The current foundation decision.
+tags: [decision, component-model, rust, wasmtime, wit, trust-model]
+created: 2026-06-29
+updated: 2026-06-29
 ---
 
 # Handoff — Foundation Decision: Component Model on Rust + Wasmtime

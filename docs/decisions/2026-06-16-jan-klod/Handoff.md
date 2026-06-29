@@ -1,5 +1,10 @@
 ---
-generated: 2026-06-16
+type: decision
+title: Jan-Klod Initial Design (Java/Quarkus era)
+description: Project vision, artifact map, extension taxonomy, config schema, and blue/green design — the original Java/Quarkus plan. Superseded by 2026-06-28 onward.
+tags: [decision, architecture, jan-klod, java, quarkus, superseded]
+created: 2026-06-16
+updated: 2026-06-16
 ---
 
 # Handoff — 🥷 Jan Klod Agent Project
