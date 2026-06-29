@@ -4,6 +4,7 @@
 
 - **Create**: Added [decisions/2026-06-29-extension-technologies/BRAINSTORM.md](decisions/2026-06-29-extension-technologies/BRAINSTORM.md) (+ folder `index.md`) — language policy for our **first-party** extensions. Per-extension best-fit, **gated by CM-toolchain maturity *and* supply-chain posture** (the build pipeline is not protected by the runtime sandbox; npm-style worms fire at build time). **Default: Go (TinyGo) or Rust**; TS/JS + Python **case-by-case** (decisive library + hygiene); **Kotlin/JVM + Java excluded for now** (Beta, `wit-bindgen` fork, WASI threading unresolved). Cross-cutting supply-chain controls recorded. Provisional near-term assignments: Phase 1–2 extensions in Go (TinyGo); net footprint Rust core + Go extensions. Listed in [decisions/index.md](decisions/index.md).
 - **Update**: [concepts/roadmap.md](concepts/roadmap.md) — added a **Status tracker** (per-phase `not-started`/`in-progress`/`blocked`/`done` flags) so phases run as a resumable loop; added the built-extension language ground rule (default Go/Rust); set the now-decided Phase 1–2 extension language to **Go (TinyGo)** (was "ideally non-Rust").
+- **Create**: Added [decisions/2026-06-29-extension-technologies/PLAN.md](decisions/2026-06-29-extension-technologies/PLAN.md) — living Phase 1 execution checklist (Slice 1a gate / Slice 1b MVP parity), the decided `src/` repo layout (`src/core/`, `src/extensions/<name>/`; `wit/` stays at root), and status flags mirroring the roadmap tracker. Added the `src/`-layout ground rule to the roadmap.
 
 ## 2026-06-29 (session 22)
 

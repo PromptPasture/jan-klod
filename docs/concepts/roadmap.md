@@ -37,6 +37,10 @@ walking skeleton behind a go/no-go gate), then build out on it.
   a core swap. See [Blue/Green Deployment](blue-green-deployment.md).
 - **The WIT contracts already exist** (`wit/*.wit`, 15 interfaces) and are canonical.
   They survived the Go-source reset and are the fixed point everything builds against.
+- **All implementation code lives under `src/`** (`src/core/` for the Rust host,
+  `src/extensions/<name>/` for guests); `wit/` stays at the repo root as
+  language-agnostic contracts. Detailed Phase 1 checklist:
+  [PLAN.md](../decisions/2026-06-29-extension-technologies/PLAN.md).
 - **Just-in-time library choices.** Every **(TBD)** in [Architecture](architecture.md)
   is resolved at the phase that first needs it (YAGNI), never speculatively.
 
