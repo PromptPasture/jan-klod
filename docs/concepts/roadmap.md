@@ -66,7 +66,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Phase | Flag | Gate / note |
 |---|---|---|
-| 1 — Walking skeleton + foundation gate | `not-started` | Slice-1a go/no-go (CM-in-Rust + one TinyGo guest) pending |
+| 1 — Walking skeleton + foundation gate | `in-progress` | **Slice 1a PASSED** (2026-06-29 — CM-in-Rust + TinyGo guest round-trip, async model decided); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). Slice 1b (MVP parity) next |
 | 2 — Agent loop | `not-started` | starts after Phase 1 exit gate |
 | 3 — Persistence + inbound network | `not-started` | — |
 | 4 — Clients & integrations | `not-started` | — |
@@ -163,7 +163,9 @@ through a sandboxed component, with an in-memory store, all over the Component M
 
 Tracked in the foundation decision's
 [open questions](../decisions/2026-06-29-component-model-rust/Handoff.md#open-questions-carried-forward--new):
-non-Rust guest toolchain maturity (Phase 1), `host-serve`/`host-socket` design
-(Phase 3/4), UI↔core transport (Phase 3), the Rust async model (Phase 1), host-side
-SQLite library (Phase 3), and carry-over agent-loop tunables (retry limit, context
-compression, ACP delegation timeout — Phase 2).
+non-Rust guest toolchain maturity (Phase 1 — **settled at the Slice 1a gate**:
+TinyGo CM toolchain works), `host-serve`/`host-socket` design (Phase 3/4),
+UI↔core transport (Phase 3), the Rust async model (Phase 1 — **resolved**: sync
+baseline, `tokio` at `host-http`), host-side SQLite library (Phase 3), and
+carry-over agent-loop tunables (retry limit, context compression, ACP delegation
+timeout — Phase 2).

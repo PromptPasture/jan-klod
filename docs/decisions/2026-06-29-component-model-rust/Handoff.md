@@ -212,6 +212,9 @@ language used in the spike is incidental to that role.
   `api-rest`.
 - Async model in the Rust host (`tokio` vs sync Wasmtime) for concurrent
   extension calls — a known Rust pain surface; scope it in the spike.
+  **Resolved (2026-06-29, Slice 1a gate):** sync Wasmtime baseline; `tokio`
+  enters at `host-http` (Slice 1b). See
+  [Slice 1a verdict](../2026-06-29-extension-technologies/SLICE-1A-GATE.md#async-model-decision-resolves-a-phase-1-open-question).
 - Host-side SQLite: prior plan used Go (`modernc/sqlite` / `ncruces/go-sqlite3`).
   Re-decide the Rust equivalent (`rusqlite` is CGo via bundled SQLite, or
   `libsql`/pure options) when the persistent store is built.

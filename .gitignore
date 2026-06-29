@@ -574,5 +574,12 @@ FodyWeavers.xsd
 # End of https://www.toptal.com/developers/gitignore/api/linux,macos,windows,visualstudio,jetbrains+all,visualstudiocode
 
 ### Jan-Klod build artifacts ###
-/bin/
-/ext/*.wasm
+# Build output directories, anywhere in the tree
+bin/
+target/
+
+# Compiled guest components (rebuilt from source)
+src/extensions/**/*.wasm
+
+# wkg-fetched WIT deps — reproducible from the committed lock via `wkg wit fetch`
+wit/**/deps/

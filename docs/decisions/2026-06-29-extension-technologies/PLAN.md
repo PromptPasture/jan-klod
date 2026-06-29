@@ -30,17 +30,20 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Item | Flag |
 |---|---|
-| Slice 1a — gate | `not-started` |
+| Slice 1a — gate | `done` — **PASSED** ([verdict](SLICE-1A-GATE.md)) |
 | Slice 1b — MVP parity | `not-started` |
 
 ## Slice 1a — the gate (go/no-go)
 
-- [ ] Cargo workspace at `src/core/`; add `wasmtime` (component model) + `wasmtime::component::bindgen!`
-- [ ] Thin contract for the gate: stubbed `llm-provider` (single `complete`) or a throwaway `spike` world
-- [ ] TinyGo (v0.34+) guest: `wit-bindgen-go` bindings, `wkg` dep resolution, handle the `wasi:cli` world quirk, build to a component
-- [ ] Host loads the component, calls `complete`, prints the echo
-- [ ] Async model decision: start with sync Wasmtime; document where `tokio` becomes necessary (host-http in 1b)
-- [ ] **Gate verdict** → update both trackers. Pass → Slice 1b. Friction → `blocked` + fall back to Go + wazero per the documented escape hatch.
+**Verdict: PASS** (2026-06-29). Full write-up: [SLICE-1A-GATE.md](SLICE-1A-GATE.md).
+Reproduce with `make gate`.
+
+- [x] Cargo workspace at `src/core/`; add `wasmtime` (component model) + `wasmtime::component::bindgen!`
+- [x] Thin contract for the gate: throwaway `spike` world (`export complete: func(prompt: string) -> string`)
+- [x] TinyGo (v0.41.1) guest: `wit-bindgen-go` bindings, `wkg` dep resolution, `wasi:cli` world quirk settled (`include wasi:cli/imports`), built to a component
+- [x] Host loads the component, calls `complete`, prints the echo (`echo: hello, component model`)
+- [x] Async model decision: sync Wasmtime baseline; `tokio` enters at `host-http` (1b) — see [verdict](SLICE-1A-GATE.md#async-model-decision-resolves-a-phase-1-open-question)
+- [x] **Gate verdict** → trackers updated. **Pass → Slice 1b.** Escape hatch (Go + wazero) not needed.
 
 ## Slice 1b — build out to MVP parity (only after the gate passes)
 

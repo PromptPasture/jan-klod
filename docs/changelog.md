@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-29 (session 25)
+
+- **Implement**: **Slice 1a gate — PASSED.** Built the thinnest CM vertical slice end-to-end: a synchronous Rust + Wasmtime host (`src/core/` Cargo workspace → `jan-klod` binary, `wasmtime`/`wasmtime-wasi` 46, `bindgen!`) loads a **TinyGo `wasip2` component** (`src/extensions/spike/`) built against a **custom WIT world** (`wit/spike/world.wit`, `jan-klod:spike`) and calls its exported `complete` across the Component Model boundary → prints `echo: hello, component model`. Reproducible via `make gate`.
+- **Resolve**: The **`wasi:cli` world quirk** — a custom `-wit-world` replaces TinyGo's default command world, so the world must `include wasi:cli/imports@0.2.0`, deps are fetched with **`wkg wit fetch`**, and the host provides them via `wasmtime_wasi::p2::add_to_linker_sync` (store state implements `WasiView`). `func main()` still required for `wasip2`.
+- **Decide**: **Host async model** — sync Wasmtime baseline; `tokio` enters at `host-http` (Slice 1b, `call_async` + `Config::async_support`). Resolves the foundation decision's async open question.
+- **Create**: Added [decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md](decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md) — the verdict record (what was built, evidence, quirk resolution, async decision, cleanup). Linked from the folder [index.md](decisions/2026-06-29-extension-technologies/index.md).
+- **Update**: [PLAN.md](decisions/2026-06-29-extension-technologies/PLAN.md) Slice 1a → `done`/checked; [roadmap.md](concepts/roadmap.md) Phase 1 → `in-progress` (Slice 1a PASSED, async + toolchain open questions marked resolved); [component-model-rust/Handoff.md](decisions/2026-06-29-component-model-rust/Handoff.md) async open question annotated resolved. `Makefile` gained `gate`/`spike-*`/`host` targets; `.gitignore` now covers `src/core/target/`, built `*.wasm`, and `wit/**/deps/`.
+
 ## 2026-06-29 (session 24)
 
 - **Create**: Added [guides/development-setup.md](guides/development-setup.md) (+ new `guides/` folder `index.md`, linked from root [index.md](index.md)) — the first setup instructions: install/verify the Phase 1 toolchain (Rust via `rustup`, Go + **TinyGo ≥ 0.34** for guest components, **wkg** for WIT dep resolution, `wasm-tools`; optional `wasmtime` CLI + `cargo-component`; Slice-1b CI tools `govulncheck`/`cargo-deny`/`syft`). Records the TinyGo `wasip2` + `--wit-package`/`--wit-world` build shape and the `wasi:cli` world quirk the Slice-1a gate must settle. Toolchain audit at write time: Rust 1.96 ✓, Go 1.26 ✓, wasm-tools 1.252 ✓; **TinyGo + wkg not yet installed** (the real gate on starting Slice 1a).
