@@ -5,6 +5,8 @@
 //! `host-log` is tagged with its id. The capabilities here are the host half of
 //! the `provider-world` imports bound in [`crate::bindings`].
 
+use std::fmt::Write as _;
+
 use serde_json::Value;
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
@@ -20,11 +22,13 @@ pub struct ConfigSection {
 
 impl ConfigSection {
     /// Wrap an instance's resolved config object.
-    pub fn new(root: Value) -> Self {
+    #[must_use]
+    pub const fn new(root: Value) -> Self {
         Self { root }
     }
 
     /// Resolve a dot-separated key path to its JSON value, if present.
+    #[must_use]
     pub fn lookup(&self, key: &str) -> Option<&Value> {
         let mut cur = &self.root;
         for segment in key.split('.') {
@@ -39,11 +43,13 @@ impl ConfigSection {
     }
 
     /// Whether `key` resolves to a value.
+    #[must_use]
     pub fn has(&self, key: &str) -> bool {
         self.lookup(key).is_some()
     }
 
     /// The whole section as a JSON string.
+    #[must_use]
     pub fn all(&self) -> String {
         self.root.to_string()
     }
@@ -98,7 +104,8 @@ impl host_log::Host for HostState {
         };
         let mut line = format!("{level} [{}] {component}: {message}", self.component_id);
         for field in fields {
-            line.push_str(&format!(" {}={}", field.key, field.value));
+            // Infallible: writing into a String never errors.
+            let _ = write!(line, " {}={}", field.key, field.value);
         }
         eprintln!("{line}");
     }

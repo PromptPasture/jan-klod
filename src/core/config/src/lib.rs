@@ -21,7 +21,7 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 /// One configured extension instance resolved from `jan-klod.yaml`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionInstance {
     /// `<category>.<name>` — unique instance id, e.g. `provider.openai`.
     pub id: String,
@@ -42,13 +42,14 @@ pub struct ExtensionInstance {
 
 impl ExtensionInstance {
     /// Wasm file name to resolve under the `ext/` directory.
+    #[must_use]
     pub fn component_file(&self) -> String {
         format!("{}.wasm", self.component)
     }
 }
 
 /// Parsed `jan-klod.yaml`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Every declared instance, ordered by `(category, name)`.
     pub instances: Vec<ExtensionInstance>,
@@ -59,6 +60,10 @@ pub struct Config {
 
 impl Config {
     /// Read and parse a `jan-klod.yaml` from disk.
+    ///
+    /// # Errors
+    /// Returns [`ConfigError::Read`] if the file cannot be read, or any parse
+    /// error from [`Config::from_yaml`].
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -69,6 +74,11 @@ impl Config {
     }
 
     /// Parse a `jan-klod.yaml` from a string.
+    ///
+    /// # Errors
+    /// Returns a [`ConfigError`] if the YAML is malformed, the structure is not
+    /// the expected category→instance mapping, an enabled instance references an
+    /// unset `${VAR}`, or more than one store is enabled.
     pub fn from_yaml(yaml: &str) -> Result<Self, ConfigError> {
         let root: Value = serde_yaml_ng::from_str(yaml)?;
         let Value::Object(mut root) = root else {
@@ -80,7 +90,7 @@ impl Config {
         let instances = parse_instances(extensions)?;
         validate(&instances)?;
         // Whatever remains at the top level is opaque agent-behaviour config.
-        Ok(Config {
+        Ok(Self {
             instances,
             agent: Value::Object(root),
         })
@@ -207,30 +217,62 @@ fn expand_str(s: &str, id: &str) -> Result<Option<String>, ConfigError> {
 /// Errors surfaced while loading `jan-klod.yaml`.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+    /// The config file could not be read from disk.
     #[error("reading {path}: {source}")]
     Read {
+        /// Path that failed to read.
         path: String,
+        /// The underlying I/O error.
         #[source]
         source: std::io::Error,
     },
+    /// The YAML could not be parsed.
     #[error("parsing config: {0}")]
     Parse(#[from] serde_yaml_ng::Error),
+    /// The document root is not a mapping.
     #[error("config root must be a mapping")]
     RootNotMap,
+    /// `extensions` is present but is not a mapping of categories.
     #[error("`extensions` must be a mapping of categories")]
     ExtensionsNotMap,
+    /// A category (e.g. `provider`) is not a mapping of named instances.
     #[error("extensions.{category} must be a mapping of named instances")]
-    CategoryNotMap { category: String },
+    CategoryNotMap {
+        /// The offending category name.
+        category: String,
+    },
+    /// An instance entry is not a mapping.
     #[error("{id} must be a mapping")]
-    InstanceNotMap { id: String },
+    InstanceNotMap {
+        /// The offending instance id.
+        id: String,
+    },
+    /// An instance's `enabled` key is not a boolean.
     #[error("{id}: `enabled` must be a boolean")]
-    EnabledNotBool { id: String },
+    EnabledNotBool {
+        /// The offending instance id.
+        id: String,
+    },
+    /// An instance's `type` key is not a string.
     #[error("{id}: `type` must be a string")]
-    TypeNotString { id: String },
+    TypeNotString {
+        /// The offending instance id.
+        id: String,
+    },
+    /// An enabled instance references an environment variable that is not set.
     #[error("{id}: environment variable `{var}` is not set")]
-    MissingEnv { id: String, var: String },
+    MissingEnv {
+        /// The instance referencing the variable.
+        id: String,
+        /// The unset variable name.
+        var: String,
+    },
+    /// More than one `store` instance is enabled (at most one is allowed).
     #[error("more than one store enabled ({names}); exactly one store may be active")]
-    MultipleStores { names: String },
+    MultipleStores {
+        /// Comma-separated ids of the conflicting stores.
+        names: String,
+    },
 }
 
 #[cfg(test)]

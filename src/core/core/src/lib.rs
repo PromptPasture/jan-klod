@@ -10,6 +10,8 @@
 //! capabilities, and runs lifecycle. Everything domain-specific lives in the
 //! extensions it hosts.
 
+// Generated Component-Model bindings; lint exemptions scoped to the macro output.
+#[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bindings;
 mod host;
 
@@ -70,6 +72,11 @@ impl Runtime {
     /// Load `jan-klod.yaml`, wire host capabilities, and resolve every enabled
     /// instance against `ext_dir`. Compiles present components; missing ones are
     /// recorded so a partial deployment still boots.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Config`] if the config fails to load, [`CoreError::Linker`]
+    /// if a host capability cannot be wired, or [`CoreError::Load`] if a present
+    /// component fails to compile.
     pub fn boot(config_path: impl AsRef<Path>, ext_dir: impl AsRef<Path>) -> Result<Self, CoreError> {
         let config = Config::from_path(config_path)?;
         let engine = Engine::default();
@@ -113,6 +120,7 @@ impl Runtime {
     }
 
     /// The resolved extension set, in boot order.
+    #[must_use]
     pub fn extensions(&self) -> &[LoadedExtension] {
         &self.extensions
     }
@@ -120,6 +128,11 @@ impl Runtime {
     /// Instantiate every compiled component in its own store and run its
     /// lifecycle (`init` → `start`). Missing components are skipped. Returns the
     /// ids that were started.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Instantiate`] if a component cannot be instantiated,
+    /// [`CoreError::Lifecycle`] if a lifecycle call traps, or
+    /// [`CoreError::LifecycleRejected`] if an extension refuses to start.
     pub fn start_all(&self) -> Result<Vec<String>, CoreError> {
         let mut started = Vec::new();
         for ext in &self.extensions {
@@ -171,7 +184,8 @@ impl Runtime {
     }
 
     /// A human-readable boot plan (each instance → its component, loaded/missing).
-    pub fn report(&self) -> BootReport<'_> {
+    #[must_use]
+    pub const fn report(&self) -> BootReport<'_> {
         BootReport(self)
     }
 }
@@ -229,44 +243,56 @@ pub enum CoreError {
     /// Wiring a host capability into the linker failed.
     #[error("wiring host capabilities into the linker")]
     Linker {
+        /// The underlying Wasmtime linker error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// Compiling a component from disk failed.
     #[error("loading component for {id} from {path}")]
     Load {
+        /// Instance id whose component failed to compile.
         id: String,
+        /// Path the component was loaded from.
         path: String,
+        /// The underlying compilation error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// Instantiating a compiled component failed.
     #[error("instantiating {id}")]
     Instantiate {
+        /// Instance id that failed to instantiate.
         id: String,
+        /// The underlying instantiation error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// A lifecycle call trapped (guest crash, host-cap error).
     #[error("{id}: lifecycle `{phase}` trapped")]
     Lifecycle {
+        /// Instance id whose lifecycle call trapped.
         id: String,
+        /// Lifecycle phase that trapped (`init` / `start`).
         phase: &'static str,
+        /// The underlying trap.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// A lifecycle call returned an error result (the extension refused to load).
     #[error("{id}: lifecycle `{phase}` failed: {message}")]
     LifecycleRejected {
+        /// Instance id that refused to load.
         id: String,
+        /// Lifecycle phase that was rejected (`init` / `start`).
         phase: &'static str,
+        /// The message the extension returned.
         message: String,
     },
 }
 
 impl CoreError {
     fn linker(source: wasmtime::Error) -> Self {
-        CoreError::Linker {
+        Self::Linker {
             source: source.into(),
         }
     }

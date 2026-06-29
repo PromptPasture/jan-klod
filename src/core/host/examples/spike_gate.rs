@@ -7,6 +7,10 @@
 //! Synchronous Wasmtime on purpose — see the async-model decision in that
 //! decision folder.
 
+// This example is dominated by `bindgen!`-generated code; exempt it from the
+// doc/style lints the workspace applies to real source.
+#![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Engine, Result, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};

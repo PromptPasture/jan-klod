@@ -59,4 +59,8 @@ Reproduce with `make gate`.
 ## Cross-cutting (from day one)
 
 - Structured logging
+- **Rust lint policy** — `[workspace.lints]` in `src/core/Cargo.toml`, inherited by
+  every crate: clippy `all`/`pedantic`/`nursery` = `warn`, `unsafe_code = "deny"`,
+  `missing_docs = "warn"`. Generated `bindgen!` output is scoped out with a local
+  `#[allow(...)]`. Workspace is warning-clean; CI will enforce `-D warnings` (below).
 - The supply-chain CI gates above
