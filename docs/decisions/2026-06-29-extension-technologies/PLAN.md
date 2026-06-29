@@ -31,7 +31,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Item | Flag |
 |---|---|
 | Slice 1a — gate | `done` — **PASSED** ([verdict](SLICE-1A-GATE.md)) |
-| Slice 1b — MVP parity | `in-progress` — core skeleton + `host-log`/`host-config` done; guests next |
+| Slice 1b — MVP parity | `in-progress` — core skeleton + `host-log`/`host-config` done; first guest (`store-memory`, Rust) loads + runs lifecycle; `provider-openai` next |
 
 ## Slice 1a — the gate (go/no-go)
 
@@ -47,11 +47,11 @@ Reproduce with `make gate`.
 
 ## Slice 1b — build out to MVP parity (only after the gate passes)
 
-- [x] Rust core skeleton: `jan-klod.yaml` loader (`jan-klod-config`); extension registry + boot ordering (category-tier; full dependency-graph deferred until managers declare deps); lifecycle drive (`init`→`start`); component host loading `ext/*.wasm` — `jan-klod-core` crate, `Runtime::boot`/`start_all`
+- [x] Rust core skeleton: `jan-klod.yaml` loader (`jan-klod-config`); extension registry + boot ordering (category-tier; full dependency-graph deferred until managers declare deps); lifecycle drive (`init`→`start`); component host loading `ext/*.wasm` — `jan-klod-core` crate, `Runtime::boot`/`start_all`. The core instantiates every guest as the category-neutral `extension-world` (imports the full host-cap set, exports only `extension-lifecycle`) so one target drives lifecycle on any guest, store or provider, without depending on a category interface.
 - [~] Host capabilities as CM imports: `host-log` ✓ + `host-config` ✓ implemented; `host-http` wired into the linker as a stub (returns `backend`) until `provider-openai` needs it (then add the blocking HTTP client + `tokio` if needed)
-- [ ] `store-memory` (Rust, `cargo-component`) — real `memory-store` component
-- [ ] `provider-openai` (Rust, `cargo-component`) — OpenAI-compatible `llm-provider` over `host-http`
-- [x] Build: `Makefile` — `make run` boots the core; `make gate` reproduces Slice 1a (now an example); per-guest `cargo component build` targets land with the first guest (`tinygo`+`wkg` retained only for the Slice 1a gate canary)
+- [x] `store-memory` (Rust) — real `memory-store` component, in-memory `HashMap` backend. Built with the `wit-bindgen` crate + the `wasm32-wasip2` target (emits a component directly; **no `cargo-component` needed**). Loads through the core, drives `init`→`start`, and round-trips both host caps it imports (`host-log` lines tagged `[store.memory]`, `host-config` `all()` returns its section). Loads via the category-neutral `extension-world` (see the core-skeleton item above).
+- [ ] `provider-openai` (Rust) — OpenAI-compatible `llm-provider` over `host-http`
+- [x] Build: `Makefile` — `make run` boots the core; `make gate` reproduces Slice 1a (now an example); `make store-memory` builds the first guest (`cargo build --target wasm32-wasip2`), `make store-memory-docker` is the no-rustup container fallback (`rust:1-slim`); `tinygo`+`wkg` retained only for the Slice 1a gate canary
 - [ ] Supply-chain CI gates: Rust `Cargo.lock` + `cargo-deny`/`cargo-audit` (primary, all our extensions); Go `-mod=readonly` + `go.sum` verify + `govulncheck` (Slice 1a gate spike only); SBOM (`syft`)
 - [ ] Tests: `cargo test` + a component test harness (load a guest, verify its WIT interface)
 - [ ] **Exit gate:** config-driven load → lifecycle → OpenAI-compatible completion through a sandboxed component + in-memory store, all over the Component Model → Phase 1 `done`

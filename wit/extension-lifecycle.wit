@@ -30,3 +30,17 @@ interface extension-lifecycle {
     /// Current liveness — polled by the host.
     health: func() -> health-status;
 }
+
+/// Category-neutral world the core instantiates to drive the *universal*
+/// lifecycle (`init` → `start` → …) on any guest, regardless of what category
+/// interface it also exports. The core grants the full host-capability set so a
+/// single instantiation target serves every extension; a guest imports only the
+/// capabilities it actually uses. Category contracts (`store-world`,
+/// `provider-world`, …) remain the worlds guests are *authored* against.
+world extension-world {
+    import host-log;
+    import host-config;
+    import host-http;
+
+    export extension-lifecycle;
+}

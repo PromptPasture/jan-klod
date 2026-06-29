@@ -578,8 +578,10 @@ FodyWeavers.xsd
 bin/
 target/
 
-# Compiled guest components (rebuilt from source)
+# Compiled guest components (rebuilt from source) — both the per-guest build
+# output and the ext/ staging dir the core loads them from.
 src/extensions/**/*.wasm
+ext/*.wasm
 
 # wkg-fetched WIT deps — reproducible from the committed lock via `wkg wit fetch`
 wit/**/deps/

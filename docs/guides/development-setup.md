@@ -107,6 +107,33 @@ guest — targets land in Slice 1b).
 
 ## Building a guest component (shape)
 
+First-party guests **default to Rust** (see the
+[extension-technology decision](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md));
+TinyGo is the case-by-case exception and the standing polyglot gate canary.
+
+### Rust (default)
+
+No `cargo-component` needed: since Rust 1.82 the `wasm32-wasip2` target emits a
+**component** directly, and the `wit-bindgen` crate generates the guest bindings
+from our `wit/`. A guest is a `cdylib` that implements the exported world's
+`Guest` traits (see `src/extensions/store-memory/`):
+
+```shell
+rustup target add wasm32-wasip2          # one-time
+cargo build --release --target wasm32-wasip2
+# -> target/wasm32-wasip2/release/<name>.wasm  (a component)
+```
+
+`make store-memory` wraps this and stages the result in `ext/`.
+
+> **No rustup? (Homebrew `rust` can't add wasm targets.)** Build in a container:
+> `make store-memory-docker` (uses `rust:1-slim`; `CONTAINER ?= podman`, override
+> `CONTAINER=docker` if needed). This is why the guide opens by insisting on
+> rustup over Homebrew's `rust` — a Homebrew toolchain can build the core but
+> not a guest.
+
+### TinyGo (gate canary / case-by-case)
+
 The native Component-Model path TinyGo uses against our contracts:
 
 ```shell
@@ -117,8 +144,8 @@ tinygo build -target=wasip2 \
 ```
 
 > **Known quirk (tracked in [PLAN.md](../decisions/2026-06-29-extension-technologies/PLAN.md)):**
-> TinyGo's `wasip2` target assumes a `wasi:cli` world. Slice 1a's gate exists
-> partly to settle how this interacts with our worlds before we build out.
+> TinyGo's `wasip2` target assumes a `wasi:cli` world — a custom `--wit-world`
+> must `include wasi:cli/imports`. Rust's `wasm32-wasip2` has no such quirk.
 
 ## Supply-chain / CI tooling (Slice 1b)
 

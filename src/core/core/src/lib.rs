@@ -22,7 +22,7 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
 
 use bindings::jan_klod::interfaces::{host_config, host_http, host_log};
-use bindings::ProviderWorld;
+use bindings::ExtensionWorld;
 use jan_klod_config::{Config, ExtensionInstance};
 
 pub use host::{ConfigSection, HostState};
@@ -143,7 +143,7 @@ impl Runtime {
             let section = ConfigSection::new(ext.instance.config.clone());
             let mut store = Store::new(&self.engine, HostState::new(id.clone(), section));
 
-            let world = ProviderWorld::instantiate(&mut store, component, &self.linker)
+            let world = ExtensionWorld::instantiate(&mut store, component, &self.linker)
                 .map_err(|source| CoreError::Instantiate {
                     id: id.clone(),
                     source: source.into(),
