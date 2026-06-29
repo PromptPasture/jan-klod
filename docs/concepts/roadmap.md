@@ -66,7 +66,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Phase | Flag | Gate / note |
 |---|---|---|
-| 1 — Walking skeleton + foundation gate | `in-progress` | **Slice 1a PASSED** (2026-06-29 — CM-in-Rust + TinyGo guest round-trip, async model decided); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). Slice 1b (MVP parity) next |
+| 1 — Walking skeleton + foundation gate | `in-progress` | **Slice 1a PASSED** (2026-06-29); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). **Slice 1b in progress** — `jan-klod-core` skeleton boots from `jan-klod.yaml` (registry, tier boot order, lifecycle, component host) with `host-log`/`host-config` as CM imports (`host-http` stubbed); `store-memory` + `provider-openai` TinyGo guests next |
 | 2 — Agent loop | `not-started` | starts after Phase 1 exit gate |
 | 3 — Persistence + inbound network | `not-started` | — |
 | 4 — Clients & integrations | `not-started` | — |

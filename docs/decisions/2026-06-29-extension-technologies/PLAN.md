@@ -31,7 +31,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Item | Flag |
 |---|---|
 | Slice 1a — gate | `done` — **PASSED** ([verdict](SLICE-1A-GATE.md)) |
-| Slice 1b — MVP parity | `not-started` |
+| Slice 1b — MVP parity | `in-progress` — core skeleton + `host-log`/`host-config` done; guests next |
 
 ## Slice 1a — the gate (go/no-go)
 
@@ -47,11 +47,11 @@ Reproduce with `make gate`.
 
 ## Slice 1b — build out to MVP parity (only after the gate passes)
 
-- [ ] Rust core skeleton: `jan-klod.yaml` loader; extension registry + dependency-graph boot ordering; lifecycle (`init/start/stop/health`); component host loading `ext/*.wasm`
-- [ ] Host capabilities as CM imports: `host-log`, `host-config`, `host-http`
+- [x] Rust core skeleton: `jan-klod.yaml` loader (`jan-klod-config`); extension registry + boot ordering (category-tier; full dependency-graph deferred until managers declare deps); lifecycle drive (`init`→`start`); component host loading `ext/*.wasm` — `jan-klod-core` crate, `Runtime::boot`/`start_all`
+- [~] Host capabilities as CM imports: `host-log` ✓ + `host-config` ✓ implemented; `host-http` wired into the linker as a stub (returns `backend`) until `provider-openai` needs it (then add the blocking HTTP client + `tokio` if needed)
 - [ ] `store-memory` (TinyGo) — real `memory-store` component
 - [ ] `provider-openai` (TinyGo) — OpenAI-compatible `llm-provider` over `host-http`
-- [ ] Build: revive `Makefile` — `cargo build` for core, `tinygo build` (+ `wkg`) per guest
+- [x] Build: `Makefile` — `make run` boots the core; `make gate` reproduces Slice 1a (now an example); per-guest `tinygo build` (+ `wkg`) targets land with the first guest
 - [ ] Supply-chain CI gates: Go `-mod=readonly` + `go.sum` verify + `govulncheck`; Rust `Cargo.lock` + `cargo-deny`/`cargo-audit`; SBOM (`syft`)
 - [ ] Tests: `cargo test` + a component test harness (load a guest, verify its WIT interface)
 - [ ] **Exit gate:** config-driven load → lifecycle → OpenAI-compatible completion through a sandboxed component + in-memory store, all over the Component Model → Phase 1 `done`

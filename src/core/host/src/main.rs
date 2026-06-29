@@ -1,61 +1,41 @@
-//! Slice 1a gate host: load a TinyGo-built `spike` component, call its exported
-//! `complete` function across the Component Model boundary, print the echo.
+//! `jan-klod` core entrypoint: boot the runtime from `jan-klod.yaml`, resolve
+//! the enabled extensions against the `ext/` directory, run their lifecycle, and
+//! print the boot plan. All behaviour lives in the extensions it loads — this
+//! binary is just the container.
 //!
-//! Synchronous Wasmtime on purpose — see the async-model decision in
-//! `docs/decisions/2026-06-29-extension-technologies/`. This whole binary is a
-//! throwaway gate; delete with `src/extensions/spike/` once the verdict lands.
+//! Usage: `jan-klod [config-path] [ext-dir]`
+//!   config-path  path to jan-klod.yaml   (default: jan-klod.yaml)
+//!   ext-dir      directory of *.wasm     (default: ext)
 
-use wasmtime::component::{Component, Linker};
-use wasmtime::{Engine, Result, Store};
-use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use std::process::ExitCode;
 
-wasmtime::component::bindgen!({
-    path: "../../../wit/spike",
-    world: "spike",
-});
+use jan_klod_core::Runtime;
 
-/// Store state. Even though the `spike` world declares no imports, a TinyGo
-/// `wasip2` component pulls in `wasi:cli`/`wasi:io`/etc. for its runtime, so the
-/// host must satisfy those via `wasmtime-wasi`.
-struct Host {
-    ctx: WasiCtx,
-    table: ResourceTable,
-}
+fn main() -> ExitCode {
+    let mut args = std::env::args().skip(1);
+    let config_path = args.next().unwrap_or_else(|| "jan-klod.yaml".to_string());
+    let ext_dir = args.next().unwrap_or_else(|| "ext".to_string());
 
-impl WasiView for Host {
-    fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.ctx,
-            table: &mut self.table,
+    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("jan-klod: boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("{}", runtime.report());
+
+    match runtime.start_all() {
+        Ok(started) if started.is_empty() => {
+            println!("no components started (none present in {ext_dir}/)");
+        }
+        Ok(started) => println!("started: {}", started.join(", ")),
+        Err(err) => {
+            eprintln!("jan-klod: start failed: {err}");
+            return ExitCode::FAILURE;
         }
     }
-}
 
-fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
-    let component_path = args
-        .next()
-        .unwrap_or_else(|| "../extensions/spike/spike.wasm".to_string());
-    let prompt = args.next().unwrap_or_else(|| "hello, component model".to_string());
-
-    let engine = Engine::default();
-    let component = Component::from_file(&engine, &component_path)
-        .map_err(|e| e.context(format!("loading component {component_path}")))?;
-
-    let mut linker: Linker<Host> = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-
-    let mut store = Store::new(
-        &engine,
-        Host {
-            ctx: WasiCtxBuilder::new().inherit_stdio().build(),
-            table: ResourceTable::new(),
-        },
-    );
-
-    let spike = Spike::instantiate(&mut store, &component, &linker)?;
-    let echo = spike.call_complete(&mut store, &prompt)?;
-
-    println!("{echo}");
-    Ok(())
+    ExitCode::SUCCESS
 }

@@ -9,5 +9,9 @@ name = "jan-klod"
 path = "src/main.rs"
 
 [dependencies]
+jan-klod-core = { path = "../core" }
+
+# Retained for the Slice 1a gate example (examples/spike_gate.rs).
+[dev-dependencies]
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
