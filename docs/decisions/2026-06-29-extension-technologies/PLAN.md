@@ -16,7 +16,7 @@ All implementation code lives under `src/` (never the project root):
 src/
   core/            # Rust host: Wasmtime + Component Model. Cargo workspace root.
   extensions/
-    <name>/        # one dir per guest (TinyGo by default)
+    <name>/        # one dir per guest (Rust by default; cargo-component)
 wit/               # language-agnostic WIT contracts — kept at repo root
 ```
 
@@ -49,10 +49,10 @@ Reproduce with `make gate`.
 
 - [x] Rust core skeleton: `jan-klod.yaml` loader (`jan-klod-config`); extension registry + boot ordering (category-tier; full dependency-graph deferred until managers declare deps); lifecycle drive (`init`→`start`); component host loading `ext/*.wasm` — `jan-klod-core` crate, `Runtime::boot`/`start_all`
 - [~] Host capabilities as CM imports: `host-log` ✓ + `host-config` ✓ implemented; `host-http` wired into the linker as a stub (returns `backend`) until `provider-openai` needs it (then add the blocking HTTP client + `tokio` if needed)
-- [ ] `store-memory` (TinyGo) — real `memory-store` component
-- [ ] `provider-openai` (TinyGo) — OpenAI-compatible `llm-provider` over `host-http`
-- [x] Build: `Makefile` — `make run` boots the core; `make gate` reproduces Slice 1a (now an example); per-guest `tinygo build` (+ `wkg`) targets land with the first guest
-- [ ] Supply-chain CI gates: Go `-mod=readonly` + `go.sum` verify + `govulncheck`; Rust `Cargo.lock` + `cargo-deny`/`cargo-audit`; SBOM (`syft`)
+- [ ] `store-memory` (Rust, `cargo-component`) — real `memory-store` component
+- [ ] `provider-openai` (Rust, `cargo-component`) — OpenAI-compatible `llm-provider` over `host-http`
+- [x] Build: `Makefile` — `make run` boots the core; `make gate` reproduces Slice 1a (now an example); per-guest `cargo component build` targets land with the first guest (`tinygo`+`wkg` retained only for the Slice 1a gate canary)
+- [ ] Supply-chain CI gates: Rust `Cargo.lock` + `cargo-deny`/`cargo-audit` (primary, all our extensions); Go `-mod=readonly` + `go.sum` verify + `govulncheck` (Slice 1a gate spike only); SBOM (`syft`)
 - [ ] Tests: `cargo test` + a component test harness (load a guest, verify its WIT interface)
 - [ ] **Exit gate:** config-driven load → lifecycle → OpenAI-compatible completion through a sandboxed component + in-memory store, all over the Component Model → Phase 1 `done`
 

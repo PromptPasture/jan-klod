@@ -26,12 +26,17 @@ walking skeleton behind a go/no-go gate), then build out on it.
   [WIT contracts](contracts.md) and interchangeable against them. We switch language
   per extension; Rust is one option among many, not required just because `core` is
   Rust. (This is what the *ecosystem* can do.)
-- **Our own built extensions: default Go (TinyGo) or Rust.** For first-party
-  extensions we gate the choice by CM-toolchain maturity *and* supply-chain posture,
-  not just ecosystem fit — so TS/JS and Python are case-by-case (only when a library
-  is decisive + hygiene controls applied) and Kotlin/JVM is excluded for now. The
-  build pipeline is not protected by the runtime sandbox, so npm-style supply-chain
-  risk weighs on language choice. See
+- **Our own built extensions default to Rust.** `core` is Rust and the team is
+  Rust-first, so first-party extensions are Rust too — one language means shared
+  types, a single CI/lockfile/audit path, and no GC caveat. Another language is used
+  only when an ecosystem library or constraint makes it *decisive*, and any such
+  non-Rust choice is still gated by CM-toolchain maturity *and* supply-chain posture
+  (TS/JS and Python case-by-case with hygiene controls; Kotlin/JVM excluded for now).
+  Go (TinyGo) stays fully supported but is no longer the default. The polyglot
+  boundary is kept proven and re-runnable by the Slice 1a TinyGo gate (`make gate`) —
+  we don't need a production Go extension to hold that guarantee. The build pipeline
+  is not protected by the runtime sandbox, so npm-style supply-chain risk weighs on
+  any non-Rust language choice. See
   [decisions/2026-06-29-extension-technologies](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md).
 - **The launcher/updater is a tiny Go binary**, separate from `core` so it survives
   a core swap. See [Blue/Green Deployment](blue-green-deployment.md).
@@ -66,7 +71,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Phase | Flag | Gate / note |
 |---|---|---|
-| 1 — Walking skeleton + foundation gate | `in-progress` | **Slice 1a PASSED** (2026-06-29); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). **Slice 1b in progress** — `jan-klod-core` skeleton boots from `jan-klod.yaml` (registry, tier boot order, lifecycle, component host) with `host-log`/`host-config` as CM imports (`host-http` stubbed); `store-memory` + `provider-openai` TinyGo guests next |
+| 1 — Walking skeleton + foundation gate | `in-progress` | **Slice 1a PASSED** (2026-06-29); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). **Slice 1b in progress** — `jan-klod-core` skeleton boots from `jan-klod.yaml` (registry, tier boot order, lifecycle, component host) with `host-log`/`host-config` as CM imports (`host-http` stubbed); `store-memory` + `provider-openai` Rust guests next |
 | 2 — Agent loop | `not-started` | starts after Phase 1 exit gate |
 | 3 — Persistence + inbound network | `not-started` | — |
 | 4 — Clients & integrations | `not-started` | — |
@@ -87,9 +92,11 @@ a Rust + Wasmtime `core` that loads **one thin Go (TinyGo) component** across th
 Component-Model boundary and calls it, plus the **async model** decision (`tokio` vs
 sync Wasmtime). Keep this component a trivial stub (a `provider` that echoes a single
 `complete`) so toolchain friction surfaces on ~10 lines — *not* on the full agent
-loop. Go is our chosen default non-Rust extension language (see
+loop. Go (TinyGo) is the non-Rust language we validate at the gate (see
 [Extension Technologies](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md));
-this slice also proves its TinyGo CM toolchain (`wkg` deps, `wasi:cli` world quirk).
+this slice proves its TinyGo CM toolchain (`wkg` deps, `wasi:cli` world quirk) and
+stays as the standing polyglot canary (`make gate`) even though our own extensions
+are now Rust.
 
 - **Go/no-go checkpoint:** if CM-in-Rust is clean and the non-Rust guest works
   end-to-end → continue to 1b. If friction outweighs the payoff → fall back to
@@ -102,7 +109,7 @@ this slice also proves its TinyGo CM toolchain (`wkg` deps, `wasi:cli` world qui
   the Wasmtime **component** host.
 - Port host capabilities to the Component Model: `host-log`, `host-config`, `host-http`.
 - Re-author `provider-openai` and `store-memory` as real `wit-bindgen` components
-  in **Go (TinyGo)** (the default non-Rust extension language).
+  in **Rust** (`cargo-component`) — the default for our first-party extensions.
 - Replace the broken Go build targets with Cargo (+ a guest build path per language).
 
 **Exit gate:** config-driven load → lifecycle → an OpenAI-compatible completion
@@ -113,9 +120,10 @@ through a sandboxed component, with an in-memory store, all over the Component M
 **Goal:** the runtime does something useful end-to-end.
 
 - `manager-agent-loop` (Option A — zero behaviour in core) + `manager-context`.
-  Both are **extensions, not core**, built in **Go (TinyGo)** — orchestration-heavy
-  pure logic, our default non-Rust language. Authoring the largest first-party
-  extension outside Rust is also our strongest polyglot proof.
+  Both are **extensions, not core**, built in **Rust** like all first-party
+  extensions. (They run as sandboxed components regardless of language; the polyglot
+  boundary is proven by the Slice 1a gate, not by authoring production extensions in
+  another language.)
 - Small-model harness pieces: intent router, step controller, retry/validate loop —
   see [Small-Model Harness](small-model-harness.md).
 - Wire provider fallback and task routing (already specified in [Architecture](architecture.md)).

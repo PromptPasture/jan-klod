@@ -74,14 +74,39 @@ machines), so supply-chain posture weighs alongside toolchain maturity. That pus
 the default to **Go (TinyGo) or Rust** — both CM-mature with strong supply-chain
 posture — and demotes large/scripted package ecosystems to case-by-case use.
 
+### Amendment (2026-06-29) — Default flipped to Rust
+
+The original decision named **Go (TinyGo) as the default** for our extensions,
+resting on "team familiarity" and "orchestration fit." Neither holds: the team and
+codebase are **Rust-first** (`core` is Rust), and `wasip2` gives no goroutine/threading
+payoff, while Rust's `cargo-component` path is *more* mature than TinyGo's. So the
+default is flipped:
+
+- **Rust is the default for all first-party extensions.** One language across `core`
+  and extensions buys shared types, a single CI/lockfile/audit path, smaller binaries,
+  and no GC caveat. The original gates (CM-maturity → supply-chain → fit) still apply
+  to any *non-Rust* choice, which is now a deliberate exception when a library/constraint
+  is decisive — not the baseline.
+- **The polyglot guarantee is unchanged.** It was never about shipping our own code in
+  Go; the architecture stays polyglot for the *ecosystem*. Our proof that the CM
+  boundary works across languages is the **Slice 1a TinyGo gate**, which stays in the
+  repo and is re-runnable via `make gate` — a standing polyglot canary at no
+  per-extension cost.
+
+The decisions, language menu, and near-term assignments below reflect this amendment.
+
 ### Decisions
 
 1. **Selection rule (priority order):** (A) CM-guest toolchain maturity gates the
    choice → (2) supply-chain/security posture → (3) ecosystem fit, with (C)
    case-by-case overrides when an ecosystem's library is *decisive*.
-2. **Default menu: Go (TinyGo) or Rust.** Pick per extension — **Rust** where
-   perf/safety or a crate is decisive; **Go** for orchestration, leanest supply
-   chain, team familiarity.
+2. **Default: Rust.** First-party extensions are Rust unless another language is
+   *decisive*. `core` is Rust and the team is Rust-first, so one-language
+   consistency (shared types, a single CI/lockfile/audit path, no GC caveat,
+   first-class `cargo-component` toolchain) outweighs per-extension ecosystem fit
+   for the components *we* build. Go (TinyGo) stays a fully supported, CM-mature
+   option — chosen when its ecosystem or fit is decisive — but is **no longer the
+   default**. *(Amended 2026-06-29; see [Amendment](#amendment-2026-06-29--default-flipped-to-rust).)*
 3. **Case-by-case only: TypeScript/JS and Python** — allowed when a library in that
    ecosystem is decisive *and* hygiene controls are applied.
 4. **Excluded for now: Kotlin/JVM, Java** — Kotlin/Wasm is Beta, needs a
@@ -99,8 +124,8 @@ posture — and demotes large/scripted package ecosystems to case-by-case use.
 
 | Tier | Language | CM-guest path | Use for our extensions |
 |---|---|---|---|
-| First-class | Rust | `cargo-component` + `wit-bindgen` | `core`; extensions where perf/safety/crate is decisive |
-| Default (non-Rust) | Go | **TinyGo** v0.34+ (native CM) + `wit-bindgen-go` + `wkg` | Default for our extensions; use TinyGo, not std Go (GC caveat) |
+| Default | Rust | `cargo-component` + `wit-bindgen` | `core` **and all first-party extensions** |
+| Case-by-case | Go | **TinyGo** v0.34+ (native CM) + `wit-bindgen-go` + `wkg` | When its ecosystem/fit is decisive; also the standing Slice 1a polyglot gate. Use TinyGo, not std Go (GC caveat) |
 | Case-by-case | TypeScript/JS | `jco` / ComponentizeJS | Only when a JS library is decisive + hygiene |
 | Case-by-case | Python | `componentize-py` | Only when a Python library is decisive + hygiene |
 | Excluded (for now) | Kotlin/JVM, Java | Beta / `wit-bindgen` fork / no Java target | Revisit when Kotlin/Wasm + WASI threading stabilize |
@@ -110,14 +135,15 @@ posture — and demotes large/scripted package ecosystems to case-by-case use.
 | Component | Phase | Language | Status |
 |---|---|---|---|
 | `core` | — | Rust | not-started |
-| slice-1a stub `provider` | 1 | Go (TinyGo) | not-started |
-| `store-memory` | 1 | Go (TinyGo) | not-started |
-| `provider-openai` | 1 | Go (TinyGo) | not-started |
-| `manager-agent-loop` | 2 | Go (TinyGo) | not-started |
-| `manager-context` | 2 | Go (TinyGo) | not-started |
-| `chat-telegram`, library-heavy tools | later | TS/Python case-by-case + hygiene | not-started |
+| slice-1a stub `provider` | 1 | Go (TinyGo) | done (gate) |
+| `store-memory` | 1 | Rust | not-started |
+| `provider-openai` | 1 | Rust | not-started |
+| `manager-agent-loop` | 2 | Rust | not-started |
+| `manager-context` | 2 | Rust | not-started |
+| `chat-telegram`, library-heavy tools | later | Rust, or TS/Python case-by-case + hygiene | not-started |
 
-Near-term footprint: **Rust (core) + Go (extensions)** — polyglot, off the npm
+Near-term footprint: **Rust across `core` and all our extensions**; Go (TinyGo) is
+retained only as the Slice 1a polyglot gate canary (`make gate`) — off the npm
 attack surface. Status flags here mirror the phase tracker in
 [Roadmap](../../concepts/roadmap.md#status-tracker).
 
