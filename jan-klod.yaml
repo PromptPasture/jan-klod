@@ -1,18 +1,135 @@
 # jan-klod configuration.
 #
-# Each key under `extensions` is one extension. The host reads only `enabled`;
-# every other key is opaque to the core and served back to the extension via the
-# host-config interface. ${VAR} references are expanded from the environment.
+# Extensions are grouped by category (`provider`, `store`, `manager`, ...).
+# Each *named* entry under a category is one configured extension instance.
+#
+# The host reads only two keys from an entry:
+#   enabled  — whether to load the instance (omit/false = skip).
+#   type     — which wasm component implements it: ext/<category>-<type>.wasm.
+#              Defaults to the entry name, so `provider.openai` implies
+#              `type: openai` -> provider-openai.wasm. Point several instances at
+#              the same `type` to reuse one wasm (several OpenAI-compatible
+#              endpoints use provider-openai); give an instance its own `type`
+#              when it needs different payloads/headers.
+#
+# Every other key in an entry is opaque to the core and served back to the
+# extension instance through the host-config interface. ${VAR} references are
+# expanded from the environment.
 
 extensions:
-  # In-memory store used to validate the host<->guest contract.
-  store-memory: true
 
-  # OpenAI-compatible LLM provider. Disabled until the extension is built
-  # (slice 3). Works against any OpenAI-compatible endpoint (OpenAI, Ollama,
-  # vLLM, LM Studio, …) by overriding base-url.
-  provider-openai:
-    enabled: false
-    base-url: https://api.openai.com/v1
-    api-key: ${OPENAI_API_KEY}
-    model: gpt-4o-mini
+  # ---- Persistence: exactly one store instance should be enabled ----
+  store:
+    memory:
+      enabled: true            # in-memory; default for dev, no persistence
+    sqlite:
+      enabled: false
+      # type: store-sqlite
+      path: ./jan-klod.db
+    postgres:
+      enabled: false
+      # type: store-postgres
+      dsn: ${DATABASE_URL}
+
+  # ---- LLM providers: each entry is one configured endpoint ----
+  # `type` selects the implementing wasm; reuse provider-openai for any
+  # OpenAI-compatible endpoint, or set a dedicated type for a bespoke API.
+  provider:
+    openai:
+      enabled: true
+      type: openai  # default, shown for clarity
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY}
+      model: gpt-4o-mini
+    anthropic:
+      enabled: false
+      type: anthropic   # distinct wasm: different payload/headers
+      api-key: ${ANTHROPIC_API_KEY}
+      model: claude-sonnet-4-6
+    ollama:
+      enabled: false
+      type: ollama        # custom Ollama API -> provider-ollama.wasm
+      base-url: http://localhost:11434/v1
+      model: qwen2.5:7b
+    lm-studio:
+      enabled: false
+      type: openai
+      base-url: http://localhost:1234/v1
+      model: qwen2.5:7b
+    groq:
+      enabled: false
+      type: openai        # yet another OpenAI-compatible endpoint
+      base-url: https://api.groq.com/openai/v1
+      api-key: ${GROQ_API_KEY}
+      model: llama-3.3-70b
+
+  # ---- Orchestrators ----
+  manager:
+    agent-loop:
+      enabled: true            # the agent loop itself (no behaviour in core)
+      # type: manager-agent-loop
+    context:
+      enabled: true
+
+  # ---- Capability catalogues ----
+  registry:
+    skills:
+      enabled: false
+    mcp:
+      enabled: false
+
+  # ---- Discrete callable tools ----
+  tool:
+    web-search:
+      enabled: false
+      base-url: http://localhost:8080/search
+      api-key: ${SEARCH_API_KEY}
+
+  # ---- AI agent delegation via ACP ----
+  agent:
+    claude-code:
+      enabled: false
+
+  # ---- Network API surfaces (host-serve) ----
+  api:
+    rest:
+      enabled: false
+      bind: 127.0.0.1:8088
+      api-key: ${REST_API_KEY}
+
+  # ---- Chat platform integrations (host-socket) ----
+  chat:
+    telegram:
+      enabled: false
+      token: ${TELEGRAM_BOT_TOKEN}
+
+# ============================================================================
+# Agent behaviour — consumed by the manager-agent-loop extension, not the core.
+# References below use provider *instance names* from extensions.provider above.
+# ============================================================================
+
+# Provider/model fallback chain. Tried top-to-bottom; within a provider, each
+# model is tried in order before moving to the next provider. If all are
+# exhausted the error surfaces to the user (no silent retry spiral).
+providers:
+  - provider: openai
+    models: [gpt-4o, gpt-4o-mini]
+  - provider: ollama          # local, always-available last resort
+    models: [qwen2.5:7b]
+
+# Task routing: task-type -> <provider-instance>/<model>. Built-in task types
+# are sensible defaults; add your own keys and the classifier picks the closest
+# match at runtime — no code change needed.
+routing:
+  code-generation:  openai/gpt-4o
+  code-review:      openai/gpt-4o
+  file-edit:        openai/gpt-4o
+  reasoning:        openai/gpt-4o
+  planning:         openai/gpt-4o
+  web-search:       openai/gpt-4o-mini
+  research:         openai/gpt-4o-mini
+  chat:             openai/gpt-4o-mini
+  clarification:    openai/gpt-4o-mini
+  agent-delegation: openai/gpt-4o
+  # user-defined example:
+  # data-analysis:  groq/llama-3.3-70b
