@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-29 (session 24)
+
+- **Create**: Added [guides/development-setup.md](guides/development-setup.md) (+ new `guides/` folder `index.md`, linked from root [index.md](index.md)) — the first setup instructions: install/verify the Phase 1 toolchain (Rust via `rustup`, Go + **TinyGo ≥ 0.34** for guest components, **wkg** for WIT dep resolution, `wasm-tools`; optional `wasmtime` CLI + `cargo-component`; Slice-1b CI tools `govulncheck`/`cargo-deny`/`syft`). Records the TinyGo `wasip2` + `--wit-package`/`--wit-world` build shape and the `wasi:cli` world quirk the Slice-1a gate must settle. Toolchain audit at write time: Rust 1.96 ✓, Go 1.26 ✓, wasm-tools 1.252 ✓; **TinyGo + wkg not yet installed** (the real gate on starting Slice 1a).
+
 ## 2026-06-29 (session 23)
 
 - **Create**: Added [decisions/2026-06-29-extension-technologies/BRAINSTORM.md](decisions/2026-06-29-extension-technologies/BRAINSTORM.md) (+ folder `index.md`) — language policy for our **first-party** extensions. Per-extension best-fit, **gated by CM-toolchain maturity *and* supply-chain posture** (the build pipeline is not protected by the runtime sandbox; npm-style worms fire at build time). **Default: Go (TinyGo) or Rust**; TS/JS + Python **case-by-case** (decisive library + hygiene); **Kotlin/JVM + Java excluded for now** (Beta, `wit-bindgen` fork, WASI threading unresolved). Cross-cutting supply-chain controls recorded. Provisional near-term assignments: Phase 1–2 extensions in Go (TinyGo); net footprint Rust core + Go extensions. Listed in [decisions/index.md](decisions/index.md).

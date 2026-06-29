@@ -2,6 +2,7 @@
 
 - [concepts/](concepts/) — core concepts: architecture, design principles, extension model
 - [decisions/](decisions/) — architecture decisions and session handoffs
+- [guides/](guides/) — setup and how-to instructions for building from source
 
 ## Overview
 
