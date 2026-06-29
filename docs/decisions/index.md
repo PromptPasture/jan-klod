@@ -2,6 +2,7 @@
 
 Session handoffs and architecture decision records, newest first.
 
+- [2026-06-29 — Extension Technologies](2026-06-29-extension-technologies/BRAINSTORM.md) — language policy for our first-party extensions: default Go (TinyGo) or Rust, gated by toolchain maturity + supply-chain posture; TS/Python case-by-case; Kotlin excluded for now
 - [2026-06-29 — Component Model on Rust + Wasmtime](2026-06-29-component-model-rust/Handoff.md) — untrusted extensions ⇒ WASM sandbox; adopt Component Model; host moves Go→Rust (no pure-Go CM host); supersedes JSON-ABI/wazero
 - [2026-06-28 — MVP WASM Host](2026-06-28-mvp-wasm-host/Handoff.md) — core-module JSON ABI (wazero has no component model), no-CGo confirmed, SQLite runs host-side not in-guest *(superseded by 2026-06-29)*
 - [2026-06-28 — Go + Wazero + WASM Stack](2026-06-28-go-wasm-stack/Handoff.md) — replaced Java/Quarkus with Go + Wazero; locked stack, storage, UI, and deployment decisions
