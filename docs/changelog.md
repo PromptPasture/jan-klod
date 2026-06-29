@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-29 (session 26)
+
+- **Implement**: **Config loader** — new `jan-klod-config` crate (`src/core/config/`, added to the Cargo workspace). Parses `jan-klod.yaml` into a list of extension **instances**: extensions grouped by category (`provider`, `store`, …), each named entry one instance. Core reads only `enabled` (default `false`) and `type` (default = entry name); the wasm resolves to `ext/<category>-<type>.wasm`, so several instances can share one component (all OpenAI-compatible endpoints → `provider-openai.wasm`). Everything else is opaque config: env-expanded (`${VAR}`, unset = error **only for enabled** instances) and preserved for `host-config`. Top-level `providers`/`routing` kept verbatim for `manager-agent-loop` (core holds no routing logic). Invariant enforced: ≤1 enabled `store`. 9 unit tests, Clippy clean. `make config` (+ `--example dump`) prints the resolved instance→wasm plan.
+- **Create**: Added [concepts/configuration.md](concepts/configuration.md) — the `jan-klod.yaml` format, the `enabled`/`type` resolution rule, `${VAR}` expansion, opaque-section/`host-config` model, and the one-store invariant. Linked from [concepts/index.md](concepts/index.md) and [architecture.md](concepts/architecture.md).
+- **Update**: [concepts/architecture.md](concepts/architecture.md) — provider-fallback and task-routing snippets now reference **provider instance names** (`anthropic`, `openai`, `ollama`) instead of wasm component ids, matching the named-instance config model; cross-linked to the new Configuration page.
+
 ## 2026-06-29 (session 25)
 
 - **Implement**: **Slice 1a gate — PASSED.** Built the thinnest CM vertical slice end-to-end: a synchronous Rust + Wasmtime host (`src/core/` Cargo workspace → `jan-klod` binary, `wasmtime`/`wasmtime-wasi` 46, `bindgen!`) loads a **TinyGo `wasip2` component** (`src/extensions/spike/`) built against a **custom WIT world** (`wit/spike/world.wit`, `jan-klod:spike`) and calls its exported `complete` across the Component Model boundary → prints `echo: hello, component model`. Reproducible via `make gate`.

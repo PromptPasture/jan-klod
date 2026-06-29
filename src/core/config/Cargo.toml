@@ -1,0 +1,10 @@
+[package]
+name = "jan-klod-config"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true

@@ -30,7 +30,7 @@ system daemon) and is **headless-capable** — on a Raspberry Pi or in a contain
 it is the only thing you run. It contains:
 
 - Extension lifecycle management (load, enable, disable, unload)
-- Configuration loading (`jan-klod.yaml`)
+- Configuration loading (`jan-klod.yaml`) — see [Configuration](configuration.md)
 - WASM component host (Wasmtime) — the capability sandbox every extension runs in
 - Event bus (extension-to-extension communication)
 - Observability (structured logging, Prometheus metrics, OpenTelemetry traces)
@@ -212,19 +212,19 @@ selected via `jan-klod.yaml`.
 
 ## Provider fallback
 
-When a provider or model fails (unavailable, rate-limited, quota exceeded, local OOM), `manager-agent-loop` falls back through a two-level priority list defined in `jan-klod.yaml`:
+When a provider or model fails (unavailable, rate-limited, quota exceeded, local OOM), `manager-agent-loop` falls back through a two-level priority list defined in `jan-klod.yaml`. Entries reference **provider instance names** (`extensions.provider.<name>`), not wasm components — see [Configuration](configuration.md):
 
 ```yaml
 providers:
-  - provider: provider-anthropic
+  - provider: anthropic
     models:
       - claude-sonnet-4-6
       - claude-haiku-4-5        # cheaper fallback within same provider
-  - provider: provider-openai
+  - provider: openai
     models:
       - gpt-4o
       - gpt-4o-mini
-  - provider: provider-ollama   # local, always available
+  - provider: ollama            # local, always available
     models:
       - qwen2.5:14b
       - qwen2.5:7b              # smaller if 14b OOM
@@ -255,19 +255,21 @@ Fallback is per-request — if the primary recovers, the next request uses it ag
 
 User-defined types can be added to `jan-klod.yaml` — the LLM classifier receives the full list at runtime and picks the closest match. No code changes needed to add a type.
 
+Routing values are `<provider-instance>/<model>`, where the instance is a name under `extensions.provider`:
+
 ```yaml
 routing:
-  code-generation:   provider-ollama/qwen2.5:14b
-  code-review:       provider-ollama/qwen2.5:14b
-  file-edit:         provider-ollama/qwen2.5:14b
-  reasoning:         provider-anthropic/claude-sonnet-4-6
-  planning:          provider-anthropic/claude-sonnet-4-6
-  web-search:        provider-openai/gpt-4o-mini
-  chat:              provider-anthropic/claude-haiku-4-5
-  clarification:     provider-anthropic/claude-haiku-4-5
-  agent-delegation:  provider-anthropic/claude-sonnet-4-6
+  code-generation:   ollama/qwen2.5:14b
+  code-review:       ollama/qwen2.5:14b
+  file-edit:         ollama/qwen2.5:14b
+  reasoning:         anthropic/claude-sonnet-4-6
+  planning:          anthropic/claude-sonnet-4-6
+  web-search:        openai/gpt-4o-mini
+  chat:              anthropic/claude-haiku-4-5
+  clarification:     anthropic/claude-haiku-4-5
+  agent-delegation:  anthropic/claude-sonnet-4-6
   # user-defined:
-  data-analysis:     provider-openai/gpt-4o
+  data-analysis:     openai/gpt-4o
 ```
 
 ## Parallel decomposition

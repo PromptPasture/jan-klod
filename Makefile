@@ -1,4 +1,4 @@
-.PHONY: wit gate spike-deps spike-guest host clean
+.PHONY: wit gate spike-deps spike-guest host config clean
 
 # The WIT contracts in wit/ are canonical and carry forward. Cargo + per-language
 # guest build targets land in Phase 1 (see docs/concepts/roadmap.md). The `gate`
@@ -29,6 +29,10 @@ spike-guest: spike-deps
 # Build the Rust host and run it against the spike component.
 host: spike-guest
 	cd $(CORE_DIR) && cargo run --quiet -- $(SPIKE_WASM) "hello, component model"
+
+# Resolve jan-klod.yaml and print the extension plan (each instance -> wasm).
+config:
+	cd $(CORE_DIR) && cargo run --quiet -p jan-klod-config --example dump -- $(abspath jan-klod.yaml)
 
 clean:
 	rm -rf bin $(SPIKE_DIR)/spike.wasm $(CORE_DIR)/target
