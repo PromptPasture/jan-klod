@@ -128,14 +128,51 @@ impl host_config::Host for HostState {
 }
 
 impl host_http::Host for HostState {
-    /// Outbound HTTP is wired into the linker but not yet implemented — it lands
-    /// with the first network extension (`provider-openai`), which is when the
-    /// host gains a blocking HTTP client. Until then a call is a clean backend
-    /// error rather than a trap.
+    /// Outbound HTTP: adapt the generated request/response types to the neutral
+    /// blocking client in [`crate::http`] (ureq, synchronous, rustls TLS). This
+    /// is the only network access an extension gets.
     fn fetch(
         &mut self,
-        _request: host_http::HttpRequest,
+        request: host_http::HttpRequest,
     ) -> Result<host_http::HttpResponse, host_http::HttpError> {
-        Err(host_http::HttpError::Backend)
+        let headers: Vec<(String, String)> = request
+            .headers
+            .into_iter()
+            .map(|h| (h.name, h.value))
+            .collect();
+        let result = crate::http::fetch(
+            &request.method,
+            &request.url,
+            &headers,
+            request.body.as_deref(),
+            request.timeout_ms,
+        );
+        match result {
+            Ok(response) => Ok(host_http::HttpResponse {
+                status: response.status,
+                headers: response
+                    .headers
+                    .into_iter()
+                    .map(|(name, value)| host_http::HttpHeader { name, value })
+                    .collect(),
+                body: response.body,
+            }),
+            Err(err) => Err(to_http_error(&err)),
+        }
+    }
+}
+
+/// Translate a neutral [`crate::http::WireError`] into the generated
+/// `host-http` error.
+const fn to_http_error(err: &crate::http::WireError) -> host_http::HttpError {
+    use crate::http::WireError;
+    match err {
+        WireError::InvalidUrl => host_http::HttpError::InvalidUrl,
+        WireError::ConnectionFailed => host_http::HttpError::ConnectionFailed,
+        WireError::Timeout => host_http::HttpError::Timeout,
+        WireError::TlsError => host_http::HttpError::TlsError,
+        WireError::ClientError(code) => host_http::HttpError::ClientError(*code),
+        WireError::ServerError(code) => host_http::HttpError::ServerError(*code),
+        WireError::Backend => host_http::HttpError::Backend,
     }
 }

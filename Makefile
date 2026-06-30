@@ -1,4 +1,5 @@
-.PHONY: wit gate spike-deps spike-guest store-memory store-memory-docker run config clean
+.PHONY: wit gate spike-deps spike-guest store-memory store-memory-docker \
+	provider-openai provider-openai-docker probe run config clean
 
 # The WIT contracts in wit/ are canonical and carry forward. Cargo + per-language
 # guest build targets land in Phase 1 (see docs/concepts/roadmap.md). The `gate`
@@ -10,6 +11,7 @@ SPIKE_WIT := $(abspath wit/spike)
 SPIKE_WASM := $(abspath $(SPIKE_DIR)/spike.wasm)
 EXT_DIR := $(abspath ext)
 STORE_MEMORY_DIR := src/extensions/store-memory
+PROVIDER_OPENAI_DIR := src/extensions/provider-openai
 # Container runtime + image for guests when the host has no rustup (Homebrew rust
 # can't add the wasm target). See docs/guides/development-setup.md. Override
 # CONTAINER=docker if not on podman.
@@ -54,6 +56,31 @@ store-memory-docker:
 		cargo build --release --target wasm32-wasip2 && \
 		cp /tmp/target/wasm32-wasip2/release/store_memory.wasm /work/ext/store-memory.wasm'
 
+# Build the provider-openai Rust guest (OpenAI-compatible llm-provider over
+# host-http) and stage it in ext/. Same wit-bindgen + wasm32-wasip2 path as
+# store-memory; requires rustup.
+provider-openai:
+	cd $(PROVIDER_OPENAI_DIR) && cargo build --release --target wasm32-wasip2
+	mkdir -p $(EXT_DIR)
+	cp $(PROVIDER_OPENAI_DIR)/target/wasm32-wasip2/release/provider_openai.wasm $(EXT_DIR)/provider-openai.wasm
+
+# Container fallback for hosts without rustup (Homebrew rust). See store-memory-docker.
+provider-openai-docker:
+	mkdir -p $(EXT_DIR)
+	$(CONTAINER) run --rm -v "$(CURDIR)":/work -w /work/$(PROVIDER_OPENAI_DIR) \
+		-e CARGO_TARGET_DIR=/tmp/target $(RUST_IMAGE) sh -c '\
+		rustup target add wasm32-wasip2 >/dev/null && \
+		cargo build --release --target wasm32-wasip2 && \
+		cp /tmp/target/wasm32-wasip2/release/provider_openai.wasm /work/ext/provider-openai.wasm'
+
+# Drive a provider's full llm-provider.complete path end-to-end against a live
+# OpenAI-compatible endpoint: instantiate provider-world, run init/start, issue
+# one completion, print the streamed chunks. Requires the provider's api-key env
+# (e.g. OPENAI_API_KEY) and network access — makes a real, token-costing call.
+probe:
+	cd $(CORE_DIR) && cargo run --quiet -p jan-klod-host --example provider_probe -- \
+		$(abspath jan-klod.yaml) $(abspath ext)
+
 # Boot the real core against the repo's jan-klod.yaml: resolve the enabled
 # extensions against ext/, compile any present components, run their lifecycle,
 # and print the boot plan.
@@ -66,4 +93,5 @@ config:
 
 clean:
 	rm -rf bin $(SPIKE_DIR)/spike.wasm $(CORE_DIR)/target \
-		$(STORE_MEMORY_DIR)/target $(EXT_DIR)/store-memory.wasm
+		$(STORE_MEMORY_DIR)/target $(EXT_DIR)/store-memory.wasm \
+		$(PROVIDER_OPENAI_DIR)/target $(EXT_DIR)/provider-openai.wasm

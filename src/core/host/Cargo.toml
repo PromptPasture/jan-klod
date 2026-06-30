@@ -11,10 +11,14 @@ path = "src/main.rs"
 [dependencies]
 jan-klod-core = { path = "../core" }
 
-# Retained for the Slice 1a gate example (examples/spike_gate.rs).
+# Examples: spike_gate (Slice 1a gate) and provider_probe (drives a provider's
+# llm-provider.complete path end-to-end; needs config + serde_json to read the
+# instance section).
 [dev-dependencies]
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
+jan-klod-config = { path = "../config" }
+serde_json.workspace = true
 
 [lints]
 workspace = true

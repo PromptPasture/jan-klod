@@ -14,6 +14,7 @@
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bindings;
 mod host;
+pub mod http;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
