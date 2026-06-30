@@ -1,97 +1,72 @@
-.PHONY: wit gate spike-deps spike-guest store-memory store-memory-docker \
-	provider-openai provider-openai-docker probe run config clean
+.PHONY: help wit all core extensions test clippy run probe config clean
 
-# The WIT contracts in wit/ are canonical and carry forward. Cargo + per-language
-# guest build targets land in Phase 1 (see docs/concepts/roadmap.md). The `gate`
-# target reproduces the Slice 1a go/no-go check end-to-end.
+.DEFAULT_GOAL := all
 
-CORE_DIR := src/core
-SPIKE_DIR := src/extensions/spike
-SPIKE_WIT := $(abspath wit/spike)
-SPIKE_WASM := $(abspath $(SPIKE_DIR)/spike.wasm)
+# Top-level orchestration. The real work lives in two sub-makefiles:
+#   src/core/Makefile       — build/test/lint the Rust host workspace (core only)
+#   src/extensions/Makefile — build the guest components (staged in ext/)
+# This file validates the root-level WIT contracts, builds both subtrees, and owns
+# the integration targets that run the host against guests staged in ext/.
+
+CORE := src/core
+EXT := src/extensions
+
+# Repo-root artifacts the host runs against (above any single subtree). EXT_DIR
+# mirrors the staging dir the extensions sub-makefile writes to — kept in sync by
+# convention (one shared constant doesn't yet justify a common include).
+CONFIG := $(abspath jan-klod.yaml)
 EXT_DIR := $(abspath ext)
-STORE_MEMORY_DIR := src/extensions/store-memory
-PROVIDER_OPENAI_DIR := src/extensions/provider-openai
-# Container runtime + image for guests when the host has no rustup (Homebrew rust
-# can't add the wasm target). See docs/guides/development-setup.md. Override
-# CONTAINER=docker if not on podman.
-CONTAINER ?= podman
-RUST_IMAGE := docker.io/library/rust:1-slim
 
-# Validate the WIT contract set.
+# List the common targets.
+help:
+	@echo "Targets:"
+	@echo "  all         build the host workspace + Rust guests (default)"
+	@echo "  core        build the host workspace"
+	@echo "  extensions  build the Rust guests, staged in ext/"
+	@echo "  test        run host-side unit tests"
+	@echo "  clippy      lint the host workspace (-D warnings)"
+	@echo "  run         boot the core against jan-klod.yaml + ext/"
+	@echo "  probe       drive a live provider completion (needs api key + network)"
+	@echo "  config      print the resolved extension plan"
+	@echo "  wit         validate the WIT contracts"
+	@echo "  clean       remove build artifacts"
+
+# Validate the root-level WIT contract set (canonical, language-neutral — it sits
+# above any single language's code, so it stays a root concern).
 wit:
 	wasm-tools component wit wit/
 
-# Slice 1a gate (historical, reproducible): build the TinyGo spike component, then
-# load and call it from the Rust host example. Prints "echo: <prompt>" on success.
-# The verdict is recorded in docs/decisions/2026-06-29-extension-technologies/.
-gate: spike-guest
-	cd $(CORE_DIR) && cargo run --quiet --example spike_gate -p jan-klod-host -- $(SPIKE_WASM) "hello, component model"
+# Build the whole project: the host workspace plus the Rust guests (staged in ext/).
+all: core extensions
 
-# Resolve the spike world's WIT deps (wasi:cli and friends) into wit/spike/deps.
-spike-deps:
-	cd wit && wkg wit fetch --wit-dir spike
+# --- Build (delegated to the sub-makefiles) ---
+core:
+	$(MAKE) -C $(CORE) build
 
-# Build the TinyGo spike guest to a Component-Model component.
-spike-guest: spike-deps
-	cd $(SPIKE_DIR) && tinygo build -target=wasip2 \
-		-wit-package $(SPIKE_WIT) -wit-world spike -o spike.wasm .
+extensions:
+	$(MAKE) -C $(EXT) all
 
-# Build the store-memory Rust guest to a Component-Model component and stage it
-# in ext/. Rust guests need no cargo-component: the wasm32-wasip2 target emits a
-# component directly, with the `wit-bindgen` crate generating the guest bindings.
-# Requires rustup (`rustup target add wasm32-wasip2`) — see development-setup.md.
-store-memory:
-	cd $(STORE_MEMORY_DIR) && cargo build --release --target wasm32-wasip2
-	mkdir -p $(EXT_DIR)
-	cp $(STORE_MEMORY_DIR)/target/wasm32-wasip2/release/store_memory.wasm $(EXT_DIR)/store-memory.wasm
+test clippy:
+	$(MAKE) -C $(CORE) $@
 
-# Same build inside a container — the fallback when the host Rust is Homebrew's
-# (no rustup, so no wasm target). Keeps the target/ dir out of the repo tree.
-store-memory-docker:
-	mkdir -p $(EXT_DIR)
-	$(CONTAINER) run --rm -v "$(CURDIR)":/work -w /work/$(STORE_MEMORY_DIR) \
-		-e CARGO_TARGET_DIR=/tmp/target $(RUST_IMAGE) sh -c '\
-		rustup target add wasm32-wasip2 >/dev/null && \
-		cargo build --release --target wasm32-wasip2 && \
-		cp /tmp/target/wasm32-wasip2/release/store_memory.wasm /work/ext/store-memory.wasm'
+# --- Integration (host + staged extensions; spans both subtrees) ---
 
-# Build the provider-openai Rust guest (OpenAI-compatible llm-provider over
-# host-http) and stage it in ext/. Same wit-bindgen + wasm32-wasip2 path as
-# store-memory; requires rustup.
-provider-openai:
-	cd $(PROVIDER_OPENAI_DIR) && cargo build --release --target wasm32-wasip2
-	mkdir -p $(EXT_DIR)
-	cp $(PROVIDER_OPENAI_DIR)/target/wasm32-wasip2/release/provider_openai.wasm $(EXT_DIR)/provider-openai.wasm
-
-# Container fallback for hosts without rustup (Homebrew rust). See store-memory-docker.
-provider-openai-docker:
-	mkdir -p $(EXT_DIR)
-	$(CONTAINER) run --rm -v "$(CURDIR)":/work -w /work/$(PROVIDER_OPENAI_DIR) \
-		-e CARGO_TARGET_DIR=/tmp/target $(RUST_IMAGE) sh -c '\
-		rustup target add wasm32-wasip2 >/dev/null && \
-		cargo build --release --target wasm32-wasip2 && \
-		cp /tmp/target/wasm32-wasip2/release/provider_openai.wasm /work/ext/provider-openai.wasm'
+# Boot the real core against jan-klod.yaml: resolve enabled extensions against
+# ext/, compile present components, run their lifecycle, print the boot plan.
+run:
+	cd $(CORE) && cargo run --quiet -p jan-klod-host -- $(CONFIG) $(EXT_DIR)
 
 # Drive a provider's full llm-provider.complete path end-to-end against a live
-# OpenAI-compatible endpoint: instantiate provider-world, run init/start, issue
-# one completion, print the streamed chunks. Requires the provider's api-key env
-# (e.g. OPENAI_API_KEY) and network access — makes a real, token-costing call.
+# OpenAI-compatible endpoint. Requires the provider's api-key env (e.g.
+# OPENAI_API_KEY) and network access — makes a real, token-costing call.
 probe:
-	cd $(CORE_DIR) && cargo run --quiet -p jan-klod-host --example provider_probe -- \
-		$(abspath jan-klod.yaml) $(abspath ext)
-
-# Boot the real core against the repo's jan-klod.yaml: resolve the enabled
-# extensions against ext/, compile any present components, run their lifecycle,
-# and print the boot plan.
-run:
-	cd $(CORE_DIR) && cargo run --quiet -p jan-klod-host -- $(abspath jan-klod.yaml) $(abspath ext)
+	cd $(CORE) && cargo run --quiet -p jan-klod-host --example provider_probe -- $(CONFIG) $(EXT_DIR)
 
 # Resolve jan-klod.yaml and print the extension plan (each instance -> wasm).
 config:
-	cd $(CORE_DIR) && cargo run --quiet -p jan-klod-config --example dump -- $(abspath jan-klod.yaml)
+	cd $(CORE) && cargo run --quiet -p jan-klod-config --example dump -- $(CONFIG)
 
+# Clean both subtrees.
 clean:
-	rm -rf bin $(SPIKE_DIR)/spike.wasm $(CORE_DIR)/target \
-		$(STORE_MEMORY_DIR)/target $(EXT_DIR)/store-memory.wasm \
-		$(PROVIDER_OPENAI_DIR)/target $(EXT_DIR)/provider-openai.wasm
+	$(MAKE) -C $(CORE) clean
+	$(MAKE) -C $(EXT) clean
