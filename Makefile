@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions test harness turn clippy run probe config clean
+.PHONY: help wit all core extensions test harness clippy run probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -24,10 +24,9 @@ help:
 	@echo "  core        build the host workspace"
 	@echo "  extensions  build the Rust guests, staged in ext/"
 	@echo "  test        run host-side unit tests"
-	@echo "  harness     build guests, then verify each + the exit-gate turn offline"
+	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  clippy      lint the host workspace (-D warnings)"
 	@echo "  run         boot the core against jan-klod.yaml + ext/"
-	@echo "  turn        drive one live agent turn: completion -> store (needs api key + network)"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
 	@echo "  wit         validate the WIT contracts"
@@ -53,21 +52,15 @@ test clippy:
 
 # --- Integration (host + staged extensions; spans both subtrees) ---
 
-# Build the guests, then verify them offline through the Component Model: the
-# component harness checks each guest's WIT interface + lifecycle in isolation,
-# and the exit-gate test drives the full agent turn (completion -> store) — both
-# against a canned host-http reply, so no network or api key. The tests skip any
+# Build the guests, then verify them offline through the Component Model:
+#   component_harness — each guest's WIT interface + lifecycle, in isolation;
+#   routing           — the exit gate: the manager-agent-loop guest runs one turn
+#                       (completion -> store) with core routing its imports into
+#                       the provider/store extensions.
+# Both run against a canned host-http reply (no network, no api key) and skip any
 # guest not staged, so this target stages them first.
 harness: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test exit_gate
-
-# Drive one full agent turn end-to-end against a live provider: complete a prompt
-# and persist it into the enabled store, all over the Component Model. Requires
-# the provider's api-key env (e.g. OPENAI_API_KEY) and network — a real,
-# token-costing call. Override PROMPT to change the message.
-PROMPT ?= Reply with exactly one word: pong
-turn:
-	cd $(CORE) && cargo run --quiet -p jan-klod-host -- $(CONFIG) $(EXT_DIR) --turn "$(PROMPT)"
+	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test routing
 
 # Boot the real core against jan-klod.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.

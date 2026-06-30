@@ -15,6 +15,7 @@
 mod bindings;
 mod host;
 pub mod http;
+pub mod route;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -189,6 +190,37 @@ impl Runtime {
     pub const fn report(&self) -> BootReport<'_> {
         BootReport(self)
     }
+
+    /// First enabled instance in `category` whose component compiled.
+    fn first_compiled(&self, category: &str) -> Option<(&ExtensionInstance, &Component)> {
+        self.extensions.iter().find_map(|ext| match &ext.state {
+            LoadState::Compiled(component) if ext.instance.category == category => {
+                Some((&ext.instance, component))
+            }
+            _ => None,
+        })
+    }
+
+    /// Wire up a routed agent loop: resolve the enabled manager, provider, and
+    /// store (each with a compiled component), instantiate them, and route the
+    /// manager's `llm-provider` / `memory-store` imports into the provider/store
+    /// instances. `http` backs the provider's `host-http` (live or canned).
+    ///
+    /// # Errors
+    /// Returns [`CoreError::NoCompiled`] if any of the three categories has no
+    /// loaded instance, or any error from instantiation / lifecycle.
+    pub fn route_agent_loop(&self, http: route::HttpFn) -> Result<route::RoutedAgentLoop, CoreError> {
+        let manager = self
+            .first_compiled("manager")
+            .ok_or_else(|| CoreError::NoCompiled { category: "manager" })?;
+        let provider = self
+            .first_compiled("provider")
+            .ok_or_else(|| CoreError::NoCompiled { category: "provider" })?;
+        let store = self
+            .first_compiled("store")
+            .ok_or_else(|| CoreError::NoCompiled { category: "store" })?;
+        route::build_routed_loop(&self.engine, manager, provider, store, http)
+    }
 }
 
 /// Build the capability linker every extension store shares: WASI for the guest
@@ -289,11 +321,32 @@ pub enum CoreError {
         /// The message the extension returned.
         message: String,
     },
+    /// Routing needs a loaded instance in a category that has none.
+    #[error("no loaded {category} instance to route")]
+    NoCompiled {
+        /// The category with no compiled instance (`manager` / `provider` / `store`).
+        category: &'static str,
+    },
+    /// A routed agent loop returned an `agent-error` from its `run`.
+    #[error("{id}: agent loop failed: {kind}")]
+    AgentLoop {
+        /// Manager instance id.
+        id: String,
+        /// The `agent-error` variant, debug-formatted.
+        kind: String,
+    },
 }
 
 impl CoreError {
     fn linker(source: wasmtime::Error) -> Self {
         Self::Linker {
+            source: source.into(),
+        }
+    }
+
+    fn instantiate(id: &str, source: wasmtime::Error) -> Self {
+        Self::Instantiate {
+            id: id.to_string(),
             source: source.into(),
         }
     }

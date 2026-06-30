@@ -4,24 +4,24 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
-[lib]
-name = "jan_klod_host"
-path = "src/lib.rs"
-
 [[bin]]
 name = "jan-klod"
 path = "src/main.rs"
 
-# The library (the `agent` loop) drives the provider/store category worlds over
-# the Component Model, so it needs wasmtime + config + serde_json directly — not
-# just the examples. The binary links the lib and passes the live HTTP client.
 [dependencies]
 jan-klod-core = { path = "../core" }
-jan-klod-config = { path = "../config" }
+
+# Examples and integration tests drive the guests over the Component Model:
+# spike_gate (Slice 1a gate), provider_probe (live single provider leg),
+# component_harness (offline per-guest interface checks), and routing (the exit
+# gate: the routed manager-agent-loop turn, via jan-klod-core's broker). They need
+# wasmtime + config + serde_json to instantiate the category worlds and read the
+# instance section. None of this ships in the `jan-klod` binary.
+[dev-dependencies]
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
+jan-klod-config = { path = "../config" }
 serde_json.workspace = true
-thiserror.workspace = true
 
 [lints]
 workspace = true

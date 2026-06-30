@@ -1,0 +1,31 @@
+[package]
+name = "manager-agent-loop"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "v0 agent loop: one routed turn (llm-provider complete -> memory-store persist)."
+
+[lib]
+# A reactor component: exports agent-loop-world, no `main`.
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.58"
+serde_json = "1"
+
+# Same strict policy as the core workspace (guests live outside src/core/, so the
+# levels are declared here rather than inherited).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[profile.release]
+opt-level = "s"
+strip = true
+lto = true
