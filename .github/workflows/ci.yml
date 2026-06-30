@@ -1,0 +1,98 @@
+name: CI
+
+# Enforces the gates the Makefiles define — lint, host tests, the Component-Model
+# exit-gate harness, and the Phase 1 supply-chain gates. CI installs the tooling
+# and then calls the same `make` targets a developer runs locally, so the gate is
+# reproducible off the runner.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint-test:
+    name: Lint + test (host workspace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/core
+      - run: make test
+      - run: make clippy
+
+  harness:
+    name: Component harness (exit gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      # Cache only the heavy host workspace (wasmtime); the guests are ~35-dep
+      # crates that build in seconds, so they are not worth enumerating here.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/core
+      # Builds every guest to wasm32-wasip2, then verifies each guest's WIT
+      # interface in isolation and runs the routed one-turn exit-gate flow offline.
+      - run: make harness
+
+  supply-chain:
+    name: Supply-chain gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Every committed Cargo.lock must already be current — a stale lock means the
+      # audited/denied tree is not the tree that builds. The glob picks up the host
+      # workspace plus every Rust guest (the Go spike has no Cargo.toml), so a new
+      # guest is covered automatically.
+      - name: Verify lockfiles (--locked)
+        run: |
+          for m in src/core/Cargo.toml src/extensions/*/Cargo.toml; do
+            cargo metadata --locked --format-version 1 \
+              --manifest-path "$m" >/dev/null
+          done
+
+      # Prebuilt binaries — far faster than `cargo install` from source.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+      - name: cargo-deny (license / advisory / source policy)
+        run: make deny
+      - name: cargo-audit (RUSTSEC)
+        run: make audit
+
+      # Go modules under src/extensions (currently only the Slice 1a canary):
+      # verified module sums + govulncheck, readonly. cache-dependency-path globs
+      # every go.sum; the Makefile target globs every go.mod — no path is pinned.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: src/extensions/*/go.sum
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Go supply-chain (mod verify + govulncheck)
+        run: make -C src/extensions go-supply-chain
+
+      # SBOM for the whole deploy unit. download-syft puts the pinned binary on
+      # PATH; `make sbom` is the same command a developer runs locally.
+      - uses: anchore/sbom-action/download-syft@v0
+      - name: Generate SBOM
+        run: make sbom
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json

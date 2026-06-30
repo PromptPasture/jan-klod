@@ -18,7 +18,14 @@ DOCKER_GUESTS := $(addsuffix -docker,$(GUESTS))
 CONTAINER ?= docker
 RUST_IMAGE := docker.io/library/rust:slim
 
-.PHONY: all clean spike-deps spike-guest $(GUESTS) $(DOCKER_GUESTS)
+# Shared cargo-deny policy (repo root) — the same file the host workspace uses.
+DENY_CONFIG := $(ROOT)/deny.toml
+
+# Go modules under src/extensions, discovered by mask (currently only the Slice 1a
+# canary). Globbed so a new Go guest is gated without editing this Makefile.
+GO_MODULES := $(wildcard */go.mod)
+
+.PHONY: all clean audit deny go-supply-chain spike-deps spike-guest $(GUESTS) $(DOCKER_GUESTS)
 
 # Build every Rust guest (the polyglot TinyGo spike stays opt-in: `make spike-guest`).
 all: $(GUESTS)
@@ -41,6 +48,23 @@ $(DOCKER_GUESTS): %-docker:
 		rustup target add wasm32-wasip2 >/dev/null && \
 		cargo build --release --target wasm32-wasip2 && \
 		cp /tmp/target/wasm32-wasip2/release/$(subst -,_,$*).wasm /work/ext/$*.wasm'
+
+# Supply-chain gates for the Rust guests (Slice 1b gate). Each guest is a
+# standalone crate with its own Cargo.lock, so audit/deny run once per guest.
+audit:
+	@for g in $(GUESTS); do echo "== audit $$g =="; ( cd $$g && cargo audit ) || exit 1; done
+
+deny:
+	@for g in $(GUESTS); do echo "== deny $$g =="; \
+		cargo deny --config $(DENY_CONFIG) --manifest-path $$g/Cargo.toml check || exit 1; done
+
+# Supply-chain gate for every Go module under src/extensions (currently only the
+# TinyGo Slice 1a canary): verified module sums + a govulncheck scan. GOFLAGS pins
+# -mod=readonly so a scan can never silently mutate go.mod/go.sum.
+go-supply-chain: export GOFLAGS = -mod=readonly
+go-supply-chain:
+	@for mod in $(GO_MODULES); do dir=$$(dirname $$mod); echo "== go supply-chain $$dir =="; \
+		( cd $$dir && go mod verify && govulncheck ./... ) || exit 1; done
 
 # Resolve the spike world's WIT deps (wasi:cli and friends) into wit/spike/deps.
 spike-deps:

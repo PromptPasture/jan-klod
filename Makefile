@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions test harness clippy run probe config clean
+.PHONY: help wit all core extensions test harness clippy audit deny sbom supply-chain run probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -26,6 +26,10 @@ help:
 	@echo "  test        run host-side unit tests"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  clippy      lint the host workspace (-D warnings)"
+	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go)"
+	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
+	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
+	@echo "  sbom        generate sbom.spdx.json for the repo (syft)"
 	@echo "  run         boot the core against jan-klod.yaml + ext/"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
@@ -49,6 +53,24 @@ extensions:
 
 test clippy:
 	$(MAKE) -C $(CORE) $@
+
+# --- Supply-chain gates (Slice 1b gate; CI enforces all of these) ---
+
+# cargo-audit / cargo-deny over the host workspace AND every guest crate. Each
+# subtree owns its own invocation; the root just fans out to both.
+audit deny:
+	$(MAKE) -C $(CORE) $@
+	$(MAKE) -C $(EXT) $@
+
+# Software bill of materials for the whole deploy unit, SPDX-JSON. syft reads the
+# committed lockfiles (Cargo.lock, go.sum) — no build required.
+sbom:
+	syft dir:. --source-name jan-klod -o spdx-json=sbom.spdx.json
+
+# The full gate: Rust license/advisory/source policy + RUSTSEC audit (host +
+# guests), every Go module's verified-readonly vuln scan, and the SBOM.
+supply-chain: deny audit sbom
+	$(MAKE) -C $(EXT) go-supply-chain
 
 # --- Integration (host + staged extensions; spans both subtrees) ---
 

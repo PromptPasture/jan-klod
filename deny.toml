@@ -1,0 +1,48 @@
+# cargo-deny policy — the primary supply-chain gate for the Rust host workspace
+# (src/core) and every first-party guest extension (src/extensions/*). Each guest
+# is a standalone crate with its own Cargo.lock; one shared policy keeps the
+# license / advisory / source rules identical across all of them. Every invocation
+# points here with `--config`, so the file's location is not significant. Closes
+# the Phase 1 supply-chain gate
+# (docs/decisions/2026-06-29-extension-technologies/PLAN.md).
+#
+# cargo-deny config schema (v2 semantics): anything not explicitly allowed — a
+# license, an advisory, or a source — is denied by default. There is no implicit
+# catch-all to forget to set.
+
+[advisories]
+# RUSTSEC vulnerabilities are denied by default. Accept one only by listing its ID
+# here with a documented reason and an expiry plan.
+ignore = []
+
+[licenses]
+# Every SPDX expression in the dependency graph must be satisfiable from this
+# permissive set. Verified against `cargo metadata --all-features` for the host
+# workspace; the guest graphs are a strict subset. Copyleft and unknown licenses
+# are denied by omission (e.g. a `GPL-2.0-only OR BSD-3-Clause` crate is accepted
+# only via its BSD-3-Clause branch).
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "ISC",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+# Require high confidence before a license is inferred from file text.
+confidence-threshold = 0.9
+
+[bans]
+# Duplicate transitive versions are noise, not a security failure, in a young tree
+# — surface them without breaking the build. Wildcard version requirements are
+# forbidden: they defeat the locked-build guarantee.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# Only the default crates.io registry is permitted. Any other registry or a git
+# dependency must be added here deliberately.
+unknown-registry = "deny"
+unknown-git = "deny"
