@@ -984,6 +984,7 @@ dependencies = [
  "jan-klod-config",
  "jan-klod-core",
  "serde_json",
+ "thiserror 2.0.18",
  "wasmtime",
  "wasmtime-wasi",
 ]
