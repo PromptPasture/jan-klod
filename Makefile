@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions test clippy run probe config clean
+.PHONY: help wit all core extensions test harness clippy run probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -24,6 +24,7 @@ help:
 	@echo "  core        build the host workspace"
 	@echo "  extensions  build the Rust guests, staged in ext/"
 	@echo "  test        run host-side unit tests"
+	@echo "  harness     build guests, then verify each through the component harness"
 	@echo "  clippy      lint the host workspace (-D warnings)"
 	@echo "  run         boot the core against jan-klod.yaml + ext/"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
@@ -50,6 +51,13 @@ test clippy:
 	$(MAKE) -C $(CORE) $@
 
 # --- Integration (host + staged extensions; spans both subtrees) ---
+
+# Build the guests, then drive each through the component harness: load it, wire
+# host capabilities, and verify its WIT interface + lifecycle offline (the
+# provider runs against a canned host-http reply — no network, no api key). The
+# harness itself skips any guest not staged, so this target stages them first.
+harness: extensions
+	cd $(CORE) && cargo test -p jan-klod-host --test component_harness
 
 # Boot the real core against jan-klod.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.
