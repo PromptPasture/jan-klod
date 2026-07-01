@@ -4,7 +4,7 @@ package jan-klod:interfaces@0.1.0;
 /// boundaries. Splitting these out keeps interfaces independently versionable:
 /// e.g. adding a field to `message` here touches one place, not every consumer.
 
-/// LLM conversation types, shared by llm-provider and context-manager.
+/// LLM conversation types, shared by llm-provider and interceptor.
 interface llm-types {
     /// Role of a message in the conversation.
     enum role {

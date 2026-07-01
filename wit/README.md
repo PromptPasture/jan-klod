@@ -12,8 +12,8 @@ go in `deps.toml`.
 | `types.wit` | shared | `llm-types`, `store-types` |
 | `extension-lifecycle.wit` | shared | `extension-lifecycle` (exported by every extension) |
 | `llm-provider.wit` | extension-exported | `llm-provider` |
-| `context-manager.wit` | extension-exported | `context-manager` |
-| `agent-manager.wit` | extension-exported | `agent-manager` |
+| `agent-loop.wit` | extension-exported | `agent-loop` (v0 walking-skeleton; retired at Phase 2 Slice 2c) |
+| `interceptor.wit` | extension-exported | `interceptor` (thin-loop decision hook; host-dispatched) |
 | `memory-store.wit` | extension-exported | `memory-store` |
 | `skill-registry.wit` | extension-exported | `skill-registry` |
 | `mcp-registry.wit` | extension-exported | `mcp-registry` |

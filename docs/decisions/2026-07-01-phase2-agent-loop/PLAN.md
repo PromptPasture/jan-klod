@@ -141,8 +141,11 @@ foundation both the core loop (2c) and every interceptor (2a, 2d) hang off.
   load order for intra-phase sequencing.
 - [ ] **`configuration.md` note** — document the interceptor enable/disable keys
   (the one remaining open item from the decision record).
-- [ ] **Retire** `context-manager.wit` and mark `agent-manager.wit` / `agent-loop.wit`
-  superseded (remove from the package once 2c/2d no longer reference them).
+- [x] **Retire** `context-manager.wit` and `agent-manager.wit` (removed — unused by
+  any build; `agent-manager` was the only consumer of `context-manager`). README +
+  `types.wit` doc-comment updated. `agent-loop.wit` stays until Slice 2c retires the
+  `manager-agent-loop` guest and its `route.rs` path. `wasm-tools component wit wit/`
+  stays green.
 
 **Definition of done:** an offline test registers two stub interceptors on the same
 phase and one on another, and asserts: order (across + within phase), each decision
