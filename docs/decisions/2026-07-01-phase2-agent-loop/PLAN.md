@@ -193,9 +193,10 @@ dispatch engine from 2b.
   wasm run entry, where the real `completion-request` is assembled).
 - [x] **Provider fallback (core mechanism)** — `complete_with_fallback` re-issues the
   *same* request down the `Completer` chain; first success wins, exhaustion returns a
-  diagnostic `Failed`. Per-request (a fresh chain each turn). *(Mapping the concrete
-  `provider-error` categories + a `warning` event lands with the wasm `Completer`
-  adapter over the routed provider.)*
+  diagnostic `Failed`. `route::ProviderCompleter` adapts a routed provider extension
+  to the `Completer` trait (drains the stream into text + tool calls), verified
+  against the real `provider-openai.wasm` with canned http. *(A `warning` event on
+  fallback lands with the run entry + event bus.)*
 - [ ] **Streaming** — preview-vs-authoritative: stream tokens live during each
   `complete()`; emit the authoritative message at the turn boundary (which
   `after-response`/`finalize` may have `replace`d).

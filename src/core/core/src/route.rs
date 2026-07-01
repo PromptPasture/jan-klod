@@ -634,18 +634,8 @@ pub fn build_routed_loop(
     let (manager_inst, manager_component) = manager;
 
     // Provider instance (real/injected host-http).
-    let mut provider_linker: Linker<CapHost> = Linker::new(engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut provider_linker).map_err(CoreError::linker)?;
-    provider_bind::jan_klod::interfaces::host_log::add_to_linker::<_, HasSelf<_>>(&mut provider_linker, |s| s)
-        .map_err(CoreError::linker)?;
-    provider_bind::jan_klod::interfaces::host_config::add_to_linker::<_, HasSelf<_>>(&mut provider_linker, |s| s)
-        .map_err(CoreError::linker)?;
-    provider_bind::jan_klod::interfaces::host_http::add_to_linker::<_, HasSelf<_>>(&mut provider_linker, |s| s)
-        .map_err(CoreError::linker)?;
-    let mut provider_store = Store::new(engine, CapHost::new(&provider_inst.id, &provider_inst.config, http));
-    let provider_world = provider_bind::ProviderWorld::instantiate(&mut provider_store, provider_component, &provider_linker)
-        .map_err(|source| CoreError::instantiate(&provider_inst.id, source))?;
-    start_provider(&provider_world, &mut provider_store, &provider_inst.id)?;
+    let (provider_store, provider_world) =
+        instantiate_provider(engine, provider_inst, provider_component, http)?;
 
     // Store instance (no host-http).
     let mut backend_linker: Linker<CapHost> = Linker::new(engine);
@@ -683,4 +673,205 @@ pub fn build_routed_loop(
         world: manager_world,
         manager_id: manager_inst.id.clone(),
     })
+}
+
+/// Instantiate a provider extension in its own store with an injected `host-http`,
+/// and drive its lifecycle to `start`. Shared by [`build_routed_loop`] and
+/// [`ProviderCompleter`].
+fn instantiate_provider(
+    engine: &Engine,
+    inst: &ExtensionInstance,
+    component: &Component,
+    http: HttpFn,
+) -> Result<(Store<CapHost>, provider_bind::ProviderWorld), CoreError> {
+    let mut linker: Linker<CapHost> = Linker::new(engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
+    provider_bind::jan_klod::interfaces::host_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)
+        .map_err(CoreError::linker)?;
+    provider_bind::jan_klod::interfaces::host_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)
+        .map_err(CoreError::linker)?;
+    provider_bind::jan_klod::interfaces::host_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)
+        .map_err(CoreError::linker)?;
+    let mut store = Store::new(engine, CapHost::new(&inst.id, &inst.config, http));
+    let world = provider_bind::ProviderWorld::instantiate(&mut store, component, &linker)
+        .map_err(|source| CoreError::instantiate(&inst.id, source))?;
+    start_provider(&world, &mut store, &inst.id)?;
+    Ok((store, world))
+}
+
+/// A provider extension adapted to the conductor's [`Completer`](crate::conductor::Completer)
+/// trait: the routed provider becomes one link in the loop's fallback chain.
+pub struct ProviderCompleter {
+    id: String,
+    store: Store<CapHost>,
+    world: provider_bind::ProviderWorld,
+}
+
+impl ProviderCompleter {
+    /// Instantiate a provider component as a completer. `http` backs its
+    /// `host-http` (live client or a canned test reply).
+    ///
+    /// # Errors
+    /// Returns a [`CoreError`] if the component cannot be wired, instantiated, or
+    /// started.
+    pub fn instantiate(
+        engine: &Engine,
+        inst: &ExtensionInstance,
+        component: &Component,
+        http: HttpFn,
+    ) -> Result<Self, CoreError> {
+        let (store, world) = instantiate_provider(engine, inst, component, http)?;
+        Ok(Self {
+            id: inst.id.clone(),
+            store,
+            world,
+        })
+    }
+}
+
+impl crate::conductor::Completer for ProviderCompleter {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn complete(
+        &mut self,
+        request: &crate::intercept::PendingRequest,
+    ) -> Result<crate::conductor::Completion, String> {
+        let preq = intercept_to_p_request(request);
+        let iface = self.world.jan_klod_interfaces_llm_provider();
+        let handle = match iface.call_complete(&mut self.store, &preq) {
+            Ok(Ok(handle)) => handle,
+            Ok(Err(err)) => return Err(format!("provider error: {err:?}")),
+            Err(_) => return Err("provider trapped".to_string()),
+        };
+
+        // Drain the stream into text + tool calls.
+        let mut text = String::new();
+        let mut tool_calls = Vec::new();
+        // Ok(None) / Err both end the stream by exiting the while-let.
+        while let Ok(Some(chunk)) = iface.call_next_chunk(&mut self.store, handle) {
+            match chunk {
+                p_llm::CompletionChunk::TextDelta(delta) => text.push_str(&delta),
+                p_llm::CompletionChunk::ToolCallRequest(call) => {
+                    tool_calls.push(crate::intercept::ToolCall {
+                        id: call.id,
+                        name: call.name,
+                        arguments: call.arguments,
+                    });
+                }
+                p_llm::CompletionChunk::Done(_) => break,
+            }
+        }
+        let _ = iface.call_close_stream(&mut self.store, handle);
+        Ok(crate::conductor::Completion { text, tool_calls })
+    }
+}
+
+/// Map the conductor's `pending-request` to the provider's `completion-request`.
+fn intercept_to_p_request(request: &crate::intercept::PendingRequest) -> p_llm::CompletionRequest {
+    use crate::intercept::Role;
+    p_llm::CompletionRequest {
+        model: request.model.clone().unwrap_or_default(),
+        messages: request
+            .messages
+            .iter()
+            .map(|m| p_llm::Message {
+                role: match m.role {
+                    Role::System => p_llm::Role::System,
+                    Role::User => p_llm::Role::User,
+                    Role::Assistant => p_llm::Role::Assistant,
+                    Role::Tool => p_llm::Role::Tool,
+                },
+                content: m.content.clone(),
+                tool_call_id: m.tool_call_id.clone(),
+            })
+            .collect(),
+        tools: request
+            .tools
+            .iter()
+            .map(|t| p_llm::ToolDefinition {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                parameters_schema: t.parameters_schema.clone(),
+            })
+            .collect(),
+        grammar: request.grammar.clone(),
+        max_tokens: request.max_tokens,
+        temperature: request.temperature,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conductor::Completer;
+    use crate::intercept::{Message, PendingRequest, Role};
+    use crate::http::WireResponse;
+    use std::path::PathBuf;
+
+    fn repo_root() -> PathBuf {
+        [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
+    }
+
+    fn canned_http(content: &'static str) -> HttpFn {
+        Box::new(move |_m, _u, _h, _b, _t| {
+            let body = serde_json::json!({
+                "choices": [{
+                    "message": { "role": "assistant", "content": content },
+                    "finish_reason": "stop"
+                }]
+            });
+            Ok(WireResponse {
+                status: 200,
+                headers: vec![],
+                body: serde_json::to_vec(&body).unwrap(),
+            })
+        })
+    }
+
+    fn user_request(text: &str) -> PendingRequest {
+        PendingRequest {
+            model: Some("mock-1".into()),
+            messages: vec![Message {
+                role: Role::User,
+                content: text.into(),
+                tool_call_id: None,
+            }],
+            tools: vec![],
+            grammar: None,
+            max_tokens: None,
+            temperature: None,
+        }
+    }
+
+    #[test]
+    fn provider_completer_completes_through_the_sandbox() {
+        let path = repo_root().join("ext").join("provider-openai.wasm");
+        if !path.exists() {
+            eprintln!("skipping: provider-openai.wasm not staged — run `make ext`");
+            return;
+        }
+        let engine = Engine::default();
+        let component = Component::from_file(&engine, &path).expect("component compiles");
+        let inst = ExtensionInstance {
+            id: "provider.openai".into(),
+            category: "provider".into(),
+            name: "openai".into(),
+            kind: "openai".into(),
+            component: "provider-openai".into(),
+            enabled: true,
+            config: serde_json::json!({
+                "base-url": "http://mock/v1",
+                "model": "mock-1",
+                "api-key": "test"
+            }),
+        };
+        let mut completer =
+            ProviderCompleter::instantiate(&engine, &inst, &component, canned_http("pong"))
+                .expect("provider instantiates");
+        let completion = completer.complete(&user_request("ping")).expect("completes");
+        assert_eq!(completion.text, "pong");
+        assert!(completion.tool_calls.is_empty());
+    }
 }
