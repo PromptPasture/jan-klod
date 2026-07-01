@@ -22,7 +22,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Item | Flag |
 |---|---|
-| Slice 2a — Intent router | `not-started` |
+| Slice 2a — Intent router | `done` |
 | Slice 2b — ReAct step controller + retry/validate | `not-started` |
 | Slice 2c — `manager-context` extension | `not-started` |
 | Slice 2d — Provider fallback + task routing | `not-started` |
@@ -86,22 +86,31 @@ instance, alongside the existing `llm-provider` / `memory-store` routing.
 Implement the layered intent router inside `manager-agent-loop` as the first gate
 before entering the ReAct step controller.
 
-- [ ] **Language detection** — pure-Rust crate (no model call); non-English
-  bypasses the heuristic tier and goes directly to the LLM classifier.
-  Candidate: `whatlang`.
-- [ ] **Heuristic tier** (English, microseconds) — ~50 rules grouped by category
-  (greetings, farewells, affirmations, meta-queries, clarifications, short
-  inputs). Emits `simple` or `pass`. Rules are organised in named groups, not a
-  flat list — one new rule = one line in the right group.
-- [ ] **LLM classifier tier** — single constrained-decoding call to the active
-  `llm-provider` (`grammar` field forces one token: `simple` | `agentic`). Runs
-  for all languages. Reuses the already-loaded provider; no embedding model.
-- [ ] Router result drives `run`: `simple` → direct completion, no loop;
-  `agentic` → step controller (Slice 2b).
+- [x] **Language detection** — `whatlang` 0.16 (pure-Rust, no model call) in
+  [`src/router/language.rs`]; only a *reliable non-English* detection bypasses the
+  heuristic tier (short/unreliable/English text stays eligible so greetings are
+  still caught cheaply).
+- [x] **Heuristic tier** (English, microseconds) — [`src/router/heuristics.rs`]:
+  ~90 rules across seven named `const` groups (greetings + greeting-prefixes,
+  farewells, affirmations, courtesies, clarifications, meta-queries, fillers).
+  Emits `simple` or `pass`; one new rule = one line in the right group. Punctuation-
+  and case-normalised (apostrophes kept so `"what's up"` matches).
+- [x] **LLM classifier tier** — [`src/router/mod.rs`] `parse_intent` + the
+  provider-backed `llm_classify` in `lib.rs`: single constrained-decoding call to
+  the routed `llm-provider` with `grammar = "root ::= \"simple\" | \"agentic\""`.
+  Ambiguous/failed output defaults to `agentic` (never wrongly skip the loop).
+- [x] Router result drives `run`: `simple` → direct completion, no loop;
+  `agentic` → one-shot fallback **until Slice 2b's step controller lands** (logged
+  as pending).
 
-**Definition of done:** `run` correctly classifies greetings and single-fact
-questions as `simple` without entering the agent loop; multi-step prompts reach
-the step controller; verified by offline unit tests (canned provider).
+**Definition of done (met):** `run` classifies greetings/acks/meta-queries as
+`simple` with no model call; English multi-step and non-English prompts reach the
+LLM tier; verified by 17 offline unit tests (`cargo test` in the guest crate,
+host target). The WIT/component code is gated behind `#[cfg(target_arch =
+"wasm32")]` so the pure router unit-tests natively; the full component still
+compiles to wasm (`make -C src/extensions manager-agent-loop-docker`) and the
+Phase 1 exit-gate routing harness (`tests/routing.rs`) still passes with the
+router in front of the turn.
 
 ---
 

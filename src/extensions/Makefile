@@ -25,10 +25,21 @@ DENY_CONFIG := $(ROOT)/deny.toml
 # canary). Globbed so a new Go guest is gated without editing this Makefile.
 GO_MODULES := $(wildcard */go.mod)
 
-.PHONY: all clean audit deny go-supply-chain spike-deps spike-guest $(GUESTS) $(DOCKER_GUESTS)
+# Guests with native (host-target) unit tests. Their WIT/component code is gated
+# behind `#[cfg(target_arch = "wasm32")]`, so a host `cargo test` compiles only
+# the pure logic modules (e.g. the intent router) + their `#[cfg(test)]` tests —
+# no wasm target required. Add a guest here once it carries such tests.
+TESTABLE_GUESTS := manager-agent-loop
+
+.PHONY: all clean test audit deny go-supply-chain spike-deps spike-guest $(GUESTS) $(DOCKER_GUESTS)
 
 # Build every Rust guest (the polyglot TinyGo spike stays opt-in: `make spike-guest`).
 all: $(GUESTS)
+
+# Run the guests' native unit tests (host target, no wasm). Skips guests without
+# host-testable modules by only iterating TESTABLE_GUESTS.
+test:
+	@for g in $(TESTABLE_GUESTS); do echo "== test $$g =="; ( cd $$g && cargo test ) || exit 1; done
 
 # Build one guest and stage it in ext/. Rust guests need no cargo-component — the
 # wasm32-wasip2 target emits a component directly and the `wit-bindgen` crate

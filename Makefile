@@ -51,8 +51,14 @@ core:
 extensions:
 	$(MAKE) -C $(EXT) all
 
-test clippy:
-	$(MAKE) -C $(CORE) $@
+# Host-side unit tests: the core workspace plus the guests' native (host-target)
+# tests (pure logic behind a wasm32 cfg-gate — e.g. the intent router).
+test:
+	$(MAKE) -C $(CORE) test
+	$(MAKE) -C $(EXT) test
+
+clippy:
+	$(MAKE) -C $(CORE) clippy
 
 # --- Supply-chain gates (Slice 1b gate; CI enforces all of these) ---
 
