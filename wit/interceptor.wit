@@ -47,6 +47,13 @@ interface interceptor {
         select-context,
         /// … then fix the tool set for the task.
         select-tools,
+        /// Non-recoverable error: provider exhausted, tool crash, validation
+        /// failure after all retries. The loop already exhausted its internal
+        /// retry logic — this phase is for observability and graceful degradation
+        /// (log, emit user-facing message, surface a retry suggestion), not for
+        /// error recovery. An interceptor that returns `replace` here cannot
+        /// resume the failed operation.
+        on-error,
         /// Raw assistant output in hand, *before* core parses/validates it.
         /// Output repair, reasoning-strip, redaction. A `replace` here rewrites
         /// the turn's authoritative message (see the streaming note on `finalize`).
@@ -111,6 +118,16 @@ interface interceptor {
         text: string,
     }
 
+    /// State delivered at the `on-error` phase.
+    record error-context {
+        /// Which phase the error occurred in or after.
+        failed-phase: phase,
+        /// Human-readable error description.
+        message: string,
+        /// The hook-state at the point of failure, if meaningful.
+        failed-state: option<hook-state>,
+    }
+
     /// Phase-specific state handed to the interceptor. The active case always
     /// matches the phase the host is dispatching.
     variant hook-state {
@@ -124,6 +141,7 @@ interface interceptor {
         tool-result(tool-outcome),
         finalize(final-answer),
         prepare-next-turn(pending-request),
+        on-error(error-context),
     }
 
     /// A question routed *through the loop to the attached driver* (TUI, chat,

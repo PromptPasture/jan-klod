@@ -104,7 +104,11 @@ phase. **Ordering is not configurable** — across phases it follows the `phase`
 within a phase it follows deterministic extension load order; `jan-klod.yaml` only
 **enables/disables** interceptors. Most of what the old monolithic `manager-agent-loop`
 did — intent routing, task classification, tool selection, context compression — is now
-a separate, independently enabled interceptor. (**Provider fallback is the exception**:
+a separate, independently enabled interceptor. The phase model also doubles as
+**agent lifecycle hooks**: `onStart` → `session-start`, `onFinish` → `finalize`,
+`onToolCall` → `tool-call`/`tool-result`, `onError` → `on-error` (see below).
+Any lifecycle point an external observer would want to react to is already a
+phase — write an interceptor for it. (**Provider fallback is the exception**:
 because it re-issues the *same* failed request on another provider, it stays **core loop
 mechanism** — see [Provider fallback](#provider-fallback) — not an interceptor.)
 
@@ -227,6 +231,8 @@ User query (from an api-*/chat-* driver)
 │      │                                     ◀── answer ── (loop resumes) ──┘│
 │      ▼                                                                   │
 │  Tool execution  ──▶ [phase: tool-result] modify ──▶ (terminate? stop)   │
+│      │                    └─(error)──▶ [phase: on-error]  decide          │
+│      │                                  retry / abort / log              │
 │      │                                                                   │
 │      ▼                                                                   │
 │  [phase: prepare-next-turn]  (optional model/context swap) ──┐          │
@@ -247,8 +253,15 @@ Streamed tokens are a **non-authoritative preview**; the loop emits the turn's
 authoritative message at the boundary, which `after-response`/`finalize` may have
 `replace`d — drivers reconcile the two (Pi's `message_update → message_end` model).
 Mid-run **steering** messages and post-stop **follow-up** messages can be injected
-by the driver; a tool result may set **`terminate`** to end the loop. An interceptor
-that returns **`ask`** suspends the loop until the driver answers. See
+by the driver; a tool result may set **`terminate`** to end the loop. An interceptor that returns **`ask`** suspends the loop until the driver answers.
+
+The **`on-error`** phase fires when a non-recoverable error occurs (provider
+exhaustion, tool-crash, validation failure after all retries). An interceptor
+here may log, emit a user-visible message, or request a retry — but the loop
+*has already* exhausted its internal retry logic before reaching this phase, so
+`on-error` is for observability and graceful degradation, not for error recovery.
+
+See
 [Small-Model Harness](small-model-harness.md) for how the mitigation strategies map
 onto these hooks, and
 [the decision record](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)

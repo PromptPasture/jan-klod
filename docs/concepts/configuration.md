@@ -4,7 +4,7 @@ title: Configuration
 description: The jan-klod.yaml format and how the core loads it into extension instances
 tags: [config, yaml, extensions, host-config, loader]
 created: 2026-06-29T00:00:00Z
-updated: 2026-06-29T00:00:00Z
+updated: 2026-07-01T00:00:00Z
 ---
 
 A single `jan-klod.yaml` declares which extensions run and how they are
@@ -90,6 +90,20 @@ make config
 # [disabled] provider.lm-studio     -> provider-openai.wasm
 # …
 ```
+
+## Per-project configuration
+
+In addition to `jan-klod.yaml`, Jan-Klod reads from `AGENTS.md` and `.agents/` at the project
+root (or the nearest ancestor directory). This keeps project-specific instructions and skills checked into version control.
+
+```
+AGENTS.md
+.agents/skills/          — project-specific skills loaded at session-start
+```
+
+The directory is read at the **`session-start` interceptor phase** and does not
+require restarting core. A `.gitignore` entry is recommended for secrets; the
+directory itself should be committed for shared team context.
 
 See [Architecture](architecture.md) for the extension taxonomy and
 [Contracts](contracts.md) for the `host-config` interface the sections are
