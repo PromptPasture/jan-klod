@@ -35,13 +35,35 @@ Extensions implement these and the host routes calls between them.
 | File | Interface | Responsibility | Implemented by |
 |---|---|---|---|
 | `llm-provider.wit` | `llm-provider` | Streaming completions, constrained decoding | `provider-*` |
-| `context-manager.wit` | `context-manager` | Conversation history + compression | `manager-context` |
-| `agent-manager.wit` | `agent-manager` | Agent loop, routing, decomposition, fallback | `manager-agent-loop` |
+| `interceptor.wit` *(planned)* | `interceptor` | Agent-loop decision hook — one generic `intercept` over a `phase` enum; the core loop calls it per phase and acts on its `proceed` / `replace` / `block` / `ask` return | `interceptor-*` |
 | `memory-store.wit` | `memory-store` | Persistent key-value storage | `store-*` |
 | `skill-registry.wit` | `skill-registry` | Skill catalog and dispatch | `registry-skills` |
 | `mcp-registry.wit` | `mcp-registry` | MCP server management + tool catalog | `registry-mcp` |
 | `agent-delegate.wit` | `agent-delegate` | ACP agent delegation (streaming) | `agent-*` |
 | `tool-callable.wit` | `tool-callable` | Discrete callable tool | `tool-*` |
+
+**Interceptor dispatch is core-native.** The core loop invokes each enabled
+`interceptor-*` component's exported `interceptor` interface directly and acts on the
+returned `decision` (`proceed` / `replace` / `block` / `ask`). There is **no `host-hook`
+capability an extension imports** — dispatch is a synchronous, ordered call driven by the
+host, distinct from the observation-only `host-event` bus. The interface is **one generic
+function over a `phase` enum** (`session-start`, `before-loop`, `select-model`,
+`select-context`, `select-tools`, `after-response`, `tool-call`, `tool-result`,
+`finalize`, `prepare-next-turn`) — a new lifecycle point is a new enum case, never a new
+function. **Ordering is structural, not configured:** across phases it follows the enum;
+within a phase, deterministic extension load order. `jan-klod.yaml` **only enables/disables**
+interceptors — an interceptor declares the phases it wants via `subscribed-phases()`. The
+`ask` decision routes a question through the loop to the attached driver (which prompts in
+its own idiom) and resumes on the answer, so a rule-based permission gate can confirm with
+the user without touching a UI. `intercept` returns `result<decision, interceptor-error>`;
+on error or trap the host **fails closed at `tool-call`** and fails-open-with-log elsewhere.
+
+> **`context-manager` is subsumed into `interceptor-context`.** History trimming and
+> compression are no longer a loop-facing contract the host routes to; under the
+> generic-hook model the loop only knows the `interceptor` interface, and
+> `interceptor-context` performs history/compression *internally* at the
+> `select-context` phase. `context-manager.wit` is retained (if at all) only as an
+> internal type source, not a routed interface.
 
 ### Host-provided interfaces
 
@@ -54,8 +76,12 @@ Core grants these capabilities to every extension.
 | `host-socket.wit` | `host-socket` | Long-lived bidirectional socket — lets `chat-*` hold a Telegram/Slack connection *(planned)* |
 | `host-log.wit` | `host-log` | Structured logging forwarded to core pipeline |
 | `host-config.wit` | `host-config` | Read own section of `jan-klod.yaml` |
-| `host-event.wit` | `host-event` | Event bus publish/subscribe |
+| `host-event.wit` | `host-event` | Event bus publish/subscribe — **observation-only** (fire-and-forget); cannot shape the loop |
 | `host-storage.wit` | `host-storage` | Proxy to active `memory-store` (subset: no purge/search) |
+
+Interceptor dispatch is **not** in this table: it is a core-native call of the
+extension-exported `interceptor` interface (above), not a capability extensions
+import.
 
 `host-serve` and `host-socket` are **planned** capabilities: they are what keep
 `api-*` (inbound listeners) and `chat-*` (long-lived connections) fully
@@ -66,7 +92,15 @@ outbound-request-only and does not cover either case.
 
 Streaming is first-class and mandatory in `llm-provider`. There is no synchronous completion path — providers that don't natively stream return a single-token stream. This ensures consistent UX (no blank-screen waits) across local models (llama.cpp, MLX, Ollama) and cloud APIs (OpenAI, Claude).
 
-Streaming uses a **poll-based handle** model rather than native WIT `stream<>`. (This was forced by `wit-bindgen-go` immaturity in the Go MVP; under Wasmtime + `wit-bindgen` the native `stream<>`/async path should be re-evaluated, but the poll-based handle remains the safe default until proven.) `complete` returns an opaque `stream-handle`; the host polls `next-chunk` until it yields `done`, then calls `close-stream`. The same pattern is used by `agent-manager` (`run-handle`) and `agent-delegate` (`delegate-handle`).
+Streaming uses a **poll-based handle** model rather than native WIT `stream<>`. (This was forced by `wit-bindgen-go` immaturity in the Go MVP; under Wasmtime + `wit-bindgen` the native `stream<>`/async path should be re-evaluated, but the poll-based handle remains the safe default until proven.) `complete` returns an opaque `stream-handle`; the host polls `next-chunk` until it yields `done`, then calls `close-stream`. The same pattern is used by `agent-delegate` (`delegate-handle`) and by the **core-exposed loop entry** that drivers (`api-*`/`chat-*`) call to run the agent (`run-handle`).
+
+> **`agent-manager` is retired as an extension interface.** Its `run` /
+> `next-event` / `cancel` / `close` surface described the old
+> `manager-agent-loop` extension. The loop is now core *mechanism*
+> ([Architecture](architecture.md#agent-loop-architecture)), so that surface — plus
+> steering / follow-up injection and a tool-result `terminate` — moves to a
+> **core-exposed driver interface** *(planned)*, and the decision logic it used to
+> hold moves to `interceptor-*` extensions. `agent-manager.wit` is superseded.
 
 ```wit
 interface llm-provider {
@@ -97,11 +131,11 @@ interface llm-provider {
 
 ## Multi-provider
 
-Multiple `llm-provider` extensions can be active simultaneously. `manager-agent-loop` selects the provider per-request based on routing rules in `jan-klod.yaml` (e.g. route code tasks to `provider-ollama`, reasoning to `provider-anthropic`).
+Multiple `llm-provider` extensions can be active simultaneously. `interceptor-task-router` selects the provider per-request (at the `select-model` phase) based on routing rules in `jan-klod.yaml` (e.g. route code tasks to `provider-ollama`, reasoning to `provider-anthropic`).
 
 ## ACP — agent delegation
 
-`agent-*` extensions implement `agent-delegate`. From `manager-agent-loop`'s perspective, delegating to another agent looks like calling a tool — but the sub-agent runs its own full loop and returns a structured result. Jan-Klod also exposes itself as an ACP server, allowing other orchestrators to call it.
+`agent-*` extensions implement `agent-delegate`. From the core loop's perspective, delegating to another agent looks like calling a tool — but the sub-agent runs its own full loop and returns a structured result. Jan-Klod also exposes itself as an ACP server, allowing other orchestrators to call it.
 
 ## WIT world structure
 

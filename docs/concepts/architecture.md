@@ -11,11 +11,14 @@ updated: 2026-06-29T00:00:00Z
 > **Components** (WIT contracts), and runs as a standalone, user-privilege
 > process — see
 > [decisions/2026-06-29-component-model-rust](../decisions/2026-06-29-component-model-rust/Handoff.md).
-> The agent loop, taxonomy, and contracts are unchanged from the Go + Wazero
-> design; what moved is the host language/runtime, and — because **nothing is
-> trusted** — the removal of the native/in-core extension tier (`api-*`/`chat-*`
-> are now sandboxed WASM; UIs are separate clients). Items still being re-decided
-> for Rust are marked **(TBD)**.
+> The taxonomy and contracts are largely unchanged from the Go + Wazero design;
+> what moved is the host language/runtime, and — because **nothing is trusted** —
+> the removal of the native/in-core extension tier (`api-*`/`chat-*` are now
+> sandboxed WASM; UIs are separate clients). The **agent loop** was re-architected
+> on 2026-07-01: its thin *mechanism* now lives in **core**, and every agent
+> *decision* is a sandboxed **interceptor** extension — see
+> [Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
+> Items still being re-decided for Rust are marked **(TBD)**.
 
 ## Philosophy
 
@@ -32,13 +35,27 @@ it is the only thing you run. It contains:
 - Extension lifecycle management (load, enable, disable, unload)
 - Configuration loading (`jan-klod.yaml`) — see [Configuration](configuration.md)
 - WASM component host (Wasmtime) — the capability sandbox every extension runs in
-- Event bus (extension-to-extension communication)
+- Event bus (extension-to-extension communication, observation-only)
+- **Agent loop mechanism** — the thin conductor (`stream → tools → loop`) plus the
+  **interceptor-chain dispatch** (see [Agent loop architecture](#agent-loop-architecture))
 - Observability (structured logging, Prometheus metrics, OpenTelemetry traces)
 
-Zero agent behaviour in core. A core-only boot starts up and does nothing — the
-agent loop itself is the `manager-agent-loop` **extension**, not core. The HTTP
-API, UIs, and chat integrations are likewise extensions or external clients,
-never built in.
+**Zero agent *behaviour* in core.** The loop is pure *mechanism* — it holds no
+policy. Every decision (should we enter the agentic loop, which model, which
+tools, how to trim history, may this tool run) is made by a sandboxed
+**interceptor** extension the loop consults. A core-only boot with no interceptors
+runs a bare `stream → tools → loop` and nothing more. The HTTP API, UIs, and chat
+integrations are likewise extensions or external clients, never built in.
+
+> **Why the loop is in core (not an extension).** Once every decision moves to an
+> interceptor, the loop has no behaviour left — it is ~200 lines of conductor
+> (provider call, tool dispatch, interceptor dispatch, streaming handles, cancel,
+> steering queue). Making that native Rust keeps "nothing trusted" intact (core
+> *is* the trusted host; all providers/tools/stores/interceptors stay sandboxed
+> WASM) while avoiding a WASM loop driving a WASM interceptor chain across the
+> component boundary twice. Cost accepted: the loop conductor is no longer a
+> swappable, polyglot component. See
+> [the decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
 
 ## Extension model
 
@@ -64,7 +81,7 @@ Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are
 | Category | Class | Mechanism | Examples |
 |---|---|---|---|
 | `provider-*` | LLM API clients | WASM | `provider-openai`, `provider-ollama`, `provider-anthropic` |
-| `manager-*` | Stateful orchestrators | WASM | `manager-agent-loop`, `manager-context` |
+| `interceptor-*` | Agent-loop decision hooks | WASM (exports `interceptor`) | `interceptor-intent-router`, `interceptor-task-router`, `interceptor-tool-selector`, `interceptor-context`, `interceptor-permission` |
 | `store-*` | Persistence backends | WASM | `store-sqlite`, `store-postgres`, `store-supabase` |
 | `registry-*` | Capability catalogues | WASM | `registry-skills`, `registry-mcp` |
 | `tool-*` | Discrete callable tools | WASM | `tool-web-search` |
@@ -72,7 +89,30 @@ Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are
 | `api-*` | Network API surfaces | WASM (`host-serve`) | `api-rest`, `api-grpc`, `api-graphql` |
 | `chat-*` | Chat platform integrations | WASM (`host-socket`) | `chat-slack`, `chat-telegram`, `chat-whatsapp`, `chat-mattermost` |
 
-**Every extension is a sandboxed, language-agnostic WASM component — nothing is trusted and nothing is compiled into core.** Extensions that need the network (`provider-*`, `tool-*`, `api-*`, `chat-*`) get it *only* through host-granted capabilities, never raw OS access. `api-*` and `chat-*` are therefore ordinary plugins: the user enables whichever `api-*` surface they want (or none) and any `chat-*` integrations they want (or none).
+**Every extension is a sandboxed, language-agnostic WASM component — nothing is trusted and nothing is compiled into core.** (The only agent code *in* core is the loop *mechanism*; it carries no policy — see [Agent loop architecture](#agent-loop-architecture).) Extensions that need the network (`provider-*`, `tool-*`, `api-*`, `chat-*`) get it *only* through host-granted capabilities, never raw OS access. `api-*` and `chat-*` are therefore ordinary plugins: the user enables whichever `api-*` surface they want (or none) and any `chat-*` integrations they want (or none).
+
+**`interceptor-*` extensions** are the agent loop's decision hooks. Each exports the
+one generic `interceptor` interface (`intercept` + `subscribed-phases`); the core loop
+invokes them **natively** at a fixed, ordered list of **phases** and acts on the
+returned `decision` — `proceed | replace | block | ask` — a synchronous, ordered
+dispatch, distinct from the observation-only event bus, with no `host-hook` capability
+for extensions to import. Adding a lifecycle point is a new `phase` enum case, never a
+new function or world import, so the design favours **many narrow phases over few broad
+ones**: each phase is a real state transition, making ordering between concerns
+*structural* (the phase order) rather than a config-fragile contract inside one big
+phase. **Ordering is not configurable** — across phases it follows the `phase` enum,
+within a phase it follows deterministic extension load order; `jan-klod.yaml` only
+**enables/disables** interceptors. Most of what the old monolithic `manager-agent-loop`
+did — intent routing, task classification, tool selection, context compression — is now
+a separate, independently enabled interceptor. (**Provider fallback is the exception**:
+because it re-issues the *same* failed request on another provider, it stays **core loop
+mechanism** — see [Provider fallback](#provider-fallback) — not an interceptor.)
+
+An interceptor may return **`ask`** — a question routed *through the loop to the attached
+driver* (TUI, chat, `api-*`), which surfaces it in its own idiom; the loop suspends and
+the host re-invokes the same interceptor once the answer returns. This is how a
+rule-based permission gate can confirm with the user even though the UI is a *separate
+client* — the interceptor never touches a UI.
 
 **User interfaces are not extensions.** TUI/GUI/web are optional, *separate client processes* that connect to core over an `api-*` HTTP+SSE surface (the LSP model: core is the server, the UI is a thin client). They are covered in [User interfaces](#user-interfaces-separate-clients) below.
 
@@ -81,15 +121,20 @@ Jan-Klod speaks ACP both ways — as a client (`agent-*` extensions call other a
 ### Extension dependency graph
 
 ```
+core agent loop      mechanism only (in core): stream → tools → loop, interceptor dispatch,
+                     grammar passthrough, parse/validate/retry, streaming handles
+
 provider-anthropic  ─┐
 provider-openai     ─┤ implements llm-provider WIT interface
 provider-ollama     ─┘
 
-manager-context       implements context-manager WIT interface
+interceptor-intent-router   exports interceptor; phase @ before-loop     (simple vs agentic; may short-circuit)
+interceptor-task-router     exports interceptor; phase @ select-model     (task classification → task→model routing)
+interceptor-context         exports interceptor; phase @ select-context   (trim/compress history to the model budget)
+interceptor-tool-selector   exports interceptor; phase @ select-tools     (which tools to expose)
+interceptor-permission      exports interceptor; phase @ tool-call        (allow / replace / block / ask on a tool call)
 
-manager-agent-loop    requires:  llm-provider, context-manager
-                      optional:  memory-store, skill-registry, mcp-registry
-                      implements agent-manager WIT interface
+# provider fallback is NOT an interceptor — it is core loop mechanism (re-issues the failed request)
 
 store-sqlite          implements memory-store WIT interface (default)
 store-postgres        implements memory-store WIT interface
@@ -98,18 +143,18 @@ store-supabase        implements memory-store WIT interface
 registry-skills       implements skill-registry WIT interface
 registry-mcp          implements mcp-registry WIT interface
 
-tool-web-search       requires: agent-manager
+tool-web-search       implements tool-callable; offered to the loop via interceptor-tool-selector
 
-agent-claude-code     requires: agent-manager (delegates tasks via ACP)
-agent-opencode        requires: agent-manager
+agent-claude-code     implements agent-delegate (delegates tasks via ACP)
+agent-opencode        implements agent-delegate
 
-api-rest              requires: agent-manager; uses host-serve (exposes core over HTTP + SSE)
-api-grpc              requires: agent-manager; uses host-serve
-api-graphql           requires: agent-manager; uses host-serve
+api-rest              drives the core loop; uses host-serve (exposes core over HTTP + SSE)
+api-grpc              drives the core loop; uses host-serve
+api-graphql           drives the core loop; uses host-serve
 
-chat-slack            requires: agent-manager; uses host-socket
-chat-telegram         requires: agent-manager; uses host-socket
-chat-whatsapp         requires: agent-manager; uses host-socket
+chat-slack            drives the core loop; uses host-socket
+chat-telegram         drives the core loop; uses host-socket
+chat-whatsapp         drives the core loop; uses host-socket
 
 # UIs are NOT extensions — separate client processes that connect over api-rest (HTTP+SSE)
 ```
@@ -139,29 +184,75 @@ require `api-rest`, matching the LSP/server model.)*
 
 ## Agent loop architecture
 
+The loop is a thin **conductor in core**. It runs a fixed `stream → tools → loop`
+cycle and, at an **ordered list of phases**, invokes the enabled `interceptor-*`
+extensions natively (each exports the `interceptor` interface) and acts on their
+`proceed | replace | block | ask` return. All *decisions* live in interceptors; the
+loop itself holds only *mechanism* (grammar passthrough, parse, structural
+validation, retry-with-correction, **provider fallback**, streaming handles, cancel,
+and the steering/follow-up queue). The phases, in order:
+
 ```
-User query
+Session opens
     │
     ▼
-Intent router ──→ direct answer (no agent)
+[phase: session-start]  once/session — load memory, set system prompt
     │
     ▼
-Step controller (selects tools, compresses history, builds prompt)
+User query (from an api-*/chat-* driver)
     │
     ▼
-LLM (constrained decoding)
+[phase: before-loop]  interceptor-intent-router ──→ direct answer (skip agentic loop)
     │
     ▼
-Parse & validate action → retry on failure
+┌───────────────────────── core loop (mechanism) ─────────────────────────┐
+│  [phase: select-model]    interceptor-task-router  — pick model          │
+│  [phase: select-context]  interceptor-context      — trim to budget      │
+│  [phase: select-tools]    interceptor-tool-selector — fix tool set       │
+│      │                    (ordered phases: each hands a defined state on) │
+│      ▼                                                                   │
+│  LLM complete(request incl. grammar) — provider executes constrained     │
+│      │                              decoding                             │
+│      │   └─(provider error)─▶ fallback: next model/provider from         │
+│      │                        `providers:` (CORE mechanism) ─▶ re-issue  │
+│      ▼                                                                   │
+│  [phase: after-response]  raw output repair / reasoning-strip / redact   │
+│      │                                                                   │
+│      ▼                                                                   │
+│  Parse & structurally validate action  ──(malformed)──▶ retry+correction │
+│      │                                                                   │
+│      ▼ tool call?                                                        │
+│  [phase: tool-call]  interceptor-permission ──→ allow / block / replace  │
+│      │                                        └─ ask ─▶ driver prompts ──┐│
+│      │                                     ◀── answer ── (loop resumes) ──┘│
+│      ▼                                                                   │
+│  Tool execution  ──▶ [phase: tool-result] modify ──▶ (terminate? stop)   │
+│      │                                                                   │
+│      ▼                                                                   │
+│  [phase: prepare-next-turn]  (optional model/context swap) ──┐          │
+│      └───────────────────── loop back ◀──────────────────────┘          │
+└──────────────────────────────────────────────────────────────────────────┘
+    │  (final-answer, or every tool result set terminate)
+    ▼
+[phase: finalize]  shape the authoritative answer (citations, redaction)
     │
     ▼
-Tool execution → loop back to step controller
-    │
-    ▼
-Answer extractor
+Authoritative answer emitted (text-delta … done)
 ```
 
-See [Small-Model Harness](small-model-harness.md) for mitigation strategies.
+(Tokens also stream live *during each turn's* `complete()` as a non-authoritative
+preview; `finalize` shapes the authoritative copy the driver reconciles against.)
+
+Streamed tokens are a **non-authoritative preview**; the loop emits the turn's
+authoritative message at the boundary, which `after-response`/`finalize` may have
+`replace`d — drivers reconcile the two (Pi's `message_update → message_end` model).
+Mid-run **steering** messages and post-stop **follow-up** messages can be injected
+by the driver; a tool result may set **`terminate`** to end the loop. An interceptor
+that returns **`ask`** suspends the loop until the driver answers. See
+[Small-Model Harness](small-model-harness.md) for how the mitigation strategies map
+onto these hooks, and
+[the decision record](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)
+for the rationale.
 
 ## Transport
 
@@ -212,7 +303,7 @@ selected via `jan-klod.yaml`.
 
 ## Provider fallback
 
-When a provider or model fails (unavailable, rate-limited, quota exceeded, local OOM), `manager-agent-loop` falls back through a two-level priority list defined in `jan-klod.yaml`. Entries reference **provider instance names** (`extensions.provider.<name>`), not wasm components — see [Configuration](configuration.md):
+When a provider or model fails (unavailable, rate-limited, quota exceeded, local OOM), the **core loop** falls back through a two-level priority list defined in `jan-klod.yaml`, re-issuing the request against the next entry. Fallback is core *mechanism*, not an interceptor: it re-issues the *same* failed request on another provider (an on-provider-error retry, the same category as retry/validate), which a `prepare-next-turn` interceptor cannot do. Entries reference **provider instance names** (`extensions.provider.<name>`), not wasm components — see [Configuration](configuration.md):
 
 ```yaml
 providers:
@@ -236,7 +327,7 @@ Fallback is per-request — if the primary recovers, the next request uses it ag
 
 ## Task routing
 
-`manager-agent-loop` classifies each request into a task type and routes it to the configured provider/model. Jan-Klod ships built-in task types as sensible defaults; users extend or override in `jan-klod.yaml`.
+`interceptor-task-router` classifies each request into a task type and routes it to the configured provider/model (setting the model on the outbound request at the `select-model` phase). Jan-Klod ships built-in task types as sensible defaults; users extend or override in `jan-klod.yaml`.
 
 **Built-in task types:**
 
@@ -274,14 +365,22 @@ routing:
 
 ## Parallel decomposition
 
-For tasks where subtasks are independent, `manager-agent-loop` decomposes and dispatches in parallel:
+> **Deferred (not in the v1 interceptor set).** Decomposition fans out multiple
+> independent sub-runs and merges them — it does not fit the `proceed`/`replace`/`block`/`ask`
+> decision shape, so it is a later addition (likely a dedicated `interceptor-decomposer`
+> that drives child loop runs, or a driver-side concern). Recorded here as intent,
+> not a Phase 2 commitment. See
+> [open questions](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md#open-questions).
+
+For tasks where subtasks are independent, a decomposition interceptor splits the
+work and dispatches in parallel:
 
 - **`file-edit`** — each file edited in parallel, results merged
 - **`web-search`** — multiple queries in parallel, results merged before LLM synthesis
 - **`research`** — multiple sources fetched in parallel
 - **`code-review`** — each module reviewed independently
 
-Single-subtask requests skip decomposition and route directly. The decomposer and merger live inside `manager-agent-loop` — no new extension needed.
+Single-subtask requests skip decomposition and route directly.
 
 ```
 Task
@@ -304,8 +403,8 @@ Final LLM call (synthesis / answer)
 `registry-mcp` monitors connected MCP servers. On crash or disconnect:
 
 1. Mark the server as `down`.
-2. Remove its tools from the active tool set — `manager-agent-loop` will not offer them.
-3. Emit an event on the bus — `ui-*` extensions display a warning to the user.
+2. Remove its tools from the active tool set — `interceptor-tool-selector` will not offer them at the `select-tools` phase.
+3. Emit an event on the bus — UI clients display a warning to the user.
 4. Attempt reconnect on an exponential backoff timer.
 
 No crash propagates to core. The agent loop continues with the remaining tools.

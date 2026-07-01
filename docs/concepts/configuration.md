@@ -74,8 +74,8 @@ that consume them.
 
 `providers` and `routing` (provider fallback chain and task→model routing) are
 **top-level, not under `extensions`**. The core preserves them verbatim for the
-`manager-agent-loop` extension and does **not** validate their references —
-routing grammar is agent-loop domain logic, not a core concern. See
+`interceptor-task-router` extension (via `host-config`) and does **not** validate
+their references — routing is interceptor domain logic, not a core concern. See
 [Architecture → Provider fallback](architecture.md#provider-fallback) and
 [Task routing](architecture.md#task-routing).
 

@@ -27,7 +27,8 @@ jan-klod-<version>-<os>-<arch>/
   jan-klod.yaml         ← pre-filled from selections
   ext/
     provider-openai.wasm
-    manager-agent-loop.wasm
+    interceptor-intent-router.wasm
+    interceptor-context.wasm
     store-sqlite.wasm
     api-rest.wasm
     …selected extensions…

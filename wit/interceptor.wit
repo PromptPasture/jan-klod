@@ -1,0 +1,217 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Agent-loop decision hook — the one generic interface every `interceptor-*`
+/// extension exports. The core loop (mechanism, in Rust) drives an **ordered
+/// list of phases** and, at each phase, invokes each enabled interceptor's
+/// `intercept` natively, acting on the returned `decision`.
+///
+/// Design rules (see decisions/2026-07-01-thin-loop-interceptors):
+///   - **One function, many phases.** Adding a lifecycle point is a new `phase`
+///     case, never a new function or world import — so the loop's world never
+///     grows a stage-specific signature. Prefer many *narrow* phases over few
+///     broad ones: each phase is a real state transition, so ordering between
+///     concerns is structural (the phase order) rather than an implicit,
+///     config-fragile contract inside one big phase.
+///   - **Zero policy in core.** Every *decision* lives here; the loop holds only
+///     mechanism (grammar passthrough, parse/validate/retry, provider fallback,
+///     streaming, cancel, the steering/follow-up queue).
+///   - **Core-native dispatch.** This is an *exported* interface the host calls,
+///     not a capability extensions import — distinct from the observation-only
+///     `host-event` bus.
+///
+/// Retires: agent-manager, agent-loop (v0), context-manager — the routing,
+/// fallback, and history decisions they held move to core mechanism or to
+/// `interceptor-*` extensions.
+interface interceptor {
+    use llm-types.{message, tool-definition, tool-call};
+
+    /// Opaque session identifier (a session spans many loop runs).
+    type session-id = string;
+
+    /// The lifecycle points, in dispatch order. Extensible: a new decision that
+    /// names a real state transition adds a case here (and the matching
+    /// `hook-state` payload). v1 builds interceptors only for the phases with a
+    /// concrete driver; the rest are declared-but-empty seams.
+    enum phase {
+        /// Once per session. Establish session-scoped state (memory, system
+        /// prompt) before any turn runs.
+        session-start,
+        /// Per run, before the agentic loop. May short-circuit to a direct
+        /// answer. Default: interceptor-intent-router.
+        before-loop,
+        /// Request-shaping, split into ordered sub-phases so each concern sees a
+        /// well-defined state and writes in a fixed order:
+        /// pick the model first (context + tools depend on it) …
+        select-model,
+        /// … then trim/compress history to the chosen model's budget …
+        select-context,
+        /// … then fix the tool set for the task.
+        select-tools,
+        /// Raw assistant output in hand, *before* core parses/validates it.
+        /// Output repair, reasoning-strip, redaction. A `replace` here rewrites
+        /// the turn's authoritative message (see the streaming note on `finalize`).
+        after-response,
+        /// A tool is about to be invoked. Allow / block / modify / ask.
+        /// Default: interceptor-permission.
+        tool-call,
+        /// A tool has returned. Modify the result or terminate the loop.
+        tool-result,
+        /// The final answer is assembled. Streaming rule: the tokens the loop
+        /// streams during `complete()` are a **non-authoritative preview**; the
+        /// loop emits the turn's authoritative message at the boundary, which
+        /// `after-response`/`finalize` may have `replace`d. Drivers reconcile the
+        /// preview with the final message (Pi's message_update → message_end
+        /// model). So `finalize` may rewrite text (citations, redaction) without
+        /// fighting the stream — it edits the authoritative copy, not emitted
+        /// tokens.
+        finalize,
+        /// A new iteration is about to begin. Optional model/context swap.
+        prepare-next-turn,
+    }
+
+    /// The outbound completion being assembled — the mutable state the
+    /// request-shaping phases (`select-model`/`-context`/`-tools`) read and
+    /// replace. Mirrors llm-provider.completion-request; kept as its own record
+    /// so interceptors don't depend on the provider world.
+    record pending-request {
+        /// None until select-model sets it.
+        model: option<string>,
+        messages: list<message>,
+        tools: list<tool-definition>,
+        /// Constrained-decoding grammar. Core supplies a default; an interceptor
+        /// may override or clear it here.
+        grammar: option<string>,
+        max-tokens: option<u32>,
+        temperature: option<f32>,
+    }
+
+    record session-ctx {
+        session: session-id,
+    }
+
+    record user-turn {
+        session: session-id,
+        user-message: string,
+    }
+
+    /// Raw model output before parsing.
+    record raw-response {
+        text: string,
+        /// "stop" | "tool-calls" | "length" | "error"
+        finish-reason: string,
+    }
+
+    record tool-outcome {
+        tool-call-id: string,
+        /// Tool result content (may be modified).
+        content: string,
+    }
+
+    record final-answer {
+        text: string,
+    }
+
+    /// Phase-specific state handed to the interceptor. The active case always
+    /// matches the phase the host is dispatching.
+    variant hook-state {
+        session-start(session-ctx),
+        before-loop(user-turn),
+        select-model(pending-request),
+        select-context(pending-request),
+        select-tools(pending-request),
+        after-response(raw-response),
+        tool-call(tool-call),
+        tool-result(tool-outcome),
+        finalize(final-answer),
+        prepare-next-turn(pending-request),
+    }
+
+    /// A question routed *through the loop to the attached driver* (TUI, chat,
+    /// api-*), which surfaces it in its own idiom. This is why a permission gate
+    /// can confirm with the user even though the UI is a separate client: the
+    /// interceptor never touches a UI. The loop suspends, the driver answers, and
+    /// the host re-invokes the *same* interceptor with `answer` set.
+    record user-prompt {
+        question: string,
+        /// Empty = free-text; non-empty = choose one.
+        options: list<string>,
+        /// If the driver cannot prompt (headless, no answer), the loop uses this.
+        default-answer: string,
+    }
+
+    /// Why an action was blocked (surfaced to the user / transcript).
+    record block-reason {
+        message: string,
+    }
+
+    /// An interceptor's internal failure. Distinct from `block` (a *decision*):
+    /// this is the interceptor itself malfunctioning.
+    ///
+    /// Host policy on `Err` **or a trap**: fail **closed** at `tool-call` (treat
+    /// as `block` — a broken permission gate must never fail open); at every
+    /// other phase, log and treat as `proceed` so one faulty interceptor cannot
+    /// wedge the loop. The offending interceptor is reported on the event bus.
+    enum interceptor-error {
+        /// Unhandled internal error.
+        internal,
+        /// State did not match the dispatched phase, or was otherwise unusable.
+        invalid-state,
+        /// A capability the interceptor needed (e.g. routed llm-provider) failed.
+        dependency-failed,
+    }
+
+    /// What the interceptor decided.
+    variant decision {
+        /// No change; continue.
+        proceed,
+        /// Replace the phase state with this (same active case as the input).
+        replace(hook-state),
+        /// Stop this action (e.g. deny a tool call, short-circuit the loop).
+        block(block-reason),
+        /// Ask the user, then resume (host re-invokes with `answer` set).
+        ask(user-prompt),
+    }
+
+    /// Input to a single dispatch.
+    record intercept-input {
+        phase: phase,
+        state: hook-state,
+        /// Present only on re-invocation after this interceptor returned `ask`.
+        answer: option<string>,
+    }
+
+    /// Invoked by the core loop at each phase. Synchronous: interceptors run at
+    /// *turn boundaries*, not mid-token. On `Err` (or a trap) the host applies
+    /// the fail-closed-at-tool-call policy documented on `interceptor-error`.
+    intercept: func(input: intercept-input) -> result<decision, interceptor-error>;
+
+    /// Which phases this interceptor wants dispatched to it. The host skips the
+    /// rest — a narrow interceptor (e.g. permission → [tool-call]) is never
+    /// woken for phases it ignores. This is the **sole source of ordering**:
+    /// - *across* phases: the `phase` enum's declaration order;
+    /// - *within* one phase: deterministic extension load order.
+    /// `jan-klod.yaml` only **enables/disables** interceptors — it never orders
+    /// or sequences them. There is no config-driven step ordering to drift.
+    subscribed-phases: func() -> list<phase>;
+}
+
+/// Interceptor world. Dispatch is core-native (the host calls `interceptor`);
+/// there is no `host-hook` import. `host-event` is present for *observation*
+/// only.
+///
+/// `llm-provider` is imported because deciding often *requires a model*:
+/// `interceptor-task-router` classifies the task with an LLM, and
+/// `interceptor-context` compresses history by summarisation. The host routes
+/// these calls to a provider extension (same routing as the loop). An
+/// interceptor that needs no model (e.g. a rule-based permission gate) simply
+/// never calls it — the import costs nothing until used.
+world interceptor-world {
+    import host-log;
+    import host-config;
+    import host-event;
+    import host-storage;
+    import llm-provider;
+
+    export extension-lifecycle;
+    export interceptor;
+}

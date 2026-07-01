@@ -72,7 +72,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Phase | Flag | Gate / note |
 |---|---|---|
 | 1 — Walking skeleton + foundation gate | `done` | **Slice 1a PASSED** (2026-06-29); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). **Slice 1b done** — `jan-klod-core` boots from `jan-klod.yaml` (registry, tier boot order, lifecycle, component host); all three host caps (`host-log`/`host-config`/`host-http`) are real CM imports; three Rust guests (`store-memory` + `provider-openai` + `manager-agent-loop`) build and verify offline; the exit gate runs as one routed turn in the sandboxed agent-loop guest (`tests/routing.rs`); supply-chain CI gates (`cargo-audit`/`cargo-deny`/`govulncheck` + SBOM) wired in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) |
-| 2 — Agent loop | `not-started` | unblocked — Phase 1 exit gate passed; first up: `manager-agent-loop` build-out (intent router, step controller, retry/validate) + `manager-context` — detailed checklist: [PLAN.md](../decisions/2026-07-01-phase2-agent-loop/PLAN.md) |
+| 2 — Agent loop | `in-progress` | **Re-architected 2026-07-01** ([decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)): thin loop *mechanism* moves into **core**; every decision becomes a sandboxed **`interceptor-*`** extension the core loop calls natively (each exports the `interceptor` interface). `manager-agent-loop` retired. Slice 2a intent router recast as the first interceptor. Detailed checklist: [PLAN.md](../decisions/2026-07-01-phase2-agent-loop/PLAN.md) |
 | 3 — Persistence + inbound network | `not-started` | — |
 | 4 — Clients & integrations | `not-started` | — |
 | 5 — Distribution & ops | `not-started` | — |
@@ -117,18 +117,28 @@ through a sandboxed component, with an in-memory store, all over the Component M
 
 ## Phase 2 — First real value: the agent loop
 
-**Goal:** the runtime does something useful end-to-end.
+**Goal:** the runtime does something useful end-to-end. **Re-architected 2026-07-01**
+([Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)).
 
-- `manager-agent-loop` (Option A — zero behaviour in core) + `manager-context`.
-  Both are **extensions, not core**, built in **Rust** like all first-party
-  extensions. (They run as sandboxed components regardless of language; the polyglot
-  boundary is proven by the Slice 1a gate, not by authoring production extensions in
-  another language.)
-- Small-model harness pieces: intent router, step controller, retry/validate loop —
-  see [Small-Model Harness](small-model-harness.md).
-- Wire provider fallback and task routing (already specified in [Architecture](architecture.md)).
+- **Thin loop mechanism in core (Rust):** `stream → tools → loop`, core-native
+  interceptor dispatch (calling each extension's exported `interceptor` interface),
+  grammar passthrough, parse/validate/retry-with-correction, **provider fallback**
+  (on-provider-error re-issue from the `providers:` list), streaming handles, cancel,
+  steering/follow-up queue, tool-result `terminate`. Zero policy. Retires the
+  `manager-agent-loop` extension.
+- **Interceptor framework + the full v1 set** (all sandboxed Rust `interceptor-*`
+  extensions, each exporting `interceptor`): `interceptor-intent-router` (before-loop;
+  recast Slice 2a), `interceptor-task-router` (select-model — task classification +
+  task→model routing), `interceptor-context` (select-context; the reworked context
+  compressor — history/compression handled internally), `interceptor-tool-selector`
+  (select-tools; built thin), and `interceptor-permission` (tool-call; built thin).
+- **Core mechanism, tunable via seams:** constrained-decoding grammar + retry/validate
+  stay fixed in the loop; construction/policy tuned via `host-config` + the
+  request-shaping phases — see [Small-Model Harness](small-model-harness.md).
 
-**Exit gate:** a query runs the full loop against one provider and returns a grounded answer.
+**Exit gate:** a query runs the full loop (intent hook → shaped request → ReAct cycle
+→ fallback on a simulated provider failure) against one provider and returns a grounded
+answer, driven end-to-end through the core-exposed loop entry.
 
 ## Phase 3 — Persistence + inbound network
 
