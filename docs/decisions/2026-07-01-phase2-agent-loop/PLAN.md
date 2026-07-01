@@ -136,11 +136,16 @@ foundation both the core loop (2c) and every interceptor (2a, 2d) hang off.
 - [x] **Error/trap policy** — on `Err` (a trap surfaces as `Err` through the
   adapter), **fail closed at `tool-call`** (treat as `block`), fail-open-with-log
   elsewhere. *(Event-bus emission of the offending id is wired with the adapter.)*
-- [ ] **Registration** — read the interceptor enable/disable set from `config.yaml`
-  (on/off only); resolve `subscribed-phases()` at boot; establish deterministic
-  load order for intra-phase sequencing.
-- [ ] **`configuration.md` note** — document the interceptor enable/disable keys
-  (the one remaining open item from the decision record).
+- [x] **Registration (enable/disable)** — interceptors are a generic extension
+  category, so `config.yaml` enable/disable already flows through
+  `jan_klod_config` with no code change: `interceptor.intent-router` resolves to
+  `interceptor-intent-router.wasm` (verified via the config dump). `config.yaml`
+  gained an `interceptor:` section (intent-router enabled; the four Slice 2d
+  interceptors disabled) and dropped the retired `manager.context`. *(Resolving
+  `subscribed-phases()` at boot + deterministic load order land with the wasm
+  adapter.)*
+- [x] **`configuration.md` note** — added an "Interceptors" subsection: enable/disable
+  only, ordering is structural (phase order + load order), never configured.
 - [x] **Retire** `context-manager.wit` and `agent-manager.wit` (removed — unused by
   any build; `agent-manager` was the only consumer of `context-manager`). README +
   `types.wit` doc-comment updated. `agent-loop.wit` stays until Slice 2c retires the

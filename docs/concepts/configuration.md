@@ -79,6 +79,25 @@ their references — routing is interceptor domain logic, not a core concern. Se
 [Architecture → Provider fallback](architecture.md#provider-fallback) and
 [Task routing](architecture.md#task-routing).
 
+## Interceptors
+
+Interceptors (the `interceptor.*` category) are extensions like any other, each
+with an `enabled` flag. Config **only enables or disables** an interceptor — it
+never orders or sequences them. Dispatch order is **structural**: across phases
+by the `phase` enum declaration order, and within a single phase by extension
+**load order** (see [`wit/interceptor.wit`](contracts.md) and
+[Roadmap → Phase 2](roadmap.md#phase-2--first-real-value-the-agent-loop)). Because
+there is no config key that sequences steps, interceptor ordering cannot drift.
+
+```yaml
+extensions:
+  interceptor:
+    intent-router:      # before-loop: simple vs agentic classification
+      enabled: true
+    permission:         # tool-call: gate dangerous tool calls
+      enabled: false
+```
+
 ## Inspecting a config
 
 `make config` resolves the repo's `config.yaml` and prints the plan (each

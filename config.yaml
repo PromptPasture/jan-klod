@@ -63,13 +63,26 @@ extensions:
       api-key: ${GROQ_API_KEY}
       model: llama-3.3-70b
 
-  # ---- Orchestrators ----
+  # ---- Orchestrator (v0 walking-skeleton loop; retired at Phase 2 Slice 2c) ----
   manager:
     agent-loop:
       enabled: true            # the agent loop itself (no behaviour in core)
       # type: manager-agent-loop
+
+  # ---- Interceptors: sandboxed decision hooks the core loop dispatches by phase.
+  #      enabled/disabled ONLY — ordering is structural (phase order + load order),
+  #      never configured here. See docs/concepts/configuration.md#interceptors. ----
+  interceptor:
+    intent-router:
+      enabled: true            # before-loop: simple vs agentic classification
+    task-router:
+      enabled: false           # select-model: task-type -> routing (Slice 2d)
     context:
-      enabled: true
+      enabled: false           # select-context: history + compression (Slice 2d)
+    tool-selector:
+      enabled: false           # select-tools: expose the active tool set (Slice 2d)
+    permission:
+      enabled: false           # tool-call: gate dangerous calls (Slice 2d)
 
   # ---- Capability catalogues ----
   registry:
@@ -104,7 +117,8 @@ extensions:
       token: ${TELEGRAM_BOT_TOKEN}
 
 # ============================================================================
-# Agent behaviour — consumed by the manager-agent-loop extension, not the core.
+# Agent behaviour — consumed by the core loop and its interceptors (task-router),
+# not the core container itself.
 # References below use provider *instance names* from extensions.provider above.
 # ============================================================================
 
