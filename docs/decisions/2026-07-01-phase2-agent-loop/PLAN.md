@@ -172,10 +172,15 @@ a canned driver. `wasm-tools component wit wit/` stays green.
 Build the thin conductor in core. Zero policy — all decisions are delegated to the
 dispatch engine from 2b.
 
-- [ ] **Loop entry** — core Rust `run_agent(session, user-message)` returning a
-  `run-handle`; `next-event` streams `text-delta` / `tool-invoked` / `tool-result` /
-  `warning` / `done`; `cancel` / `close`; a `pending-prompt` event + `provide-answer`
-  for the `ask` flow; steering + follow-up queue.
+- [~] **Loop entry** — `Runtime::build_agent(&http_factory)` boots the enabled
+  `interceptor.*` as a `Dispatcher` + the enabled `provider.*` as a `ProviderCompleter`
+  fallback chain; `AgentSession::run(session, message)` drives the conductor
+  end-to-end (headless `Driver`). Verified by `host/tests/agent_loop.rs`: from a real
+  `config.yaml`, a greeting short-circuits (`agentic:false`) and a multi-step prompt
+  runs the agentic path (`agentic:true`), both through the sandboxed provider +
+  interceptor. *Still to add:* the streaming `run-handle` (`next-event` / `cancel` /
+  `provide-answer` / steering queue), and routing an interceptor's `llm-provider` to
+  the real providers (v1 uses a safe-default classifier).
 - [~] **Conductor** (`jan_klod_core::conductor`) — `before-loop` (short-circuits a
   simple prompt) → `select-model` → `select-context` → `select-tools` (assembling
   `pending-request`) → the **ReAct loop**: `complete()` → `after-response` → parse

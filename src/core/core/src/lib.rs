@@ -224,6 +224,92 @@ impl Runtime {
             .ok_or_else(|| CoreError::NoCompiled { category: "store" })?;
         route::build_routed_loop(&self.engine, manager, provider, store, http)
     }
+
+    /// Boot the thin-loop agent from config: instantiate every enabled+compiled
+    /// `interceptor.*` as a dispatcher (in boot/load order) and every
+    /// `provider.*` as a completer fallback chain, ready to run turns through the
+    /// [`conductor`]. This supersedes [`Self::route_agent_loop`] — the loop is now
+    /// core mechanism, not the `manager-agent-loop` guest.
+    ///
+    /// `http_factory` mints a fresh `host-http` backend per provider (each provider
+    /// instance owns its own store). In v1 an interceptor's `llm-provider` import is
+    /// backed by a safe-default classifier (`"agentic"`); routing it to the real
+    /// providers is a follow-up.
+    ///
+    /// # Errors
+    /// Returns a [`CoreError`] if any interceptor or provider fails to instantiate
+    /// or start.
+    pub fn build_agent(
+        &self,
+        http_factory: &dyn Fn() -> route::HttpFn,
+    ) -> Result<AgentSession, CoreError> {
+        let mut providers: Vec<Box<dyn conductor::Completer>> = Vec::new();
+        let mut interceptors: Vec<Box<dyn intercept::Interceptor>> = Vec::new();
+        for ext in &self.extensions {
+            let LoadState::Compiled(component) = &ext.state else {
+                continue;
+            };
+            match ext.instance.category.as_str() {
+                "provider" => providers.push(Box::new(route::ProviderCompleter::instantiate(
+                    &self.engine,
+                    &ext.instance,
+                    component,
+                    http_factory(),
+                )?)),
+                "interceptor" => {
+                    let section = ConfigSection::new(ext.instance.config.clone());
+                    // v1: safe-default classifier; real routing is a follow-up.
+                    let provider_fn: interceptor_host::ProviderFn =
+                        Box::new(|_prompt| "agentic".to_string());
+                    interceptors.push(Box::new(interceptor_host::WasmInterceptor::instantiate(
+                        &self.engine,
+                        &ext.instance.id,
+                        component,
+                        section,
+                        provider_fn,
+                    )?));
+                }
+                _ => {}
+            }
+        }
+        Ok(AgentSession {
+            dispatcher: intercept::Dispatcher::new(interceptors),
+            providers,
+        })
+    }
+}
+
+/// A booted thin-loop agent: the interceptor dispatcher and the provider fallback
+/// chain, ready to run turns through the [`conductor`].
+pub struct AgentSession {
+    dispatcher: intercept::Dispatcher,
+    providers: Vec<Box<dyn conductor::Completer>>,
+}
+
+impl AgentSession {
+    /// Run one turn for `message` in `session`, driving the full loop
+    /// (before-loop → shaping → `ReAct` → finalize). Headless: an interceptor
+    /// `ask` resolves to its `default-answer`. Tools are not yet wired (v1).
+    pub fn run(&mut self, session: &str, message: &str) -> conductor::RunResult {
+        let mut driver = HeadlessDriver;
+        conductor::run_turn(
+            &mut self.dispatcher,
+            &mut self.providers,
+            &mut conductor::NoTools,
+            &mut driver,
+            session,
+            message,
+        )
+    }
+}
+
+/// Headless driver: no interactive surface, so an `ask` takes the prompt's
+/// `default-answer`.
+struct HeadlessDriver;
+impl intercept::Driver for HeadlessDriver {
+    fn ask(&mut self, prompt: &intercept::UserPrompt) -> String {
+        prompt.default_answer.clone()
+    }
 }
 
 /// Build the capability linker every extension store shares: WASI for the guest
