@@ -35,7 +35,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 |---|---|
 | Slice 2a — Intent router logic (recast into `interceptor-intent-router`) | `done` |
 | Slice 2b — `interceptor` contract + core-native dispatch framework | `done` |
-| Slice 2c — Core loop mechanism (conductor, harness, fallback, run entry) | `not-started` |
+| Slice 2c — Core loop mechanism (conductor, harness, fallback, run entry) | `in-progress` |
 | Slice 2d — v1 interceptor set (task-router, context, tool-selector, permission) | `not-started` |
 | Slice 2e — Exit gate | `not-started` |
 
@@ -176,20 +176,22 @@ dispatch engine from 2b.
   `run-handle`; `next-event` streams `text-delta` / `tool-invoked` / `tool-result` /
   `warning` / `done`; `cancel` / `close`; a `pending-prompt` event + `provide-answer`
   for the `ask` flow; steering + follow-up queue.
-- [ ] **Conductor** — `session-start` (once) → `before-loop` → per turn:
-  `select-model` → `select-context` → `select-tools` (dispatch phases, assembling
-  `pending-request`) → `complete()` → `after-response` → parse → `tool-call` →
-  tool dispatch → `tool-result` (honour `terminate`) → `prepare-next-turn` → loop;
-  on exit `finalize`.
+- [~] **Conductor** (`jan_klod_core::conductor`) — `before-loop` (short-circuits a
+  simple prompt) → `select-model` → `select-context` → `select-tools` (assembling
+  `pending-request`) → `complete()` → `after-response` → `finalize`. Trait-decoupled
+  from Wasmtime (completions via the `Completer` trait), unit-tested with stubs
+  (5 tests). *Still to add:* `session-start`, the `tool-call`/`tool-result` ReAct
+  loop (≥2 cycles), `prepare-next-turn`, and the wasm run-handle entry.
 - [ ] **Small-model harness (core mechanism)** — pass the `grammar` on
   `completion-request` (provider executes it); grammar **construction** default
   (derive from the active tool set after `select-tools`), overridable by an
   interceptor; **parse + structural validation**; **retry-with-correction** on
   malformed output (configurable N via `host-config`, default 3; no silent spiral).
-- [ ] **Provider fallback (core mechanism)** — on `provider-error`
-  (`rate-limited` / `transient` / `model-not-found`) re-issue the *same* request
-  down the `providers:` list (each model in a provider → next provider → exhausted →
-  `AgentError`); emit a `warning`; per-request (primary recovers next request).
+- [x] **Provider fallback (core mechanism)** — `complete_with_fallback` re-issues the
+  *same* request down the `Completer` chain; first success wins, exhaustion returns a
+  diagnostic `Failed`. Per-request (a fresh chain each turn). *(Mapping the concrete
+  `provider-error` categories + a `warning` event lands with the wasm `Completer`
+  adapter over the routed provider.)*
 - [ ] **Streaming** — preview-vs-authoritative: stream tokens live during each
   `complete()`; emit the authoritative message at the turn boundary (which
   `after-response`/`finalize` may have `replace`d).

@@ -13,6 +13,7 @@
 // Generated Component-Model bindings; lint exemptions scoped to the macro output.
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bindings;
+pub mod conductor;
 mod host;
 pub mod http;
 pub mod intercept;
