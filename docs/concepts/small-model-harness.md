@@ -4,7 +4,7 @@ title: Small-Model Harness
 description: Design principles for running reliable agentic loops on 9-12B parameter models
 tags: [llm, small-model, constrained-decoding, agent-loop]
 created: 2026-06-28T00:00:00Z
-updated: 2026-06-29T00:00:00Z
+updated: 2026-07-01T00:00:00Z
 ---
 
 Small instruction-tuned models (9–12B parameters) fail in agent loops for predictable reasons. The harness mitigates these systematically.

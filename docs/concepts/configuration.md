@@ -15,7 +15,7 @@ specific is opaque to the core and handed to the instance through
 
 ## File shape
 
-Extensions are grouped by **category** (`provider`, `store`, `manager`,
+Extensions are grouped by **category** (`provider`, `store`, `interceptor`,
 `registry`, `tool`, `agent`, `api`, `chat`). Each *named* entry under a category
 is one extension **instance**:
 

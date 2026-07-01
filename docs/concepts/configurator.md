@@ -45,7 +45,7 @@ the UI client is bundled, and what `jan-klod.yaml` is pre-filled with.
 
 | Bundle | Included extensions | UI client |
 |---|---|---|
-| `tui` | providers + managers + stores + registries + tools + `api-rest` | included (launches in TUI mode) |
+| `tui` | providers + interceptors + stores + registries + tools + `api-rest` | included (launches in TUI mode) |
 | `gui` | same | included (launches with `--gui`) |
 | `full` | everything | included |
 

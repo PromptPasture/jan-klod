@@ -4,7 +4,7 @@ title: Contracts
 description: Stable WIT interfaces that form the boundary between core and extensions
 tags: [contracts, wit, interfaces, extensions, wasm]
 created: 2026-06-28T00:00:00Z
-updated: 2026-06-29T00:00:00Z
+updated: 2026-07-01T00:00:00Z
 ---
 
 Contracts are the stable interfaces that the core exposes and extensions consume or implement. They are the API surface that must not break — a breaking change here breaks all extensions.
@@ -35,7 +35,7 @@ Extensions implement these and the host routes calls between them.
 | File | Interface | Responsibility | Implemented by |
 |---|---|---|---|
 | `llm-provider.wit` | `llm-provider` | Streaming completions, constrained decoding | `provider-*` |
-| `interceptor.wit` *(planned)* | `interceptor` | Agent-loop decision hook — one generic `intercept` over a `phase` enum; the core loop calls it per phase and acts on its `proceed` / `replace` / `block` / `ask` return | `interceptor-*` |
+| `interceptor.wit` | `interceptor` | Agent-loop decision hook — one generic `intercept` over a `phase` enum; the core loop calls it per phase and acts on its `proceed` / `replace` / `block` / `ask` return | `interceptor-*` |
 | `memory-store.wit` | `memory-store` | Persistent key-value storage | `store-*` |
 | `skill-registry.wit` | `skill-registry` | Skill catalog and dispatch | `registry-skills` |
 | `mcp-registry.wit` | `mcp-registry` | MCP server management + tool catalog | `registry-mcp` |

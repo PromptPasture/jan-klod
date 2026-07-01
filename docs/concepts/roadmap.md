@@ -4,7 +4,7 @@ title: Roadmap
 description: Phased plan from the Rust + Wasmtime + Component Model foundation decision to a shippable, polyglot-extension agent runtime.
 tags: [roadmap, planning, rust, wasmtime, component-model, phases]
 created: 2026-06-29
-updated: 2026-06-29
+updated: 2026-07-01
 ---
 
 # Roadmap
@@ -71,7 +71,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Phase | Flag | Gate / note |
 |---|---|---|
-| 1 — Walking skeleton + foundation gate | `done` | **Slice 1a PASSED** (2026-06-29); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). **Slice 1b done** — `jan-klod-core` boots from `jan-klod.yaml` (registry, tier boot order, lifecycle, component host); all three host caps (`host-log`/`host-config`/`host-http`) are real CM imports; three Rust guests (`store-memory` + `provider-openai` + `manager-agent-loop`) build and verify offline; the exit gate runs as one routed turn in the sandboxed agent-loop guest (`tests/routing.rs`); supply-chain CI gates (`cargo-audit`/`cargo-deny`/`govulncheck` + SBOM) wired in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) |
+| 1 — Walking skeleton + foundation gate | `done` | **Slice 1a PASSED** (2026-06-29); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). **Slice 1b done** — `jan-klod-core` boots from `jan-klod.yaml` (registry, tier boot order, lifecycle, component host); all three host caps (`host-log`/`host-config`/`host-http`) are real CM imports; three Rust guests (`store-memory` + `provider-openai` + `manager-agent-loop` — the latter retired in Phase 2) build and verify offline; the exit gate runs as one routed turn in the sandboxed agent-loop guest (`tests/routing.rs`); supply-chain CI gates (`cargo-audit`/`cargo-deny`/`govulncheck` + SBOM) wired in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) |
 | 2 — Agent loop | `in-progress` | **Re-architected 2026-07-01** ([decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)): thin loop *mechanism* moves into **core**; every decision becomes a sandboxed **`interceptor-*`** extension the core loop calls natively (each exports the `interceptor` interface). `manager-agent-loop` retired. Slice 2a intent router recast as the first interceptor. Detailed checklist: [PLAN.md](../decisions/2026-07-01-phase2-agent-loop/PLAN.md) |
 | 3 — Persistence + inbound network | `not-started` | — |
 | 4 — Clients & integrations | `not-started` | — |

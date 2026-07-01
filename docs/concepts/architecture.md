@@ -4,7 +4,7 @@ title: Architecture
 description: High-level architecture of the Jan-Klod agent runtime
 tags: [architecture, core, extensions, rust, wasm, wasmtime]
 created: 2026-06-28T00:00:00Z
-updated: 2026-06-29T00:00:00Z
+updated: 2026-07-01T00:00:00Z
 ---
 
 > **Foundation:** the core is **Rust + Wasmtime** running WebAssembly
