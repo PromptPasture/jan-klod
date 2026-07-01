@@ -1,0 +1,30 @@
+[package]
+name = "interceptor-task-router"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "select-model interceptor: classifies the request into a task type via a constrained llm-provider call, resolves the routing table (task -> provider/model) from host-config, and sets the model."
+
+[lib]
+# A reactor component: exports interceptor-world, no `main`.
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.58"
+
+# Same strict policy as the core workspace (guests live outside src/core/, so the
+# levels are declared here rather than inherited).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[profile.release]
+opt-level = "s"
+strip = true
+lto = true

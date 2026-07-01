@@ -836,6 +836,76 @@ mod tests {
         assert_eq!(message_count(&state), 2, "nothing dropped under budget");
     }
 
+    fn load_task_router(config: serde_json::Value, provider: ProviderFn) -> Option<WasmInterceptor> {
+        let path = repo_root().join("ext").join("interceptor-task-router.wasm");
+        if !path.exists() {
+            eprintln!("skipping: interceptor-task-router.wasm not staged — run `make ext`");
+            return None;
+        }
+        let engine = Engine::default();
+        let component = Component::from_file(&engine, &path).expect("component compiles");
+        Some(
+            WasmInterceptor::instantiate(
+                &engine,
+                "interceptor.task-router",
+                &component,
+                ConfigSection::new(config),
+                provider,
+            )
+            .expect("interceptor instantiates"),
+        )
+    }
+
+    fn select_model(user_message: &str) -> HookState {
+        HookState::SelectModel(PendingRequest {
+            model: None,
+            messages: vec![msg(Role::User, user_message)],
+            tools: vec![],
+            grammar: None,
+            max_tokens: None,
+            temperature: None,
+        })
+    }
+
+    fn model_of(state: &HookState) -> Option<String> {
+        match state {
+            HookState::SelectModel(r) => r.model.clone(),
+            _ => panic!("expected select-model state"),
+        }
+    }
+
+    #[test]
+    fn task_router_subscribes_only_to_select_model() {
+        let Some(t) = load_task_router(json!({}), Box::new(|_| "chat".into())) else { return };
+        assert_eq!(t.subscribed_phases(), vec![Phase::SelectModel]);
+    }
+
+    #[test]
+    fn task_router_sets_model_from_routing_table() {
+        // Classifier says "code-generation"; the routing table maps it to a model.
+        let config = json!({ "routing": { "code-generation": "openai/gpt-4o" } });
+        let Some(t) = load_task_router(config, Box::new(|_| "code-generation".into())) else {
+            return;
+        };
+        let mut d = Dispatcher::new(vec![Box::new(t)]);
+        let mut state = select_model("write a function");
+        d.dispatch(Phase::SelectModel, &mut state, &mut NoDriver);
+        assert_eq!(model_of(&state).as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn task_router_proceeds_when_no_route_configured() {
+        // A classified task with no routing entry leaves the model unset.
+        let Some(t) = load_task_router(json!({}), Box::new(|_| "chat".into())) else { return };
+        let mut d = Dispatcher::new(vec![Box::new(t)]);
+        let mut state = select_model("hi");
+        assert!(matches!(
+            d.dispatch(Phase::SelectModel, &mut state, &mut NoDriver),
+            Outcome::Proceeded
+        ));
+        assert_eq!(model_of(&state), None);
+    }
+
     #[test]
     fn intent_router_subscribes_only_to_before_loop() {
         let Some((_engine, interceptor)) = load_intent_router(Box::new(|_| "agentic".into())) else {

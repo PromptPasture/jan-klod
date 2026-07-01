@@ -36,7 +36,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice 2a — Intent router logic (recast into `interceptor-intent-router`) | `done` |
 | Slice 2b — `interceptor` contract + core-native dispatch framework | `done` |
 | Slice 2c — Core loop mechanism (conductor, harness, fallback, run entry) | `in-progress` |
-| Slice 2d — v1 interceptor set (task-router, context, tool-selector, permission) | `in-progress` |
+| Slice 2d — v1 interceptor set (task-router, context, tool-selector, permission) | `done` |
 | Slice 2e — Exit gate | `not-started` |
 
 ## Architecture context
@@ -232,10 +232,13 @@ The remaining four interceptors (intent-router is Slice 2a). Each a sandboxed Ru
 guest exporting `interceptor-world`. Two are **built thin** (real but single-rule) to
 prove the seam without speculative machinery.
 
-- [ ] **`interceptor-task-router`** (`select-model`) — classify the request into a
-  task type (built-in list + user-defined from `host-config`) via a constrained
-  `llm-provider` call; resolve the `routing:` entry (`<provider-instance>/<model>`)
-  and set `pending-request.model`. Subsumes the old task-routing domain logic.
+- [x] **`interceptor-task-router`** (`select-model`) — classifies the request into a
+  built-in task type via a constrained `llm-provider` call, resolves the `routing:`
+  entry (`routing.<task>` → `provider/model`, served through `host-config`) and sets
+  `pending-request.model`; proceeds (model unset) when classification or routing
+  yields nothing. Built + staged; 3 native tests + 3 adapter tests (subscribes to
+  `select-model` only; sets the model from the table; proceeds with no route).
+  *(User-defined task types are a later refinement.)*
 - [x] **`interceptor-context`** (`select-context`) — trims the assembled history to
   the model budget: char/4 estimate + sliding window (keep system + most recent, drop
   oldest, always keep the current turn); budget from `host-config` `context-tokens`
@@ -254,9 +257,12 @@ prove the seam without speculative machinery.
   3 native rule tests + 4 adapter tests driving the real guest through the
   `Dispatcher` (subscribes to `tool-call` only; deny→block; approve→proceed; ordinary
   tool never asks). Exercises the `ask` round-trip end-to-end.
-- [ ] **Build targets** — `make interceptor-<name>[-docker]` for each.
-- [ ] **Harness tests** — each guest: lifecycle + `subscribed-phases` + one
-  `intercept` round-trip; skip when the component is not staged.
+- [x] **Build targets** — all four wired into the extensions Makefile
+  (`make interceptor-<name>[-docker]`), added to `GUESTS` (+ `TESTABLE_GUESTS` for the
+  three with native logic).
+- [x] **Harness tests** — each guest has core adapter tests (lifecycle via
+  `instantiate` + `subscribed-phases` + an `intercept` round-trip through the real
+  component), skipped when the component is not staged.
 
 **Definition of done:** all four load through the core, are dispatched only at their
 phases, and drive their decisions end-to-end in the harness (task-router sets a model;
