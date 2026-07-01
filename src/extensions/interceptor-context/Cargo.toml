@@ -1,0 +1,30 @@
+[package]
+name = "interceptor-context"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "select-context interceptor: trims conversation history to the model's token budget (char/4 estimate, drop oldest, keep system + most recent). Summarisation is a later refinement behind the same seam."
+
+[lib]
+# A reactor component: exports interceptor-world, no `main`.
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.58"
+
+# Same strict policy as the core workspace (guests live outside src/core/, so the
+# levels are declared here rather than inherited).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[profile.release]
+opt-level = "s"
+strip = true
+lto = true

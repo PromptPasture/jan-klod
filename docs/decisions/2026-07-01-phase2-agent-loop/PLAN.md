@@ -236,12 +236,13 @@ prove the seam without speculative machinery.
   task type (built-in list + user-defined from `host-config`) via a constrained
   `llm-provider` call; resolve the `routing:` entry (`<provider-instance>/<model>`)
   and set `pending-request.model`. Subsumes the old task-routing domain logic.
-- [ ] **`interceptor-context`** (`select-context`) — the reworked context manager,
-  history + compression handled **internally**: keep session history (in-memory,
-  persistence deferred to Phase 3), trim to the chosen model's budget
-  (char/4 estimate v1; drop oldest turns; summarisation via `llm-provider`
-  deferred behind the same interface). Replaces `manager-context` +
-  `context-manager.wit`.
+- [x] **`interceptor-context`** (`select-context`) — trims the assembled history to
+  the model budget: char/4 estimate + sliding window (keep system + most recent, drop
+  oldest, always keep the current turn); budget from `host-config` `context-tokens`
+  (default 8192). Summarisation via `llm-provider` is deferred behind the same seam.
+  Replaces `manager-context` + `context-manager.wit`. Built + staged; 4 native trim
+  tests + 3 adapter tests (subscribes to `select-context` only; trims over-budget
+  history; leaves small history untouched).
 - [x] **`interceptor-tool-selector`** (`select-tools`) — **thin**: a working
   pass-through that exposes the assembled tool set and proceeds (tool sources
   `mcp-registry`/`tool-callable` are wired later; per-step narrowing is a later

@@ -586,7 +586,9 @@ const fn from_gen_error(err: g_icept::InterceptorError) -> InterceptorError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intercept::{Dispatcher, Driver, HookState, Outcome, UserTurn};
+    use crate::intercept::{
+        Dispatcher, Driver, HookState, Message, Outcome, PendingRequest, Role, UserTurn,
+    };
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -750,6 +752,88 @@ mod tests {
             d.dispatch(Phase::SelectTools, &mut state, &mut NoDriver),
             Outcome::Proceeded
         ));
+    }
+
+    fn load_context(config: serde_json::Value) -> Option<WasmInterceptor> {
+        let path = repo_root().join("ext").join("interceptor-context.wasm");
+        if !path.exists() {
+            eprintln!("skipping: interceptor-context.wasm not staged — run `make ext`");
+            return None;
+        }
+        let engine = Engine::default();
+        let component = Component::from_file(&engine, &path).expect("component compiles");
+        Some(
+            WasmInterceptor::instantiate(
+                &engine,
+                "interceptor.context",
+                &component,
+                ConfigSection::new(config),
+                Box::new(|_| String::new()),
+            )
+            .expect("interceptor instantiates"),
+        )
+    }
+
+    fn msg(role: Role, content: &str) -> Message {
+        Message {
+            role,
+            content: content.into(),
+            tool_call_id: None,
+        }
+    }
+
+    fn select_context(messages: Vec<Message>) -> HookState {
+        HookState::SelectContext(PendingRequest {
+            model: Some("m".into()),
+            messages,
+            tools: vec![],
+            grammar: None,
+            max_tokens: None,
+            temperature: None,
+        })
+    }
+
+    fn message_count(state: &HookState) -> usize {
+        match state {
+            HookState::SelectContext(r) => r.messages.len(),
+            _ => panic!("expected select-context state"),
+        }
+    }
+
+    #[test]
+    fn context_subscribes_only_to_select_context() {
+        let Some(c) = load_context(json!({})) else { return };
+        assert_eq!(c.subscribed_phases(), vec![Phase::SelectContext]);
+    }
+
+    #[test]
+    fn context_trims_over_budget_history() {
+        // A tiny configured budget forces trimming.
+        let Some(c) = load_context(json!({ "context-tokens": 5 })) else { return };
+        let mut d = Dispatcher::new(vec![Box::new(c)]);
+        let long = "x".repeat(200); // ~50 tokens each
+        let mut state = select_context(vec![
+            msg(Role::System, "sys"),
+            msg(Role::User, &long),
+            msg(Role::Assistant, &long),
+            msg(Role::User, &long),
+        ]);
+        d.dispatch(Phase::SelectContext, &mut state, &mut NoDriver);
+        let kept = message_count(&state);
+        assert!(kept < 4, "over-budget history is trimmed (kept {kept})");
+        assert!(kept >= 2, "system + current turn are always kept (kept {kept})");
+    }
+
+    #[test]
+    fn context_leaves_small_history_untouched() {
+        let Some(c) = load_context(json!({ "context-tokens": 100_000 })) else { return };
+        let mut d = Dispatcher::new(vec![Box::new(c)]);
+        let mut state = select_context(vec![msg(Role::System, "sys"), msg(Role::User, "hi")]);
+        assert!(matches!(
+            d.dispatch(Phase::SelectContext, &mut state, &mut NoDriver),
+            Outcome::Proceeded
+        ));
+        assert_eq!(message_count(&state), 2, "nothing dropped under budget");
     }
 
     #[test]
