@@ -63,12 +63,6 @@ extensions:
       api-key: ${GROQ_API_KEY}
       model: llama-3.3-70b
 
-  # ---- Orchestrator (v0 walking-skeleton loop; retired at Phase 2 Slice 2c) ----
-  manager:
-    agent-loop:
-      enabled: true            # the agent loop itself (no behaviour in core)
-      # type: manager-agent-loop
-
   # ---- Interceptors: sandboxed decision hooks the core loop dispatches by phase.
   #      enabled/disabled ONLY — ordering is structural (phase order + load order),
   #      never configured here. See docs/concepts/configuration.md#interceptors. ----

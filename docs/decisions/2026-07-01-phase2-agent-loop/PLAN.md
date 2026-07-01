@@ -209,8 +209,13 @@ dispatch engine from 2b.
   `tool-call` gate then the `ToolInvoker` seam (skip-if-absent → the model is told
   "no tool named …"); a `tool-result` block is the `terminate` signal. *(Wiring the
   seam to the routed `tool-callable` extensions lands with the wasm run entry.)*
-- [ ] **Retire the `manager-agent-loop` guest** and the `agent-loop-world` stub path
-  in core routing.
+- [x] **Retire the `manager-agent-loop` guest** and the `agent-loop-world` stub path.
+  Removed: the guest crate, `wit/agent-loop.wit`, the v0 `route::build_routed_loop` /
+  `RoutedAgentLoop` / `ManagerHost` / `store-world`+`agent-loop-world` bindings and
+  their `route_agent_loop` entry, `host/tests/routing.rs`, the `config.yaml` `manager:`
+  section, and the Makefile/README entries. `route.rs` now holds only the provider
+  machinery (`CapHost` + `ProviderCompleter`). `wasm-tools component wit wit/` green;
+  full core suite green.
 
 **Definition of done:** a multi-step prompt against a canned `host-http` drives ≥2
 ReAct cycles; malformed output triggers retry+correction; a simulated `rate-limited`
