@@ -86,20 +86,29 @@ Carried forward (done):
   (`grammar = "root ::= \"simple\" | \"agentic\""`); ambiguous/failed → `agentic`
   (never wrongly skip the loop).
 
-Recast (pending):
-- [ ] **New guest `src/extensions/interceptor-intent-router/`** exporting
-  `interceptor-world`; move the `router` module in verbatim.
-- [ ] **`subscribed-phases()` → `[before-loop]`**; implement `intercept` for the
-  `before-loop(user-turn)` case: `simple` → `block` (short-circuit the agentic loop,
-  carrying the direct answer), `agentic` → `proceed`.
-- [ ] **LLM classifier via the routed `llm-provider` import** (now available on
+Recast:
+- [x] **New guest `src/extensions/interceptor-intent-router/`** exporting
+  `interceptor-world`; `router` module moved in verbatim (17 tests pass unchanged).
+- [x] **`subscribed-phases()` → `[before-loop]`**; `intercept` implemented for the
+  `before-loop(user-turn)` case: `simple` → `block`, `agentic` → `proceed`. (The
+  `block-reason` currently carries only a message; wiring a direct-answer payload is
+  deferred to the core loop, Slice 2c.)
+- [x] **LLM classifier via the routed `llm-provider` import** (available on
   `interceptor-world`), replacing the in-manager provider call.
-- [ ] **Build** — `make interceptor-intent-router[-docker]`.
+- [x] **Build** — `make interceptor-intent-router[-docker]`; the staged component
+  exports `interceptor` + `extension-lifecycle`.
+- Fixed two latent `interceptor.wit` bugs surfaced by building the world (the
+  Slice 2b "finalize the contract" item): the `error-context` record collided with a
+  reserved WIT keyword (renamed `error-info`) and its `failed-state:
+  option<hook-state>` field made `hook-state` self-referential (removed;
+  `on-error` is observation-only in v1). `wasm-tools component wit wit/` now passes.
+- [ ] **Core dispatch integration** — the guest loading through the core and being
+  dispatched at `before-loop` depends on the Slice 2b dispatch framework.
 
 **Definition of done:** the guest loads through the core, is dispatched only at
 `before-loop`, classifies greetings/acks as `simple` (no model call) and multi-step
 prompts as `agentic`; the existing 17 router unit tests pass unchanged in the new
-crate.
+crate. *(Router recast + unit tests done; core-dispatch half blocked on Slice 2b.)*
 
 ---
 

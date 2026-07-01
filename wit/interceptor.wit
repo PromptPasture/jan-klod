@@ -118,14 +118,15 @@ interface interceptor {
         text: string,
     }
 
-    /// State delivered at the `on-error` phase.
-    record error-context {
+    /// State delivered at the `on-error` phase. (Named `error-info` rather than
+    /// `error-context` — the latter is a reserved WIT keyword.)
+    record error-info {
         /// Which phase the error occurred in or after.
         failed-phase: phase,
-        /// Human-readable error description.
+        /// Human-readable error description. (WIT cannot express a recursive
+        /// `option<hook-state>` here, and `on-error` is observation-only in v1,
+        /// so the failing state is summarised into this message by the core.)
         message: string,
-        /// The hook-state at the point of failure, if meaningful.
-        failed-state: option<hook-state>,
     }
 
     /// Phase-specific state handed to the interceptor. The active case always
@@ -141,7 +142,7 @@ interface interceptor {
         tool-result(tool-outcome),
         finalize(final-answer),
         prepare-next-turn(pending-request),
-        on-error(error-context),
+        on-error(error-info),
     }
 
     /// A question routed *through the loop to the attached driver* (TUI, chat,
