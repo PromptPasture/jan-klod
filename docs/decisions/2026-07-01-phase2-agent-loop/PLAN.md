@@ -178,10 +178,12 @@ dispatch engine from 2b.
   for the `ask` flow; steering + follow-up queue.
 - [~] **Conductor** (`jan_klod_core::conductor`) — `before-loop` (short-circuits a
   simple prompt) → `select-model` → `select-context` → `select-tools` (assembling
-  `pending-request`) → `complete()` → `after-response` → `finalize`. Trait-decoupled
-  from Wasmtime (completions via the `Completer` trait), unit-tested with stubs
-  (5 tests). *Still to add:* `session-start`, the `tool-call`/`tool-result` ReAct
-  loop (≥2 cycles), `prepare-next-turn`, and the wasm run-handle entry.
+  `pending-request`) → the **ReAct loop**: `complete()` → `after-response` → parse
+  tool calls → `tool-call` gate → tool dispatch (via the `ToolInvoker` seam,
+  skip-if-absent) → `tool-result` (a block here terminates the loop) → repeat (capped
+  at 8 iterations) → `finalize`. Trait-decoupled from Wasmtime, unit-tested with
+  stubs (8 tests incl. a ≥2-cycle ReAct run, permission-deny, and terminate).
+  *Still to add:* `session-start`, `prepare-next-turn`, and the wasm run-handle entry.
 - [ ] **Small-model harness (core mechanism)** — pass the `grammar` on
   `completion-request` (provider executes it); grammar **construction** default
   (derive from the active tool set after `select-tools`), overridable by an
@@ -195,8 +197,10 @@ dispatch engine from 2b.
 - [ ] **Streaming** — preview-vs-authoritative: stream tokens live during each
   `complete()`; emit the authoritative message at the turn boundary (which
   `after-response`/`finalize` may have `replace`d).
-- [ ] **Tool dispatch** — route `tool-call` requests to the routed `tool-callable`
-  extensions (skip-if-absent in v1); honour a tool-result `terminate`.
+- [x] **Tool dispatch** — the conductor routes each parsed tool call through the
+  `tool-call` gate then the `ToolInvoker` seam (skip-if-absent → the model is told
+  "no tool named …"); a `tool-result` block is the `terminate` signal. *(Wiring the
+  seam to the routed `tool-callable` extensions lands with the wasm run entry.)*
 - [ ] **Retire the `manager-agent-loop` guest** and the `agent-loop-world` stub path
   in core routing.
 
