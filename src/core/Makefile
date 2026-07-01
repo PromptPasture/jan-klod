@@ -27,7 +27,7 @@ audit:
 	cargo audit
 
 deny:
-	cargo deny --config $(DENY_CONFIG) check
+	cargo deny check --config $(DENY_CONFIG)
 
 clean:
 	cargo clean

@@ -56,7 +56,7 @@ audit:
 
 deny:
 	@for g in $(GUESTS); do echo "== deny $$g =="; \
-		cargo deny --config $(DENY_CONFIG) --manifest-path $$g/Cargo.toml check || exit 1; done
+		cargo deny --manifest-path $$g/Cargo.toml check --config $(DENY_CONFIG) || exit 1; done
 
 # Supply-chain gate for every Go module under src/extensions (currently only the
 # TinyGo Slice 1a canary): verified module sums + a govulncheck scan. GOFLAGS pins
