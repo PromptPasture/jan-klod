@@ -49,7 +49,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 4a — UI client (CLI/REPL first, then TUI) | `not-started` |
+| 4a — UI client (CLI/REPL first, then TUI) | `in-progress` |
 | 4b — `host-socket` + `chat-telegram` | `not-started` |
 | 4c — `agent-*` ACP delegation (both directions) | `not-started` |
 | 4d — Exit gate | `not-started` |
@@ -58,15 +58,17 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 ## Slice 4a — UI client
 
-- [ ] **Thin client binary** — a separate `jan-klod` client (subcommand or crate)
-  that connects to a running core's REST surface: read a line, `POST` the turn,
-  print the answer; keep a session id across the REPL. No core changes — it is a
-  pure REST client, proving the separate-process model.
-- [ ] **TUI** — layer `ratatui` + `crossterm` over the same client transport
-  (scrollable transcript, input box); GUI (`--gui`, Tauri) stays deferred.
+- [x] **Thin client binary** — `jan-klod-ui`, a **separate crate/process** that
+  depends on neither core nor Wasmtime: `send_turn(addr, session, message)` `POST`s a
+  turn to a running core and returns the answer; the binary is a REPL over it (shared
+  session across turns). 3 unit tests + a `roundtrip` test (real socket) + an
+  end-to-end smoke against a live `jan-klod serve`. `make chat`. No core changes.
+- [ ] **TUI** — layer `ratatui` + `crossterm` over `send_turn` (scrollable transcript,
+  input box); GUI (`--gui`, Tauri) stays deferred.
 
-**Exit gate:** the client, run against a live `jan-klod serve`, holds a
-conversation (multiple turns, shared session) end-to-end.
+**Exit gate:** ✓ (request→response). The client drives a running `jan-klod serve` over
+REST and holds a multi-turn shared-session conversation; verified by the `roundtrip`
+test + a live e2e smoke.
 
 ---
 

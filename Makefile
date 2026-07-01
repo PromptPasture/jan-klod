@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions test harness phase2-gate phase3-gate clippy audit deny sbom supply-chain run serve probe config clean
+.PHONY: help wit all core extensions test harness phase2-gate phase3-gate clippy audit deny sbom supply-chain run serve chat probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -118,6 +118,13 @@ run:
 BIND ?= 127.0.0.1:8787
 serve:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host -- serve $(CONFIG) $(EXT_DIR) $(BIND)
+
+# REPL client for a running `jan-klod serve` — a separate client process that drives
+# core over the REST surface. Override ADDR=host:port and SESSION=id.
+ADDR ?= 127.0.0.1:8787
+SESSION ?= cli
+chat:
+	cd $(CORE) && cargo run --quiet -p jan-klod-ui -- $(ADDR) $(SESSION)
 
 # Drive a provider's full llm-provider.complete path end-to-end against a live
 # OpenAI-compatible endpoint. Requires the provider's api-key env (e.g.
