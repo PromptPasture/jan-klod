@@ -22,13 +22,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/core
+
+      # The spike_gate example's bindgen! resolves wit/spike/deps (wasi:cli & co),
+      # which are gitignored and fetched on demand from the committed wit/wkg.lock.
+      # `cargo test` and `clippy --all-targets` compile that example, so populate the
+      # deps first — the same `wkg wit fetch` a developer runs locally.
+      - name: Install wkg
+        run: cargo install wkg
+
+      - name: Fetch spike WIT deps
+        run: make -C src/extensions spike-deps
+
       - run: make test
+
       - run: make clippy
 
   harness:
@@ -36,14 +50,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
+
       # Cache only the heavy host workspace (wasmtime); the guests are ~35-dep
       # crates that build in seconds, so they are not worth enumerating here.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/core
+
       # Builds every guest to wasm32-wasip2, then verifies each guest's WIT
       # interface in isolation and runs the routed one-turn exit-gate flow offline.
       - run: make harness
@@ -53,6 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
 
       # Every committed Cargo.lock must already be current — a stale lock means the
@@ -70,8 +88,10 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-audit
+
       - name: cargo-deny (license / advisory / source policy)
         run: make deny
+
       - name: cargo-audit (RUSTSEC)
         run: make audit
 
@@ -82,16 +102,20 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: src/extensions/*/go.sum
+
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
       - name: Go supply-chain (mod verify + govulncheck)
         run: make -C src/extensions go-supply-chain
 
       # SBOM for the whole deploy unit. download-syft puts the pinned binary on
       # PATH; `make sbom` is the same command a developer runs locally.
       - uses: anchore/sbom-action/download-syft@v0
+
       - name: Generate SBOM
         run: make sbom
+
       - uses: actions/upload-artifact@v4
         with:
           name: sbom
