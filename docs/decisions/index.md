@@ -2,6 +2,7 @@
 
 Session handoffs and architecture decision records, newest first.
 
+- [2026-07-02 — Phase 3: Persistence + Inbound Network](2026-07-02-phase3-persistence-network/PLAN.md) — execution plan + TBD leans for durable host-side state (`store-sqlite` via `rusqlite` bundled) and inbound network (`host-serve` + `api-rest` over `axum`/SSE); persistence is host-side, not SQLite-in-wasm
 - [2026-07-01 — Thin Loop + Interceptor Middleware](2026-07-01-thin-loop-interceptors/BRAINSTORM.md) — adopt Pi's thin loop as **core** mechanism (retire `manager-agent-loop`); every agent decision becomes a sandboxed **interceptor** extension via a new synchronous, ordered, return-carrying host primitive; small-model harness (grammar + retry/validate) stays fixed core mechanism
 - [2026-06-29 — Extension Technologies](2026-06-29-extension-technologies/BRAINSTORM.md) — language policy for our first-party extensions: default Rust, gated by toolchain maturity + supply-chain posture; TS/Python case-by-case; Kotlin excluded for now
 - [2026-06-29 — Component Model on Rust + Wasmtime](2026-06-29-component-model-rust/Handoff.md) — untrusted extensions ⇒ WASM sandbox; adopt Component Model; host moves Go→Rust (no pure-Go CM host); supersedes JSON-ABI/wazero
