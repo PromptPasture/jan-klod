@@ -73,8 +73,13 @@ jobs:
           workspaces: src/core
 
       # Builds every guest to wasm32-wasip2, then verifies each guest's WIT
-      # interface in isolation and runs the routed one-turn exit-gate flow offline.
+      # interface in isolation and runs the thin loop booted from config offline.
       - run: make harness
+
+      # Phase 2 exit gate: the full thin loop (intent -> shaping -> completion with
+      # provider fallback -> grounded answer) through all v1 interceptors + provider,
+      # offline. Reuses the guests staged by `make harness`.
+      - run: make phase2-gate
 
   supply-chain:
     name: Supply-chain gates

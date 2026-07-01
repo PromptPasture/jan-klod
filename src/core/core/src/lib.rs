@@ -71,6 +71,10 @@ pub struct Runtime {
     engine: Engine,
     linker: Linker<HostState>,
     extensions: Vec<LoadedExtension>,
+    /// Top-level agent-behaviour config (`routing`, `providers`, …), preserved
+    /// verbatim and served to interceptors that need it (e.g. task-router) via
+    /// `host-config`. Always a JSON object.
+    agent: serde_json::Value,
 }
 
 impl Runtime {
@@ -84,6 +88,7 @@ impl Runtime {
     /// component fails to compile.
     pub fn boot(config_path: impl AsRef<Path>, ext_dir: impl AsRef<Path>) -> Result<Self, CoreError> {
         let config = Config::from_path(config_path)?;
+        let agent = config.agent.clone();
         let engine = Engine::default();
         let linker = build_linker(&engine)?;
 
@@ -121,6 +126,7 @@ impl Runtime {
             engine,
             linker,
             extensions,
+            agent,
         })
     }
 
@@ -226,7 +232,7 @@ impl Runtime {
                     http_factory(),
                 )?)),
                 "interceptor" => {
-                    let section = ConfigSection::new(ext.instance.config.clone());
+                    let section = ConfigSection::new(self.interceptor_config(&ext.instance));
                     // v1: safe-default classifier; real routing is a follow-up.
                     let provider_fn: interceptor_host::ProviderFn =
                         Box::new(|_prompt| "agentic".to_string());
@@ -245,6 +251,23 @@ impl Runtime {
             dispatcher: intercept::Dispatcher::new(interceptors),
             providers,
         })
+    }
+
+    /// An interceptor's `host-config` section: its own config plus the top-level
+    /// agent keys (`routing`, `providers`) served verbatim, so e.g. task-router can
+    /// resolve `routing.<task>`. An instance's own key wins if it defines one.
+    fn interceptor_config(&self, instance: &ExtensionInstance) -> serde_json::Value {
+        let mut section = instance.config.clone();
+        if let (serde_json::Value::Object(map), serde_json::Value::Object(agent)) =
+            (&mut section, &self.agent)
+        {
+            for key in ["routing", "providers"] {
+                if let Some(value) = agent.get(key) {
+                    map.entry(key).or_insert_with(|| value.clone());
+                }
+            }
+        }
+        section
     }
 }
 

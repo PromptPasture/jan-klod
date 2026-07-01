@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions test harness clippy audit deny sbom supply-chain run probe config clean
+.PHONY: help wit all core extensions test harness phase2-gate clippy audit deny sbom supply-chain run probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -82,13 +82,20 @@ supply-chain: deny audit sbom
 
 # Build the guests, then verify them offline through the Component Model:
 #   component_harness — each guest's WIT interface + lifecycle, in isolation;
-#   routing           — the exit gate: the manager-agent-loop guest runs one turn
-#                       (completion -> store) with core routing its imports into
-#                       the provider/store extensions.
+#   agent_loop        — the thin loop booted from config (Runtime::build_agent):
+#                       a greeting short-circuits, a multi-step prompt runs the
+#                       agentic path, both through the sandboxed provider + guests.
 # Both run against a canned host-http reply (no network, no api key) and skip any
 # guest not staged, so this target stages them first.
 harness: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test routing
+	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop
+
+# Phase 2 exit gate: boot the real core from a config with two providers, a routing
+# table, and all v1 interceptors enabled, and run the full thin loop offline —
+# intent -> shaping -> completion with provider fallback -> grounded answer. Stages
+# the guests first; skips if any is not built.
+phase2-gate: extensions
+	cd $(CORE) && cargo test -p jan-klod-host --test phase2_gate
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.
