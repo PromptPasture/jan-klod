@@ -187,3 +187,51 @@ UI↔core transport (Phase 3), the Rust async model (Phase 1 — **resolved**: s
 baseline, `tokio` at `host-http`), host-side SQLite library (Phase 3), and
 carry-over agent-loop tunables (retry limit, context compression, ACP delegation
 timeout — Phase 2).
+
+## File-workspace tier (not yet scoped)
+
+The runtime today can *reason and call tools*, but it cannot yet *work with files* —
+the sandbox grants no filesystem access. Three gaps stand between the current design
+and an agent that can operate on a workspace of files (coding is one use of this, not
+the only one). All are **post-v1** and recorded here as scope, not commitments.
+
+1. **Two substrate capabilities.** The sandbox grants no filesystem and no process
+   access by design, so both must be added as host-mediated, routed capabilities:
+   - **`host-fs`** — a scoped, read/write view of a workspace directory. Every
+     file-touching tool (read/write, edit, grep/find) needs it. (Copy-on-write /
+     overlay isolation for safe edits + checkpoint/restore is a candidate model.)
+   - **`host-process`** — spawn and **hold a long-lived child process**. This is a
+     *co-equal* substrate, not a sub-case: the single most important agent tool —
+     **code execution** (`bash`/`eval`) — depends on it, as do `ssh`, background
+     jobs, and the language-server / debugger / browser bridges.
+
+   Open question: whether these are two capabilities or one; either way, *nothing
+   file- or execution-shaped can be built as a sandboxed extension until they land.*
+
+2. **Long-term / curated memory — open, and maybe not ours.** Beyond `store-sqlite`
+   (durable KV/history persistence, already planned), a coding agent benefits from
+   *curated* memory: working vs episodic recall, semantic search, consolidation. It is
+   **unresolved whether jan-klod should ship this at all** — it may belong in a
+   third-party `store-*`/`tool-*` extension, an MCP server via `registry-mcp`, or an
+   external service, rather than a first-party contract. Decide *if* before *how*; do
+   not add a memory-curation interface speculatively (YAGNI). Persistence is planned;
+   curation is deliberately parked as a question.
+
+3. **A fleet of `tool-*` extensions.** All ordinary sandboxed `tool-*` components,
+   cheap to add *once #1 exists*, grouped by the capability they route through:
+
+   | Needs | Candidate `tool-*` |
+   |---|---|
+   | `host-fs` | read, write, edit, ast-edit, find (glob), grep, ast-grep, checkpoint, git |
+   | `host-process` | **bash/shell**, **eval (code exec)**, ssh, job, lsp, debug (dap), browser |
+   | `host-http` (have it) | web-search *(built)*, fetch |
+   | none / local | bm25 local search |
+
+   The only shared design work is routed I/O — file/exec tools go through
+   `host-fs`/`host-process`, never raw OS. **Deferred / out of this tier:** curated
+   memory tools (recall/retain — the [open memory question](#file-workspace-tier-not-yet-scoped)),
+   and multimodal tools (image/tts — need capable providers, off-target for small text
+   models). **Not tools:** `ask` is the interceptor `ask` decision; subagent dispatch
+   is `agent-*` delegation; skills are `registry-skills`; a per-turn *watcher/critic*
+   and *code-review-with-verdict* are `interceptor-*` (mechanism already supports them,
+   just not in the v1 set).

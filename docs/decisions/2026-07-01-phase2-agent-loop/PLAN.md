@@ -246,7 +246,7 @@ Not blockers, but resolve before the slice that first needs each.
 
 | Question | First needed | Current lean |
 |---|---|---|
-| `hook-state` payload completeness (does `select-context` need an explicit token-budget field, or infer from `model` + `host-config`?) | Slice 2b | Infer from model + config; add a field only if a v1 interceptor needs it |
+| `hook-state` payload completeness (does `select-context` need an explicit token-budget field, or infer from `model` + `host-config`?) | Slice 2b | Infer budget from the [model catalog](../../concepts/architecture.md#model-catalog) (`context-window`/capabilities/cost) via `host-config`; add a `hook-state` field only if a v1 interceptor needs it |
 | Core-exposed **loop-entry / driver capability** WIT shape (run/next-event/ask/steering) | Slice 2b | Prototype as a core Rust entry in Phase 2; promote to a host capability when `api-*` lands (Phase 3/4) |
 | Constrained-decoding grammar format (GBNF vs JSON-schema) | Slice 2c | GBNF (llama.cpp); confirm vLLM / Ollama accept the same `grammar` field |
 | Intra-phase load order determinism (multiple interceptors on one phase) | Slice 2b | Registry insertion order; document it — config never sequences |

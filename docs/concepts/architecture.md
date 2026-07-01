@@ -338,6 +338,27 @@ Fallback order: try each model within the current provider → move to next prov
 
 Fallback is per-request — if the primary recovers, the next request uses it again. This also enables cost routing: cheap tasks naturally route to smaller/cheaper models without a separate configuration.
 
+## Model catalog
+
+Several loop decisions need to know facts *about a model* that the model itself
+doesn't report: its context-window size, what modalities it accepts, whether it
+supports reasoning/thinking, and its token pricing. Jan-Klod keeps this as a small
+**per-model catalog** — a lookup from model id to metadata:
+
+| Field | Used by | For |
+|---|---|---|
+| `context-window` | `interceptor-context` (`select-context`) | the budget to trim/compress history against |
+| `max-output` | core loop | capping `max-tokens` on the request |
+| `modalities` (`text`, `image`, …) | `interceptor-task-router` (`select-model`) | routing only to models that can accept the input |
+| `reasoning` (bool) | `interceptor-task-router` | routing reasoning-heavy task types to capable models |
+| `cost` (input / output / cache) | `interceptor-task-router` | cost-aware routing — cheap tasks to cheap models |
+
+The catalog is **data, not policy** — a refreshable table shipped with defaults and
+overridable in `config.yaml`, read by the request-shaping interceptors through
+`host-config`. It is what lets `select-context` size its budget and `select-model`
+route by capability and cost without hard-coding model facts into the loop. New
+models are added by extending the table, no code change.
+
 ## Task routing
 
 `interceptor-task-router` classifies each request into a task type and routes it to the configured provider/model (setting the model on the outbound request at the `select-model` phase). Jan-Klod ships built-in task types as sensible defaults; users extend or override in `config.yaml`.

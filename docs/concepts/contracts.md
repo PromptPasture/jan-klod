@@ -88,6 +88,14 @@ import.
 sandboxed instead of needing raw OS access. Today's `host-http` is
 outbound-request-only and does not cover either case.
 
+Two further substrate capabilities are **not yet scoped**: **`host-fs`** (scoped
+workspace-filesystem access) for file-touching tools (read/write, edit, grep/find,
+git), and **`host-process`** (spawn/hold a long-lived child process) for execution
+tools — **code execution (`bash`/`eval`)**, ssh, and the LSP/DAP/browser bridges. Both
+are needed because the sandbox denies raw filesystem and process access by design.
+Recorded as the [file-workspace tier](roadmap.md#file-workspace-tier-not-yet-scoped);
+no contract is defined until that tier is scoped.
+
 ## Streaming
 
 Streaming is first-class and mandatory in `llm-provider`. There is no synchronous completion path — providers that don't natively stream return a single-token stream. This ensures consistent UX (no blank-screen waits) across local models (llama.cpp, MLX, Ollama) and cloud APIs (OpenAI, Claude).
