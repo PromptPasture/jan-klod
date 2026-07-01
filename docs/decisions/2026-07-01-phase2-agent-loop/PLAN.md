@@ -33,8 +33,8 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Item | Flag |
 |---|---|
-| Slice 2a — Intent router logic (recast into `interceptor-intent-router`) | `in-progress` |
-| Slice 2b — `interceptor` contract + core-native dispatch framework | `in-progress` |
+| Slice 2a — Intent router logic (recast into `interceptor-intent-router`) | `done` |
+| Slice 2b — `interceptor` contract + core-native dispatch framework | `done` |
 | Slice 2c — Core loop mechanism (conductor, harness, fallback, run entry) | `not-started` |
 | Slice 2d — v1 interceptor set (task-router, context, tool-selector, permission) | `not-started` |
 | Slice 2e — Exit gate | `not-started` |
@@ -102,8 +102,9 @@ Recast:
   reserved WIT keyword (renamed `error-info`) and its `failed-state:
   option<hook-state>` field made `hook-state` self-referential (removed;
   `on-error` is observation-only in v1). `wasm-tools component wit wit/` now passes.
-- [ ] **Core dispatch integration** — the guest loading through the core and being
-  dispatched at `before-loop` depends on the Slice 2b dispatch framework.
+- [x] **Core dispatch integration** — done via the Slice 2b wasm adapter: the guest
+  loads through `interceptor_host::WasmInterceptor` and is dispatched at `before-loop`
+  by the `Dispatcher` (see the 4 adapter integration tests).
 
 **Definition of done:** the guest loads through the core, is dispatched only at
 `before-loop`, classifies greetings/acks as `simple` (no model call) and multi-step
@@ -119,13 +120,18 @@ crate. *(Router recast + unit tests done; core-dispatch half blocked on Slice 2b
 Finalize the contract and build the host machinery that drives it. This is the
 foundation both the core loop (2c) and every interceptor (2a, 2d) hang off.
 
-- [ ] **Finalize [`wit/interceptor.wit`](../../../wit/interceptor.wit)** (drafted;
-  validates via `wasm-tools component wit wit/`) — confirm the `hook-state` payload
-  records against the loop's needs; add the `run-handle`/driver **loop-entry**
-  interface (`run` / `next-event` / `cancel` / `provide-answer` for `ask` resume /
-  steering + follow-up injection) as a **core-exposed** surface *(planned WIT;
-  exercised in Phase 2 through a core Rust entry, not yet a host capability)*.
-- [ ] **`bindgen!` the interceptor world** in core; generate the host-side caller.
+- [x] **Finalize [`wit/interceptor.wit`](../../../wit/interceptor.wit)** — validates
+  via `wasm-tools component wit wit/` (fixed the `error-context` keyword clash and
+  the self-referential `hook-state` in Slice 2a); `hook-state` records confirmed
+  against the adapter mapping. The `run-handle`/driver **loop-entry** interface is
+  Slice 2c's concern (prototyped there as a core Rust entry, not yet a host cap).
+- [x] **`bindgen!` the interceptor world** in core — `interceptor_host::WasmInterceptor`
+  instantiates a guest, satisfies all five world imports (`host-log`/`host-config`/
+  `host-event` + in-memory `host-storage` + an injected canned `llm-provider`),
+  resolves `subscribed-phases()` at boot, and implements the `Interceptor` trait via
+  full host↔generated type mapping. 4 integration tests drive the real
+  `interceptor-intent-router.wasm` through the `Dispatcher` (heuristic block with no
+  provider call; LLM tier via the canned provider; provider verdict honoured).
 - [x] **Dispatch engine** (`jan_klod_core::intercept`): given a phase and a mutable
   loop state, call each enabled+subscribed interceptor in order, apply its
   `decision` — `proceed` (no-op), `replace` (swap the phase state), `block`
