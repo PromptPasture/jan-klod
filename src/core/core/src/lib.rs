@@ -251,7 +251,26 @@ impl Runtime {
         Ok(AgentSession {
             dispatcher: intercept::Dispatcher::new(interceptors),
             providers,
+            store: self.open_store()?,
         })
+    }
+
+    /// Open the host-side persistent store from config: the enabled `store.sqlite`
+    /// instance's `path` gives a durable `SQLite` file; anything else (including
+    /// `store.memory` or a missing `path`) is an ephemeral in-memory store.
+    /// Persistence is host-side — the sandbox has no filesystem.
+    fn open_store(&self) -> Result<store::Store, CoreError> {
+        let sqlite_path = self.extensions.iter().find_map(|ext| {
+            let inst = &ext.instance;
+            (inst.category == "store" && inst.kind == "sqlite")
+                .then(|| inst.config.get("path").and_then(serde_json::Value::as_str))
+                .flatten()
+        });
+        sqlite_path
+            .map_or_else(store::Store::open_in_memory, store::Store::open)
+            .map_err(|source| CoreError::Store {
+                message: source.to_string(),
+            })
     }
 
     /// An interceptor's `host-config` section: its own config plus the top-level
@@ -277,6 +296,7 @@ impl Runtime {
 pub struct AgentSession {
     dispatcher: intercept::Dispatcher,
     providers: Vec<Box<dyn conductor::Completer>>,
+    store: store::Store,
 }
 
 impl AgentSession {
@@ -289,8 +309,9 @@ impl AgentSession {
 
     /// Run one turn driving the full loop (before-loop → shaping → `ReAct` →
     /// finalize) with an explicit `driver` (answers interceptor `ask`s) and
-    /// `tools` (routes tool calls). This is the seam a real client/driver and the
-    /// `tool-callable` fleet wire into.
+    /// `tools` (routes tool calls). On a completed turn the user message + answer
+    /// are appended to the session's durable transcript in the host-side store.
+    /// This is the seam a real client/driver and the `tool-callable` fleet wire into.
     pub fn run_with(
         &mut self,
         driver: &mut dyn intercept::Driver,
@@ -298,14 +319,37 @@ impl AgentSession {
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
-        conductor::run_turn(
+        let result = conductor::run_turn(
             &mut self.dispatcher,
             &mut self.providers,
             tools,
             driver,
             session,
             message,
-        )
+        );
+        if let conductor::RunResult::Answered { text, .. } = &result {
+            self.persist_turn(session, message, text);
+        }
+        result
+    }
+
+    /// The durable transcript for `session`, oldest turn first. Reads from the
+    /// host-side store, so it survives a `Runtime` restart against the same DB.
+    #[must_use]
+    pub fn transcript(&self, session: &str) -> Vec<store::Entry> {
+        let mut entries = self.store.recent(session, u32::MAX).unwrap_or_default();
+        entries.reverse(); // `recent` is newest-first; a transcript reads oldest-first
+        entries
+    }
+
+    /// Append one `{user, answer}` turn to the session's transcript. Best-effort:
+    /// a store failure is logged, never fatal to the turn that already succeeded.
+    fn persist_turn(&self, session: &str, user: &str, answer: &str) {
+        let turn = self.store.list_keys(session).map_or(0, |keys| keys.len()) + 1;
+        let value = serde_json::json!({ "user": user, "answer": answer }).to_string();
+        if let Err(err) = self.store.set(session, &format!("turn-{turn}"), &value) {
+            eprintln!("WARN [core] persisting turn for session {session} failed: {err}");
+        }
     }
 }
 
@@ -405,6 +449,12 @@ pub enum CoreError {
         /// The underlying trap.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// The host-side persistent store could not be opened.
+    #[error("opening the persistent store: {message}")]
+    Store {
+        /// The underlying store error, stringified.
+        message: String,
     },
     /// A lifecycle call returned an error result (the extension refused to load).
     #[error("{id}: lifecycle `{phase}` failed: {message}")]

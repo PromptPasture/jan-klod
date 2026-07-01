@@ -85,10 +85,12 @@ supply-chain: deny audit sbom
 #   agent_loop        — the thin loop booted from config (Runtime::build_agent):
 #                       a greeting short-circuits, a multi-step prompt runs the
 #                       agentic path, both through the sandboxed provider + guests.
+#   persistence       — a turn's transcript survives a full Runtime restart against
+#                       the same host-side SQLite store (Phase 3 Slice 3a gate).
 # Both run against a canned host-http reply (no network, no api key) and skip any
 # guest not staged, so this target stages them first.
 harness: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop
+	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence
 
 # Phase 2 exit gate: boot the real core from a config with two providers, a routing
 # table, and all v1 interceptors enabled, and run the full thin loop offline —
