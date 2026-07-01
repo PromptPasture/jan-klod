@@ -49,7 +49,7 @@ capability an extension imports** — dispatch is a synchronous, ordered call dr
 host, distinct from the observation-only `host-event` bus. The interface is **one generic
 function over a `phase` enum** (`session-start`, `before-loop`, `select-model`,
 `select-context`, `select-tools`, `after-response`, `tool-call`, `tool-result`,
-`finalize`, `prepare-next-turn`) — a new lifecycle point is a new enum case, never a new
+`on-error`, `finalize`, `prepare-next-turn`) — a new lifecycle point is a new enum case, never a new
 function. **Ordering is structural, not configured:** across phases it follows the enum;
 within a phase, deterministic extension load order. `config.yaml` **only enables/disables**
 interceptors — an interceptor declares the phases it wants via `subscribed-phases()`. The

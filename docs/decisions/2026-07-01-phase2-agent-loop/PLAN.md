@@ -55,12 +55,12 @@ subscribed-phases: func() -> list<phase>
 // decision = proceed | replace(hook-state) | block(block-reason) | ask(user-prompt)
 // phase    = session-start | before-loop | select-model | select-context
 //          | select-tools | after-response | tool-call | tool-result
-//          | finalize | prepare-next-turn
+//          | on-error | finalize | prepare-next-turn
 ```
 
 **Dispatch is core-native and ordering is structural:** the core calls each enabled
 interceptor's `intercept` at the phases it lists in `subscribed-phases()`, across
-phases in enum order and within a phase in deterministic load order. `jan-klod.yaml`
+phases in enum order and within a phase in deterministic load order. `config.yaml`
 **only enables/disables** interceptors — it never orders them.
 
 **Retirements (cleanup tasks in the slices below):** `manager-agent-loop` (guest),
@@ -125,7 +125,7 @@ foundation both the core loop (2c) and every interceptor (2a, 2d) hang off.
 - [ ] **Error/trap policy** — wrap each `intercept` call: on `Err`/trap, **fail
   closed at `tool-call`** (treat as `block`), fail-open-with-log elsewhere; emit the
   offending interceptor id on the `host-event` bus.
-- [ ] **Registration** — read the interceptor enable/disable set from `jan-klod.yaml`
+- [ ] **Registration** — read the interceptor enable/disable set from `config.yaml`
   (on/off only); resolve `subscribed-phases()` at boot; establish deterministic
   load order for intra-phase sequencing.
 - [ ] **`configuration.md` note** — document the interceptor enable/disable keys
@@ -221,7 +221,7 @@ asks then blocks/allows).
 **GitHub:** #28 · **Blocked on:** all of #24–#27
 
 - [ ] Offline test `tests/phase2_gate.rs` — canned `host-http`, no network / API key:
-  - Boot the real `Runtime` from a `jan-klod.yaml` with two provider instances, a
+  - Boot the real `Runtime` from a `config.yaml` with two provider instances, a
     `routing:` section, and the v1 interceptors enabled.
   - Call the core **loop entry** (`run_agent`).
   - Submit a multi-step user query.

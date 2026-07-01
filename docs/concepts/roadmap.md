@@ -109,7 +109,7 @@ are now Rust.
   the Wasmtime **component** host.
 - Port host capabilities to the Component Model: `host-log`, `host-config`, `host-http`.
 - Re-author `provider-openai` and `store-memory` as real `wit-bindgen` components
-  in **Rust** (`cargo-component`) — the default for our first-party extensions.
+  in **Rust** (`wasm32-wasip2` target + `wit-bindgen`; no `cargo-component` needed) — the default for our first-party extensions.
 - Replace the broken Go build targets with Cargo (+ a guest build path per language).
 
 **Exit gate:** config-driven load → lifecycle → an OpenAI-compatible completion
