@@ -35,8 +35,19 @@ jobs:
       # which are gitignored and fetched on demand from the committed wit/wkg.lock.
       # `cargo test` and `clippy --all-targets` compile that example, so populate the
       # deps first — the same `wkg wit fetch` a developer runs locally.
+      #
+      # Prebuilt binary (pinned to the version that produced wit/wkg.lock) — instant,
+      # unlike `cargo install wkg`, which recompiles from source every run. wkg ships
+      # pure binaries (no archive), hence extension-matching + rename + chmod.
       - name: Install wkg
-        run: cargo install wkg
+        uses: jaxxstorm/action-install-gh-release@v1
+        with:
+          repo: bytecodealliance/wasm-pkg-tools
+          tag: v0.15.1
+          extension-matching: disable
+          rename-to: wkg
+          chmod: 0755
+          cache: enable
 
       - name: Fetch spike WIT deps
         run: make -C src/extensions spike-deps

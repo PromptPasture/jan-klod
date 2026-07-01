@@ -5,6 +5,10 @@ members = ["host", "core", "config"]
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
+# Internal crates — a host binary and its libraries, not for crates.io. Marking
+# them unpublished also lets cargo-deny's `allow-wildcard-paths` exempt their
+# versionless intra-workspace path deps (see deny.toml [bans]).
+publish = false
 
 [workspace.dependencies]
 wasmtime = "46"

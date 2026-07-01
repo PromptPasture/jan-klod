@@ -37,9 +37,13 @@ confidence-threshold = 0.9
 [bans]
 # Duplicate transitive versions are noise, not a security failure, in a young tree
 # — surface them without breaking the build. Wildcard version requirements are
-# forbidden: they defeat the locked-build guarantee.
+# forbidden: they defeat the locked-build guarantee — but only for registry crates.
+# Intra-workspace path deps (jan-klod-core/-config) carry no version and so read as
+# `*`; they resolve from the filesystem, not a registry, so a wildcard there is
+# harmless and expected for unpublished crates.
 multiple-versions = "warn"
 wildcards = "deny"
+allow-wildcard-paths = true
 
 [sources]
 # Only the default crates.io registry is permitted. Any other registry or a git
