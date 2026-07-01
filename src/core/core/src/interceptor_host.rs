@@ -628,6 +628,82 @@ mod tests {
         })
     }
 
+    /// A driver that answers every `ask` with a fixed response.
+    struct FixedDriver(&'static str);
+    impl Driver for FixedDriver {
+        fn ask(&mut self, _prompt: &UserPrompt) -> String {
+            self.0.to_string()
+        }
+    }
+
+    fn load_permission() -> Option<WasmInterceptor> {
+        let path = repo_root().join("ext").join("interceptor-permission.wasm");
+        if !path.exists() {
+            eprintln!("skipping: interceptor-permission.wasm not staged — run `make ext`");
+            return None;
+        }
+        let engine = Engine::default();
+        let component = Component::from_file(&engine, &path).expect("component compiles");
+        Some(
+            WasmInterceptor::instantiate(
+                &engine,
+                "interceptor.permission",
+                &component,
+                ConfigSection::new(json!({})),
+                Box::new(|_| String::new()),
+            )
+            .expect("interceptor instantiates"),
+        )
+    }
+
+    fn tool_call(name: &str) -> HookState {
+        HookState::ToolCall(crate::intercept::ToolCall {
+            id: "1".into(),
+            name: name.into(),
+            arguments: "{}".into(),
+        })
+    }
+
+    #[test]
+    fn permission_subscribes_only_to_tool_call() {
+        let Some(p) = load_permission() else { return };
+        assert_eq!(p.subscribed_phases(), vec![Phase::ToolCall]);
+    }
+
+    #[test]
+    fn permission_blocks_a_dangerous_tool_when_denied() {
+        let Some(p) = load_permission() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(p)]);
+        let mut state = tool_call("bash");
+        assert!(matches!(
+            d.dispatch(Phase::ToolCall, &mut state, &mut FixedDriver("no")),
+            Outcome::Blocked(_)
+        ));
+    }
+
+    #[test]
+    fn permission_allows_a_dangerous_tool_when_approved() {
+        let Some(p) = load_permission() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(p)]);
+        let mut state = tool_call("bash");
+        assert!(matches!(
+            d.dispatch(Phase::ToolCall, &mut state, &mut FixedDriver("yes")),
+            Outcome::Proceeded
+        ));
+    }
+
+    #[test]
+    fn permission_ignores_ordinary_tools() {
+        let Some(p) = load_permission() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(p)]);
+        let mut state = tool_call("web_search");
+        // NoDriver panics if asked — an ordinary tool must never trigger an ask.
+        assert!(matches!(
+            d.dispatch(Phase::ToolCall, &mut state, &mut NoDriver),
+            Outcome::Proceeded
+        ));
+    }
+
     #[test]
     fn intent_router_subscribes_only_to_before_loop() {
         let Some((_engine, interceptor)) = load_intent_router(Box::new(|_| "agentic".into())) else {

@@ -36,7 +36,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice 2a — Intent router logic (recast into `interceptor-intent-router`) | `done` |
 | Slice 2b — `interceptor` contract + core-native dispatch framework | `done` |
 | Slice 2c — Core loop mechanism (conductor, harness, fallback, run entry) | `in-progress` |
-| Slice 2d — v1 interceptor set (task-router, context, tool-selector, permission) | `not-started` |
+| Slice 2d — v1 interceptor set (task-router, context, tool-selector, permission) | `in-progress` |
 | Slice 2e — Exit gate | `not-started` |
 
 ## Architecture context
@@ -245,10 +245,12 @@ prove the seam without speculative machinery.
 - [ ] **`interceptor-tool-selector`** (`select-tools`) — **thin**: a working
   pass-through that exposes the full active tool set (from `mcp-registry` /
   `tool-callable` when present), leaving per-step narrowing as a later refinement.
-- [ ] **`interceptor-permission`** (`tool-call`) — **thin**: a single-rule gate
-  (e.g. confirm on a configured dangerous-command pattern) that returns `ask` to the
-  driver and `block`/`proceed` on the answer — exercising the `ask` round-trip and
-  the fail-closed policy.
+- [x] **`interceptor-permission`** (`tool-call`) — **thin**: a single-rule gate that
+  flags a dangerous tool by name (`rules::is_dangerous`), returns `ask` to confirm,
+  and `proceed`/`block`s on the answer (`rules::is_affirmative`). Built + staged;
+  3 native rule tests + 4 adapter tests driving the real guest through the
+  `Dispatcher` (subscribes to `tool-call` only; deny→block; approve→proceed; ordinary
+  tool never asks). Exercises the `ask` round-trip end-to-end.
 - [ ] **Build targets** — `make interceptor-<name>[-docker]` for each.
 - [ ] **Harness tests** — each guest: lifecycle + `subscribed-phases` + one
   `intercept` round-trip; skip when the component is not staged.
