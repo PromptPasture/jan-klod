@@ -2,7 +2,7 @@
 //! sandboxes with **core only brokering**.
 //!
 //! Where `component_harness` verifies each guest in isolation, this boots the
-//! real runtime against a `jan-klod.yaml`, asks it to route the agent loop, and
+//! real runtime against a `config.yaml`, asks it to route the agent loop, and
 //! runs one turn. The `manager-agent-loop` guest imports `llm-provider` and
 //! `memory-store`; the core's routing layer satisfies those imports by delegating
 //! into the provider and store extensions. The provider's `host-http` is a canned
@@ -60,7 +60,7 @@ fn routed_agent_loop_runs_one_turn() {
     // in-memory store — the three the loop routes across.
     let dir = std::env::temp_dir().join(format!("jk-routing-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let config = dir.join("jan-klod.yaml");
+    let config = dir.join("config.yaml");
     std::fs::write(
         &config,
         "

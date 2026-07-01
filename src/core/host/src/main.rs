@@ -1,10 +1,10 @@
-//! `jan-klod` core entrypoint: boot the runtime from `jan-klod.yaml`, resolve
+//! `jan-klod` core entrypoint: boot the runtime from `config.yaml`, resolve
 //! the enabled extensions against the `ext/` directory, run their lifecycle, and
 //! print the boot plan. All behaviour lives in the extensions it loads — this
 //! binary is just the container.
 //!
 //! Usage: `jan-klod [config-path] [ext-dir]`
-//!   config-path  path to jan-klod.yaml   (default: jan-klod.yaml)
+//!   config-path  path to config.yaml   (default: config.yaml)
 //!   ext-dir      directory of *.wasm     (default: ext)
 
 use std::process::ExitCode;
@@ -13,7 +13,7 @@ use jan_klod_core::Runtime;
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
-    let config_path = args.next().unwrap_or_else(|| "jan-klod.yaml".to_string());
+    let config_path = args.next().unwrap_or_else(|| "config.yaml".to_string());
     let ext_dir = args.next().unwrap_or_else(|| "ext".to_string());
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {

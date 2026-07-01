@@ -51,7 +51,7 @@ function over a `phase` enum** (`session-start`, `before-loop`, `select-model`,
 `select-context`, `select-tools`, `after-response`, `tool-call`, `tool-result`,
 `finalize`, `prepare-next-turn`) — a new lifecycle point is a new enum case, never a new
 function. **Ordering is structural, not configured:** across phases it follows the enum;
-within a phase, deterministic extension load order. `jan-klod.yaml` **only enables/disables**
+within a phase, deterministic extension load order. `config.yaml` **only enables/disables**
 interceptors — an interceptor declares the phases it wants via `subscribed-phases()`. The
 `ask` decision routes a question through the loop to the attached driver (which prompts in
 its own idiom) and resumes on the answer, so a rule-based permission gate can confirm with
@@ -75,7 +75,7 @@ Core grants these capabilities to every extension.
 | `host-serve.wit` | `host-serve` | **Inbound** listener — lets `api-*` bind a port and serve REST/gRPC *(planned)* |
 | `host-socket.wit` | `host-socket` | Long-lived bidirectional socket — lets `chat-*` hold a Telegram/Slack connection *(planned)* |
 | `host-log.wit` | `host-log` | Structured logging forwarded to core pipeline |
-| `host-config.wit` | `host-config` | Read own section of `jan-klod.yaml` |
+| `host-config.wit` | `host-config` | Read own section of `config.yaml` |
 | `host-event.wit` | `host-event` | Event bus publish/subscribe — **observation-only** (fire-and-forget); cannot shape the loop |
 | `host-storage.wit` | `host-storage` | Proxy to active `memory-store` (subset: no purge/search) |
 
@@ -131,7 +131,7 @@ interface llm-provider {
 
 ## Multi-provider
 
-Multiple `llm-provider` extensions can be active simultaneously. `interceptor-task-router` selects the provider per-request (at the `select-model` phase) based on routing rules in `jan-klod.yaml` (e.g. route code tasks to `provider-ollama`, reasoning to `provider-anthropic`).
+Multiple `llm-provider` extensions can be active simultaneously. `interceptor-task-router` selects the provider per-request (at the `select-model` phase) based on routing rules in `config.yaml` (e.g. route code tasks to `provider-ollama`, reasoning to `provider-anthropic`).
 
 ## ACP — agent delegation
 

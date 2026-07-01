@@ -208,7 +208,7 @@ interface interceptor {
     /// woken for phases it ignores. This is the **sole source of ordering**:
     /// - *across* phases: the `phase` enum's declaration order;
     /// - *within* one phase: deterministic extension load order.
-    /// `jan-klod.yaml` only **enables/disables** interceptors — it never orders
+    /// `config.yaml` only **enables/disables** interceptors — it never orders
     /// or sequences them. There is no config-driven step ordering to drift.
     subscribed-phases: func() -> list<phase>;
 }

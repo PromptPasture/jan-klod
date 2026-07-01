@@ -14,7 +14,7 @@ EXT := src/extensions
 # Repo-root artifacts the host runs against (above any single subtree). EXT_DIR
 # mirrors the staging dir the extensions sub-makefile writes to — kept in sync by
 # convention (one shared constant doesn't yet justify a common include).
-CONFIG := $(abspath jan-klod.yaml)
+CONFIG := $(abspath config.yaml)
 EXT_DIR := $(abspath ext)
 
 # List the common targets.
@@ -30,7 +30,7 @@ help:
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
 	@echo "  sbom        generate sbom.spdx.json for the repo (syft)"
-	@echo "  run         boot the core against jan-klod.yaml + ext/"
+	@echo "  run         boot the core against config.yaml + ext/"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
 	@echo "  wit         validate the WIT contracts"
@@ -90,7 +90,7 @@ supply-chain: deny audit sbom
 harness: extensions
 	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test routing
 
-# Boot the real core against jan-klod.yaml: resolve enabled extensions against
+# Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.
 run:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host -- $(CONFIG) $(EXT_DIR)
@@ -101,7 +101,7 @@ run:
 probe:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host --example provider_probe -- $(CONFIG) $(EXT_DIR)
 
-# Resolve jan-klod.yaml and print the extension plan (each instance -> wasm).
+# Resolve config.yaml and print the extension plan (each instance -> wasm).
 config:
 	cd $(CORE) && cargo run --quiet -p jan-klod-config --example dump -- $(CONFIG)
 

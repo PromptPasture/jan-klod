@@ -1,4 +1,4 @@
-//! Loader for `jan-klod.yaml`.
+//! Loader for `config.yaml`.
 //!
 //! Extensions are grouped by category (`provider`, `store`, …); each named
 //! entry under a category is one extension *instance*. The core interprets only
@@ -20,7 +20,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-/// One configured extension instance resolved from `jan-klod.yaml`.
+/// One configured extension instance resolved from `config.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionInstance {
     /// `<category>.<name>` — unique instance id, e.g. `provider.openai`.
@@ -48,7 +48,7 @@ impl ExtensionInstance {
     }
 }
 
-/// Parsed `jan-klod.yaml`.
+/// Parsed `config.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Every declared instance, ordered by `(category, name)`.
@@ -59,7 +59,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Read and parse a `jan-klod.yaml` from disk.
+    /// Read and parse a `config.yaml` from disk.
     ///
     /// # Errors
     /// Returns [`ConfigError::Read`] if the file cannot be read, or any parse
@@ -73,7 +73,7 @@ impl Config {
         Self::from_yaml(&text)
     }
 
-    /// Parse a `jan-klod.yaml` from a string.
+    /// Parse a `config.yaml` from a string.
     ///
     /// # Errors
     /// Returns a [`ConfigError`] if the YAML is malformed, the structure is not
@@ -214,7 +214,7 @@ fn expand_str(s: &str, id: &str) -> Result<Option<String>, ConfigError> {
     Ok(Some(out))
 }
 
-/// Errors surfaced while loading `jan-klod.yaml`.
+/// Errors surfaced while loading `config.yaml`.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     /// The config file could not be read from disk.

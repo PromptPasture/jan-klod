@@ -33,7 +33,7 @@ system daemon) and is **headless-capable** — on a Raspberry Pi or in a contain
 it is the only thing you run. It contains:
 
 - Extension lifecycle management (load, enable, disable, unload)
-- Configuration loading (`jan-klod.yaml`) — see [Configuration](configuration.md)
+- Configuration loading (`config.yaml`) — see [Configuration](configuration.md)
 - WASM component host (Wasmtime) — the capability sandbox every extension runs in
 - Event bus (extension-to-extension communication, observation-only)
 - **Agent loop mechanism** — the thin conductor (`stream → tools → loop`) plus the
@@ -101,7 +101,7 @@ new function or world import, so the design favours **many narrow phases over fe
 ones**: each phase is a real state transition, making ordering between concerns
 *structural* (the phase order) rather than a config-fragile contract inside one big
 phase. **Ordering is not configurable** — across phases it follows the `phase` enum,
-within a phase it follows deterministic extension load order; `jan-klod.yaml` only
+within a phase it follows deterministic extension load order; `config.yaml` only
 **enables/disables** interceptors. Most of what the old monolithic `manager-agent-loop`
 did — intent routing, task classification, tool selection, context compression — is now
 a separate, independently enabled interceptor. The phase model also doubles as
@@ -289,7 +289,7 @@ SQL layer: type-safe Rust SQL **(TBD — e.g. `sqlx` compile-time-checked querie
 The persistent store is a **host-side capability** the core exposes through the
 `memory-store` / `host-storage` contract — it is *not* SQLite-in-wasm (which the
 Go MVP confirmed does not work). Only one `memory-store` is active at a time;
-selected via `jan-klod.yaml`.
+selected via `config.yaml`.
 
 ## Stack
 
@@ -305,7 +305,7 @@ selected via `jan-klod.yaml`.
 | Build | Cargo (native binary; no CGo in the core) |
 | Linting | Clippy (Rust core); `golangci-lint` for any Go-language tooling/guests |
 | Observability | Structured logging + Prometheus + OpenTelemetry |
-| Config | YAML (`jan-klod.yaml`) |
+| Config | YAML (`config.yaml`) |
 | Updater/supervisor | TinyGo standalone binary (blue/green flip + rollback) |
 
 ## Testing
@@ -316,7 +316,7 @@ selected via `jan-klod.yaml`.
 
 ## Provider fallback
 
-When a provider or model fails (unavailable, rate-limited, quota exceeded, local OOM), the **core loop** falls back through a two-level priority list defined in `jan-klod.yaml`, re-issuing the request against the next entry. Fallback is core *mechanism*, not an interceptor: it re-issues the *same* failed request on another provider (an on-provider-error retry, the same category as retry/validate), which a `prepare-next-turn` interceptor cannot do. Entries reference **provider instance names** (`extensions.provider.<name>`), not wasm components — see [Configuration](configuration.md):
+When a provider or model fails (unavailable, rate-limited, quota exceeded, local OOM), the **core loop** falls back through a two-level priority list defined in `config.yaml`, re-issuing the request against the next entry. Fallback is core *mechanism*, not an interceptor: it re-issues the *same* failed request on another provider (an on-provider-error retry, the same category as retry/validate), which a `prepare-next-turn` interceptor cannot do. Entries reference **provider instance names** (`extensions.provider.<name>`), not wasm components — see [Configuration](configuration.md):
 
 ```yaml
 providers:
@@ -340,7 +340,7 @@ Fallback is per-request — if the primary recovers, the next request uses it ag
 
 ## Task routing
 
-`interceptor-task-router` classifies each request into a task type and routes it to the configured provider/model (setting the model on the outbound request at the `select-model` phase). Jan-Klod ships built-in task types as sensible defaults; users extend or override in `jan-klod.yaml`.
+`interceptor-task-router` classifies each request into a task type and routes it to the configured provider/model (setting the model on the outbound request at the `select-model` phase). Jan-Klod ships built-in task types as sensible defaults; users extend or override in `config.yaml`.
 
 **Built-in task types:**
 
@@ -357,7 +357,7 @@ Fallback is per-request — if the primary recovers, the next request uses it ag
 | `clarification` | Resolve ambiguity |
 | `agent-delegation` | Delegate to another AI agent via ACP |
 
-User-defined types can be added to `jan-klod.yaml` — the LLM classifier receives the full list at runtime and picks the closest match. No code changes needed to add a type.
+User-defined types can be added to `config.yaml` — the LLM classifier receives the full list at runtime and picks the closest match. No code changes needed to add a type.
 
 Routing values are `<provider-instance>/<model>`, where the instance is a name under `extensions.provider`:
 
@@ -424,7 +424,7 @@ No crash propagates to core. The agent loop continues with the remaining tools.
 
 ## Config hot-reload
 
-Extensions can pick up `jan-klod.yaml` changes without restart. Core watches the config file and notifies affected extensions via the event bus. Extensions opt in to hot-reload by implementing the reload lifecycle hook.
+Extensions can pick up `config.yaml` changes without restart. Core watches the config file and notifies affected extensions via the event bus. Extensions opt in to hot-reload by implementing the reload lifecycle hook.
 
 ## Deployment targets
 
@@ -432,12 +432,12 @@ Extensions can pick up `jan-klod.yaml` changes without restart. Core watches the
 |---|---|
 | Desktop (macOS, Windows, Linux) | Primary target; all UI modes available |
 | ARM home server / NAS | Low memory footprint (Rust + WASM); **headless core, no UI client** — e.g. `chat-telegram` for access, optionally `api-rest` |
-| Docker | Single container; config via environment variables or mounted `jan-klod.yaml` |
+| Docker | Single container; config via environment variables or mounted `config.yaml` |
 | Kubernetes | Enterprise; horizontal scaling of stateless API layer; shared `store-postgres` or `store-supabase` |
 
 ## Deployment modes
 
-- **Standard:** the `core` binary + `ext/*.wasm` + `jan-klod.yaml` (the deploy unit). A UI client binary is a separate, optional artifact.
+- **Standard:** the `core` binary + `ext/*.wasm` + `config.yaml` (the deploy unit). A UI client binary is a separate, optional artifact.
 - **Bundle:** pre-packaged ZIP with core + a curated `.wasm` set + pre-filled config; UI-oriented bundles also include the UI client binary.
 
 See [Configurator](configurator.md) for generating these archives and [Blue/Green Deployment](blue-green-deployment.md) for the update strategy.

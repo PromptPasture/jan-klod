@@ -1,6 +1,6 @@
 package jan-klod:interfaces@0.1.0;
 
-/// Configuration access — extension reads only its own section of jan-klod.yaml.
+/// Configuration access — extension reads only its own section of config.yaml.
 interface host-config {
     enum config-error {
         key-not-found,

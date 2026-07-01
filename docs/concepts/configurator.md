@@ -7,7 +7,7 @@ created: 2026-06-28T00:00:00Z
 updated: 2026-06-29T00:00:00Z
 ---
 
-The Configurator is a Spring Initializr-style web UI. Users select extensions and provide settings; the UI generates a ready-to-run archive containing the core binary, selected `.wasm` extensions, and a pre-filled `jan-klod.yaml`.
+The Configurator is a Spring Initializr-style web UI. Users select extensions and provide settings; the UI generates a ready-to-run archive containing the core binary, selected `.wasm` extensions, and a pre-filled `config.yaml`.
 
 Hosted publicly. Launch on **GitHub Pages**; migrate to `start.janklod.dev` once the domain is set up. Self-hosted mode always supported.
 
@@ -24,7 +24,7 @@ Hosted publicly. Launch on **GitHub Pages**; migrate to `start.janklod.dev` once
 jan-klod-<version>-<os>-<arch>/
   jan-klod              ← Rust core binary (platform-specific)
   jan-klod-ui           ← UI client binary (UI bundles only; TUI/GUI by launch flag)
-  jan-klod.yaml         ← pre-filled from selections
+  config.yaml         ← pre-filled from selections
   ext/
     provider-openai.wasm
     interceptor-intent-router.wasm
@@ -41,7 +41,7 @@ All bundles ship the same `jan-klod` **core** binary (built with Cargo) plus a
 selected `.wasm` extension set. UI-oriented bundles additionally include the
 separate **UI client** binary and enable an `api-rest` extension for it to
 connect to. Presets differ only in which `.wasm` extensions are included, whether
-the UI client is bundled, and what `jan-klod.yaml` is pre-filled with.
+the UI client is bundled, and what `config.yaml` is pre-filled with.
 
 | Bundle | Included extensions | UI client |
 |---|---|---|

@@ -31,11 +31,11 @@ own — core runs headless without them.
       provider-openai.wasm
       store-sqlite.wasm
       …
-    jan-klod.yaml
+    config.yaml
   green/             ← standby slot (staged update)
     jan-klod         ← Rust core binary
     ext/
-    jan-klod.yaml
+    config.yaml
   active             ← symlink → blue/ or green/
   state.yaml         ← records which slot is live and version history
 ```

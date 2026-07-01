@@ -1,4 +1,4 @@
-//! Jan-Klod core runtime: the minimal container that turns a `jan-klod.yaml`
+//! Jan-Klod core runtime: the minimal container that turns a `config.yaml`
 //! into a set of sandboxed extension components.
 //!
 //! The flow is: load config ([`jan_klod_config`]) → build a host [`Linker`] that
@@ -71,7 +71,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Load `jan-klod.yaml`, wire host capabilities, and resolve every enabled
+    /// Load `config.yaml`, wire host capabilities, and resolve every enabled
     /// instance against `ext_dir`. Compiles present components; missing ones are
     /// recorded so a partial deployment still boots.
     ///
@@ -270,7 +270,7 @@ impl fmt::Display for BootReport<'_> {
 /// Errors surfaced while booting the core.
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
-    /// Loading or parsing `jan-klod.yaml` failed.
+    /// Loading or parsing `config.yaml` failed.
     #[error(transparent)]
     Config(#[from] jan_klod_config::ConfigError),
     /// Wiring a host capability into the linker failed.
@@ -382,7 +382,7 @@ mod tests {
     fn boot_resolves_enabled_instances_and_marks_missing() {
         let dir = std::env::temp_dir().join(format!("jk-boot-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let cfg = dir.join("jan-klod.yaml");
+        let cfg = dir.join("config.yaml");
         std::fs::write(
             &cfg,
             "

@@ -126,7 +126,7 @@ fn wire_to_http(err: &jan_klod_core::http::WireError) -> host_http::HttpError {
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let config_path = args.next().unwrap_or_else(|| "jan-klod.yaml".to_string());
+    let config_path = args.next().unwrap_or_else(|| "config.yaml".to_string());
     let ext_dir = args.next().unwrap_or_else(|| "ext".to_string());
     let prompt = args
         .next()

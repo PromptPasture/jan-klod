@@ -12,7 +12,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::bindings::jan_klod::interfaces::{host_config, host_http, host_log};
 
-/// One extension instance's own slice of `jan-klod.yaml`, served back through
+/// One extension instance's own slice of `config.yaml`, served back through
 /// `host-config`. Keys are dot-separated paths into the (already env-expanded)
 /// config object.
 #[derive(Debug, Clone)]

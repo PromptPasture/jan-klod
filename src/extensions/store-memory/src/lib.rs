@@ -5,7 +5,7 @@
 //! setup, no persistence — everything lives in a process-local map and is gone
 //! when the component is dropped. It exercises the full guest round-trip the
 //! core wired up: it imports `host-log` (structured logging back to the core)
-//! and `host-config` (reads its own `jan-klod.yaml` section), and exports
+//! and `host-config` (reads its own `config.yaml` section), and exports
 //! lifecycle + storage over the Component Model.
 
 // Generated Component-Model bindings; lint exemptions (incl. the `unsafe` ABI

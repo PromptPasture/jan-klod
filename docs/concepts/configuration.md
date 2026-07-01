@@ -1,13 +1,13 @@
 ---
 type: concept
 title: Configuration
-description: The jan-klod.yaml format and how the core loads it into extension instances
+description: The config.yaml format and how the core loads it into extension instances
 tags: [config, yaml, extensions, host-config, loader]
 created: 2026-06-29T00:00:00Z
 updated: 2026-07-01T00:00:00Z
 ---
 
-A single `jan-klod.yaml` declares which extensions run and how they are
+A single `config.yaml` declares which extensions run and how they are
 configured. The **core** loads it (`src/core/config/`, the `jan-klod-config`
 crate) and turns it into a list of **extension instances**; everything domain-
 specific is opaque to the core and handed to the instance through
@@ -81,7 +81,7 @@ their references — routing is interceptor domain logic, not a core concern. Se
 
 ## Inspecting a config
 
-`make config` resolves the repo's `jan-klod.yaml` and prints the plan (each
+`make config` resolves the repo's `config.yaml` and prints the plan (each
 instance → its wasm), which is also how the loader is exercised:
 
 ```
@@ -93,7 +93,7 @@ make config
 
 ## Per-project configuration
 
-In addition to `jan-klod.yaml`, Jan-Klod reads from `AGENTS.md` and `.agents/` at the project
+In addition to `config.yaml`, Jan-Klod reads from `AGENTS.md` and `.agents/` at the project
 root (or the nearest ancestor directory). This keeps project-specific instructions and skills checked into version control.
 
 ```
