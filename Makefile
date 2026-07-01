@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions test harness phase2-gate clippy audit deny sbom supply-chain run serve probe config clean
+.PHONY: help wit all core extensions test harness phase2-gate phase3-gate clippy audit deny sbom supply-chain run serve probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -100,6 +100,12 @@ harness: extensions
 # the guests first; skips if any is not built.
 phase2-gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-host --test phase2_gate
+
+# Phase 3 exit gate: durable state survives a Runtime restart (persistence) AND an
+# external HTTP client drives the loop over the host-side REST surface (api_rest),
+# both offline. Stages the guests first.
+phase3-gate: extensions
+	cd $(CORE) && cargo test -p jan-klod-host --test persistence --test api_rest
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.

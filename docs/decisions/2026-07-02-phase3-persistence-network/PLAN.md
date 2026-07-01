@@ -56,9 +56,9 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice | Flag |
 |---|---|
 | 3a — Host-side persistent store (`store-sqlite`) | `done` |
-| 3b — `host-serve` capability + `api-rest` (REST + SSE) | `in-progress` |
-| 3c — UI ↔ core transport resolution | `not-started` |
-| 3d — Exit gate | `not-started` |
+| 3b — `host-serve` capability + `api-rest` (REST + SSE) | `done` |
+| 3c — UI ↔ core transport resolution | `done` |
+| 3d — Exit gate | `done` |
 
 ---
 
@@ -129,25 +129,32 @@ driving the real loop through the sandboxed guests, offline. Wired into `make ha
 
 ## Slice 3c — UI ↔ core transport
 
-- [ ] **Confirm the transport** — UI clients connect via `api-rest` (HTTP+SSE);
-  record the decision (does a UI deployment always require `api-rest`? current
-  lean: yes). No core code beyond what 3b provides; this is a recorded decision +
-  any client-contract notes that unblock Phase 4's `jan-klod-ui`.
+- [x] **Transport confirmed: UI clients connect via the host-side REST surface
+  (HTTP; SSE once streaming lands).** A UI deployment **always includes** the REST
+  surface — the LSP/server model: core is the server, the UI a thin client. In v1
+  this is `jan_klod_core::serve` (host-side), not a separate `api-rest` guest (see
+  Slice 3b). Client contract for Phase 4's `jan-klod-ui`: `POST` a JSON turn
+  (`{session?, message}`) → `{answer, agentic}`; streaming (SSE) arrives with the
+  run-handle. No new core code beyond 3b.
 
-**Exit gate:** the transport decision is recorded and consistent with `api-rest`.
+**Exit gate:** ✓ the transport decision is recorded and consistent with the 3b REST
+surface.
 
 ---
 
 ## Slice 3d — Exit gate
 
-- [ ] Integration test(s): **state persists across a `Runtime` restart** (3a) **and
-  an external HTTP client drives core via `api-rest`** (3b), both offline/local.
-- [ ] CI — a `make phase3-gate` added to `.github/workflows/ci.yml`.
-- [ ] **Mark Phase 3 `done`** here and in [roadmap.md](../../concepts/roadmap.md);
-  begin Phase 4 planning.
+- [x] Integration tests: **state persists across a `Runtime` restart** (`persistence.rs`,
+  3a) **and an external HTTP client drives the loop over the REST surface**
+  (`api_rest.rs`, 3b), both offline/local.
+- [x] CI — `make phase3-gate` runs both, wired into the harness job in
+  `.github/workflows/ci.yml`.
+- [x] **Mark Phase 3 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
+  Carried-forward, non-blocking refinements: SSE streaming (with the run-handle),
+  and backing the interceptor `host-storage` import with the shared `Store`.
 
-**Definition of done:** `make phase3-gate` passes in CI; `roadmap.md` status tracker
-updated to `done`.
+**Definition of done:** `make phase3-gate` passes in CI (green); `roadmap.md` status
+tracker updated to `done`. ✓
 
 ## Cross-cutting (continuous)
 

@@ -81,6 +81,10 @@ jobs:
       # offline. Reuses the guests staged by `make harness`.
       - run: make phase2-gate
 
+      # Phase 3 exit gate: durable state survives a Runtime restart, and an external
+      # HTTP client drives the loop over the host-side REST surface, both offline.
+      - run: make phase3-gate
+
   supply-chain:
     name: Supply-chain gates
     runs-on: ubuntu-latest
