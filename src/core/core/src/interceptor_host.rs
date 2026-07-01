@@ -704,6 +704,54 @@ mod tests {
         ));
     }
 
+    fn load_tool_selector() -> Option<WasmInterceptor> {
+        let path = repo_root().join("ext").join("interceptor-tool-selector.wasm");
+        if !path.exists() {
+            eprintln!("skipping: interceptor-tool-selector.wasm not staged — run `make ext`");
+            return None;
+        }
+        let engine = Engine::default();
+        let component = Component::from_file(&engine, &path).expect("component compiles");
+        Some(
+            WasmInterceptor::instantiate(
+                &engine,
+                "interceptor.tool-selector",
+                &component,
+                ConfigSection::new(json!({})),
+                Box::new(|_| String::new()),
+            )
+            .expect("interceptor instantiates"),
+        )
+    }
+
+    fn select_tools() -> HookState {
+        HookState::SelectTools(crate::intercept::PendingRequest {
+            model: Some("m".into()),
+            messages: vec![],
+            tools: vec![],
+            grammar: None,
+            max_tokens: None,
+            temperature: None,
+        })
+    }
+
+    #[test]
+    fn tool_selector_subscribes_only_to_select_tools() {
+        let Some(t) = load_tool_selector() else { return };
+        assert_eq!(t.subscribed_phases(), vec![Phase::SelectTools]);
+    }
+
+    #[test]
+    fn tool_selector_passes_through() {
+        let Some(t) = load_tool_selector() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(t)]);
+        let mut state = select_tools();
+        assert!(matches!(
+            d.dispatch(Phase::SelectTools, &mut state, &mut NoDriver),
+            Outcome::Proceeded
+        ));
+    }
+
     #[test]
     fn intent_router_subscribes_only_to_before_loop() {
         let Some((_engine, interceptor)) = load_intent_router(Box::new(|_| "agentic".into())) else {

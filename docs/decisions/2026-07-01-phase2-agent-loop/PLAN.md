@@ -242,9 +242,11 @@ prove the seam without speculative machinery.
   (char/4 estimate v1; drop oldest turns; summarisation via `llm-provider`
   deferred behind the same interface). Replaces `manager-context` +
   `context-manager.wit`.
-- [ ] **`interceptor-tool-selector`** (`select-tools`) — **thin**: a working
-  pass-through that exposes the full active tool set (from `mcp-registry` /
-  `tool-callable` when present), leaving per-step narrowing as a later refinement.
+- [x] **`interceptor-tool-selector`** (`select-tools`) — **thin**: a working
+  pass-through that exposes the assembled tool set and proceeds (tool sources
+  `mcp-registry`/`tool-callable` are wired later; per-step narrowing is a later
+  refinement). Built + staged; 2 adapter tests (subscribes to `select-tools` only;
+  passes through).
 - [x] **`interceptor-permission`** (`tool-call`) — **thin**: a single-rule gate that
   flags a dangerous tool by name (`rules::is_dangerous`), returns `ask` to confirm,
   and `proceed`/`block`s on the answer (`rules::is_affirmative`). Built + staged;
