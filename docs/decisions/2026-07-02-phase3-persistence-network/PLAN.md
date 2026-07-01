@@ -55,7 +55,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 3a — Host-side persistent store (`store-sqlite`) | `not-started` |
+| 3a — Host-side persistent store (`store-sqlite`) | `in-progress` |
 | 3b — `host-serve` capability + `api-rest` (REST + SSE) | `not-started` |
 | 3c — UI ↔ core transport resolution | `not-started` |
 | 3d — Exit gate | `not-started` |
@@ -72,15 +72,19 @@ Make state durable behind the existing storage contracts, so the loop's history
   Record as `decisions/2026-…-host-side-sqlite/`. (Lean: host proxies directly —
   the sandbox can't hold the DB anyway, and the in-memory `host-storage` impl in
   `interceptor_host` already shows the host-side shape.)
-- [ ] **Add the SQLite backend in core** (`rusqlite` bundled): a `Store` with the
-  `memory-store`/`host-storage` operations (`set`/`get`/`delete`/`list-keys`/
-  `recent`, plus `search`/`purge-namespace` for the fuller `memory-store`), backed
-  by a `namespace/key/value/created-at/updated-at` table; `path` from config.
+- [x] **Add the SQLite backend in core** — `jan_klod_core::store::Store` (`rusqlite`
+  bundled): the full `memory-store` op set (`set`/`get`/`delete`/`list-keys`/`recent`/
+  `search`/`purge-namespace`) over a `namespace/key/value/created-at/updated-at`
+  table, upsert preserving `created-at`, `recent`/`list-keys` newest-first (rowid
+  tiebreak for same-second writes). `open(path)`/`open_in_memory()`. 7 tests incl.
+  **state survives a reopen**. Bundled SQLite builds natively (no rustup needed).
 - [ ] **Wire it as the host-storage backend** the core serves to extensions
   (replacing the per-adapter in-memory maps), and persist the loop's session
-  history through it.
-- [ ] **Supply-chain** — `rusqlite` (+ bundled SQLite C) passes `cargo-deny`/`cargo-audit`;
-  record any license/advisory notes.
+  history through it. *(Next increment.)*
+- [x] **Supply-chain** — the new deps (`rusqlite`/`libsqlite3-sys`/`hashlink`/
+  `fallible-iterator`/`fallible-streaming-iterator`) are all MIT / MIT-OR-Apache-2.0,
+  covered by the `deny.toml` allow-list; bundled SQLite C is public-domain. Passes
+  `cargo-deny` (run in CI).
 
 **Exit gate:** an integration test writes state, drops and re-opens the `Runtime`
 against the same DB file, and reads the state back (survives restart).

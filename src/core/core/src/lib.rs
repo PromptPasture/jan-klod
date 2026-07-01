@@ -19,6 +19,7 @@ pub mod http;
 pub mod intercept;
 pub mod interceptor_host;
 pub mod route;
+pub mod store;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
