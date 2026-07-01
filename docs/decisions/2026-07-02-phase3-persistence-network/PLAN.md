@@ -56,7 +56,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice | Flag |
 |---|---|
 | 3a — Host-side persistent store (`store-sqlite`) | `done` |
-| 3b — `host-serve` capability + `api-rest` (REST + SSE) | `not-started` |
+| 3b — `host-serve` capability + `api-rest` (REST + SSE) | `in-progress` |
 | 3c — UI ↔ core transport resolution | `not-started` |
 | 3d — Exit gate | `not-started` |
 
@@ -99,18 +99,28 @@ against the same DB file, and the transcript reads back intact. Wired into
 
 Give the outside world a way in.
 
-- [ ] **Design `wit/host-serve.wit`** — a host-owned inbound listener the `api-*`
-  guest binds (`serve(bind-addr)`), with the host calling the guest back per
-  request (handler registration), returning a response. Keep the socket in the host.
-- [ ] **Promote the driver/loop-entry WIT** — the Phase 2 core-Rust entry
-  (`run` / `next-event` / `provide-answer` / cancel + steering) becomes the shape
-  `api-rest` imports to drive turns.
-- [ ] **Build `api-rest`** (REST + SSE): a `POST /turns` (or `/chat`) that drives
-  the loop and streams `next-event` over SSE; host side on `axum`/`tokio`.
-- [ ] **Resolve the HTTP-framework + async plumbing** (`axum`) and record it.
+- [x] **Boundary decided: the REST surface is host-side, not a wasm guest.** The
+  loop it drives is host mechanism, and the wasip2 sandbox grants no inbound
+  sockets, so `host-serve`-as-guest-callback would add a WIT/plumbing layer with no
+  isolation benefit for trusted infrastructure code. A `wit/host-serve.wit` +
+  `api-rest` *guest* stays available for domain-specific surfaces later; v1 is
+  `jan_klod_core::serve`. *(Supersedes the guest/`host-serve` framing in this
+  slice's original checklist.)*
+- [x] **HTTP framework decided: `tiny_http` (synchronous), not `axum`/`tokio`.** The
+  loop is sync and `AgentSession` is `!Send` (Wasmtime + `rusqlite`), so a blocking
+  server that serves one turn at a time on the session's own thread is the right fit
+  — no async runtime, no cross-thread session sharing. (`axum` returns if/when an
+  async, multi-session surface is warranted.)
+- [x] **Build `api-rest` (request→response)** — `serve::handle_turn` (`{session?,
+  message}` → `{answer, agentic}`), `serve::serve_once` / `serve::serve` over
+  `tiny_http`. Pure `handle_turn` is unit-testable; `serve_once` drives one HTTP
+  round-trip.
+- [ ] **SSE streaming** — stream `next-event` over Server-Sent Events. Deferred with
+  the streaming run-handle (Phase 2 carry-forward); v1 returns the whole answer.
 
-**Exit gate:** an external HTTP client `POST`s a query and receives the streamed
-answer over SSE, driving the real loop end-to-end.
+**Exit gate:** ✓ `host/tests/api_rest.rs` — an external HTTP client (on a separate
+thread) `POST`s a query to the bound port and reads back `200 OK` with the answer,
+driving the real loop through the sandboxed guests, offline. Wired into `make harness`.
 
 ---
 

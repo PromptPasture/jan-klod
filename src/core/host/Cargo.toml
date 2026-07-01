@@ -23,6 +23,8 @@ wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 jan-klod-config = { path = "../config" }
 serde_json.workspace = true
+# api_rest integration test binds the host-side REST surface on an ephemeral port.
+tiny_http = "0.12"
 
 [lints]
 workspace = true

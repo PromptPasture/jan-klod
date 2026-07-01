@@ -15,6 +15,10 @@ ureq = "3"
 # Host-side persistent store (Phase 3 Slice 3a). `bundled` compiles SQLite from
 # source so there is no system-lib dependency; host-side, so no wasm constraint.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Host-side inbound HTTP surface (Phase 3 Slice 3b). Synchronous/blocking, which
+# matches the sync loop + the !Send Wasmtime-backed AgentSession (no async runtime,
+# no cross-thread sharing of the session). See docs/concepts/architecture.md#transport.
+tiny_http = "0.12"
 
 [lints]
 workspace = true
