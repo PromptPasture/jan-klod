@@ -1,11 +1,16 @@
-//! `jan-klod-ui` — a REPL client for a running core.
+//! `jan-klod-ui` — a client for a running core.
 //!
-//! Usage: `jan-klod-ui [addr] [session]`
+//! Usage:
+//!   `jan-klod-ui [addr] [session]`       — line REPL
+//!   `jan-klod-ui tui [addr] [session]`   — full-screen terminal UI (`ratatui`)
+//!
 //!   addr     `host:port` of a running `jan-klod serve` (default: 127.0.0.1:8787)
 //!   session  session id, shared across the conversation (default: cli)
 //!
-//! Type a message and press enter to drive a turn; empty input, `quit`, or EOF
-//! exits. A `ratatui` TUI is a later step over this same transport.
+//! In the REPL, type a message and press enter to drive a turn; empty input,
+//! `quit`, or EOF exits.
+
+mod tui;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -13,9 +18,23 @@ use std::process::ExitCode;
 use jan_klod_ui::send_turn;
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
+    let use_tui = matches!(args.peek().map(String::as_str), Some("tui" | "--tui"));
+    if use_tui {
+        args.next();
+    }
     let addr = args.next().unwrap_or_else(|| "127.0.0.1:8787".to_string());
     let session = args.next().unwrap_or_else(|| "cli".to_string());
+
+    if use_tui {
+        return match tui::run(&addr, &session) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("jan-klod-ui: {err}");
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     println!("jan-klod-ui → {addr} (session `{session}`); type a message, `quit` to exit.");
 

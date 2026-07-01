@@ -49,7 +49,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 4a — UI client (CLI/REPL first, then TUI) | `in-progress` |
+| 4a — UI client (CLI/REPL first, then TUI) | `done` |
 | 4b — `host-socket` + `chat-telegram` | `not-started` |
 | 4c — `agent-*` ACP delegation (both directions) | `not-started` |
 | 4d — Exit gate | `not-started` |
@@ -63,12 +63,15 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
   turn to a running core and returns the answer; the binary is a REPL over it (shared
   session across turns). 3 unit tests + a `roundtrip` test (real socket) + an
   end-to-end smoke against a live `jan-klod serve`. `make chat`. No core changes.
-- [ ] **TUI** — layer `ratatui` + `crossterm` over `send_turn` (scrollable transcript,
-  input box); GUI (`--gui`, Tauri) stays deferred.
+- [x] **TUI** — `jan-klod-ui tui [addr] [session]` layers `ratatui` (0.29, bundled
+  crossterm) over `send_turn`: a scrollable transcript + an input box. The state
+  lives in a pure `app::App` model (typing/backspace/submit/record), unit-tested (4
+  tests); the render/event loop is thin terminal-bound glue (not auto-tested — needs
+  a TTY). GUI (`--gui`, Tauri) stays deferred.
 
 **Exit gate:** ✓ (request→response). The client drives a running `jan-klod serve` over
-REST and holds a multi-turn shared-session conversation; verified by the `roundtrip`
-test + a live e2e smoke.
+REST and holds a multi-turn shared-session conversation (line REPL or TUI); verified
+by the `roundtrip` test, the `App`-model tests, and a live e2e smoke.
 
 ---
 

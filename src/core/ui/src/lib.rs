@@ -6,6 +6,8 @@
 //! step). It depends on neither the core runtime nor Wasmtime — only the REST
 //! contract: `POST /turn` with `{session, message}` → `{answer, agentic}`.
 
+pub mod app;
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
