@@ -34,7 +34,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Item | Flag |
 |---|---|
 | Slice 2a — Intent router logic (recast into `interceptor-intent-router`) | `in-progress` |
-| Slice 2b — `interceptor` contract + core-native dispatch framework | `not-started` |
+| Slice 2b — `interceptor` contract + core-native dispatch framework | `in-progress` |
 | Slice 2c — Core loop mechanism (conductor, harness, fallback, run entry) | `not-started` |
 | Slice 2d — v1 interceptor set (task-router, context, tool-selector, permission) | `not-started` |
 | Slice 2e — Exit gate | `not-started` |
@@ -126,14 +126,16 @@ foundation both the core loop (2c) and every interceptor (2a, 2d) hang off.
   steering + follow-up injection) as a **core-exposed** surface *(planned WIT;
   exercised in Phase 2 through a core Rust entry, not yet a host capability)*.
 - [ ] **`bindgen!` the interceptor world** in core; generate the host-side caller.
-- [ ] **Dispatch engine** (`jan_klod_core::intercept`): given a phase and a mutable
+- [x] **Dispatch engine** (`jan_klod_core::intercept`): given a phase and a mutable
   loop state, call each enabled+subscribed interceptor in order, apply its
   `decision` — `proceed` (no-op), `replace` (swap the phase state), `block`
-  (short-circuit with reason), `ask` (suspend → surface prompt on the run-handle →
-  resume on `provide-answer`, re-invoking the same interceptor with `answer` set).
-- [ ] **Error/trap policy** — wrap each `intercept` call: on `Err`/trap, **fail
-  closed at `tool-call`** (treat as `block`), fail-open-with-log elsewhere; emit the
-  offending interceptor id on the `host-event` bus.
+  (short-circuit with reason), `ask` (suspend → `Driver::ask` → resume the same
+  interceptor with `answer` set). Built Wasmtime-decoupled behind an `Interceptor`
+  trait so it is unit-tested with stubs (6 tests); the wasm-guest adapter is one
+  implementor, landing with the `bindgen!` item below.
+- [x] **Error/trap policy** — on `Err` (a trap surfaces as `Err` through the
+  adapter), **fail closed at `tool-call`** (treat as `block`), fail-open-with-log
+  elsewhere. *(Event-bus emission of the offending id is wired with the adapter.)*
 - [ ] **Registration** — read the interceptor enable/disable set from `config.yaml`
   (on/off only); resolve `subscribed-phases()` at boot; establish deterministic
   load order for intra-phase sequencing.

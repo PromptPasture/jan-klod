@@ -15,6 +15,7 @@
 mod bindings;
 mod host;
 pub mod http;
+pub mod intercept;
 pub mod route;
 
 use std::fmt;
