@@ -24,6 +24,11 @@ use crate::intercept::{
 /// never spin forever. Tunable via `host-config` later; a safe default for now.
 const MAX_ITERATIONS: u32 = 8;
 
+/// How many times a malformed completion is re-issued with a correction before
+/// the turn gives up (no silent spiral). Default per the plan; `host-config`
+/// override lands with the wasm run entry.
+const MAX_RETRIES: u32 = 3;
+
 /// One model completion: the assistant text plus any tool calls it emitted.
 #[derive(Debug, Clone, Default)]
 pub struct Completion {
@@ -137,7 +142,7 @@ pub fn run_turn(
     let mut final_text;
     let mut iterations = 0;
     loop {
-        let completion = match complete_with_fallback(providers, &request) {
+        let completion = match complete_validated(providers, &request) {
             Ok(completion) => completion,
             Err(reason) => return RunResult::Failed(reason),
         };
@@ -289,6 +294,52 @@ fn complete_with_fallback(
     Err(format!("all providers failed ({})", failures.join("; ")))
 }
 
+/// Complete with the small-model harness: on a malformed completion, feed the bad
+/// output back with a correction and re-issue, up to [`MAX_RETRIES`] times. The
+/// correction context is transient (a local copy of the request) so it never
+/// pollutes the real conversation; only a valid completion is returned.
+fn complete_validated(
+    providers: &mut [Box<dyn Completer>],
+    request: &PendingRequest,
+) -> Result<Completion, String> {
+    let mut attempt_request = request.clone();
+    for attempt in 0..=MAX_RETRIES {
+        let completion = complete_with_fallback(providers, &attempt_request)?;
+        match validate(&completion) {
+            Ok(()) => return Ok(completion),
+            Err(reason) if attempt == MAX_RETRIES => {
+                return Err(format!("malformed output after {MAX_RETRIES} retries: {reason}"));
+            }
+            Err(reason) => {
+                attempt_request.messages.push(Message {
+                    role: Role::Assistant,
+                    content: completion.text,
+                    tool_call_id: None,
+                });
+                attempt_request.messages.push(Message {
+                    role: Role::User,
+                    content: format!(
+                        "Your previous response was invalid: {reason}. Reply again, correctly."
+                    ),
+                    tool_call_id: None,
+                });
+            }
+        }
+    }
+    // The loop returns on the last attempt; this is unreachable.
+    Err("retry loop exited unexpectedly".to_string())
+}
+
+/// Structural validation of a completion: every tool call's `arguments` must be
+/// valid JSON (the `tool-callable` contract encodes arguments as a JSON string).
+fn validate(completion: &Completion) -> Result<(), String> {
+    for call in &completion.tool_calls {
+        serde_json::from_str::<serde_json::Value>(&call.arguments)
+            .map_err(|err| format!("tool `{}` arguments are not valid JSON: {err}", call.name))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,6 +428,22 @@ mod tests {
 
     fn with_tools(text: &str, calls: Vec<ToolCall>) -> Completion {
         Completion { text: text.into(), tool_calls: calls }
+    }
+
+    fn bad_call(id: &str, name: &str) -> ToolCall {
+        ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: "not json".into(),
+        }
+    }
+
+    fn scripted(id: &str, replies: Vec<Result<Completion, String>>) -> Box<dyn Completer> {
+        Box::new(ScriptedProvider {
+            id: id.into(),
+            replies: RefCell::new(VecDeque::from(replies)),
+            seen: Rc::new(RefCell::new(vec![])),
+        })
     }
 
     /// Invoker that returns a canned result for any call and counts invocations.
@@ -497,6 +564,31 @@ mod tests {
         let mut tools = NoTools;
         let out = run_turn(&mut d, &mut providers, &mut tools, &mut NoDriver, "s", "go");
         assert_eq!(out, RunResult::Answered { text: "partial".into(), agentic: true });
+    }
+
+    #[test]
+    fn malformed_output_triggers_retry_with_correction() {
+        let mut d = Dispatcher::new(vec![]);
+        // First completion has a tool call with invalid JSON args; the retry
+        // returns clean text.
+        let mut providers = vec![scripted(
+            "p",
+            vec![
+                Ok(with_tools("", vec![bad_call("1", "search")])),
+                Ok(with_tools("recovered", vec![])),
+            ],
+        )];
+        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, "s", "go");
+        assert_eq!(out, RunResult::Answered { text: "recovered".into(), agentic: true });
+    }
+
+    #[test]
+    fn persistently_malformed_output_fails_after_retries() {
+        let mut d = Dispatcher::new(vec![]);
+        // A single reply that repeats: always malformed -> give up after retries.
+        let mut providers = vec![scripted("p", vec![Ok(with_tools("", vec![bad_call("1", "x")]))])];
+        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, "s", "go");
+        assert!(matches!(out, RunResult::Failed(msg) if msg.contains("malformed output after 3 retries")));
     }
 
     #[test]

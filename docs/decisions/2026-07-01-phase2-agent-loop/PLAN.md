@@ -184,11 +184,13 @@ dispatch engine from 2b.
   at 8 iterations) → `finalize`. Trait-decoupled from Wasmtime, unit-tested with
   stubs (8 tests incl. a ≥2-cycle ReAct run, permission-deny, and terminate).
   *Still to add:* `session-start`, `prepare-next-turn`, and the wasm run-handle entry.
-- [ ] **Small-model harness (core mechanism)** — pass the `grammar` on
-  `completion-request` (provider executes it); grammar **construction** default
-  (derive from the active tool set after `select-tools`), overridable by an
-  interceptor; **parse + structural validation**; **retry-with-correction** on
-  malformed output (configurable N via `host-config`, default 3; no silent spiral).
+- [~] **Small-model harness (core mechanism)** — **parse + structural validation**
+  (`validate`: every tool call's `arguments` must be valid JSON) and
+  **retry-with-correction** on malformed output (`complete_validated`: feed the bad
+  output back with a correction and re-issue, default N=3, no silent spiral) are
+  built and unit-tested (2 tests). *Still to add:* passing the `grammar` on the
+  request + default grammar **construction** from the active tool set (lands with the
+  wasm run entry, where the real `completion-request` is assembled).
 - [x] **Provider fallback (core mechanism)** — `complete_with_fallback` re-issues the
   *same* request down the `Completer` chain; first success wins, exhaustion returns a
   diagnostic `Failed`. Per-request (a fresh chain each turn). *(Mapping the concrete
