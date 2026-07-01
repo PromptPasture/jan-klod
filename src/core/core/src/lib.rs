@@ -279,16 +279,29 @@ pub struct AgentSession {
 }
 
 impl AgentSession {
-    /// Run one turn for `message` in `session`, driving the full loop
-    /// (before-loop → shaping → `ReAct` → finalize). Headless: an interceptor
-    /// `ask` resolves to its `default-answer`. Tools are not yet wired (v1).
+    /// Run one turn headless with no tools — the convenience path. An interceptor
+    /// `ask` resolves to its `default-answer`, and tool calls resolve to
+    /// "no tool" (there is no first-party `tool-callable` extension in v1).
     pub fn run(&mut self, session: &str, message: &str) -> conductor::RunResult {
-        let mut driver = HeadlessDriver;
+        self.run_with(&mut HeadlessDriver, &mut conductor::NoTools, session, message)
+    }
+
+    /// Run one turn driving the full loop (before-loop → shaping → `ReAct` →
+    /// finalize) with an explicit `driver` (answers interceptor `ask`s) and
+    /// `tools` (routes tool calls). This is the seam a real client/driver and the
+    /// `tool-callable` fleet wire into.
+    pub fn run_with(
+        &mut self,
+        driver: &mut dyn intercept::Driver,
+        tools: &mut dyn conductor::ToolInvoker,
+        session: &str,
+        message: &str,
+    ) -> conductor::RunResult {
         conductor::run_turn(
             &mut self.dispatcher,
             &mut self.providers,
-            &mut conductor::NoTools,
-            &mut driver,
+            tools,
+            driver,
             session,
             message,
         )

@@ -35,9 +35,9 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 |---|---|
 | Slice 2a — Intent router logic (recast into `interceptor-intent-router`) | `done` |
 | Slice 2b — `interceptor` contract + core-native dispatch framework | `done` |
-| Slice 2c — Core loop mechanism (conductor, harness, fallback, run entry) | `in-progress` |
+| Slice 2c — Core loop mechanism (conductor, harness, fallback, run entry) | `done` |
 | Slice 2d — v1 interceptor set (task-router, context, tool-selector, permission) | `done` |
-| Slice 2e — Exit gate | `in-progress` |
+| Slice 2e — Exit gate | `done` |
 
 ## Architecture context
 
@@ -178,9 +178,11 @@ dispatch engine from 2b.
   end-to-end (headless `Driver`). Verified by `host/tests/agent_loop.rs`: from a real
   `config.yaml`, a greeting short-circuits (`agentic:false`) and a multi-step prompt
   runs the agentic path (`agentic:true`), both through the sandboxed provider +
-  interceptor. *Still to add:* the streaming `run-handle` (`next-event` / `cancel` /
-  `provide-answer` / steering queue), and routing an interceptor's `llm-provider` to
-  the real providers (v1 uses a safe-default classifier).
+  interceptor; `AgentSession::run_with` exposes the driver + `ToolInvoker` seams for
+  the integrated ReAct/permission gate. *Carried forward (post-v1, not gate-blocking):*
+  the streaming `run-handle` (`next-event` / `cancel` / `provide-answer` / steering
+  queue), and routing an interceptor's `llm-provider` to the real providers (v1 uses a
+  safe-default classifier).
 - [~] **Conductor** (`jan_klod_core::conductor`) — `before-loop` (short-circuits a
   simple prompt) → `select-model` → `select-context` → `select-tools` (assembling
   `pending-request`) → the **ReAct loop**: `complete()` → `after-response` → parse
@@ -279,24 +281,29 @@ asks then blocks/allows).
   Boots the real `Runtime` from a `config.yaml` with **two provider instances**, a
   `routing:` section, and **all five v1 interceptors enabled**; calls the loop entry
   (`build_agent` → `AgentSession::run`) with a multi-step query and a greeting.
-  Asserts the wired path end-to-end: the intent router fires at `before-loop` (greeting
-  → simple short-circuit `agentic:false`; multi-step → `agentic:true`); the shaping
-  interceptors run (task-router resolves `routing.chat`, context, tool-selector); the
-  primary provider's transport fails so **provider fallback** engages and the secondary
-  answers; a grounded answer is returned. *(The `tool-call`/permission-`ask` cycle and
-  retry-with-correction are proven at the unit level — conductor + interceptor-adapter
-  tests — since `AgentSession` wires `NoTools` in v1; exercising them through the
-  integrated gate needs the tool-callable seam wired into `build_agent`, tracked as a
-  Slice 2c/Phase-3 refinement.)*
+  Asserts the wired path end-to-end across **two tests**: (1) the intent router fires at
+  `before-loop` (greeting → simple short-circuit `agentic:false`; multi-step →
+  `agentic:true`); the shaping interceptors run (task-router resolves `routing.chat`,
+  context, tool-selector); the primary provider's transport fails so **provider
+  fallback** engages and the secondary answers with a grounded answer. (2) The
+  **integrated ReAct + permission path**: a provider emits a tool call then a final
+  answer; the real `interceptor-permission` guest `ask`s, the driver approves, the
+  canned tool runs (`AgentSession::run_with` wires the driver + `ToolInvoker` seams),
+  the result feeds back, and the loop returns the answer. *(Retry-with-correction stays
+  proven at the unit level in the conductor tests.)*
 - [x] CI — `make phase2-gate` added to `.github/workflows/ci.yml` (harness job); runs
   offline. `make harness` also updated (the retired `routing` test → the new
   `agent_loop` test).
-- [~] **Mark Phase 2 `done`** — the wired loop + full interceptor set pass the gate;
-  the remaining integration (tool-path through real guests, streaming run-handle) is
-  noted above and in Slice 2c. Phase 3 planning can begin in parallel.
+- [x] **Mark Phase 2 `done`** — the roadmap exit gate (intent → shaped request → ReAct
+  cycle → fallback on a simulated failure → grounded answer, via the loop entry) passes
+  end-to-end through the sandboxed guests. Marked `done` here and in
+  [roadmap.md](../../concepts/roadmap.md). Carried-forward refinements (not gate-blocking):
+  the streaming `run-handle` (`next-event`/steering), routing an interceptor's
+  `llm-provider` to the real providers (v1 uses a safe-default classifier), and the
+  `tool-callable` fleet that populates the tool set — all Phase 3+/roadmap items.
 
-**Definition of done:** `make phase2-gate` passes in CI (green); the integrated tool /
-streaming refinements are tracked, not blocking.
+**Definition of done:** `make phase2-gate` passes in CI (green); `roadmap.md` status
+tracker updated to `done`. ✓
 
 ---
 

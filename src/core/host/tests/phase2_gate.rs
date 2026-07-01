@@ -13,9 +13,12 @@
 
 use std::cell::Cell;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
-use jan_klod_core::conductor::RunResult;
+use jan_klod_core::conductor::{RunResult, ToolInvoker};
 use jan_klod_core::http::{WireError, WireResponse};
+use jan_klod_core::intercept::{Driver, ToolCall, UserPrompt};
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 
@@ -143,4 +146,122 @@ routing:
     );
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The integrated `ReAct` + permission path: a provider that first emits a tool call
+/// then a final answer, gated by the real `interceptor-permission` guest whose
+/// `ask` the driver approves, with a canned tool result fed back into the loop.
+fn tool_then_answer_http() -> HttpFn {
+    // First completion returns a (dangerous) tool call; the second returns text.
+    let calls = Arc::new(AtomicU32::new(0));
+    Box::new(move |_m, _u, _h, _b, _t| {
+        let n = calls.fetch_add(1, Ordering::Relaxed);
+        let body = if n == 0 {
+            serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "function": { "name": "bash", "arguments": "{}" }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            })
+        } else {
+            serde_json::json!({
+                "choices": [{
+                    "message": { "role": "assistant", "content": "all done" },
+                    "finish_reason": "stop"
+                }]
+            })
+        };
+        Ok(WireResponse {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&body).unwrap(),
+        })
+    })
+}
+
+/// Driver that approves every `ask` and counts how often it was asked.
+struct ApprovingDriver(Arc<AtomicU32>);
+impl Driver for ApprovingDriver {
+    fn ask(&mut self, _prompt: &UserPrompt) -> String {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        "yes".to_string()
+    }
+}
+
+/// A tool backend that returns a canned result and counts invocations.
+struct CountingTools(Arc<AtomicU32>);
+impl ToolInvoker for CountingTools {
+    fn invoke(&mut self, _call: &ToolCall) -> Option<String> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Some("bash: ok".to_string())
+    }
+}
+
+#[test]
+fn phase2_gate_react_tool_call_with_permission() {
+    let ext_dir = repo_root().join("ext");
+    for guest in GUESTS {
+        if !ext_dir.join(guest).exists() {
+            eprintln!("skipping: {guest} not staged — run `make ext`");
+            return;
+        }
+    }
+
+    let dir = std::env::temp_dir().join(format!("jk-phase2-tools-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        "
+extensions:
+  store:
+    memory:
+      enabled: true
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    intent-router:
+      enabled: true
+    task-router:
+      enabled: true
+    context:
+      enabled: true
+    tool-selector:
+      enabled: true
+    permission:
+      enabled: true
+routing:
+  chat: openai/mock-1
+",
+    )
+    .unwrap();
+
+    let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
+    let factory = tool_then_answer_http;
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+
+    let asked = Arc::new(AtomicU32::new(0));
+    let invoked = Arc::new(AtomicU32::new(0));
+    let mut driver = ApprovingDriver(Arc::clone(&asked));
+    let mut tools = CountingTools(Arc::clone(&invoked));
+
+    let out = agent.run_with(&mut driver, &mut tools, "gate-tools", "use bash to clean up, then report");
+
+    assert_eq!(
+        out,
+        RunResult::Answered { text: "all done".into(), agentic: true },
+        "the loop runs a ReAct cycle and returns the final answer"
+    );
+    assert_eq!(asked.load(Ordering::Relaxed), 1, "permission asked once for the dangerous tool");
+    assert_eq!(invoked.load(Ordering::Relaxed), 1, "the approved tool ran once");
 }
