@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions test harness phase2-gate clippy audit deny sbom supply-chain run probe config clean
+.PHONY: help wit all core extensions test harness phase2-gate clippy audit deny sbom supply-chain run serve probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -105,6 +105,13 @@ phase2-gate: extensions
 # ext/, compile present components, run their lifecycle, print the boot plan.
 run:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host -- $(CONFIG) $(EXT_DIR)
+
+# Serve the loop over the host-side REST surface (default 127.0.0.1:8787). Uses
+# live host-http (real provider calls), so the enabled provider needs its api-key
+# env. POST {"session":"…","message":"…"} to drive a turn. Override BIND=host:port.
+BIND ?= 127.0.0.1:8787
+serve:
+	cd $(CORE) && cargo run --quiet -p jan-klod-host -- serve $(CONFIG) $(EXT_DIR) $(BIND)
 
 # Drive a provider's full llm-provider.complete path end-to-end against a live
 # OpenAI-compatible endpoint. Requires the provider's api-key env (e.g.

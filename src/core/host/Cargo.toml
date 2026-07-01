@@ -11,6 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 jan-klod-core = { path = "../core" }
+# The `serve` subcommand binds the host-side REST surface. Also used by the
+# api_rest integration test (a normal dep is visible to tests too).
+tiny_http = "0.12"
 
 # Examples and integration tests drive the guests over the Component Model:
 # spike_gate (Slice 1a gate), provider_probe (live single provider leg),
@@ -23,8 +26,6 @@ wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 jan-klod-config = { path = "../config" }
 serde_json.workspace = true
-# api_rest integration test binds the host-side REST surface on an ephemeral port.
-tiny_http = "0.12"
 
 [lints]
 workspace = true

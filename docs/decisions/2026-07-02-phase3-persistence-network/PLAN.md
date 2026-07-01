@@ -115,6 +115,9 @@ Give the outside world a way in.
   message}` → `{answer, agentic}`), `serve::serve_once` / `serve::serve` over
   `tiny_http`. Pure `handle_turn` is unit-testable; `serve_once` drives one HTTP
   round-trip.
+- [x] **Launchable surface** — `jan-klod serve [config] [ext] [bind]` boots the agent
+  with live `host-http` and serves turns (`make serve`, default `127.0.0.1:8787`).
+  Smoke-tested: a `POST` drives the loop and returns JSON.
 - [ ] **SSE streaming** — stream `next-event` over Server-Sent Events. Deferred with
   the streaming run-handle (Phase 2 carry-forward); v1 returns the whole answer.
 

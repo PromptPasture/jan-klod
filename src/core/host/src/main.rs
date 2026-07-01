@@ -1,20 +1,35 @@
-//! `jan-klod` core entrypoint: boot the runtime from `config.yaml`, resolve
-//! the enabled extensions against the `ext/` directory, run their lifecycle, and
-//! print the boot plan. All behaviour lives in the extensions it loads — this
-//! binary is just the container.
+//! `jan-klod` core entrypoint: boot the runtime from `config.yaml`, resolve the
+//! enabled extensions against the `ext/` directory, and either print the boot plan
+//! or serve the loop over the host-side REST surface. All behaviour lives in the
+//! extensions it loads — this binary is just the container.
 //!
-//! Usage: `jan-klod [config-path] [ext-dir]`
+//! Usage:
+//!   `jan-klod [config-path] [ext-dir]`            — boot + print the plan
+//!   `jan-klod serve [config-path] [ext-dir] [bind]` — boot + serve REST turns
+//!
 //!   config-path  path to config.yaml   (default: config.yaml)
-//!   ext-dir      directory of *.wasm     (default: ext)
+//!   ext-dir      directory of *.wasm    (default: ext)
+//!   bind         host:port to listen on (default: 127.0.0.1:8787)
 
 use std::process::ExitCode;
 
+use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let config_path = args.next().unwrap_or_else(|| "config.yaml".to_string());
-    let ext_dir = args.next().unwrap_or_else(|| "ext".to_string());
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("serve") {
+        serve(&args[1..])
+    } else {
+        boot_plan(&args)
+    }
+}
+
+/// Boot the runtime and print the plan, running each present component's
+/// lifecycle. This is the default (no subcommand) mode.
+fn boot_plan(args: &[String]) -> ExitCode {
+    let config_path = arg(args, 0, "config.yaml");
+    let ext_dir = arg(args, 1, "ext");
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
@@ -38,4 +53,49 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// Boot the agent and serve turns over the host-side REST surface until killed.
+fn serve(args: &[String]) -> ExitCode {
+    let config_path = arg(args, 0, "config.yaml");
+    let ext_dir = arg(args, 1, "ext");
+    let bind = arg(args, 2, "127.0.0.1:8787");
+
+    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("jan-klod: boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Live host-http: the provider's outbound calls hit the real network.
+    let factory = || -> HttpFn { Box::new(jan_klod_core::http::fetch) };
+    let mut agent = match runtime.build_agent(&factory) {
+        Ok(agent) => agent,
+        Err(err) => {
+            eprintln!("jan-klod: agent boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let server = match tiny_http::Server::http(&bind) {
+        Ok(server) => server,
+        Err(err) => {
+            eprintln!("jan-klod: cannot bind {bind}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("jan-klod: serving on http://{bind} — POST {{\"session\":\"…\",\"message\":\"…\"}}");
+
+    if let Err(err) = jan_klod_core::serve::serve(&server, &mut agent) {
+        eprintln!("jan-klod: serve loop failed: {err}");
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+/// Positional arg `index` (0-based within the subcommand's args), or `default`.
+fn arg(args: &[String], index: usize, default: &str) -> String {
+    args.get(index).cloned().unwrap_or_else(|| default.to_string())
 }
