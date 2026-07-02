@@ -52,7 +52,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice | Flag |
 |---|---|
 | 7a — `host-fs` capability | `done` |
-| 7b — `host-process` capability | `not-started` |
+| 7b — `host-process` capability | `in-progress` |
 | 7c — Exit gate | `not-started` |
 
 ---
@@ -82,14 +82,17 @@ through `host-fs`, a `..` escape is denied, and a call with **no workspace** is 
 
 ## Slice 7b — `host-process`
 
-- [ ] **Design `wit/host-process.wit`** — `exec(command, args: list<string>, cwd:
-  option<string>, stdin: option<string>) -> result<exit, proc-error>` where `exit =
-  { code: s32, stdout: string, stderr: string }`; `proc-error` (`denied`, `timeout`,
-  `spawn-failed`). Validate.
-- [ ] **Host impl** — spawn via `std::process::Command`, cwd jailed to the workspace,
-  a timeout, and an output cap (truncate). Disabled → `denied`.
+- [x] **`wit/host-process.wit`** — `exec(command, args, cwd?, stdin?) -> result<exit,
+  proc-error>` with `exit { code, stdout, stderr }` and `proc-error`
+  (`denied`/`timeout`/`spawn-failed`). `wasm-tools` green.
+- [x] **Host impl** — `host_process::ProcessRunner`: spawns via `std::process::Command`,
+  cwd jailed to the workspace (reusing `Workspace::resolve`), polls `try_wait` to a
+  **timeout** (kills on expiry), and caps captured output. **Default-deny** via
+  `ProcessRunner::disabled`. 7 host-side tests with real commands (echo/false/cat +
+  disabled-deny, cwd-escape-deny, timeout via `sleep`, output cap). Pipe-deadlock on
+  huge output noted as a v1 caveat.
 - [ ] **Probe guest** — a guest that runs a trivial command (`echo`) and reads back
-  stdout.
+  stdout. *(Next increment: `host-process` on `tool-world` + `tool_host` + probe.)*
 
 **Exit gate:** a sandboxed guest runs a command through `host-process` and receives
 its stdout/exit code; a disabled/over-timeout/escaping call is denied — offline.

@@ -1,0 +1,41 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Run a command as a child process — the execution substrate (Phase 7).
+///
+/// This is **code execution**, so it is host-owned and bounded: **default-deny**
+/// (disabled unless the deployment opts in), the working directory is **jailed to
+/// the workspace**, and each run has a **timeout** and an **output cap**. The loop
+/// gates it at `tool-call` (`interceptor-permission`). v1 runs to completion; a
+/// long-lived / streaming child (ssh, lsp, browser) is a later refinement.
+///
+/// Implemented by the host; imported by execution `tool-*` extensions (bash/eval/…).
+interface host-process {
+    /// Why an exec failed.
+    enum proc-error {
+        /// Execution is disabled, or the `cwd` escapes the workspace.
+        denied,
+        /// The command exceeded its time budget and was killed.
+        timeout,
+        /// The command could not be spawned (not found, permissions).
+        spawn-failed,
+    }
+
+    /// The outcome of a completed command.
+    record exit {
+        /// Exit code, or -1 if terminated by a signal.
+        code: s32,
+        /// Captured stdout (truncated to the output cap).
+        stdout: string,
+        /// Captured stderr (truncated to the output cap).
+        stderr: string,
+    }
+
+    /// Run `command` with `args`, an optional workspace-relative `cwd`, and optional
+    /// `stdin`. Returns the exit code + captured output, or a `proc-error`.
+    exec: func(
+        command: string,
+        args: list<string>,
+        cwd: option<string>,
+        stdin: option<string>,
+    ) -> result<exit, proc-error>;
+}

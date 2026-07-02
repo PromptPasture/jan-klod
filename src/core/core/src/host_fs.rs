@@ -50,6 +50,12 @@ impl Workspace {
         Ok(Self { root })
     }
 
+    /// The canonicalized workspace root.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Resolve a workspace-relative `requested` path to an absolute path inside the
     /// root, or [`FsError::Denied`] if it escapes.
     ///
