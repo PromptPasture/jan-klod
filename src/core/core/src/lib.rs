@@ -416,6 +416,26 @@ impl AgentSession {
         )
     }
 
+    /// Run one turn with the session's tool fleet but an explicit `driver` (so a
+    /// client can answer an interceptor `ask` — e.g. a permission confirmation).
+    pub fn run_driven(
+        &mut self,
+        driver: &mut dyn intercept::Driver,
+        session: &str,
+        message: &str,
+    ) -> conductor::RunResult {
+        run_and_persist(
+            &mut self.dispatcher,
+            &mut self.providers,
+            &self.store,
+            &mut self.tools,
+            driver,
+            &mut conductor::NoSink,
+            session,
+            message,
+        )
+    }
+
     /// Like [`Self::run_with`], but streams incremental [`conductor::Event`]s to
     /// `sink` as the turn runs (for a live TUI transcript or SSE).
     pub fn run_streaming(

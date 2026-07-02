@@ -104,6 +104,10 @@ jobs:
       # unit-tested host-side and driven across the CM boundary by probe guests.
       - run: make phase7-gate
 
+      # Phase 8 exit gate: a model tool call runs through the loop (permission gate ->
+      # fleet -> real tool-fs-write -> host-fs), plus fleet dispatch + build_agent wiring.
+      - run: make phase8-gate
+
   supply-chain:
     name: Supply-chain gates
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate phase5-gate phase6-gate phase7-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
+.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate phase5-gate phase6-gate phase7-gate phase8-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -159,6 +159,12 @@ phase6-gate: extensions
 phase7-gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-core -- host_fs host_process
 	cd $(CORE) && cargo test -p jan-klod-host --test host_fs --test host_process
+
+# Phase 8 exit gate: the tool fleet. A model tool call runs through the loop
+# (permission gate -> fleet -> real tool-fs-write -> host-fs), plus the fleet dispatch
+# + build_agent wiring, offline.
+phase8-gate: extensions
+	cd $(CORE) && cargo test -p jan-klod-host --test phase8_gate --test tool_fleet --test tool_wiring
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.

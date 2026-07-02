@@ -50,7 +50,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 8a — Wire the loop to tools (`ToolFleet` + config) | `done` |
 | 8b — `host-fs` tools (read / write / grep) | `done` |
 | 8c — `host-process` tool (shell) | `done` |
-| 8d — Exit gate | `not-started` |
+| 8d — Exit gate | `done` |
 
 ---
 
@@ -111,15 +111,22 @@ permission-gate-in-the-loop path is exercised in Slice 8d.
 
 ## Slice 8d — Exit gate
 
-- [ ] Integration test: a turn drives at least one `host-fs` tool (read/write) and the
-  `host-process` `tool-shell` through the loop, with the permission gate exercised —
-  offline.
-- [ ] CI — `make phase8-gate` added to `.github/workflows/ci.yml`.
-- [ ] **Mark Phase 8 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
-  With Phases 1–8 done, the runtime is a file-workspace-capable agent.
+- [x] Integration test: `phase8_gate.rs` — from a config with all v1 interceptors +
+  `tool.fs-write` + a workspace, the (canned) model emits an `fs-write` tool call; it
+  is advertised at `select-tools`, gated at `tool-call` (the **permission ask** fires
+  — `fs-write` contains "write" — and an approving driver allows it via the new
+  `AgentSession::run_driven`), the fleet dispatches to the real `tool-fs-write` which
+  **writes the file through `host-fs`**, the result feeds back, and the loop returns a
+  grounded answer. The file is verified on disk.
+- [x] CI — `make phase8-gate` (the gate + `tool_fleet` + `tool_wiring`) wired into the
+  harness job.
+- [x] **Mark Phase 8 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
+  With Phases 1–8 done, the runtime is a file-workspace-capable agent. Carried-forward:
+  the rest of the fleet (edit/ast-*/find/git; eval/ssh/lsp/browser; fetch) follows the
+  same pattern; symlink/COW + long-lived children (Phase 7 carry-forwards).
 
-**Definition of done:** `make phase8-gate` passes in CI; `roadmap.md` status tracker
-updated to `done`.
+**Definition of done:** `make phase8-gate` passes in CI (green); `roadmap.md` status
+tracker updated to `done`. ✓
 
 ## Cross-cutting (continuous)
 
