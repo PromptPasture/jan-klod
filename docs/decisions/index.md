@@ -2,6 +2,7 @@
 
 Session handoffs and architecture decision records, newest first.
 
+- [2026-07-02 — Phase 6: Streaming & Steering](2026-07-02-phase6-streaming-steering/PLAN.md) — execution plan + TBD leans for the run-handle event stream (push-based `EventSink` fitting the sync loop), SSE on the REST surface, and cancel/steering; streaming stays push, no async runtime
 - [2026-07-02 — Phase 5: Distribution & Ops](2026-07-02-phase5-distribution-ops/PLAN.md) — execution plan + TBD leans for the tiny Go supervisor/updater (blue/green stage→flip→health-check→rollback) and Configurator/curated bundles; deploy unit is the host-side core binary + provider/interceptor guests (store/REST now in-core)
 - [2026-07-02 — Phase 4: Clients & Integrations](2026-07-02-phase4-clients-integrations/PLAN.md) — execution plan + TBD leans for the UI client (thin REST client first, then `ratatui` TUI), `host-socket` + `chat-telegram`, and `agent-*` ACP delegation; clients are separate processes over the REST surface
 - [2026-07-02 — Phase 3: Persistence + Inbound Network](2026-07-02-phase3-persistence-network/PLAN.md) — execution plan + TBD leans for durable host-side state (`store-sqlite` via `rusqlite` bundled) and inbound network (`host-serve` + `api-rest` over `axum`/SSE); persistence is host-side, not SQLite-in-wasm
