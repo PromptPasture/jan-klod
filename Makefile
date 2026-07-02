@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions test harness phase2-gate phase3-gate phase4-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
+.PHONY: help wit all core extensions supervisor test harness phase2-gate phase3-gate phase4-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -10,6 +10,7 @@
 
 CORE := src/core
 EXT := src/extensions
+SUPERVISOR := src/supervisor
 
 # Repo-root artifacts the host runs against (above any single subtree). EXT_DIR
 # mirrors the staging dir the extensions sub-makefile writes to — kept in sync by
@@ -56,6 +57,11 @@ extensions:
 test:
 	$(MAKE) -C $(CORE) test
 	$(MAKE) -C $(EXT) test
+	cd $(SUPERVISOR) && go vet ./... && go test ./...
+
+# Build the tiny Go blue/green supervisor (static, dependency-free binary).
+supervisor:
+	cd $(SUPERVISOR) && go build ./...
 
 clippy:
 	$(MAKE) -C $(CORE) clippy
@@ -74,9 +80,11 @@ sbom:
 	syft dir:. --source-name jan-klod -o spdx-json=sbom.spdx.json
 
 # The full gate: Rust license/advisory/source policy + RUSTSEC audit (host +
-# guests), every Go module's verified-readonly vuln scan, and the SBOM.
+# guests), every Go module's verified-readonly vuln scan (guests + supervisor),
+# and the SBOM.
 supply-chain: deny audit sbom
 	$(MAKE) -C $(EXT) go-supply-chain
+	cd $(SUPERVISOR) && GOFLAGS=-mod=readonly go mod verify && govulncheck ./...
 
 # --- Integration (host + staged extensions; spans both subtrees) ---
 

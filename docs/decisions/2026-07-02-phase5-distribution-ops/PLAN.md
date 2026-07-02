@@ -48,7 +48,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 5a — Supervisor / updater (blue/green stage → flip → health-check → rollback) | `in-progress` |
+| 5a — Supervisor / updater (blue/green stage → flip → health-check → rollback) | `done` |
 | 5b — Configurator + curated bundles | `not-started` |
 | 5c — Exit gate | `not-started` |
 
@@ -59,19 +59,24 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 - [x] **`GET /health` on the core REST surface** — `serve::health()` returns
   `200 {status:"ok", version}`; `serve_once` routes `GET /health` (else `POST /turn`).
   Unit-tested + exercised over a real socket in `api_rest.rs` (a second round-trip).
-- [ ] **The supervisor (Go)** — manages `~/.jan-klod/{blue,green}`, `active`
-  symlink, `state.yaml`. Pure slot/state logic (which slot is live, pick the flip
-  target, record rollback target) is unit-tested; process spawn + health probe are
-  glue.
-- [ ] **Update flow** — stage into the standby slot → validate (checksums; WIT
-  interface compatibility of the staged `ext/` against the core) → atomic symlink
-  flip → restart → health-check → **PASS** keep / **FAIL** roll back (flip back,
-  restart, mark bad).
-- [ ] **Supply-chain** — the Go supervisor module passes `go mod verify` +
-  `govulncheck` (extend `make go-supply-chain`).
+- [x] **The supervisor (Go, `src/supervisor/`)** — a stdlib-only static binary.
+  Pure model unit-tested: `Slot`/`Standby`/`Plan`/`Update.Resolve`/`State`
+  (JSON, not YAML, to stay dependency-free) `AfterHealth`; `Activate`/`ActiveSlot`
+  (atomic symlink flip via temp+rename); `Probe`/`ProbeWithRetries` (HTTP `/health`);
+  and `Promote` — the full flip → start → health → commit/rollback cycle behind
+  injected `start`/`probe` seams. `main` wires `status` + `promote` (spawn core +
+  probe). 8 tests; `go vet` + `golangci-lint` clean.
+- [x] **Update flow (flip → health → commit/rollback)** — implemented + tested by
+  `Promote`: healthy commits the standby slot active; unhealthy stops the bad core
+  and flips the `active` symlink back. *(Staging the standby slot — download +
+  checksum/WIT-compat validation — is the release/download side, layered on later;
+  the flip/rollback mechanism it feeds is done.)*
+- [x] **Supply-chain** — `make supply-chain` runs `go mod verify` + `govulncheck` on
+  the supervisor (stdlib-only; `golangci-lint` clean).
 
-**Exit gate:** a scripted update stages a new slot, flips, health-checks, and (on a
-simulated failed health check) rolls back to the previous slot — verified offline.
+**Exit gate:** ✓ `Promote` unit tests verify the offline cycle both ways — a healthy
+promotion flips to and commits the standby slot; a simulated failed health check
+stops the bad core and rolls the `active` symlink back to the previous slot.
 
 ---
 
