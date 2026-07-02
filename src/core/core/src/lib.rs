@@ -338,6 +338,17 @@ impl AgentSession {
         self.drive(driver, tools, sink, session, message)
     }
 
+    /// Headless streaming turn (no interactive driver, no tools) — the entry the
+    /// REST surface's SSE handler uses. Events go to `sink` as the turn runs.
+    pub fn run_streaming_headless(
+        &mut self,
+        sink: &mut dyn conductor::EventSink,
+        session: &str,
+        message: &str,
+    ) -> conductor::RunResult {
+        self.drive(&mut HeadlessDriver, &mut conductor::NoTools, sink, session, message)
+    }
+
     /// Drive one turn through the conductor and persist a completed turn's
     /// transcript. Shared by the run entry points.
     fn drive(

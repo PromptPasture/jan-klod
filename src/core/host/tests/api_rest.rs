@@ -113,5 +113,27 @@ extensions:
     assert!(health.contains("200 OK"), "health status line: {health}");
     assert!(health.contains("\"status\":\"ok\""), "health body: {health}");
 
+    // A third round-trip: an SSE client (Accept: text/event-stream) gets streamed
+    // event frames ending in a `done` frame with the answer.
+    let sse_client = thread::spawn(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
+        let body = r#"{"session":"http-1","message":"hello"}"#;
+        let request = format!(
+            "POST /turn HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+             Accept: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    });
+    serve_once(&server, &mut agent).expect("serves the SSE request");
+    let sse = sse_client.join().expect("sse client thread");
+    assert!(sse.contains("Content-Type: text/event-stream"), "SSE content-type: {sse}");
+    assert!(sse.contains("event: done"), "SSE has a done frame: {sse}");
+    assert!(sse.contains("\"answer\":\"pong\""), "SSE done carries the answer: {sse}");
+
     std::fs::remove_dir_all(&dir).ok();
 }

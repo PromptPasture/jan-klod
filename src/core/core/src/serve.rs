@@ -12,9 +12,11 @@
 //! supervisor). Server-Sent-Events streaming of `next-event` is a follow-up once
 //! the streaming run-handle lands.
 
-use tiny_http::{Header, Method, Response, Server};
+use std::io::Write;
 
-use crate::conductor::RunResult;
+use tiny_http::{Header, Method, Request, Response, Server};
+
+use crate::conductor::{Event, EventSink, RunResult};
 use crate::AgentSession;
 
 /// A ready HTTP reply: status code + JSON body.
@@ -31,19 +33,11 @@ pub struct Reply {
 /// Pure over the body, so it is unit-testable without a socket.
 #[must_use]
 pub fn handle_turn(agent: &mut AgentSession, body: &str) -> Reply {
-    let value: serde_json::Value = match serde_json::from_str(body) {
-        Ok(value) => value,
-        Err(err) => return error_reply(400, &format!("invalid JSON body: {err}")),
+    let (session, message) = match parse_turn(body) {
+        Ok(parsed) => parsed,
+        Err(err) => return error_reply(400, &err),
     };
-    let Some(message) = value.get("message").and_then(serde_json::Value::as_str) else {
-        return error_reply(400, "missing string field `message`");
-    };
-    let session = value
-        .get("session")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("default");
-
-    match agent.run(session, message) {
+    match agent.run(&session, &message) {
         RunResult::Answered { text, agentic } => Reply {
             status: 200,
             body: serde_json::json!({ "answer": text, "agentic": agentic }).to_string(),
@@ -61,20 +55,124 @@ pub fn handle_turn(agent: &mut AgentSession, body: &str) -> Reply {
 /// answered.
 pub fn serve_once(server: &Server, agent: &mut AgentSession) -> std::io::Result<()> {
     let mut request = server.recv()?;
-    let is_health = *request.method() == Method::Get && request.url().starts_with("/health");
-    let reply = if is_health {
-        health()
-    } else if *request.method() == Method::Post {
-        let mut body = String::new();
-        request.as_reader().read_to_string(&mut body)?;
-        handle_turn(agent, &body)
+    let method = request.method().clone();
+    let url = request.url().to_string();
+
+    // GET /health — liveness.
+    if method == Method::Get && url.starts_with("/health") {
+        return respond_json(request, health());
+    }
+    if method != Method::Post {
+        return respond_json(request, error_reply(405, "use POST /turn or GET /health"));
+    }
+
+    // POST /turn — read the body, then either stream (SSE) or reply once.
+    let wants_sse = accepts_event_stream(&request);
+    let mut body = String::new();
+    request.as_reader().read_to_string(&mut body)?;
+
+    if wants_sse {
+        serve_turn_sse(request, agent, &body)
     } else {
-        error_reply(405, "use POST /turn or GET /health")
-    };
+        respond_json(request, handle_turn(agent, &body))
+    }
+}
+
+/// Whether the client asked for an SSE stream (`Accept: text/event-stream`).
+fn accepts_event_stream(request: &Request) -> bool {
+    request.headers().iter().any(|h| {
+        h.field.as_str().as_str().eq_ignore_ascii_case("accept")
+            && h.value.as_str().contains("text/event-stream")
+    })
+}
+
+/// Write a single JSON reply and finish the request.
+fn respond_json(request: Request, reply: Reply) -> std::io::Result<()> {
     let response = Response::from_string(reply.body)
         .with_status_code(reply.status)
         .with_header(json_content_type());
     request.respond(response)
+}
+
+/// Stream a turn as Server-Sent Events: take raw access to the socket, write the
+/// SSE status line + headers, then push one frame per [`Event`] as the turn runs
+/// (the conductor emits synchronously on this thread). A terminal `done` frame
+/// carries the authoritative answer; a failed turn ends with an `error` frame.
+fn serve_turn_sse(request: Request, agent: &mut AgentSession, body: &str) -> std::io::Result<()> {
+    let mut writer = request.into_writer();
+    writer.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+          Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
+    )?;
+
+    let (session, message) = match parse_turn(body) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            let _ = write_frame(&mut writer, "error", &serde_json::json!({ "error": err }).to_string());
+            return Ok(());
+        }
+    };
+
+    let mut sink = SseSink { writer: &mut writer, live: true };
+    if let RunResult::Failed(reason) = agent.run_streaming_headless(&mut sink, &session, &message) {
+        // The conductor already emitted a Warning; add an explicit terminal error.
+        let _ = write_frame(&mut writer, "error", &serde_json::json!({ "error": reason }).to_string());
+    }
+    Ok(())
+}
+
+/// An [`EventSink`] that writes each event as an SSE frame to the socket. Best
+/// effort: once a write fails (client gone) it stops.
+struct SseSink<'a> {
+    writer: &'a mut dyn Write,
+    live: bool,
+}
+
+impl EventSink for SseSink<'_> {
+    fn emit(&mut self, event: &Event) {
+        if !self.live {
+            return;
+        }
+        let (kind, data) = match event {
+            Event::TextDelta(text) => ("delta", serde_json::json!({ "text": text })),
+            Event::ToolInvoked(call) => {
+                ("tool", serde_json::json!({ "id": call.id, "name": call.name }))
+            }
+            Event::ToolResult(outcome) => (
+                "tool-result",
+                serde_json::json!({ "id": outcome.tool_call_id, "content": outcome.content }),
+            ),
+            Event::Warning(message) => ("warning", serde_json::json!({ "message": message })),
+            Event::Done { text, agentic } => {
+                ("done", serde_json::json!({ "answer": text, "agentic": agentic }))
+            }
+        };
+        if write_frame(self.writer, kind, &data.to_string()).is_err() {
+            self.live = false; // client disconnected — stop writing
+        }
+    }
+}
+
+/// Write one SSE frame: `event: <kind>\ndata: <json>\n\n`, flushed.
+fn write_frame(writer: &mut dyn Write, kind: &str, data: &str) -> std::io::Result<()> {
+    write!(writer, "event: {kind}\ndata: {data}\n\n")?;
+    writer.flush()
+}
+
+/// Extract `(session, message)` from a turn request body (`session` defaults to
+/// `"default"`).
+fn parse_turn(body: &str) -> Result<(String, String), String> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|err| format!("invalid JSON body: {err}"))?;
+    let message = value
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("missing string field `message`")?;
+    let session = value
+        .get("session")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("default");
+    Ok((session.to_string(), message.to_string()))
 }
 
 /// Serve requests forever (the accept loop). Blocks the calling thread; one turn

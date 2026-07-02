@@ -71,15 +71,19 @@ ending in `Done` with the authoritative answer.
 
 ## Slice 6b — SSE on the REST surface
 
-- [ ] **`POST /turn` streaming** — when the client sends `Accept: text/event-stream`
-  (or `GET /turn?stream=1`), `serve` responds with a `tiny_http` streaming response
-  and an SSE sink that writes `event:/data:` frames per `Event`; non-streaming clients
-  keep the current single-JSON reply.
+- [x] **`POST /turn` streaming** — on `Accept: text/event-stream`, `serve` takes raw
+  socket access (`tiny_http` `Request::into_writer`), writes the SSE status+headers,
+  and pushes one `event:/data:` frame per `Event` as the turn runs (flushed);
+  non-streaming clients keep the single-JSON reply. `AgentSession::run_streaming_headless`
+  drives it; an `SseSink` maps `Event` → frames (`delta`/`tool`/`tool-result`/
+  `warning`/`done`, plus a terminal `error` on failure), best-effort if the client
+  drops.
 - [ ] **Clients** — `jan-klod-ui` (and the TUI) consume the SSE stream, rendering
-  deltas live; Telegram may stay non-streaming (edit-message batching later).
+  deltas live; Telegram stays non-streaming (edit-message batching later).
 
-**Exit gate:** an external HTTP client receives ordered SSE frames for a turn and a
-final `done`, offline.
+**Exit gate:** ✓ `api_rest.rs` — an external HTTP client sending `Accept:
+text/event-stream` receives `Content-Type: text/event-stream` + ordered frames
+ending in `event: done` with the answer, offline.
 
 ---
 
