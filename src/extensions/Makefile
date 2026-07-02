@@ -9,7 +9,7 @@ WIT_DIR := $(ROOT)/wit
 # Rust guests, by directory name (= staged ext/<name>.wasm). Add a guest here and
 # it gets `make <name>` + `make <name>-docker` + a slot in `all`/`clean` for free.
 # The cargo artifact swaps '-' for '_' (e.g. store-memory -> store_memory.wasm).
-GUESTS := store-memory provider-openai interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router tool-fs-probe tool-proc-probe tool-fs-read tool-fs-write
+GUESTS := store-memory provider-openai interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router tool-fs-probe tool-proc-probe tool-fs-read tool-fs-write tool-fs-grep
 DOCKER_GUESTS := $(addsuffix -docker,$(GUESTS))
 
 # Container runtime + image for guests when the host has no rustup (Homebrew rust
@@ -29,7 +29,7 @@ GO_MODULES := $(wildcard */go.mod)
 # behind `#[cfg(target_arch = "wasm32")]`, so a host `cargo test` compiles only
 # the pure logic modules (e.g. the intent router) + their `#[cfg(test)]` tests —
 # no wasm target required. Add a guest here once it carries such tests.
-TESTABLE_GUESTS := interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router
+TESTABLE_GUESTS := interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router tool-fs-grep
 
 .PHONY: all clean test audit deny go-supply-chain spike-deps spike-guest $(GUESTS) $(DOCKER_GUESTS)
 

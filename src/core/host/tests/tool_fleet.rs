@@ -77,21 +77,26 @@ fn fs_write_then_fs_read_through_the_fleet() {
     std::fs::create_dir_all(&workspace_dir).unwrap();
     let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
 
-    let (Some(writer), Some(reader)) = (
+    let (Some(writer), Some(reader), Some(grepper)) = (
         load_tool(&engine, "tool-fs-write", workspace.clone()),
-        load_tool(&engine, "tool-fs-read", workspace),
+        load_tool(&engine, "tool-fs-read", workspace.clone()),
+        load_tool(&engine, "tool-fs-grep", workspace),
     ) else {
         return;
     };
-    let mut fleet = ToolFleet::new(vec![writer, reader]);
-    assert!(fleet.tool_names().contains(&"fs-write".to_string()));
-    assert!(fleet.tool_names().contains(&"fs-read".to_string()));
+    let mut fleet = ToolFleet::new(vec![writer, reader, grepper]);
+    for name in ["fs-write", "fs-read", "fs-grep"] {
+        assert!(fleet.tool_names().contains(&name.to_string()), "fleet has {name}");
+    }
 
-    // The model would emit fs-write then fs-read; drive both through the fleet.
-    let written = fleet.invoke(&call("fs-write", r#"{"path":"src/main.rs","contents":"fn main(){}"}"#));
+    // The model would emit fs-write then fs-read / fs-grep; drive them through the fleet.
+    let written =
+        fleet.invoke(&call("fs-write", r#"{"path":"src/main.rs","contents":"fn main(){}\nlet x=1;"}"#));
     assert!(written.unwrap().contains("wrote src/main.rs"));
     let read = fleet.invoke(&call("fs-read", r#"{"path":"src/main.rs"}"#));
-    assert_eq!(read.as_deref(), Some("fn main(){}"));
+    assert_eq!(read.as_deref(), Some("fn main(){}\nlet x=1;"));
+    let grepped = fleet.invoke(&call("fs-grep", r#"{"pattern":"fn","path":"src/main.rs"}"#));
+    assert_eq!(grepped.as_deref(), Some("1:fn main(){}"));
 
     std::fs::remove_dir_all(&workspace_dir).ok();
 }
