@@ -48,7 +48,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 5a — Supervisor / updater (blue/green stage → flip → health-check → rollback) | `not-started` |
+| 5a — Supervisor / updater (blue/green stage → flip → health-check → rollback) | `in-progress` |
 | 5b — Configurator + curated bundles | `not-started` |
 | 5c — Exit gate | `not-started` |
 
@@ -56,8 +56,9 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 ## Slice 5a — Supervisor / updater
 
-- [ ] **`GET /health` on the core REST surface** — a cheap liveness endpoint the
-  supervisor probes after a flip (returns 200 + a small JSON `{status, version}`).
+- [x] **`GET /health` on the core REST surface** — `serve::health()` returns
+  `200 {status:"ok", version}`; `serve_once` routes `GET /health` (else `POST /turn`).
+  Unit-tested + exercised over a real socket in `api_rest.rs` (a second round-trip).
 - [ ] **The supervisor (Go)** — manages `~/.jan-klod/{blue,green}`, `active`
   symlink, `state.yaml`. Pure slot/state logic (which slot is live, pick the flip
   target, record rollback target) is unit-tested; process spawn + health probe are

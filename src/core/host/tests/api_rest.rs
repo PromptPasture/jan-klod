@@ -98,5 +98,20 @@ extensions:
     assert!(response.contains("200 OK"), "status line present: {response}");
     assert!(response.contains("\"answer\":\"pong\""), "answer in body: {response}");
 
+    // A second round-trip: GET /health returns liveness (the supervisor's probe).
+    let health_client = thread::spawn(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
+        stream
+            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    });
+    serve_once(&server, &mut agent).expect("serves the health request");
+    let health = health_client.join().expect("health client thread");
+    assert!(health.contains("200 OK"), "health status line: {health}");
+    assert!(health.contains("\"status\":\"ok\""), "health body: {health}");
+
     std::fs::remove_dir_all(&dir).ok();
 }
