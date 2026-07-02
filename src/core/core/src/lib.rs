@@ -16,6 +16,7 @@ mod bindings;
 pub mod conductor;
 pub mod delegate;
 mod host;
+pub mod host_fs;
 pub mod http;
 pub mod intercept;
 pub mod interceptor_host;

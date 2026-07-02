@@ -1,0 +1,42 @@
+package jan-klod:interfaces@0.1.0;
+
+/// Scoped, path-jailed read/write access to a workspace directory (Phase 7).
+///
+/// Host-provided: the guest never touches the raw filesystem. Every `path` is
+/// **workspace-relative** and resolved against a configured workspace root; any
+/// path that escapes the root (`..`, absolute, or a symlink target outside it) is
+/// rejected with `denied`. **Default-deny:** with no workspace configured, every
+/// operation returns `denied`.
+///
+/// Implemented by the host; imported by file-touching `tool-*` extensions.
+interface host-fs {
+    /// Why a filesystem operation failed.
+    enum fs-error {
+        /// The path does not exist within the workspace.
+        not-found,
+        /// The path escapes the workspace, or no workspace is configured.
+        denied,
+        /// An underlying I/O error (permissions, not-UTF-8, …).
+        io,
+    }
+
+    /// One directory entry (from `list`).
+    record entry {
+        /// File or directory name (not a full path).
+        name: string,
+        /// Whether the entry is a directory.
+        is-dir: bool,
+    }
+
+    /// Read a UTF-8 file (workspace-relative).
+    read: func(path: string) -> result<string, fs-error>;
+
+    /// Create or replace a UTF-8 file (workspace-relative). Parent dirs are created.
+    write: func(path: string, contents: string) -> result<_, fs-error>;
+
+    /// List a directory (workspace-relative).
+    list-dir: func(path: string) -> result<list<entry>, fs-error>;
+
+    /// Whether `path` exists and is within the workspace.
+    exists: func(path: string) -> bool;
+}

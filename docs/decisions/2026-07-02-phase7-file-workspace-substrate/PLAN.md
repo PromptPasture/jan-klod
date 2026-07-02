@@ -51,7 +51,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 7a — `host-fs` capability | `not-started` |
+| 7a — `host-fs` capability | `in-progress` |
 | 7b — `host-process` capability | `not-started` |
 | 7c — Exit gate | `not-started` |
 
@@ -59,13 +59,14 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 ## Slice 7a — `host-fs`
 
-- [ ] **Design `wit/host-fs.wit`** — a host-provided interface: `read(path) ->
-  result<string, fs-error>`, `write(path, contents) -> result<_, fs-error>`,
-  `list(path) -> result<list<entry>, fs-error>`, `exists(path) -> bool`; an
-  `fs-error` enum (`not-found`, `denied`, `io`). Add to `wit/README.md`; validate
-  with `wasm-tools component wit wit/`.
-- [ ] **Path-jail (pure, unit-tested)** — `resolve(root, requested) -> Result<PathBuf,
-  Denied>` that joins + canonicalizes and rejects any escape of `root`.
+- [x] **`wit/host-fs.wit`** — host-provided `read`/`write`/`list-dir`/`exists`
+  (renamed from `list` — reserved keyword) + `fs-error` (`not-found`/`denied`/`io`)
+  + `entry`. `wasm-tools component wit wit/` green.
+- [x] **Path-jail (pure, unit-tested)** — `host_fs::Workspace::resolve` joins +
+  lexically normalizes (`.`/`..`) and prefix-checks against the canonicalized root;
+  absolute + `..` escapes denied. `Workspace` also does `read`/`write`/`list_dir`/
+  `exists`. 5 tests (roundtrip, not-found, escapes denied, inner `..` allowed, sorted
+  list). Symlink-escape hardening noted as a v1 caveat.
 - [ ] **Host impl in core** — a `host-fs` backed by a configured workspace root;
   `add_to_linker` so an interceptor/tool guest importing `host-fs` gets it. No
   workspace configured → all ops `denied`.
