@@ -17,7 +17,7 @@ serde_json.workspace = true
 # Terminal UI for the `tui` mode (binary only). Bundles the crossterm backend +
 # event types (used via `ratatui::crossterm`). The pure App model in `app` needs
 # no TUI deps and is unit-tested without a terminal.
-ratatui = "0.29"
+ratatui = "0.30"
 
 [dev-dependencies]
 # The round-trip test stands up a canned HTTP server to drive the client against.
