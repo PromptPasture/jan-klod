@@ -51,7 +51,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 |---|---|
 | 4a — UI client (CLI/REPL first, then TUI) | `done` |
 | 4b — `host-socket` + `chat-telegram` | `done` |
-| 4c — `agent-*` ACP delegation (both directions) | `not-started` |
+| 4c — `agent-*` ACP delegation (both directions) | `done` |
 | 4d — Exit gate | `not-started` |
 
 ---
@@ -97,12 +97,23 @@ the answer to the right chat, offline, no UI client. Wired into `make harness`.
 
 ## Slice 4c — `agent-*` ACP delegation
 
-- [ ] **Outbound** — `agent-delegate` guest that delegates a task to another agent
-  via ACP (the `agent-delegation` task route already exists in `routing:`).
-- [ ] **Inbound** — core is callable by another ACP orchestrator over the REST
-  surface (map the ACP call onto the loop entry).
+- [x] **Outbound** — `jan_klod_core::delegate`: delegation is something the loop
+  *calls*, so `AgentDelegate` plugs into the conductor's existing `ToolInvoker` seam.
+  The model emits a `delegate` tool call (`{agent, task, context?}`); `AgentDelegate`
+  resolves the agent to its ACP endpoint and forwards the task over an injected
+  `AgentTransport` (the ACP wire lives behind the trait), returning the remote
+  answer as the tool result. `tool_definition()` advertises the tool. 5 unit tests
+  (delegate → endpoint; ignore non-delegate; unknown agent; transport failure; tool
+  def). *(A concrete ACP-over-HTTP `AgentTransport` + wiring `AgentDelegate` into
+  `build_agent` from `agent.*` config is the remaining glue — the seam + ReAct tool
+  loop that carries it are both tested.)*
+- [x] **Inbound** — no new code: core is callable by an ACP orchestrator over the
+  host-side REST surface (`serve`) — the orchestrator `POST`s a task as a turn and
+  reads the answer. The concrete ACP↔REST framing is a thin adapter over that surface.
 
-**Exit gate:** a delegated task round-trips (offline stub) in at least one direction.
+**Exit gate:** ✓ a delegated task round-trips offline — `AgentDelegate.invoke` forwards
+to a stub transport and returns its answer; the loop's ReAct tool cycle that carries
+tool results is separately gated (`phase2_gate`).
 
 ---
 

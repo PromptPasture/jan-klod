@@ -14,6 +14,7 @@
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bindings;
 pub mod conductor;
+pub mod delegate;
 mod host;
 pub mod http;
 pub mod intercept;
