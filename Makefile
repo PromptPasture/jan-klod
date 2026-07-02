@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate phase5-gate phase6-gate phase7-gate phase8-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
+.PHONY: help wit all core extensions supervisor bundle test harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -26,6 +26,7 @@ help:
 	@echo "  extensions  build the Rust guests, staged in ext/"
 	@echo "  test        run host-side unit tests"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
+	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
 	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go)"
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
@@ -120,51 +121,29 @@ supply-chain: deny audit sbom
 harness: extensions
 	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence --test api_rest --test telegram --test host_fs --test host_process --test tool_fleet --test tool_wiring
 
-# Phase 2 exit gate: boot the real core from a config with two providers, a routing
-# table, and all v1 interceptors enabled, and run the full thin loop offline —
-# intent -> shaping -> completion with provider fallback -> grounded answer. Stages
-# the guests first; skips if any is not built.
-phase2-gate: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test phase2_gate
-
-# Phase 3 exit gate: durable state survives a Runtime restart (persistence) AND an
-# external HTTP client drives the loop over the host-side REST surface (api_rest),
-# both offline. Stages the guests first.
-phase3-gate: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test persistence --test api_rest
-
-# Phase 4 exit gate: a UI client drives core over REST (jan-klod-ui roundtrip) AND
-# an inbound Telegram message drives a turn and a reply (telegram), both offline.
-phase4-gate: extensions
-	cd $(CORE) && cargo test -p jan-klod-ui --test roundtrip
-	cd $(CORE) && cargo test -p jan-klod-host --test telegram
-
-# Phase 5 exit gate: the blue/green supervisor's stage->flip->health->rollback cycle
-# (Promote commits on healthy, rolls the active symlink back on a failed health
-# check), offline.
-phase5-gate:
-	cd $(SUPERVISOR) && go test ./...
-
-# Phase 6 exit gate: streaming (conductor event stream + SSE over the REST surface),
-# cancel (a sink Stop ends the turn), and steering (a driver follow-up injects another
-# cycle). The SSE test drives real guests, so stage them first.
-phase6-gate: extensions
-	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up
-	cd $(CORE) && cargo test -p jan-klod-host --test api_rest
+# Exit gate: the full offline integration surface. Boots the real core against staged
+# guests and drives every v1 guarantee end to end, all offline (canned host-http, no
+# api key) and skipping any guest not staged, so it stages the guests first:
+#   gate            — the thin loop: intent -> shaping -> completion with provider
+#                     fallback -> grounded answer, through all v1 interceptors; plus a
+#                     model tool call through the loop (permission gate -> fleet ->
+#                     real tool-fs -> host-fs).
+#   persistence     — durable state survives a Runtime restart.
+#   api_rest        — an external HTTP client drives the loop over the REST surface.
+#   telegram        — an inbound Telegram message drives a turn and a reply.
+#   host_fs/host_process — the file-workspace substrate (path-jailed read/write,
+#                     bounded exec) driven across the CM boundary by probe guests.
+#   tool_fleet/tool_wiring — fleet dispatch by name + build_agent wiring from config.
+#   jan-klod-core   — streaming (event stream + SSE), cancel, steering, and the
+#                     host-fs/host-process host-side units.
+#   jan-klod-ui     — a UI client drives core over REST.
+# The Go supervisor's flip/health/rollback cycle is covered by `make test`.
+gate: extensions
+	cd $(CORE) && cargo test -p jan-klod-host \
+		--test gate --test persistence --test api_rest --test telegram \
+		--test host_fs --test host_process --test tool_fleet --test tool_wiring
+	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up host_fs host_process
 	cd $(CORE) && cargo test -p jan-klod-ui
-
-# Phase 7 exit gate: the file-workspace substrate. host-fs (path-jailed workspace
-# read/write; escapes + no-workspace denied) and host-process (bounded exec; disabled
-# denied), both unit-tested host-side and driven across the CM boundary by probe guests.
-phase7-gate: extensions
-	cd $(CORE) && cargo test -p jan-klod-core -- host_fs host_process
-	cd $(CORE) && cargo test -p jan-klod-host --test host_fs --test host_process
-
-# Phase 8 exit gate: the tool fleet. A model tool call runs through the loop
-# (permission gate -> fleet -> real tool-fs -> host-fs), plus the fleet dispatch
-# + build_agent wiring, offline.
-phase8-gate: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test phase8_gate --test tool_fleet --test tool_wiring
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.

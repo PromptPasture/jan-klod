@@ -61,9 +61,6 @@ jobs:
 
       - run: make clippy
 
-      # Phase 5 exit gate: the blue/green supervisor's flip/health/rollback cycle.
-      - run: make phase5-gate
-
   harness:
     name: Component harness (exit gate)
     runs-on: ubuntu-latest
@@ -84,29 +81,11 @@ jobs:
       # interface in isolation and runs the thin loop booted from config offline.
       - run: make harness
 
-      # Phase 2 exit gate: the full thin loop (intent -> shaping -> completion with
-      # provider fallback -> grounded answer) through all v1 interceptors + provider,
-      # offline. Reuses the guests staged by `make harness`.
-      - run: make phase2-gate
-
-      # Phase 3 exit gate: durable state survives a Runtime restart, and an external
-      # HTTP client drives the loop over the host-side REST surface, both offline.
-      - run: make phase3-gate
-
-      # Phase 4 exit gate: a UI client drives core over REST, and an inbound Telegram
-      # message drives a turn and a reply, both offline.
-      - run: make phase4-gate
-
-      # Phase 6 exit gate: streaming (event stream + SSE), cancel, and steering.
-      - run: make phase6-gate
-
-      # Phase 7 exit gate: the file-workspace substrate (host-fs + host-process),
-      # unit-tested host-side and driven across the CM boundary by probe guests.
-      - run: make phase7-gate
-
-      # Phase 8 exit gate: a model tool call runs through the loop (permission gate ->
-      # fleet -> real tool-fs -> host-fs), plus fleet dispatch + build_agent wiring.
-      - run: make phase8-gate
+      # Exit gate: the full offline integration surface across all v1 guarantees —
+      # the thin loop with provider fallback, durable state + REST, UI + Telegram
+      # roundtrips, streaming/cancel/steering, the file-workspace substrate, and the
+      # tool fleet. Reuses the guests staged by `make harness`.
+      - run: make gate
 
   supply-chain:
     name: Supply-chain gates
