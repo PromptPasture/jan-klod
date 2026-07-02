@@ -25,12 +25,12 @@ jan-klod-<version>-<os>-<arch>/
   jan-klod              ← Rust core binary (platform-specific)
   jan-klod-ui           ← UI client binary (UI bundles only; TUI/GUI by launch flag)
   config.yaml         ← pre-filled from selections
-  ext/
+  ext/                ← provider/interceptor/tool guests (persistence, the REST
+                        surface, telegram, and delegation are host-side in the core
+                        binary as of Phase 3/4 — not guests)
     provider-openai.wasm
     interceptor-intent-router.wasm
     interceptor-context.wasm
-    store-sqlite.wasm
-    api-rest.wasm
     …selected extensions…
   README.md
 ```
@@ -38,19 +38,21 @@ jan-klod-<version>-<os>-<arch>/
 ## Bundle presets
 
 All bundles ship the same `jan-klod` **core** binary (built with Cargo) plus a
-selected `.wasm` extension set. UI-oriented bundles additionally include the
-separate **UI client** binary and enable an `api-rest` extension for it to
-connect to. Presets differ only in which `.wasm` extensions are included, whether
-the UI client is bundled, and what `config.yaml` is pre-filled with.
+selected `.wasm` extension set. The core's **REST surface is built in** (host-side,
+`jan-klod serve`), so UI-oriented bundles simply add the separate **UI client**
+binary that connects to it — no `api-rest` guest to include. Presets differ only in
+which `.wasm` extensions are included, whether the UI client is bundled, and what
+`config.yaml` is pre-filled with.
 
-| Bundle | Included extensions | UI client |
+| Bundle | Included guests | UI client |
 |---|---|---|
-| `tui` | providers + interceptors + stores + registries + tools + `api-rest` | included (launches in TUI mode) |
+| `tui` | providers + interceptors + registries + tools | included (launches in TUI mode) |
 | `gui` | same | included (launches with `--gui`) |
 | `full` | everything | included |
 
-Core runs headless; the UI client selects its mode at launch: `jan-klod-ui`
-(TUI), `jan-klod-ui --gui`, or a browser pointed at the `api-rest` surface.
+Core runs headless and serves REST itself; the UI client selects its mode at
+launch: `jan-klod-ui` (TUI), `jan-klod-ui --gui`, or a browser pointed at the core's
+REST surface.
 
 ## Extension registry
 

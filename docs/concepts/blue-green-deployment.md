@@ -24,13 +24,14 @@ own — core runs headless without them.
 
 ```
 ~/.jan-klod/
-  jan-klod-supervisor  ← TinyGo updater (performs the flip; not swapped during a core update)
+  jan-klod-supervisor  ← Go updater (performs the flip; not swapped during a core update)
   blue/
-    jan-klod         ← Rust core binary
+    jan-klod         ← Rust core binary (self-contained: persistence, REST surface,
+                       telegram, delegation are host-side in-core as of Phase 3/4)
     ext/
       provider-openai.wasm
-      store-sqlite.wasm
-      …
+      interceptor-intent-router.wasm
+      …selected provider/interceptor/tool guests…
     config.yaml
   green/             ← standby slot (staged update)
     jan-klod         ← Rust core binary
@@ -69,11 +70,11 @@ blue:
   installed: 2026-06-16
   extensions:
     provider-openai: 0.3.1
-    store-sqlite: 1.0.0
+    interceptor-intent-router: 1.0.0
 green:
   version: 1.3.0-rc1
   installed: 2026-06-28
   extensions:
     provider-openai: 0.4.0
-    store-sqlite: 1.0.0
+    interceptor-intent-router: 1.0.0
 ```

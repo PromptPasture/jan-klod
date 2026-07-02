@@ -111,6 +111,7 @@ updated to `done`.
 - Strict lint on new code (Go supervisor: the repo `golangci-lint` policy); Rust
   changes keep the workspace clippy-clean.
 - Supply-chain gates extended to the supervisor module.
-- Update the [Blue/Green](../../concepts/blue-green-deployment.md) and
-  [Configurator](../../concepts/configurator.md) concept docs to drop the retired
-  `store-sqlite.wasm` / `api-rest.wasm` guests from the deploy unit (now host-side).
+- [x] Updated the [Blue/Green](../../concepts/blue-green-deployment.md) and
+  [Configurator](../../concepts/configurator.md) concept docs: the deploy unit's
+  `ext/` holds provider/interceptor/tool guests only — persistence, the REST surface,
+  telegram, and delegation are host-side in the core binary (Phase 3/4).
