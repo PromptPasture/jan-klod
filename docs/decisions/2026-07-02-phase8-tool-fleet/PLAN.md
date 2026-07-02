@@ -49,7 +49,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 |---|---|
 | 8a — Wire the loop to tools (`ToolFleet` + config) | `done` |
 | 8b — `host-fs` tools (read / write / grep) | `done` |
-| 8c — `host-process` tool (shell) | `not-started` |
+| 8c — `host-process` tool (shell) | `done` |
 | 8d — Exit gate | `not-started` |
 
 ---
@@ -97,12 +97,15 @@ workspace file; escapes stay denied (Phase 7).
 
 ## Slice 8c — `host-process` tool
 
-- [ ] **`tool-shell`** — a `tool-callable` guest over `host-process`:
-  `shell({command, args?})` → `{ code, stdout, stderr }`. Gated at `tool-call` by
-  `interceptor-permission` (it is dangerous by name).
+- [x] **`tool-shell`** — a `tool-callable` guest over `host-process`:
+  `shell({command, args?})` → `{ code, stdout, stderr }` (JSON). Named `shell` so
+  `interceptor-permission` gates it at `tool-call`. Built + staged; driven through a
+  `ToolFleet` (`shell_tool_runs_a_command_through_the_fleet`: `echo` → `{code:0,
+  stdout}`).
 
-**Exit gate:** the loop runs a shell command via the tool, the permission gate can
-deny it, and the result feeds back.
+**Exit gate:** ✓ (through a `ToolFleet` with an enabled runner) `shell` runs a command
+and returns its output; disabled/escape denied by `host-process` (Phase 7). The
+permission-gate-in-the-loop path is exercised in Slice 8d.
 
 ---
 

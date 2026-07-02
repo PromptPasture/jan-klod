@@ -100,3 +100,35 @@ fn fs_write_then_fs_read_through_the_fleet() {
 
     std::fs::remove_dir_all(&workspace_dir).ok();
 }
+
+#[test]
+fn shell_tool_runs_a_command_through_the_fleet() {
+    use std::time::Duration;
+
+    let engine = Engine::default();
+    let path = repo_root().join("ext").join("tool-shell.wasm");
+    if !path.exists() {
+        eprintln!("skipping: tool-shell.wasm not staged — run `make ext`");
+        return;
+    }
+    let component = Component::from_file(&engine, &path).expect("component compiles");
+
+    let workspace_dir = std::env::temp_dir().join(format!("jk-shelltool-{}", std::process::id()));
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+    let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
+    let runner = ProcessRunner::new(workspace, Duration::from_secs(5), 64 * 1024);
+
+    let shell = ToolExtension::instantiate(&engine, "tool.shell", &component, None, runner)
+        .expect("tool instantiates");
+    let mut fleet = ToolFleet::new(vec![shell]);
+    assert_eq!(fleet.tool_names(), vec!["shell".to_string()]);
+
+    let out = fleet
+        .invoke(&call("shell", r#"{"command":"echo","args":["from the shell tool"]}"#))
+        .expect("shell dispatched");
+    let json: serde_json::Value = serde_json::from_str(&out).expect("shell returns JSON");
+    assert_eq!(json["code"], 0);
+    assert!(json["stdout"].as_str().unwrap().contains("from the shell tool"), "stdout: {out}");
+
+    std::fs::remove_dir_all(&workspace_dir).ok();
+}
