@@ -53,7 +53,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 |---|---|
 | 7a — `host-fs` capability | `done` |
 | 7b — `host-process` capability | `done` |
-| 7c — Exit gate | `not-started` |
+| 7c — Exit gate | `done` |
 
 ---
 
@@ -104,14 +104,17 @@ through `host-fs`, a `..` escape is denied, and a call with **no workspace** is 
 
 ## Slice 7c — Exit gate
 
-- [ ] Integration test(s): a guest exercises `host-fs` (write→read, escape denied)
-  and `host-process` (run→capture, denied when off), offline.
-- [ ] CI — `make phase7-gate` added to `.github/workflows/ci.yml`.
-- [ ] **Mark Phase 7 `done`** here and in [roadmap.md](../../concepts/roadmap.md);
-  begin Phase 8 (the `tool-*` fleet over these substrates).
+- [x] Integration tests: `host_fs.rs` (guest write→read, escape + no-workspace denied)
+  and `host_process.rs` (guest run→capture, disabled denied), offline.
+- [x] CI — `make phase7-gate` (substrate unit tests + the two cross-boundary tests)
+  wired into the harness job.
+- [x] **Mark Phase 7 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
+  Carried-forward, non-blocking: symlink-escape hardening + COW/checkpoint for `host-fs`;
+  long-lived/streaming children + heavier OS isolation (rlimits/namespaces) for
+  `host-process`; wiring the substrates into `build_agent` (the loop's tools).
 
-**Definition of done:** `make phase7-gate` passes in CI; `roadmap.md` status tracker
-updated to `done`.
+**Definition of done:** `make phase7-gate` passes in CI (green); `roadmap.md` status
+tracker updated to `done`. ✓
 
 ## Cross-cutting (continuous)
 

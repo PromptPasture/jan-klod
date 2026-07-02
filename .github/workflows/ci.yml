@@ -100,6 +100,10 @@ jobs:
       # Phase 6 exit gate: streaming (event stream + SSE), cancel, and steering.
       - run: make phase6-gate
 
+      # Phase 7 exit gate: the file-workspace substrate (host-fs + host-process),
+      # unit-tested host-side and driven across the CM boundary by probe guests.
+      - run: make phase7-gate
+
   supply-chain:
     name: Supply-chain gates
     runs-on: ubuntu-latest

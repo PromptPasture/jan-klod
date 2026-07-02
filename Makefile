@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate phase5-gate phase6-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
+.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate phase5-gate phase6-gate phase7-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -148,6 +148,13 @@ phase6-gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up
 	cd $(CORE) && cargo test -p jan-klod-host --test api_rest
 	cd $(CORE) && cargo test -p jan-klod-ui
+
+# Phase 7 exit gate: the file-workspace substrate. host-fs (path-jailed workspace
+# read/write; escapes + no-workspace denied) and host-process (bounded exec; disabled
+# denied), both unit-tested host-side and driven across the CM boundary by probe guests.
+phase7-gate: extensions
+	cd $(CORE) && cargo test -p jan-klod-core -- host_fs host_process
+	cd $(CORE) && cargo test -p jan-klod-host --test host_fs --test host_process
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.
