@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor test harness phase2-gate phase3-gate phase4-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
+.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -62,6 +62,14 @@ test:
 # Build the tiny Go blue/green supervisor (static, dependency-free binary).
 supervisor:
 	cd $(SUPERVISOR) && go build ./...
+
+# Assemble a self-contained, ready-to-run bundle (release core + staged guests +
+# config + README) as dist/jan-klod-<version>-<os>-<arch>.tar.gz. Persistence and
+# the REST surface are in-core, so ext/ holds only provider/interceptor/tool guests.
+BUNDLE_OUT ?= $(abspath dist)
+bundle: extensions
+	cd $(CORE) && cargo build --release -p jan-klod-host
+	sh scripts/bundle.sh $(CORE)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT)
 
 clippy:
 	$(MAKE) -C $(CORE) clippy

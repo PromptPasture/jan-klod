@@ -49,7 +49,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice | Flag |
 |---|---|
 | 5a — Supervisor / updater (blue/green stage → flip → health-check → rollback) | `done` |
-| 5b — Configurator + curated bundles | `not-started` |
+| 5b — Configurator + curated bundles | `in-progress` |
 | 5c — Exit gate | `not-started` |
 
 ---
@@ -82,16 +82,19 @@ stops the bad core and rolls the `active` symlink back to the previous slot.
 
 ## Slice 5b — Configurator + curated bundles
 
-- [ ] **Curated bundles (v1)** — a small set of ready-to-run archives (per preset ×
-  os/arch): the `jan-klod` core, a preset `ext/` set, a pre-filled `config.yaml`,
-  and (UI presets) the `jan-klod-ui` binary + an enabled REST surface. A `make
-  bundle` produces one locally; publish the matrix from CI on release.
+- [x] **Curated bundle (`make bundle`)** — `scripts/bundle.sh` assembles a
+  ready-to-run archive: the release `jan-klod` core, the staged provider/interceptor/
+  tool guests (`ext/`), a pre-filled `config.yaml`, and a README, tarred as
+  `dist/jan-klod-<version>-<os>-<arch>.tar.gz`. Verified: the extracted `./jan-klod`
+  boots offline, loading its guests from the bundled `ext/`. *(The per-preset ×
+  os/arch matrix + UI-client inclusion is a CI-release concern layered on the same
+  script.)*
 - [ ] **Configurator web UI (later)** — the Spring-Initializr-style selector on
   GitHub Pages that resolves the extension graph and emits a ZIP. Deferred behind the
   static bundles; record the hosting/build-service decision when built.
 
-**Exit gate:** `make bundle` produces a self-contained archive that boots
-(`jan-klod` runs from the extracted dir) offline.
+**Exit gate:** ✓ `make bundle` produces a self-contained archive; the extracted
+`jan-klod` boots offline (verified — loads bundled guests + runs lifecycle).
 
 ---
 
