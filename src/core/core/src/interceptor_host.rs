@@ -754,6 +754,41 @@ mod tests {
         ));
     }
 
+    fn load_tool_selector_with(config: serde_json::Value) -> Option<WasmInterceptor> {
+        let path = repo_root().join("ext").join("interceptor-tool-selector.wasm");
+        if !path.exists() {
+            return None;
+        }
+        let engine = Engine::default();
+        let component = Component::from_file(&engine, &path).expect("component compiles");
+        Some(
+            WasmInterceptor::instantiate(
+                &engine,
+                "interceptor.tool-selector",
+                &component,
+                ConfigSection::new(config),
+                Box::new(|_| String::new()),
+            )
+            .expect("interceptor instantiates"),
+        )
+    }
+
+    #[test]
+    fn tool_selector_advertises_configured_tools() {
+        let config = json!({
+            "tools": [
+                { "name": "fs-read", "description": "read a file", "parameters-schema": "{}" }
+            ]
+        });
+        let Some(t) = load_tool_selector_with(config) else { return };
+        let mut d = Dispatcher::new(vec![Box::new(t)]);
+        let mut state = select_tools();
+        d.dispatch(Phase::SelectTools, &mut state, &mut NoDriver);
+        let HookState::SelectTools(request) = state else { panic!("state case changed") };
+        assert_eq!(request.tools.len(), 1, "the advertised tool is placed on the request");
+        assert_eq!(request.tools[0].name, "fs-read");
+    }
+
     fn load_context(config: serde_json::Value) -> Option<WasmInterceptor> {
         let path = repo_root().join("ext").join("interceptor-context.wasm");
         if !path.exists() {

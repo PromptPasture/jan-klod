@@ -238,20 +238,24 @@ pub struct ToolMeta {
 /// tools: a model's `tool-call` name is matched to the extension that advertises it,
 /// and its `invoke` runs. Unknown names return `None` (skip-if-absent).
 pub struct ToolFleet {
-    /// (advertised tool name, extension), name resolved once via `meta`.
-    tools: Vec<(String, ToolExtension)>,
+    /// (advertised metadata, extension), metadata resolved once via `meta`.
+    tools: Vec<(ToolMeta, ToolExtension)>,
 }
 
 impl ToolFleet {
-    /// Build a fleet from instantiated extensions, resolving each tool's advertised
-    /// name (falling back to the instance id if `meta` traps).
+    /// Build a fleet from instantiated extensions, resolving each tool's metadata
+    /// (falling back to the instance id if `meta` traps).
     #[must_use]
     pub fn new(extensions: Vec<ToolExtension>) -> Self {
         let tools = extensions
             .into_iter()
             .map(|mut ext| {
-                let name = ext.meta().map_or_else(|_| ext.id().to_string(), |m| m.name);
-                (name, ext)
+                let meta = ext.meta().unwrap_or_else(|_| ToolMeta {
+                    name: ext.id().to_string(),
+                    description: String::new(),
+                    arguments_schema: "{}".to_string(),
+                });
+                (meta, ext)
             })
             .collect();
         Self { tools }
@@ -266,13 +270,19 @@ impl ToolFleet {
     /// The advertised tool names.
     #[must_use]
     pub fn tool_names(&self) -> Vec<String> {
-        self.tools.iter().map(|(name, _)| name.clone()).collect()
+        self.tools.iter().map(|(meta, _)| meta.name.clone()).collect()
+    }
+
+    /// The advertised metadata for every tool (for `select-tools` advertising).
+    #[must_use]
+    pub fn metas(&self) -> Vec<ToolMeta> {
+        self.tools.iter().map(|(meta, _)| meta.clone()).collect()
     }
 }
 
 impl crate::conductor::ToolInvoker for ToolFleet {
     fn invoke(&mut self, call: &crate::intercept::ToolCall) -> Option<String> {
-        let entry = self.tools.iter_mut().find(|(name, _)| *name == call.name)?;
+        let entry = self.tools.iter_mut().find(|(meta, _)| meta.name == call.name)?;
         // A tool error is fed back to the model as the result, not an abort.
         Some(entry.1.invoke(&call.arguments).unwrap_or_else(|err| err))
     }

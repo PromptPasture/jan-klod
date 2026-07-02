@@ -226,13 +226,14 @@ impl Runtime {
         http_factory: &dyn Fn() -> route::HttpFn,
     ) -> Result<AgentSession, CoreError> {
         let mut providers: Vec<Box<dyn conductor::Completer>> = Vec::new();
-        let mut interceptors: Vec<Box<dyn intercept::Interceptor>> = Vec::new();
         let mut tool_extensions: Vec<tool_host::ToolExtension> = Vec::new();
 
         // Shared, default-deny substrates for tools (opt-in via config).
         let workspace = self.open_workspace();
         let process = self.open_process_runner(workspace.as_ref());
 
+        // Pass 1: providers + tools. (Tools first so the interceptors — notably
+        // tool-selector — can be handed the fleet's advertised metadata.)
         for ext in &self.extensions {
             let LoadState::Compiled(component) = &ext.state else {
                 continue;
@@ -244,19 +245,6 @@ impl Runtime {
                     component,
                     http_factory(),
                 )?)),
-                "interceptor" => {
-                    let section = ConfigSection::new(self.interceptor_config(&ext.instance));
-                    // v1: safe-default classifier; real routing is a follow-up.
-                    let provider_fn: interceptor_host::ProviderFn =
-                        Box::new(|_prompt| "agentic".to_string());
-                    interceptors.push(Box::new(interceptor_host::WasmInterceptor::instantiate(
-                        &self.engine,
-                        &ext.instance.id,
-                        component,
-                        section,
-                        provider_fn,
-                    )?));
-                }
                 "tool" => tool_extensions.push(tool_host::ToolExtension::instantiate(
                     &self.engine,
                     &ext.instance.id,
@@ -267,11 +255,38 @@ impl Runtime {
                 _ => {}
             }
         }
+        let tools = tool_host::ToolFleet::new(tool_extensions);
+        let tools_advert = tools_metadata_json(&tools);
+
+        // Pass 2: interceptors, each served the tool set at `select-tools`.
+        let mut interceptors: Vec<Box<dyn intercept::Interceptor>> = Vec::new();
+        for ext in &self.extensions {
+            let LoadState::Compiled(component) = &ext.state else {
+                continue;
+            };
+            if ext.instance.category != "interceptor" {
+                continue;
+            }
+            let mut config = self.interceptor_config(&ext.instance);
+            if let serde_json::Value::Object(map) = &mut config {
+                map.entry("tools").or_insert_with(|| tools_advert.clone());
+            }
+            // v1: safe-default classifier; real routing is a follow-up.
+            let provider_fn: interceptor_host::ProviderFn = Box::new(|_prompt| "agentic".to_string());
+            interceptors.push(Box::new(interceptor_host::WasmInterceptor::instantiate(
+                &self.engine,
+                &ext.instance.id,
+                component,
+                ConfigSection::new(config),
+                provider_fn,
+            )?));
+        }
+
         Ok(AgentSession {
             dispatcher: intercept::Dispatcher::new(interceptors),
             providers,
             store: self.open_store()?,
-            tools: tool_host::ToolFleet::new(tool_extensions),
+            tools,
         })
     }
 
@@ -483,6 +498,25 @@ fn run_and_persist(
         }
     }
     result
+}
+
+/// Serialize a fleet's tool metadata as the `tools` array `interceptor-tool-selector`
+/// reads from `host-config` to fill `pending-request.tools` (name / description /
+/// `parameters-schema`).
+fn tools_metadata_json(tools: &tool_host::ToolFleet) -> serde_json::Value {
+    serde_json::Value::Array(
+        tools
+            .metas()
+            .into_iter()
+            .map(|meta| {
+                serde_json::json!({
+                    "name": meta.name,
+                    "description": meta.description,
+                    "parameters-schema": meta.arguments_schema,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Headless driver: no interactive surface, so an `ask` takes the prompt's

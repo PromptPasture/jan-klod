@@ -1,12 +1,12 @@
 //! `interceptor-tool-selector` — the default `select-tools` interceptor.
 //!
-//! Thin v1: a pass-through. The request-shaping pipeline reaches `select-tools`
-//! with whatever tool set has been assembled; this interceptor exposes it as-is
-//! and proceeds. Once tool sources (`tool-callable`, `mcp-registry`) are wired,
-//! this is where the active tool set is assembled and (later) narrowed per step.
+//! Fills `pending-request.tools` with the active tool set the host advertises via
+//! `host-config` (`tools` — a JSON array of `{name, description, parameters-schema}`,
+//! served from the loop's `ToolFleet`). If none are advertised it proceeds
+//! unchanged. Per-step narrowing is a later refinement.
 //!
-//! Entirely Component-Model glue (no host-testable pure logic), so the crate only
-//! compiles for `wasm32`; on the host target it builds as an empty lib.
+//! Entirely Component-Model glue, so the crate only compiles for `wasm32`; on the
+//! host target it builds as an empty lib.
 
 #[cfg(target_arch = "wasm32")]
 mod component {
@@ -23,11 +23,41 @@ mod component {
     };
     use bindings::exports::jan_klod::interfaces::interceptor::{
         Decision, Guest as Interceptor, HookState, InterceptInput, InterceptorError, Phase,
+        ToolDefinition,
     };
+    use bindings::jan_klod::interfaces::host_config;
     use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
 
     fn log(level: LogLevel, message: &str) {
         host_log::log(level, "interceptor-tool-selector", message, &[]);
+    }
+
+    /// The advertised tool set, read from the `tools` config key (a JSON array).
+    fn advertised_tools() -> Vec<ToolDefinition> {
+        let Ok(raw) = host_config::get("tools") else {
+            return Vec::new();
+        };
+        let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return Vec::new();
+        };
+        items
+            .iter()
+            .filter_map(|tool| {
+                Some(ToolDefinition {
+                    name: tool.get("name")?.as_str()?.to_string(),
+                    description: tool
+                        .get("description")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    parameters_schema: tool
+                        .get("parameters-schema")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("{}")
+                        .to_string(),
+                })
+            })
+            .collect()
     }
 
     struct Component;
@@ -55,17 +85,17 @@ mod component {
         }
 
         fn intercept(input: InterceptInput) -> Result<Decision, InterceptorError> {
-            let HookState::SelectTools(request) = input.state else {
+            let HookState::SelectTools(mut request) = input.state else {
                 log(LogLevel::Error, "dispatched with non-select-tools state");
                 return Err(InterceptorError::InvalidState);
             };
-            // Pass-through: expose whatever tool set is already assembled. Tool
-            // sources are wired later; for now proceed unchanged.
-            log(
-                LogLevel::Info,
-                &format!("select-tools: {} tool(s) exposed", request.tools.len()),
-            );
-            Ok(Decision::Proceed)
+            let tools = advertised_tools();
+            if tools.is_empty() {
+                return Ok(Decision::Proceed);
+            }
+            log(LogLevel::Info, &format!("select-tools: advertising {} tool(s)", tools.len()));
+            request.tools = tools;
+            Ok(Decision::Replace(HookState::SelectTools(request)))
         }
     }
 

@@ -47,7 +47,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 8a — Wire the loop to tools (`ToolFleet` + config) | `in-progress` |
+| 8a — Wire the loop to tools (`ToolFleet` + config) | `done` |
 | 8b — `host-fs` tools (read / write / grep) | `not-started` |
 | 8c — `host-process` tool (shell) | `not-started` |
 | 8d — Exit gate | `not-started` |
@@ -69,9 +69,11 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
   a `ToolFleet`, and `AgentSession::run`/`run_streaming_headless` drive the loop with
   the fleet (restructured to avoid the borrow conflict). `tool_wiring.rs`: a config
   enabling `tool.fs-probe` + a workspace yields `tool_names() == ["fs-probe"]`.
-- [ ] **Advertise at `select-tools`** — `interceptor-tool-selector` fills
-  `pending-request.tools` from the fleet's metadata (via `host-config`). *(Dispatch
-  works now; advertising to the model is the remaining 8a item.)*
+- [x] **Advertise at `select-tools`** — `build_agent` serves the fleet's metadata
+  as a `tools` array in every interceptor's `host-config` section; the rebuilt
+  `interceptor-tool-selector` reads it and **replaces `pending-request.tools`** with
+  the advertised `{name, description, parameters-schema}` set (empty → proceed). Tested
+  (`tool_selector_advertises_configured_tools`: a `tools` config fills the request).
 
 **Exit gate:** a turn whose model emits a tool call reaches the matching `tool-*`
 extension through the loop and feeds the result back (offline, canned provider) —
