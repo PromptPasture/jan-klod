@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate phase5-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
+.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate phase5-gate phase6-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -136,6 +136,14 @@ phase4-gate: extensions
 # check), offline.
 phase5-gate:
 	cd $(SUPERVISOR) && go test ./...
+
+# Phase 6 exit gate: streaming (conductor event stream + SSE over the REST surface),
+# cancel (a sink Stop ends the turn), and steering (a driver follow-up injects another
+# cycle). The SSE test drives real guests, so stage them first.
+phase6-gate: extensions
+	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up
+	cd $(CORE) && cargo test -p jan-klod-host --test api_rest
+	cd $(CORE) && cargo test -p jan-klod-ui
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.

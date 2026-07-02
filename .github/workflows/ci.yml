@@ -97,6 +97,9 @@ jobs:
       # message drives a turn and a reply, both offline.
       - run: make phase4-gate
 
+      # Phase 6 exit gate: streaming (event stream + SSE), cancel, and steering.
+      - run: make phase6-gate
+
   supply-chain:
     name: Supply-chain gates
     runs-on: ubuntu-latest

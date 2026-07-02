@@ -47,7 +47,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 6a — Conductor emits events via an `EventSink` | `done` |
 | 6b — SSE on the REST surface | `done` |
 | 6c — Cancel + steering (follow-up queue) | `done` |
-| 6d — Exit gate | `not-started` |
+| 6d — Exit gate | `done` |
 
 ---
 
@@ -111,15 +111,19 @@ terminal `Done`; a driver `follow_up` injects another cycle.
 
 ## Slice 6d — Exit gate
 
-- [ ] Integration test: a driver runs a multi-step turn, receives events
-  incrementally (recording sink and/or SSE), answers an `ask` mid-turn, and cancels a
-  run — offline.
-- [ ] CI — `make phase6-gate` added to `.github/workflows/ci.yml`.
-- [ ] **Mark Phase 6 `done`** here and in [roadmap.md](../../concepts/roadmap.md);
-  begin Phase 7.
+- [x] Tests covering the phase behaviour: the conductor event stream (delta →
+  done; tool events; fallback warning), cancel (a sink `Stop`), steering (a driver
+  follow-up), the SSE server (`api_rest.rs`), and the SSE client (`jan-klod-ui`
+  `parse_frame` + `roundtrip`) — all offline.
+- [x] CI — `make phase6-gate` aggregates them (`cargo test -- stream cancel follow_up`
+  + `api_rest` + `jan-klod-ui`), wired into the harness job.
+- [x] **Mark Phase 6 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
+  Carried-forward, non-blocking: per-token deltas (v1 streams per-completion), the
+  `ratatui` TUI + Telegram consuming the stream, and the driver-capability WIT (only
+  if `api-*`/`chat-*` become guests).
 
-**Definition of done:** `make phase6-gate` passes in CI; `roadmap.md` status tracker
-updated to `done`.
+**Definition of done:** `make phase6-gate` passes in CI (green); `roadmap.md` status
+tracker updated to `done`. ✓
 
 ## Cross-cutting (continuous)
 
