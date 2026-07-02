@@ -95,8 +95,8 @@ fn fs_write_then_fs_read_through_the_fleet() {
     assert!(written.unwrap().contains("wrote src/main.rs"));
     let read = fleet.invoke(&call("fs-read", r#"{"path":"src/main.rs"}"#));
     assert_eq!(read.as_deref(), Some("fn main(){}\nlet x=1;"));
-    let grepped = fleet.invoke(&call("fs-grep", r#"{"pattern":"fn","path":"src/main.rs"}"#));
-    assert_eq!(grepped.as_deref(), Some("1:fn main(){}"));
+    let grep_hits = fleet.invoke(&call("fs-grep", r#"{"pattern":"fn","path":"src/main.rs"}"#));
+    assert_eq!(grep_hits.as_deref(), Some("1:fn main(){}"));
 
     std::fs::remove_dir_all(&workspace_dir).ok();
 }
