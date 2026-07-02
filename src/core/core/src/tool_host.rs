@@ -185,6 +185,28 @@ impl ToolExtension {
         Ok(Self { id: id.to_string(), store, world })
     }
 
+    /// This extension's instance id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The tool's advertised metadata (name / description / arguments schema).
+    ///
+    /// # Errors
+    /// Returns a trap description if the guest's `meta` call traps.
+    pub fn meta(&mut self) -> Result<ToolMeta, String> {
+        let tool = self.world.jan_klod_interfaces_tool_callable();
+        match tool.call_meta(&mut self.store) {
+            Ok(meta) => Ok(ToolMeta {
+                name: meta.name,
+                description: meta.description,
+                arguments_schema: meta.arguments_schema,
+            }),
+            Err(_) => Err(format!("tool `{}` meta trapped", self.id)),
+        }
+    }
+
     /// Invoke the tool with JSON-encoded `arguments`, returning its JSON result.
     ///
     /// # Errors
@@ -196,6 +218,63 @@ impl ToolExtension {
             Ok(Err(err)) => Err(format!("tool `{}` error: {err:?}", self.id)),
             Err(_) => Err(format!("tool `{}` trapped", self.id)),
         }
+    }
+}
+
+/// A tool's advertised metadata (mirrors `tool-callable.tool-meta`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolMeta {
+    /// Tool name — the `tool-call` name the model emits.
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// JSON Schema string for the arguments object.
+    pub arguments_schema: String,
+}
+
+/// A set of instantiated `tool-*` extensions, dispatched by tool name.
+///
+/// Implements [`ToolInvoker`](crate::conductor::ToolInvoker) so the loop can call
+/// tools: a model's `tool-call` name is matched to the extension that advertises it,
+/// and its `invoke` runs. Unknown names return `None` (skip-if-absent).
+pub struct ToolFleet {
+    /// (advertised tool name, extension), name resolved once via `meta`.
+    tools: Vec<(String, ToolExtension)>,
+}
+
+impl ToolFleet {
+    /// Build a fleet from instantiated extensions, resolving each tool's advertised
+    /// name (falling back to the instance id if `meta` traps).
+    #[must_use]
+    pub fn new(extensions: Vec<ToolExtension>) -> Self {
+        let tools = extensions
+            .into_iter()
+            .map(|mut ext| {
+                let name = ext.meta().map_or_else(|_| ext.id().to_string(), |m| m.name);
+                (name, ext)
+            })
+            .collect();
+        Self { tools }
+    }
+
+    /// Whether the fleet holds no tools.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
+
+    /// The advertised tool names.
+    #[must_use]
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.iter().map(|(name, _)| name.clone()).collect()
+    }
+}
+
+impl crate::conductor::ToolInvoker for ToolFleet {
+    fn invoke(&mut self, call: &crate::intercept::ToolCall) -> Option<String> {
+        let entry = self.tools.iter_mut().find(|(name, _)| *name == call.name)?;
+        // A tool error is fed back to the model as the result, not an abort.
+        Some(entry.1.invoke(&call.arguments).unwrap_or_else(|err| err))
     }
 }
 

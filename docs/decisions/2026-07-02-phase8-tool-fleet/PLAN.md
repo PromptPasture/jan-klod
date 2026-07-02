@@ -47,7 +47,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 8a — Wire the loop to tools (`ToolFleet` + config) | `not-started` |
+| 8a — Wire the loop to tools (`ToolFleet` + config) | `in-progress` |
 | 8b — `host-fs` tools (read / write / grep) | `not-started` |
 | 8c — `host-process` tool (shell) | `not-started` |
 | 8d — Exit gate | `not-started` |
@@ -56,9 +56,12 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 ## Slice 8a — Wire the loop to tools
 
-- [ ] **`ToolFleet`** — a `conductor::ToolInvoker` over a set of `ToolExtension`s,
-  dispatching `call.name` to the matching extension's `invoke(arguments)`; unknown
-  tool → `None` (skip-if-absent). Exposes the tools' `meta()` for advertising.
+- [x] **`ToolFleet`** — `tool_host::ToolFleet` implements `conductor::ToolInvoker`
+  over a `Vec<ToolExtension>`, resolving each tool's advertised name via
+  `ToolExtension::meta()` at construction and dispatching `call.name` → the matching
+  extension's `invoke`; unknown → `None`. Exposes `tool_names()`/`meta()` for
+  advertising. Verified across the boundary (`tool_fleet.rs`: dispatches `fs-probe`
+  by name, skips an unknown tool).
 - [ ] **Config → capabilities** — `Runtime` reads a workspace root + execution
   settings; `build_agent` instantiates each enabled `tool.*` as a `ToolExtension`
   (with the shared `host-fs` workspace / `host-process` runner) into a `ToolFleet`,
