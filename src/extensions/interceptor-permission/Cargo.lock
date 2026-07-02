@@ -63,6 +63,7 @@ dependencies = [
 name = "interceptor-permission"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "wit-bindgen",
 ]
 

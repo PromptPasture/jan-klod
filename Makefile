@@ -161,7 +161,7 @@ phase7-gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-host --test host_fs --test host_process
 
 # Phase 8 exit gate: the tool fleet. A model tool call runs through the loop
-# (permission gate -> fleet -> real tool-fs-write -> host-fs), plus the fleet dispatch
+# (permission gate -> fleet -> real tool-fs -> host-fs), plus the fleet dispatch
 # + build_agent wiring, offline.
 phase8-gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-host --test phase8_gate --test tool_fleet --test tool_wiring

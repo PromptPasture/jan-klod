@@ -182,7 +182,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tool-fs-grep"
+name = "tool-fs"
 version = "0.1.0"
 dependencies = [
  "serde_json",

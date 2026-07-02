@@ -1,16 +1,20 @@
 //! `interceptor-permission` — the default `tool-call` gate.
 //!
-//! A thin, single-rule permission interceptor: when a tool call looks dangerous
-//! ([`rules::is_dangerous`]), it returns [`Decision::Ask`] so the loop's driver
-//! confirms with the user; on the answer it [`Decision::Proceed`]s or
-//! [`Decision::Block`]s. Ordinary calls proceed untouched.
+//! Gates tool calls on three independent checks (see [`rules`]):
 //!
-//! This exercises two mechanisms the loop relies on: the `ask` round-trip (the
-//! host re-invokes `intercept` with `answer` set) and the fail-closed-at-tool-call
-//! policy (a trap here is treated as a block by the core dispatcher).
+//! - **Name check**: the tool name contains a high-risk verb (`shell`, `exec`, …).
+//! - **Op check**: a benign-named multi-op tool selects a mutating operation via
+//!   an `{"op":"write"}` argument (e.g. the unified `fs` tool).
+//! - **Scope check**: any string argument contains an absolute path or a `..`
+//!   traversal that would escape the workspace root.
 //!
-//! The rule is pure Rust with no WIT dependency, so it is unit-tested natively
-//! (`cargo test`); the Component-Model glue below only compiles for `wasm32`.
+//! Either condition returns [`Decision::Ask`] so the loop's driver confirms with
+//! the user; on the answer it [`Decision::Proceed`]s or [`Decision::Block`]s.
+//! Ordinary, in-scope calls proceed untouched.
+//!
+//! The rules are pure Rust with no WIT dependency, so they are unit-tested
+//! natively (`cargo test`); the Component-Model glue below only compiles for
+//! `wasm32`.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod rules;
@@ -70,14 +74,24 @@ mod component {
                 return Err(InterceptorError::InvalidState);
             };
 
-            if !rules::is_dangerous(&call.name) {
+            let reason = if rules::is_dangerous(&call.name) {
+                Some(format!("tool `{}` has a high-risk name", call.name))
+            } else if rules::args_are_dangerous(&call.arguments) {
+                Some(format!("tool `{}` selects a high-risk operation", call.name))
+            } else if rules::args_escape_scope(&call.arguments) {
+                Some(format!("tool `{}` arguments reference a path outside the workspace", call.name))
+            } else {
+                None
+            };
+
+            let Some(reason) = reason else {
                 return Ok(Decision::Proceed);
-            }
+            };
 
             match input.answer {
-                // First pass on a dangerous call: ask the driver to confirm.
+                // First pass: ask the driver to confirm.
                 None => Ok(Decision::Ask(UserPrompt {
-                    question: format!("Allow potentially dangerous tool `{}`?", call.name),
+                    question: format!("Allow tool `{}`? Reason: {reason}", call.name),
                     options: vec!["yes".to_string(), "no".to_string()],
                     default_answer: "no".to_string(),
                 })),

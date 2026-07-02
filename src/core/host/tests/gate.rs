@@ -7,8 +7,8 @@
 //! `ReAct` + permission path (dangerous tool call → driver approves → canned result
 //! fed back).
 //!
-//! *Phase 8* — boots the `Runtime` with all v1 interceptors + `tool-fs-write` + a
-//! workspace. The provider emits an `fs-write` tool call; the fleet dispatches it to
+//! *Phase 8* — boots the `Runtime` with all v1 interceptors + `tool-fs` + a
+//! workspace. The provider emits an `fs` `{"op":"write"}` tool call; the fleet dispatches it to
 //! the real guest which writes the file **through `host-fs`**, proving the model →
 //! permission → fleet → host-fs → answer path.
 //!
@@ -102,23 +102,23 @@ const PHASE8_GUESTS: &[&str] = &[
     "interceptor-context.wasm",
     "interceptor-tool-selector.wasm",
     "interceptor-permission.wasm",
-    "tool-fs-write.wasm",
+    "tool-fs.wasm",
 ];
 
-/// A provider that emits an `fs-write` tool call on the first completion, then a
+/// A provider that emits an `fs` `{"op":"write"}` tool call on the first completion, then a
 /// final text answer on the second.
 fn tool_calling_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
         let n = calls.fetch_add(1, Ordering::Relaxed);
         let body = if n == 0 {
-            let args =
-                serde_json::json!({ "path": "out.txt", "contents": "hello from the tool" }).to_string();
+            let args = serde_json::json!({ "op": "write", "path": "out.txt", "contents": "hello from the tool" })
+                .to_string();
             serde_json::json!({
                 "choices": [{
                     "message": {
                         "role": "assistant",
-                        "tool_calls": [{ "id": "c1", "function": { "name": "fs-write", "arguments": args } }]
+                        "tool_calls": [{ "id": "c1", "function": { "name": "fs", "arguments": args } }]
                     },
                     "finish_reason": "tool_calls"
                 }]
@@ -339,7 +339,7 @@ extensions:
     permission:
       enabled: true
   tool:
-    fs-write:
+    fs:
       enabled: true
 routing:
   chat: openai/mock-1
@@ -355,10 +355,10 @@ workspace: {ws}
     let mut agent = runtime.build_agent(&factory).expect("agent boots with tools");
 
     // The tool is advertised to the model.
-    assert!(agent.tool_names().contains(&"fs-write".to_string()), "fleet: {:?}", agent.tool_names());
+    assert!(agent.tool_names().contains(&"fs".to_string()), "fleet: {:?}", agent.tool_names());
 
-    // `fs-write` trips the permission gate (contains "write"); the driver approves,
-    // so the tool runs — exercising the ask→approve→tool path with a real tool.
+    // `fs` with `{"op":"write"}` trips the permission gate (dangerous op); the driver
+    // approves, so the tool runs — exercising the ask→approve→tool path with a real tool.
     let out = agent.run_driven(&mut ApprovingDriver, "gate-8", "please write out.txt");
     assert_eq!(
         out,

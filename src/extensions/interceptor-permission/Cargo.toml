@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.58"
+serde_json = "1"
 
 # Same strict policy as the core workspace (guests live outside src/core/, so the
 # levels are declared here rather than inherited).

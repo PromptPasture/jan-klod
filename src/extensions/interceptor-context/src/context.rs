@@ -20,6 +20,7 @@ pub const fn estimate_tokens(char_len: usize) -> usize {
 /// The two slices must be the same length.
 #[must_use]
 pub fn keep_indices(tokens: &[usize], is_system: &[bool], budget: usize) -> Vec<usize> {
+    debug_assert_eq!(tokens.len(), is_system.len(), "tokens and is_system must be the same length");
     let total: usize = tokens.iter().sum();
     if total <= budget {
         return (0..tokens.len()).collect();

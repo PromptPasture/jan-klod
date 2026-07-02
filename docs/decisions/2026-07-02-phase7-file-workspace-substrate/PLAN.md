@@ -73,6 +73,8 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
   `host-fs` added to `tool-world` (the world Phase 8 file tools use).
 - [x] **Probe guest** — `tool-fs-probe` (a `tool-callable` guest importing `host-fs`):
   `invoke({path, contents})` writes then reads back. Built + staged.
+  _(Post-Phase 8: retired — `host_fs.rs` now drives the real `tool-fs` component's
+  `write`/`read` ops instead of a dedicated probe.)_
 
 **Exit gate:** ✓ `host/tests/host_fs.rs` — the guest round-trips a workspace file
 through `host-fs`, a `..` escape is denied, and a call with **no workspace** is denied

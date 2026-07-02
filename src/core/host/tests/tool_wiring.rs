@@ -1,6 +1,6 @@
 //! Phase 8 Slice 8a — `build_agent` instantiates enabled `tool.*` into the fleet.
 //!
-//! Boots a `Runtime` from a config that enables `tool.fs-probe` and a workspace,
+//! Boots a `Runtime` from a config that enables `tool.fs` and a workspace,
 //! and asserts the built `AgentSession` carries that tool — proving the config →
 //! capability → fleet wiring (the loop can now reach real tools). Offline.
 //!
@@ -13,7 +13,7 @@ mod common;
 #[test]
 fn build_agent_wires_enabled_tools_into_the_fleet() {
     let ext_dir = common::repo_root().join("ext");
-    for guest in ["provider-openai.wasm", "interceptor-intent-router.wasm", "tool-fs-probe.wasm"] {
+    for guest in ["provider-openai.wasm", "interceptor-intent-router.wasm", "tool-fs.wasm"] {
         if !ext_dir.join(guest).exists() {
             eprintln!("skipping: {guest} not staged — run `make ext`");
             return;
@@ -42,7 +42,7 @@ extensions:
     intent-router:
       enabled: true
   tool:
-    fs-probe:
+    fs:
       enabled: true
 workspace: {ws}
 ",
@@ -56,8 +56,8 @@ workspace: {ws}
     let agent = runtime.build_agent(&factory).expect("agent boots with tools");
 
     assert!(
-        agent.tool_names().contains(&"fs-probe".to_string()),
-        "the enabled tool.fs-probe should be in the fleet: {:?}",
+        agent.tool_names().contains(&"fs".to_string()),
+        "the enabled tool.fs should be in the fleet: {:?}",
         agent.tool_names()
     );
 

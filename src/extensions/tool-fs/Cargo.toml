@@ -1,18 +1,21 @@
 [package]
-name = "tool-fs-write"
+name = "tool-fs"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "fs-write tool: write a workspace file through host-fs."
+description = "fs tool: read / write / grep a workspace file through host-fs, dispatched by an `op` argument."
 
 [lib]
+# A reactor component: exports tool-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.58"
 serde_json = "1"
 
+# Same strict policy as the core workspace (guests live outside src/core/, so the
+# levels are declared here rather than inherited).
 [lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"

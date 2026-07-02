@@ -4,6 +4,16 @@ Living execution checklist for Phase 8 of the [Roadmap](../../concepts/roadmap.m
 Update the flags here and in the roadmap [Status tracker](../../concepts/roadmap.md#status-tracker)
 as work proceeds.
 
+> **Amendment (post-Phase 8):** the three `host-fs` tools shipped here —
+> `tool-fs-read`, `tool-fs-write`, `tool-fs-grep` — were later consolidated into a
+> single **`tool-fs`** component exposing one tool named `fs`, with the operation
+> chosen by an `op` argument (`{op:"read"|"write"|"grep", …}`). The `tool-fs-probe`
+> fixture was retired and its host tests (`host_fs.rs`, `tool_fleet.rs`,
+> `tool_wiring.rs`) retargeted to `tool-fs`. Because `fs` has a benign name, the
+> `interceptor-permission` gate gained an **op check** that flags mutating ops
+> (`write`/`delete`/…) — replacing the old "name contains `write`" trigger. The
+> slice notes below describe the original three-tool design as built at the time.
+
 **Prerequisite:** Phase 7 done. The `host-fs` and `host-process` substrates exist and
 are proven across the CM boundary via `tool_host::ToolExtension` + probe guests — but
 the loop can't yet *use* tools (`AgentSession` wires `NoTools`), and there is no real
