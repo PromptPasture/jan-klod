@@ -81,7 +81,7 @@ pub struct ToolDefinition {
 }
 
 /// A tool call emitted by the model (mirrors `llm-types.tool-call`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCall {
     /// Unique id for this call.
     pub id: String,
@@ -136,7 +136,7 @@ pub struct RawResponse {
 }
 
 /// A tool's result (handed at `tool-result`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutcome {
     /// The call this result answers.
     pub tool_call_id: String,

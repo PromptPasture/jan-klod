@@ -44,7 +44,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 6a — Conductor emits events via an `EventSink` | `not-started` |
+| 6a — Conductor emits events via an `EventSink` | `done` |
 | 6b — SSE on the REST surface | `not-started` |
 | 6c — Cancel + steering (follow-up queue) | `not-started` |
 | 6d — Exit gate | `not-started` |
@@ -53,16 +53,19 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 ## Slice 6a — Conductor event stream
 
-- [ ] **`EventSink` + `Event`** in `conductor`: `text-delta(String)`,
-  `tool-invoked(ToolCall)`, `tool-result(ToolOutcome)`, `warning(String)`,
-  `done{text, agentic}`. `run_with` takes a sink (a `NoSink` no-op keeps the current
-  behaviour); emit events at each stage (per-completion text as a delta, each tool
-  call/result, provider-fallback warnings, and a terminal `done`).
-- [ ] **Unit tests** — a recording sink asserts the event sequence for a simple
-  turn and a ReAct (tool) turn.
+- [x] **`EventSink` + `Event`** in `conductor` (`TextDelta`/`ToolInvoked`/
+  `ToolResult`/`Warning`/`Done{text, agentic}`). `run_turn` threads a sink;
+  `complete_with_fallback`/`complete_validated`/`run_tool_calls` emit
+  (fallback + malformed-retry warnings, tool invoked/result, per-completion delta,
+  terminal `Done`). `AgentSession::run_streaming` exposes it; `run`/`run_with` pass
+  `NoSink` (unchanged behaviour). Added `PartialEq`/`Eq` to `intercept::ToolCall`/
+  `ToolOutcome` so `Event` compares.
+- [x] **Unit tests** — a `RecordingSink` asserts the event order for a simple turn
+  (`TextDelta` → `Done`), a ReAct turn (`ToolInvoked` → `ToolResult` → `TextDelta`
+  → `Done`), and a fallback (leading `Warning`, terminal `Done`). 13 conductor tests.
 
-**Exit gate:** a recording sink observes the ordered events of a multi-step turn,
-ending in `done` with the authoritative answer.
+**Exit gate:** ✓ a recording sink observes the ordered events of a multi-step turn,
+ending in `Done` with the authoritative answer.
 
 ---
 

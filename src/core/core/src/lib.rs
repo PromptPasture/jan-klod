@@ -322,11 +322,38 @@ impl AgentSession {
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
+        self.drive(driver, tools, &mut conductor::NoSink, session, message)
+    }
+
+    /// Like [`Self::run_with`], but streams incremental [`conductor::Event`]s to
+    /// `sink` as the turn runs (for a live TUI transcript or SSE).
+    pub fn run_streaming(
+        &mut self,
+        driver: &mut dyn intercept::Driver,
+        tools: &mut dyn conductor::ToolInvoker,
+        sink: &mut dyn conductor::EventSink,
+        session: &str,
+        message: &str,
+    ) -> conductor::RunResult {
+        self.drive(driver, tools, sink, session, message)
+    }
+
+    /// Drive one turn through the conductor and persist a completed turn's
+    /// transcript. Shared by the run entry points.
+    fn drive(
+        &mut self,
+        driver: &mut dyn intercept::Driver,
+        tools: &mut dyn conductor::ToolInvoker,
+        sink: &mut dyn conductor::EventSink,
+        session: &str,
+        message: &str,
+    ) -> conductor::RunResult {
         let result = conductor::run_turn(
             &mut self.dispatcher,
             &mut self.providers,
             tools,
             driver,
+            sink,
             session,
             message,
         );
