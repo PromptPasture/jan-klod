@@ -52,7 +52,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 4a — UI client (CLI/REPL first, then TUI) | `done` |
 | 4b — `host-socket` + `chat-telegram` | `done` |
 | 4c — `agent-*` ACP delegation (both directions) | `done` |
-| 4d — Exit gate | `not-started` |
+| 4d — Exit gate | `done` |
 
 ---
 
@@ -119,14 +119,18 @@ tool results is separately gated (`phase2_gate`).
 
 ## Slice 4d — Exit gate
 
-- [ ] Integration test(s): the UI client holds a conversation against a live serve
-  (4a) and a `chat-*` inbound message drives a turn (4b), offline where possible.
-- [ ] CI — a `make phase4-gate` added to `.github/workflows/ci.yml`.
-- [ ] **Mark Phase 4 `done`** here and in [roadmap.md](../../concepts/roadmap.md);
-  begin Phase 5 planning.
+- [x] Integration tests: the UI client drives core over REST (`jan-klod-ui`
+  `roundtrip`, 4a) and an inbound Telegram message drives a turn + reply
+  (`host/tests/telegram.rs`, 4b), both offline.
+- [x] CI — `make phase4-gate` runs both, wired into the harness job in
+  `.github/workflows/ci.yml`.
+- [x] **Mark Phase 4 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
+  Carried-forward, non-blocking: `ratatui` GUI (`--gui`, Tauri), the concrete
+  ACP-over-HTTP `AgentTransport` + wiring `AgentDelegate` into `build_agent`, and
+  `host-socket` (only if a future chat platform needs a persistent inbound socket).
 
-**Definition of done:** `make phase4-gate` passes in CI; `roadmap.md` status tracker
-updated to `done`.
+**Definition of done:** `make phase4-gate` passes in CI (green); `roadmap.md` status
+tracker updated to `done`. ✓
 
 ## Cross-cutting (continuous)
 

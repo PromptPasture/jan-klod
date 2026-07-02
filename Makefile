@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions test harness phase2-gate phase3-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
+.PHONY: help wit all core extensions test harness phase2-gate phase3-gate phase4-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -108,6 +108,12 @@ phase2-gate: extensions
 # both offline. Stages the guests first.
 phase3-gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-host --test persistence --test api_rest
+
+# Phase 4 exit gate: a UI client drives core over REST (jan-klod-ui roundtrip) AND
+# an inbound Telegram message drives a turn and a reply (telegram), both offline.
+phase4-gate: extensions
+	cd $(CORE) && cargo test -p jan-klod-ui --test roundtrip
+	cd $(CORE) && cargo test -p jan-klod-host --test telegram
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.

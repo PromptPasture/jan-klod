@@ -85,6 +85,10 @@ jobs:
       # HTTP client drives the loop over the host-side REST surface, both offline.
       - run: make phase3-gate
 
+      # Phase 4 exit gate: a UI client drives core over REST, and an inbound Telegram
+      # message drives a turn and a reply, both offline.
+      - run: make phase4-gate
+
   supply-chain:
     name: Supply-chain gates
     runs-on: ubuntu-latest
