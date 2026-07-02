@@ -4,7 +4,7 @@ title: Development Environment Setup
 description: Install and verify the toolchain needed to build the Rust core and TinyGo guest extensions for Phase 1.
 tags: [setup, toolchain, rust, tinygo, wasmtime, wit, component-model, phase-1]
 created: 2026-06-29
-updated: 2026-06-29
+updated: 2026-07-02
 ---
 
 # Development Environment Setup
@@ -14,7 +14,7 @@ component host), **TinyGo guest extensions**, and the **WIT** tooling that ties 
 together. This is the toolchain the [Phase 1 plan](../decisions/2026-06-29-extension-technologies/PLAN.md)
 assumes — see the [Roadmap](../concepts/roadmap.md) for why each piece exists.
 
-> Commands below target **macOS** (Homebrew). Linux notes are inline where they
+> Commands below target **macOS**. Linux notes are inline where they
 > differ. This guide grows as later phases add tools (SQLite, HTTP, etc.).
 
 ## At a glance
@@ -25,7 +25,7 @@ assumes — see the [Roadmap](../concepts/roadmap.md) for why each piece exists.
 | **Go** ≥ 1.23 | toolchain TinyGo builds on | TinyGo guests | `brew` |
 | **TinyGo** ≥ 0.34 | compiles Go guests to **components** (`wasip2`) | guest extensions | `brew` |
 | **wkg** ≥ 0.15 | resolves/fetches WIT package dependencies | building guests against `wit/` | `cargo install` |
-| **wasm-tools** | inspect/validate/compose components | always (debugging) | `cargo install` / `brew` |
+| **wasm-tools** | inspect/validate/compose components | always (debugging) | `cargo install` |
 | `wasmtime` CLI ≥ 46 | run a component standalone | optional (debug only) | `brew` / installer |
 | `cargo-component` | build **Rust** guests as components | optional (Rust extensions) | `cargo install` |
 
@@ -36,8 +36,8 @@ required to run Jan-Klod — only handy for poking at a `.wasm` by hand.
 
 ### 1. Rust (core)
 
-Use `rustup`, not Homebrew's `rust` — it keeps the toolchain and components
-(`clippy`, `rustfmt`) updatable together.
+Use `rustup` to manage your Rust toolchain — it keeps `rustc`, `cargo`, and
+components (`clippy`, `rustfmt`) updatable together.
 
 ```shell
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -74,7 +74,7 @@ Prebuilt binaries are also on
 ### 4. wasm-tools (inspect / validate)
 
 ```shell
-cargo install wasm-tools   # or: brew install wasm-tools
+cargo install wasm-tools
 ```
 
 Used to print a component's WIT (`wasm-tools component wit foo.wasm`) and to
@@ -129,12 +129,6 @@ cargo build --release --target wasm32-wasip2
 `make store-memory` / `make provider-openai` wrap this and stage the result in
 `ext/`. To drive a provider's full `complete` path against a live endpoint,
 `make probe` (needs the provider's api-key env + network).
-
-> **No rustup? (Homebrew `rust` can't add wasm targets.)** Build in a container:
-> `make store-memory-docker` (uses `rust:1-slim`; `CONTAINER ?= podman`, override
-> `CONTAINER=docker` if needed). This is why the guide opens by insisting on
-> rustup over Homebrew's `rust` — a Homebrew toolchain can build the core but
-> not a guest.
 
 ### TinyGo (gate canary / case-by-case)
 

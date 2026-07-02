@@ -7,16 +7,9 @@ EXT_DIR := $(ROOT)/ext
 WIT_DIR := $(ROOT)/wit
 
 # Rust guests, by directory name (= staged ext/<name>.wasm). Add a guest here and
-# it gets `make <name>` + `make <name>-docker` + a slot in `all`/`clean` for free.
+# it gets `make <name>` + a slot in `all`/`clean` for free.
 # The cargo artifact swaps '-' for '_' (e.g. store-memory -> store_memory.wasm).
 GUESTS := store-memory provider-openai interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router tool-fs-probe tool-proc-probe tool-fs-read tool-fs-write tool-fs-grep tool-shell
-DOCKER_GUESTS := $(addsuffix -docker,$(GUESTS))
-
-# Container runtime + image for guests when the host has no rustup (Homebrew rust
-# can't add the wasm target). See docs/guides/development-setup.md. Override
-# CONTAINER=podman if not on docker.
-CONTAINER ?= docker
-RUST_IMAGE := docker.io/library/rust:slim
 
 # Shared cargo-deny policy (repo root) — the same file the host workspace uses.
 DENY_CONFIG := $(ROOT)/deny.toml
@@ -31,7 +24,7 @@ GO_MODULES := $(wildcard */go.mod)
 # no wasm target required. Add a guest here once it carries such tests.
 TESTABLE_GUESTS := interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router tool-fs-grep tool-shell
 
-.PHONY: all clean test audit deny go-supply-chain spike-deps spike-guest $(GUESTS) $(DOCKER_GUESTS)
+.PHONY: all clean test audit deny go-supply-chain spike-deps spike-guest $(GUESTS)
 
 # Build every Rust guest (the polyglot TinyGo spike stays opt-in: `make spike-guest`).
 all: $(GUESTS)
@@ -49,16 +42,6 @@ $(GUESTS):
 	mkdir -p $(EXT_DIR)
 	cp $@/target/wasm32-wasip2/release/$(subst -,_,$@).wasm $(EXT_DIR)/$@.wasm
 
-# Same build inside a container — the fallback when the host Rust is Homebrew's (no
-# rustup, so no wasm target). CARGO_TARGET_DIR=/tmp/target keeps target/ out of the
-# repo tree; the repo root is mounted at /work.
-$(DOCKER_GUESTS): %-docker:
-	mkdir -p $(EXT_DIR)
-	$(CONTAINER) run --rm -v "$(ROOT)":/work -w /work/src/extensions/$* \
-		-e CARGO_TARGET_DIR=/tmp/target $(RUST_IMAGE) sh -c '\
-		rustup target add wasm32-wasip2 >/dev/null && \
-		cargo build --release --target wasm32-wasip2 && \
-		cp /tmp/target/wasm32-wasip2/release/$(subst -,_,$*).wasm /work/ext/$*.wasm'
 
 # Supply-chain gates for the Rust guests (Slice 1b gate). Each guest is a
 # standalone crate with its own Cargo.lock, so audit/deny run once per guest.
