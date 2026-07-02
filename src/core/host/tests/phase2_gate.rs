@@ -12,7 +12,6 @@
 //! with `make ext`.
 
 use std::cell::Cell;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -22,31 +21,12 @@ use jan_klod_core::intercept::{Driver, ToolCall, UserPrompt};
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 
-fn repo_root() -> PathBuf {
-    [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
-}
+mod common;
 
 /// An `host-http` backend that always fails the connection — the primary provider
 /// uses this so the completion must fall back to the secondary.
 fn failing_http() -> HttpFn {
     Box::new(|_m, _u, _h, _b, _t| Err(WireError::ConnectionFailed))
-}
-
-/// A canned chat-completions reply — the secondary provider answers with this.
-fn canned_http(content: &'static str) -> HttpFn {
-    Box::new(move |_m, _u, _h, _b, _t| {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": { "role": "assistant", "content": content },
-                "finish_reason": "stop"
-            }]
-        });
-        Ok(WireResponse {
-            status: 200,
-            headers: vec![],
-            body: serde_json::to_vec(&body).unwrap(),
-        })
-    })
 }
 
 const GUESTS: &[&str] = &[
@@ -60,7 +40,7 @@ const GUESTS: &[&str] = &[
 
 #[test]
 fn phase2_exit_gate() {
-    let ext_dir = repo_root().join("ext");
+    let ext_dir = common::repo_root().join("ext");
     for guest in GUESTS {
         if !ext_dir.join(guest).exists() {
             eprintln!("skipping: {guest} not staged — run `make ext`");
@@ -120,7 +100,7 @@ routing:
         if n == 0 {
             failing_http()
         } else {
-            canned_http("grounded answer")
+            common::canned_http("grounded answer")
         }
     };
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
@@ -205,7 +185,7 @@ impl ToolInvoker for CountingTools {
 
 #[test]
 fn phase2_gate_react_tool_call_with_permission() {
-    let ext_dir = repo_root().join("ext");
+    let ext_dir = common::repo_root().join("ext");
     for guest in GUESTS {
         if !ext_dir.join(guest).exists() {
             eprintln!("skipping: {guest} not staged — run `make ext`");

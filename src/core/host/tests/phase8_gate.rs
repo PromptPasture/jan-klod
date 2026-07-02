@@ -7,9 +7,8 @@
 //! writes the file **through `host-fs`**, the result feeds back, and the loop returns
 //! a grounded answer. Proves the model → permission → fleet → host-fs → answer path.
 //!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Panics (with a message to run `make ext`) when the guests are not staged in `ext/`.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -27,10 +26,6 @@ impl Driver for ApprovingDriver {
     }
 }
 
-fn repo_root() -> PathBuf {
-    [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
-}
-
 const GUESTS: &[&str] = &[
     "provider-openai.wasm",
     "interceptor-intent-router.wasm",
@@ -40,6 +35,8 @@ const GUESTS: &[&str] = &[
     "interceptor-permission.wasm",
     "tool-fs-write.wasm",
 ];
+
+mod common;
 
 /// A provider that emits an `fs-write` tool call on the first completion, then a
 /// final text answer on the second.
@@ -64,21 +61,23 @@ fn tool_calling_http() -> HttpFn {
                 "choices": [{ "message": { "role": "assistant", "content": "wrote the file" }, "finish_reason": "stop" }]
             })
         };
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
+        Ok(WireResponse { status: 200, headers: vec![("Content-Type".into(), "application/json".into())], body: serde_json::to_vec(&body).unwrap() })
     })
 }
 
 #[test]
 fn phase8_exit_gate_tool_runs_through_the_loop() {
-    let ext_dir = repo_root().join("ext");
+    let ext_dir = common::repo_root().join("ext");
     for guest in GUESTS {
-        if !ext_dir.join(guest).exists() {
-            eprintln!("skipping: {guest} not staged — run `make ext`");
-            return;
-        }
+        assert!(
+            ext_dir.join(guest).exists(),
+            "guest {guest} not staged at {} — run `make ext`",
+            ext_dir.display(),
+        );
     }
 
     let dir = std::env::temp_dir().join(format!("jk-phase8-{}", std::process::id()));
+    let _guard = common::TempDir(dir.clone());
     let workspace = dir.join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let config = dir.join("config.yaml");
@@ -139,5 +138,4 @@ workspace: {ws}
     let written = std::fs::read_to_string(workspace.join("out.txt")).expect("the tool wrote the file");
     assert_eq!(written, "hello from the tool");
 
-    std::fs::remove_dir_all(&dir).ok();
 }

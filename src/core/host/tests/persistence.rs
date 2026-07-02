@@ -7,32 +7,14 @@
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
-use std::path::PathBuf;
-
 use jan_klod_core::conductor::RunResult;
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 
-fn repo_root() -> PathBuf {
-    [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
-}
-
-fn canned_http(content: &'static str) -> HttpFn {
-    Box::new(move |_m, _u, _h, _b, _t| {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": { "role": "assistant", "content": content },
-                "finish_reason": "stop"
-            }]
-        });
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
-    })
-}
+mod common;
 
 #[test]
 fn transcript_survives_a_runtime_restart() {
-    let ext_dir = repo_root().join("ext");
+    let ext_dir = common::repo_root().join("ext");
     for guest in ["provider-openai.wasm", "interceptor-intent-router.wasm"] {
         if !ext_dir.join(guest).exists() {
             eprintln!("skipping: {guest} not staged — run `make ext`");
@@ -71,7 +53,7 @@ extensions:
     // First boot: run a turn; its transcript is persisted to the SQLite file.
     {
         let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
-        let factory = || canned_http("first answer");
+        let factory = || common::canned_http("first answer");
         let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
         let out = agent.run("chat-1", "hello there");
@@ -84,7 +66,7 @@ extensions:
     // Second boot against the SAME db file: the transcript is still there.
     {
         let runtime = Runtime::boot(&config, &ext_dir).expect("runtime reboots");
-        let factory = || canned_http("unused");
+        let factory = || common::canned_http("unused");
         let agent = runtime.build_agent(&factory).expect("agent reboots");
 
         let transcript = agent.transcript("chat-1");

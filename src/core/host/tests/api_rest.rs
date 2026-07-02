@@ -10,34 +10,17 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
 use std::thread;
 
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
 use jan_klod_core::serve::serve_once;
 use jan_klod_core::Runtime;
 use tiny_http::Server;
 
-fn repo_root() -> PathBuf {
-    [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
-}
-
-fn canned_http(content: &'static str) -> HttpFn {
-    Box::new(move |_m, _u, _h, _b, _t| {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": { "role": "assistant", "content": content },
-                "finish_reason": "stop"
-            }]
-        });
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
-    })
-}
+mod common;
 
 #[test]
 fn external_client_drives_the_loop_over_http() {
-    let ext_dir = repo_root().join("ext");
+    let ext_dir = common::repo_root().join("ext");
     for guest in ["provider-openai.wasm", "interceptor-intent-router.wasm"] {
         if !ext_dir.join(guest).exists() {
             eprintln!("skipping: {guest} not staged — run `make ext`");
@@ -69,7 +52,7 @@ extensions:
     .unwrap();
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
-    let factory = || canned_http("pong");
+    let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
     let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");

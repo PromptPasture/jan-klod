@@ -7,7 +7,6 @@
 //!
 //! Skips (passes as a no-op) when the guest is not staged in `ext/`.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use jan_klod_core::host_fs::Workspace;
@@ -16,12 +15,10 @@ use jan_klod_core::tool_host::ToolExtension;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
-fn repo_root() -> PathBuf {
-    [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
-}
+mod common;
 
 fn probe_component(engine: &Engine) -> Option<Component> {
-    let path = repo_root().join("ext").join("tool-proc-probe.wasm");
+    let path = common::repo_root().join("ext").join("tool-proc-probe.wasm");
     if !path.exists() {
         eprintln!("skipping: tool-proc-probe.wasm not staged — run `make ext`");
         return None;

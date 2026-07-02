@@ -8,32 +8,15 @@
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
 
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
 use jan_klod_core::telegram::poll_once;
 use jan_klod_core::Runtime;
 
-fn repo_root() -> PathBuf {
-    [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
-}
-
-fn canned_provider_http(content: &'static str) -> HttpFn {
-    Box::new(move |_m, _u, _h, _b, _t| {
-        let body = serde_json::json!({
-            "choices": [{
-                "message": { "role": "assistant", "content": content },
-                "finish_reason": "stop"
-            }]
-        });
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
-    })
-}
+mod common;
 
 #[test]
 fn telegram_message_drives_a_turn_and_replies() {
-    let ext_dir = repo_root().join("ext");
+    let ext_dir = common::repo_root().join("ext");
     for guest in ["provider-openai.wasm", "interceptor-intent-router.wasm"] {
         if !ext_dir.join(guest).exists() {
             eprintln!("skipping: {guest} not staged — run `make ext`");
@@ -65,7 +48,7 @@ extensions:
     .unwrap();
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
-    let factory = || canned_provider_http("pong");
+    let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
     // Injected Telegram HTTP: getUpdates returns one message; sendMessage is captured.
