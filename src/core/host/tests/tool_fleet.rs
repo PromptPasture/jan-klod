@@ -56,3 +56,42 @@ fn fleet_dispatches_a_tool_call_by_name() {
 
     std::fs::remove_dir_all(&workspace_dir).ok();
 }
+
+fn load_tool(engine: &Engine, name: &str, workspace: Workspace) -> Option<ToolExtension> {
+    let path = repo_root().join("ext").join(format!("{name}.wasm"));
+    if !path.exists() {
+        eprintln!("skipping: {name}.wasm not staged — run `make ext`");
+        return None;
+    }
+    let component = Component::from_file(engine, &path).expect("component compiles");
+    Some(
+        ToolExtension::instantiate(engine, name, &component, Some(workspace), ProcessRunner::disabled())
+            .expect("tool instantiates"),
+    )
+}
+
+#[test]
+fn fs_write_then_fs_read_through_the_fleet() {
+    let engine = Engine::default();
+    let workspace_dir = std::env::temp_dir().join(format!("jk-fstools-{}", std::process::id()));
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+    let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
+
+    let (Some(writer), Some(reader)) = (
+        load_tool(&engine, "tool-fs-write", workspace.clone()),
+        load_tool(&engine, "tool-fs-read", workspace),
+    ) else {
+        return;
+    };
+    let mut fleet = ToolFleet::new(vec![writer, reader]);
+    assert!(fleet.tool_names().contains(&"fs-write".to_string()));
+    assert!(fleet.tool_names().contains(&"fs-read".to_string()));
+
+    // The model would emit fs-write then fs-read; drive both through the fleet.
+    let written = fleet.invoke(&call("fs-write", r#"{"path":"src/main.rs","contents":"fn main(){}"}"#));
+    assert!(written.unwrap().contains("wrote src/main.rs"));
+    let read = fleet.invoke(&call("fs-read", r#"{"path":"src/main.rs"}"#));
+    assert_eq!(read.as_deref(), Some("fn main(){}"));
+
+    std::fs::remove_dir_all(&workspace_dir).ok();
+}

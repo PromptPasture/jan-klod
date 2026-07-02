@@ -48,7 +48,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice | Flag |
 |---|---|
 | 8a — Wire the loop to tools (`ToolFleet` + config) | `done` |
-| 8b — `host-fs` tools (read / write / grep) | `not-started` |
+| 8b — `host-fs` tools (read / write / grep) | `in-progress` |
 | 8c — `host-process` tool (shell) | `not-started` |
 | 8d — Exit gate | `not-started` |
 
@@ -83,13 +83,15 @@ verified in Slice 8d.
 
 ## Slice 8b — `host-fs` tools
 
-- [ ] **`tool-fs-read` / `tool-fs-write` / `tool-fs-grep`** — sandboxed
-  `tool-callable` guests over `host-fs`. `read({path})`, `write({path, contents})`,
-  `grep({pattern, path?})` (line matches). Built + staged; each `invoke` returns
-  JSON.
+- [x] **`tool-fs-read` / `tool-fs-write`** — sandboxed `tool-callable` guests over
+  `host-fs`. `fs-read({path})` → contents; `fs-write({path, contents})` → a
+  confirmation. Built + staged; driven through a `ToolFleet`
+  (`fs_write_then_fs_read_through_the_fleet`).
+- [ ] **`tool-fs-grep`** — `fs-grep({pattern, path})` → matching lines. *(Next
+  increment.)*
 
-**Exit gate:** through the loop (or `ToolExtension` directly), read/write/grep operate
-on a workspace file; escapes stay denied.
+**Exit gate:** ✓ (read/write) through a `ToolFleet`, `fs-write` then `fs-read` operate
+on a workspace file; escapes stay denied (Phase 7). *(grep pending.)*
 
 ---
 
