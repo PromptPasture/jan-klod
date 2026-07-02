@@ -27,6 +27,11 @@ jobs:
         with:
           components: clippy
 
+      # `make test` also runs the Go supervisor's `go vet` + `go test`.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/core
@@ -55,6 +60,9 @@ jobs:
       - run: make test
 
       - run: make clippy
+
+      # Phase 5 exit gate: the blue/green supervisor's flip/health/rollback cycle.
+      - run: make phase5-gate
 
   harness:
     name: Component harness (exit gate)

@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
+.PHONY: help wit all core extensions supervisor bundle test harness phase2-gate phase3-gate phase4-gate phase5-gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
 
 .DEFAULT_GOAL := all
 
@@ -130,6 +130,12 @@ phase3-gate: extensions
 phase4-gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-ui --test roundtrip
 	cd $(CORE) && cargo test -p jan-klod-host --test telegram
+
+# Phase 5 exit gate: the blue/green supervisor's stage->flip->health->rollback cycle
+# (Promote commits on healthy, rolls the active symlink back on a failed health
+# check), offline.
+phase5-gate:
+	cd $(SUPERVISOR) && go test ./...
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.

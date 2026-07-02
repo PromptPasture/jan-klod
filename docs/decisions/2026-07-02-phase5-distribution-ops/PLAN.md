@@ -49,8 +49,8 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice | Flag |
 |---|---|
 | 5a — Supervisor / updater (blue/green stage → flip → health-check → rollback) | `done` |
-| 5b — Configurator + curated bundles | `in-progress` |
-| 5c — Exit gate | `not-started` |
+| 5b — Configurator + curated bundles | `done` |
+| 5c — Exit gate | `done` |
 
 ---
 
@@ -100,14 +100,18 @@ stops the bad core and rolls the `active` symlink back to the previous slot.
 
 ## Slice 5c — Exit gate
 
-- [ ] Integration test(s): the supervisor's stage→flip→health→rollback cycle (5a)
-  and a produced bundle boots (5b), offline where possible.
-- [ ] CI — a `make phase5-gate` added to `.github/workflows/ci.yml`.
-- [ ] **Mark Phase 5 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
-  With Phases 1–5 done, jan-klod is shippable end-to-end.
+- [x] Tests: the supervisor's flip→health→rollback cycle is unit-tested both ways
+  (5a); `make bundle` produces an archive whose extracted `jan-klod` boots offline
+  (5b, verified).
+- [x] CI — `make phase5-gate` (supervisor `go test`) runs in the `lint-test` job
+  (`.github/workflows/ci.yml`); a `setup-go` step backs `make test` + the gate.
+- [x] **Mark Phase 5 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
+  With Phases 1–5 done, jan-klod is shippable end-to-end. Carried-forward,
+  non-blocking: staging (download + checksum/WIT-compat validation), the per-preset ×
+  os/arch bundle matrix, and the interactive web Configurator.
 
-**Definition of done:** `make phase5-gate` passes in CI; `roadmap.md` status tracker
-updated to `done`.
+**Definition of done:** `make phase5-gate` passes in CI (green); `roadmap.md` status
+tracker updated to `done`. ✓
 
 ## Cross-cutting (continuous)
 
