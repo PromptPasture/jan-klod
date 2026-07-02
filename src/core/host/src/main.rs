@@ -18,10 +18,10 @@ use jan_klod_core::Runtime;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("serve") {
-        serve(&args[1..])
-    } else {
-        boot_plan(&args)
+    match args.first().map(String::as_str) {
+        Some("serve") => serve(&args[1..]),
+        Some("telegram") => telegram(&args[1..]),
+        _ => boot_plan(&args),
     }
 }
 
@@ -93,6 +93,57 @@ fn serve(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// Boot the agent and drive it from a Telegram bot (long-poll) until killed. The
+/// bot token comes from the `TELEGRAM_BOT_TOKEN` environment variable.
+fn telegram(args: &[String]) -> ExitCode {
+    let config_path = arg(args, 0, "config.yaml");
+    let ext_dir = arg(args, 1, "ext");
+
+    let Ok(token) = std::env::var("TELEGRAM_BOT_TOKEN") else {
+        eprintln!("jan-klod: set TELEGRAM_BOT_TOKEN to run the telegram bot");
+        return ExitCode::FAILURE;
+    };
+
+    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("jan-klod: boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let factory = || -> HttpFn { Box::new(jan_klod_core::http::fetch) };
+    let mut agent = match runtime.build_agent(&factory) {
+        Ok(agent) => agent,
+        Err(err) => {
+            eprintln!("jan-klod: agent boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Bridge the telegram poller's fetch to the real host-http client. The read
+    // timeout must exceed the server-side long-poll window.
+    let fetch = |method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>| {
+        let owned: Vec<(String, String)> =
+            headers.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+        match jan_klod_core::http::fetch(method, url, &owned, body, 40_000) {
+            Ok(response) => Ok(response.body),
+            Err(err) => Err(format!("{err:?}")),
+        }
+    };
+
+    println!("jan-klod: telegram bot polling (Ctrl-C to stop)");
+    let mut offset = 0;
+    loop {
+        match jan_klod_core::telegram::poll_once(&mut agent, &fetch, &token, offset) {
+            Ok(next) => offset = next,
+            Err(err) => {
+                eprintln!("jan-klod: telegram poll error: {err}; retrying in 5s");
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    }
 }
 
 /// Positional arg `index` (0-based within the subcommand's args), or `default`.

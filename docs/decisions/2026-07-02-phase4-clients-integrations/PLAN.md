@@ -50,7 +50,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice | Flag |
 |---|---|
 | 4a — UI client (CLI/REPL first, then TUI) | `done` |
-| 4b — `host-socket` + `chat-telegram` | `not-started` |
+| 4b — `host-socket` + `chat-telegram` | `done` |
 | 4c — `agent-*` ACP delegation (both directions) | `not-started` |
 | 4d — Exit gate | `not-started` |
 
@@ -77,16 +77,21 @@ by the `roundtrip` test, the `App`-model tests, and a live e2e smoke.
 
 ## Slice 4b — `host-socket` + `chat-telegram`
 
-- [ ] **Confirm the transport need** — does `chat-telegram` (Telegram bot long-poll)
-  need `host-socket`, or does the existing `host-http` (outbound polling) suffice for
-  v1? Resolve before designing the capability (YAGNI).
-- [ ] **Design `wit/host-socket.wit`** *(only if 4b needs it)* — a host-owned
-  long-lived socket the guest opens/reads/writes.
-- [ ] **Build `chat-telegram`** — a sandboxed guest that drives the loop from
-  inbound Telegram messages and replies. Unlocks headless chat-only deployments.
+- [x] **Transport need resolved: no `host-socket` for v1.** The Telegram Bot API is
+  **outbound HTTP only** — `getUpdates` (long-poll GET) + `sendMessage` (POST) — so
+  the existing outbound HTTP covers it. `wit/host-socket.wit` is **not built** (YAGNI;
+  revisit for a chat platform that needs a persistent inbound socket, e.g. a
+  websocket-only API).
+- [x] **Build `chat-telegram`** — `jan_klod_core::telegram`: `parse_updates` /
+  `next_offset` (pure, tested) + `poll_once(agent, fetch, token, offset)` that fetches
+  updates, drives each message through the loop (chat id = durable session), and
+  sends the answer back. Host-side (drives the host loop, consistent with the REST
+  surface); HTTP injected as a `Fetch` closure for offline testing. Launchable:
+  `jan-klod telegram` (`make chat-telegram`, `TELEGRAM_BOT_TOKEN`).
 
-**Exit gate:** a chat message drives a turn and gets a reply (offline: a canned
-inbound message → loop → reply), no UI client required.
+**Exit gate:** ✓ `host/tests/telegram.rs` — a canned inbound message drives one
+`poll_once` cycle through the sandboxed guests and the captured `sendMessage` carries
+the answer to the right chat, offline, no UI client. Wired into `make harness`.
 
 ---
 

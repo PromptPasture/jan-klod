@@ -21,6 +21,7 @@ pub mod interceptor_host;
 pub mod route;
 pub mod serve;
 pub mod store;
+pub mod telegram;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
