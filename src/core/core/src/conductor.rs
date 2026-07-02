@@ -94,17 +94,32 @@ pub enum Event {
     },
 }
 
+/// Whether the loop should keep running after an event.
+///
+/// A sink returns [`Flow::Stop`] to **cancel** the turn at the next loop boundary —
+/// e.g. an SSE sink whose client disconnected, or an explicit stop button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    /// Keep going.
+    Continue,
+    /// Cancel the turn at the next boundary (finalize with what's in hand).
+    Stop,
+}
+
 /// A sink the conductor pushes [`Event`]s to as a turn runs — synchronously, on the
-/// turn's own thread (the loop is sync and the session is `!Send`).
+/// turn's own thread (the loop is sync and the session is `!Send`). Returning
+/// [`Flow::Stop`] cancels the turn.
 pub trait EventSink {
-    /// Handle one event.
-    fn emit(&mut self, event: &Event);
+    /// Handle one event; return [`Flow::Stop`] to cancel the turn.
+    fn emit(&mut self, event: &Event) -> Flow;
 }
 
 /// An [`EventSink`] that drops every event — the non-streaming default.
 pub struct NoSink;
 impl EventSink for NoSink {
-    fn emit(&mut self, _event: &Event) {}
+    fn emit(&mut self, _event: &Event) -> Flow {
+        Flow::Continue
+    }
 }
 
 /// The result of running one turn.
@@ -195,12 +210,16 @@ pub fn run_turn(
             content: text.clone(),
             tool_call_id: None,
         });
-        if !text.is_empty() {
-            sink.emit(&Event::TextDelta(text.clone())); // preview; authoritative in Done
-        }
+        // Preview delta; the authoritative text is in the terminal Done. A sink
+        // returning Stop (e.g. client disconnected) cancels the turn here.
+        let flow = if text.is_empty() {
+            Flow::Continue
+        } else {
+            sink.emit(&Event::TextDelta(text.clone()))
+        };
         final_text = text;
 
-        if completion.tool_calls.is_empty() {
+        if flow == Flow::Stop || completion.tool_calls.is_empty() {
             break;
         }
         iterations += 1;
@@ -208,8 +227,9 @@ pub fn run_turn(
             break;
         }
 
+        // Returns true to stop the loop: a tool-result `terminate`, or a sink cancel.
         if run_tool_calls(dispatcher, tools, driver, sink, &completion.tool_calls, &mut request) {
-            break; // a tool-result interceptor terminated the loop
+            break;
         }
     }
 
@@ -229,14 +249,14 @@ fn run_tool_calls(
     calls: &[ToolCall],
     request: &mut PendingRequest,
 ) -> bool {
-    let mut terminate = false;
+    let mut stop = false;
     for call in calls {
         // tool-call gate (e.g. permission). A block denies just this call; the
         // model is told, and the loop continues.
         let mut call_state = HookState::ToolCall(call.clone());
         let content = match dispatcher.dispatch(Phase::ToolCall, &mut call_state, driver) {
             Outcome::Blocked(reason) => {
-                sink.emit(&Event::Warning(format!("tool `{}` denied: {}", call.name, reason.message)));
+                let _ = sink.emit(&Event::Warning(format!("tool `{}` denied: {}", call.name, reason.message)));
                 format!("tool call denied: {}", reason.message)
             }
             Outcome::Proceeded => {
@@ -244,7 +264,9 @@ fn run_tool_calls(
                     HookState::ToolCall(c) => c.clone(),
                     _ => call.clone(),
                 };
-                sink.emit(&Event::ToolInvoked(effective.clone()));
+                if sink.emit(&Event::ToolInvoked(effective.clone())) == Flow::Stop {
+                    stop = true;
+                }
                 tools
                     .invoke(&effective)
                     .unwrap_or_else(|| format!("no tool named `{}`", effective.name))
@@ -260,20 +282,22 @@ fn run_tool_calls(
             dispatcher.dispatch(Phase::ToolResult, &mut result_state, driver),
             Outcome::Blocked(_)
         ) {
-            terminate = true;
+            stop = true; // tool-result `terminate`
         }
         let outcome = match result_state {
             HookState::ToolResult(outcome) => outcome,
             _ => ToolOutcome { tool_call_id: call.id.clone(), content: String::new() },
         };
-        sink.emit(&Event::ToolResult(outcome.clone()));
+        if sink.emit(&Event::ToolResult(outcome.clone())) == Flow::Stop {
+            stop = true; // sink cancel
+        }
         request.messages.push(Message {
             role: Role::Tool,
             content: outcome.content,
             tool_call_id: Some(call.id.clone()),
         });
     }
-    terminate
+    stop
 }
 
 /// Dispatch a request-shaping phase, threading the `PendingRequest` through the
@@ -691,8 +715,26 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink(Vec<Event>);
     impl EventSink for RecordingSink {
-        fn emit(&mut self, event: &Event) {
+        fn emit(&mut self, event: &Event) -> Flow {
             self.0.push(event.clone());
+            Flow::Continue
+        }
+    }
+
+    /// A sink that records events and returns `Stop` once it has seen `after` of
+    /// them — to test cancellation at a loop boundary.
+    struct CancelAfter {
+        events: Vec<Event>,
+        after: usize,
+    }
+    impl EventSink for CancelAfter {
+        fn emit(&mut self, event: &Event) -> Flow {
+            self.events.push(event.clone());
+            if self.events.len() >= self.after {
+                Flow::Stop
+            } else {
+                Flow::Continue
+            }
         }
     }
 
@@ -734,6 +776,28 @@ mod tests {
                 Event::TextDelta("final answer".into()),
                 Event::Done { text: "final answer".into(), agentic: true },
             ]
+        );
+    }
+
+    #[test]
+    fn sink_stop_cancels_the_react_loop() {
+        // The provider would keep emitting tool calls forever; a sink that stops
+        // after the first tool result must cancel the loop at that boundary.
+        let mut d = Dispatcher::new(vec![]);
+        let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
+            id: "p".into(),
+            replies: RefCell::new(VecDeque::from(vec![Ok(with_tools("", vec![call("1", "loop")]))])),
+            seen: Rc::new(RefCell::new(vec![])),
+        })];
+        let mut tools = CountingTools { result: "r".into(), count: Rc::new(RefCell::new(0)) };
+        // Events: ToolInvoked, ToolResult (stop here), then Done at finalize.
+        let mut sink = CancelAfter { events: vec![], after: 2 };
+        let out = run_turn(&mut d, &mut providers, &mut tools, &mut NoDriver, &mut sink, "s", "go");
+        assert!(matches!(out, RunResult::Answered { .. }), "a cancelled turn still finalizes");
+        assert!(
+            matches!(sink.events.last(), Some(Event::Done { .. })),
+            "the loop stopped and emitted a terminal Done: {:?}",
+            sink.events
         );
     }
 

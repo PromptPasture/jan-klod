@@ -16,7 +16,7 @@ use std::io::Write;
 
 use tiny_http::{Header, Method, Request, Response, Server};
 
-use crate::conductor::{Event, EventSink, RunResult};
+use crate::conductor::{Event, EventSink, Flow, RunResult};
 use crate::AgentSession;
 
 /// A ready HTTP reply: status code + JSON body.
@@ -129,9 +129,9 @@ struct SseSink<'a> {
 }
 
 impl EventSink for SseSink<'_> {
-    fn emit(&mut self, event: &Event) {
+    fn emit(&mut self, event: &Event) -> Flow {
         if !self.live {
-            return;
+            return Flow::Stop; // client gone — cancel the turn
         }
         let (kind, data) = match event {
             Event::TextDelta(text) => ("delta", serde_json::json!({ "text": text })),
@@ -149,7 +149,9 @@ impl EventSink for SseSink<'_> {
         };
         if write_frame(self.writer, kind, &data.to_string()).is_err() {
             self.live = false; // client disconnected — stop writing
+            return Flow::Stop;
         }
+        Flow::Continue
     }
 }
 

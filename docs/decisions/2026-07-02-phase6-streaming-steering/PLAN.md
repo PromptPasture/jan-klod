@@ -92,14 +92,16 @@ ending in `event: done` with the answer, offline.
 
 ## Slice 6c — Cancel + steering
 
-- [ ] **Cancel** — `EventSink::on_event` returns a `Flow` (`Continue`/`Stop`); the
-  conductor checks it at loop boundaries (after each completion / tool result) and
-  stops cleanly, emitting a `done` with what it has.
+- [x] **Cancel** — `EventSink::emit` returns a `Flow` (`Continue`/`Stop`); the
+  conductor checks it at loop boundaries (after each completion delta and each tool
+  event) and stops cleanly, still emitting the terminal `Done`. The `SseSink` returns
+  `Stop` when a frame write fails, so a **disconnected client cancels the turn** for
+  free. Tested (`CancelAfter` sink stops an otherwise-infinite ReAct loop).
 - [ ] **Steering / follow-up queue** — a queue the driver appends to; the conductor
   drains it at `prepare-next-turn`, injecting follow-up user messages into the run.
 
-**Exit gate:** a sink that returns `Stop` after the first tool result ends the run at
-the next boundary; a queued follow-up is picked up on the next iteration.
+**Exit gate:** ✓ (cancel) a sink returning `Stop` ends the run at the next boundary
+with a terminal `Done`; *(steering follow-up pending.)*
 
 ---
 
