@@ -41,6 +41,7 @@ pub struct Exit {
 
 /// Runs commands under a workspace, bounded by a timeout and output cap.
 /// Default-deny: [`ProcessRunner::disabled`] rejects every exec.
+#[derive(Clone)]
 pub struct ProcessRunner {
     workspace: Option<Workspace>,
     timeout: Duration,

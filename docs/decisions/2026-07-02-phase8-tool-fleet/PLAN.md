@@ -62,15 +62,20 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
   extension's `invoke`; unknown → `None`. Exposes `tool_names()`/`meta()` for
   advertising. Verified across the boundary (`tool_fleet.rs`: dispatches `fs-probe`
   by name, skips an unknown tool).
-- [ ] **Config → capabilities** — `Runtime` reads a workspace root + execution
-  settings; `build_agent` instantiates each enabled `tool.*` as a `ToolExtension`
-  (with the shared `host-fs` workspace / `host-process` runner) into a `ToolFleet`,
-  and `AgentSession::run*` drives the loop with it instead of `NoTools`.
+- [x] **Config → capabilities** — `Runtime::open_workspace` (top-level `workspace:`)
+  and `open_process_runner` (`execution: { enabled, timeout-secs?, output-cap? }`)
+  build the shared, **default-deny** `host-fs`/`host-process` capabilities;
+  `build_agent` instantiates each enabled `tool.*` as a `ToolExtension` with them into
+  a `ToolFleet`, and `AgentSession::run`/`run_streaming_headless` drive the loop with
+  the fleet (restructured to avoid the borrow conflict). `tool_wiring.rs`: a config
+  enabling `tool.fs-probe` + a workspace yields `tool_names() == ["fs-probe"]`.
 - [ ] **Advertise at `select-tools`** — `interceptor-tool-selector` fills
-  `pending-request.tools` from the fleet's metadata (via `host-config`).
+  `pending-request.tools` from the fleet's metadata (via `host-config`). *(Dispatch
+  works now; advertising to the model is the remaining 8a item.)*
 
 **Exit gate:** a turn whose model emits a tool call reaches the matching `tool-*`
-extension through the loop and feeds the result back (offline, canned provider).
+extension through the loop and feeds the result back (offline, canned provider) —
+verified in Slice 8d.
 
 ---
 

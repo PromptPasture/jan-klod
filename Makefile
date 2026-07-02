@@ -113,10 +113,12 @@ supply-chain: deny audit sbom
 #                       runner denies (Phase 7 Slice 7b).
 #   tool_fleet        — a ToolFleet dispatches a tool call by name to the matching
 #                       tool-* extension (Phase 8 Slice 8a).
+#   tool_wiring       — build_agent instantiates an enabled tool.* into the fleet
+#                       from config + a workspace (Phase 8 Slice 8a).
 # Both run against a canned host-http reply (no network, no api key) and skip any
 # guest not staged, so this target stages them first.
 harness: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence --test api_rest --test telegram --test host_fs --test host_process --test tool_fleet
+	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence --test api_rest --test telegram --test host_fs --test host_process --test tool_fleet --test tool_wiring
 
 # Phase 2 exit gate: boot the real core from a config with two providers, a routing
 # table, and all v1 interceptors enabled, and run the full thin loop offline —

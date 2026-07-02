@@ -227,6 +227,12 @@ impl Runtime {
     ) -> Result<AgentSession, CoreError> {
         let mut providers: Vec<Box<dyn conductor::Completer>> = Vec::new();
         let mut interceptors: Vec<Box<dyn intercept::Interceptor>> = Vec::new();
+        let mut tool_extensions: Vec<tool_host::ToolExtension> = Vec::new();
+
+        // Shared, default-deny substrates for tools (opt-in via config).
+        let workspace = self.open_workspace();
+        let process = self.open_process_runner(workspace.as_ref());
+
         for ext in &self.extensions {
             let LoadState::Compiled(component) = &ext.state else {
                 continue;
@@ -251,6 +257,13 @@ impl Runtime {
                         provider_fn,
                     )?));
                 }
+                "tool" => tool_extensions.push(tool_host::ToolExtension::instantiate(
+                    &self.engine,
+                    &ext.instance.id,
+                    component,
+                    workspace.clone(),
+                    process.clone(),
+                )?),
                 _ => {}
             }
         }
@@ -258,7 +271,50 @@ impl Runtime {
             dispatcher: intercept::Dispatcher::new(interceptors),
             providers,
             store: self.open_store()?,
+            tools: tool_host::ToolFleet::new(tool_extensions),
         })
+    }
+
+    /// Open the host-side workspace for `host-fs` from the top-level `workspace:`
+    /// config key. Absent or un-openable → `None` (default-deny).
+    fn open_workspace(&self) -> Option<host_fs::Workspace> {
+        let root = self.agent.get("workspace").and_then(serde_json::Value::as_str)?;
+        host_fs::Workspace::open(root).map_or_else(
+            |_| {
+                eprintln!("WARN [core] workspace `{root}` could not be opened; host-fs is default-deny");
+                None
+            },
+            Some,
+        )
+    }
+
+    /// Build the `host-process` runner from the top-level `execution:` config
+    /// (`{ enabled, timeout-secs?, output-cap? }`). Disabled unless enabled *and* a
+    /// workspace is configured (the exec cwd is jailed to it).
+    fn open_process_runner(&self, workspace: Option<&host_fs::Workspace>) -> host_process::ProcessRunner {
+        let exec = self.agent.get("execution");
+        let enabled = exec
+            .and_then(|e| e.get("enabled"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        match (enabled, workspace) {
+            (true, Some(ws)) => {
+                let timeout = exec
+                    .and_then(|e| e.get("timeout-secs"))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(30);
+                let cap = exec
+                    .and_then(|e| e.get("output-cap"))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(64 * 1024);
+                host_process::ProcessRunner::new(
+                    ws.clone(),
+                    std::time::Duration::from_secs(timeout),
+                    usize::try_from(cap).unwrap_or(64 * 1024),
+                )
+            }
+            _ => host_process::ProcessRunner::disabled(),
+        }
     }
 
     /// Open the host-side persistent store from config: the enabled `store.sqlite`
@@ -303,21 +359,29 @@ pub struct AgentSession {
     dispatcher: intercept::Dispatcher,
     providers: Vec<Box<dyn conductor::Completer>>,
     store: store::Store,
+    /// The enabled `tool-*` extensions, dispatched by the loop as a `ToolInvoker`.
+    tools: tool_host::ToolFleet,
 }
 
 impl AgentSession {
-    /// Run one turn headless with no tools — the convenience path. An interceptor
-    /// `ask` resolves to its `default-answer`, and tool calls resolve to
-    /// "no tool" (there is no first-party `tool-callable` extension in v1).
+    /// Run one turn headless, using the session's tool fleet. An interceptor `ask`
+    /// resolves to its `default-answer`.
     pub fn run(&mut self, session: &str, message: &str) -> conductor::RunResult {
-        self.run_with(&mut HeadlessDriver, &mut conductor::NoTools, session, message)
+        run_and_persist(
+            &mut self.dispatcher,
+            &mut self.providers,
+            &self.store,
+            &mut self.tools,
+            &mut HeadlessDriver,
+            &mut conductor::NoSink,
+            session,
+            message,
+        )
     }
 
-    /// Run one turn driving the full loop (before-loop → shaping → `ReAct` →
-    /// finalize) with an explicit `driver` (answers interceptor `ask`s) and
-    /// `tools` (routes tool calls). On a completed turn the user message + answer
-    /// are appended to the session's durable transcript in the host-side store.
-    /// This is the seam a real client/driver and the `tool-callable` fleet wire into.
+    /// Run one turn with an explicit `driver` and `tools` (overriding the fleet).
+    /// On a completed turn the user message + answer are appended to the session's
+    /// durable transcript. The seam a test injects stub tools through.
     pub fn run_with(
         &mut self,
         driver: &mut dyn intercept::Driver,
@@ -325,7 +389,16 @@ impl AgentSession {
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
-        self.drive(driver, tools, &mut conductor::NoSink, session, message)
+        run_and_persist(
+            &mut self.dispatcher,
+            &mut self.providers,
+            &self.store,
+            tools,
+            driver,
+            &mut conductor::NoSink,
+            session,
+            message,
+        )
     }
 
     /// Like [`Self::run_with`], but streams incremental [`conductor::Event`]s to
@@ -338,43 +411,42 @@ impl AgentSession {
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
-        self.drive(driver, tools, sink, session, message)
+        run_and_persist(
+            &mut self.dispatcher,
+            &mut self.providers,
+            &self.store,
+            tools,
+            driver,
+            sink,
+            session,
+            message,
+        )
     }
 
-    /// Headless streaming turn (no interactive driver, no tools) — the entry the
-    /// REST surface's SSE handler uses. Events go to `sink` as the turn runs.
+    /// Headless streaming turn using the session's tool fleet — the entry the REST
+    /// surface's SSE handler uses. Events go to `sink` as the turn runs.
     pub fn run_streaming_headless(
         &mut self,
         sink: &mut dyn conductor::EventSink,
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
-        self.drive(&mut HeadlessDriver, &mut conductor::NoTools, sink, session, message)
-    }
-
-    /// Drive one turn through the conductor and persist a completed turn's
-    /// transcript. Shared by the run entry points.
-    fn drive(
-        &mut self,
-        driver: &mut dyn intercept::Driver,
-        tools: &mut dyn conductor::ToolInvoker,
-        sink: &mut dyn conductor::EventSink,
-        session: &str,
-        message: &str,
-    ) -> conductor::RunResult {
-        let result = conductor::run_turn(
+        run_and_persist(
             &mut self.dispatcher,
             &mut self.providers,
-            tools,
-            driver,
+            &self.store,
+            &mut self.tools,
+            &mut HeadlessDriver,
             sink,
             session,
             message,
-        );
-        if let conductor::RunResult::Answered { text, .. } = &result {
-            self.persist_turn(session, message, text);
-        }
-        result
+        )
+    }
+
+    /// The names of the tools the loop can call (advertised names from the fleet).
+    #[must_use]
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.tool_names()
     }
 
     /// The durable transcript for `session`, oldest turn first. Reads from the
@@ -385,16 +457,32 @@ impl AgentSession {
         entries.reverse(); // `recent` is newest-first; a transcript reads oldest-first
         entries
     }
+}
 
-    /// Append one `{user, answer}` turn to the session's transcript. Best-effort:
-    /// a store failure is logged, never fatal to the turn that already succeeded.
-    fn persist_turn(&self, session: &str, user: &str, answer: &str) {
-        let turn = self.store.list_keys(session).map_or(0, |keys| keys.len()) + 1;
-        let value = serde_json::json!({ "user": user, "answer": answer }).to_string();
-        if let Err(err) = self.store.set(session, &format!("turn-{turn}"), &value) {
+/// Drive one turn through the conductor and persist a completed turn's transcript.
+/// A free function (not a method) so `run`/streaming can pass disjoint `&mut` borrows
+/// of the session's fields (dispatcher, providers, tools) in one call.
+#[allow(clippy::too_many_arguments)]
+fn run_and_persist(
+    dispatcher: &mut intercept::Dispatcher,
+    providers: &mut [Box<dyn conductor::Completer>],
+    store: &store::Store,
+    tools: &mut dyn conductor::ToolInvoker,
+    driver: &mut dyn intercept::Driver,
+    sink: &mut dyn conductor::EventSink,
+    session: &str,
+    message: &str,
+) -> conductor::RunResult {
+    let result = conductor::run_turn(dispatcher, providers, tools, driver, sink, session, message);
+    if let conductor::RunResult::Answered { text, .. } = &result {
+        // Best-effort transcript append: a store failure never fails the answered turn.
+        let turn = store.list_keys(session).map_or(0, |keys| keys.len()) + 1;
+        let value = serde_json::json!({ "user": message, "answer": text }).to_string();
+        if let Err(err) = store.set(session, &format!("turn-{turn}"), &value) {
             eprintln!("WARN [core] persisting turn for session {session} failed: {err}");
         }
     }
+    result
 }
 
 /// Headless driver: no interactive surface, so an `ask` takes the prompt's
