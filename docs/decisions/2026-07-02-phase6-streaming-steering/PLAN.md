@@ -45,7 +45,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice | Flag |
 |---|---|
 | 6a — Conductor emits events via an `EventSink` | `done` |
-| 6b — SSE on the REST surface | `not-started` |
+| 6b — SSE on the REST surface | `done` |
 | 6c — Cancel + steering (follow-up queue) | `not-started` |
 | 6d — Exit gate | `not-started` |
 
@@ -78,8 +78,11 @@ ending in `Done` with the authoritative answer.
   drives it; an `SseSink` maps `Event` → frames (`delta`/`tool`/`tool-result`/
   `warning`/`done`, plus a terminal `error` on failure), best-effort if the client
   drops.
-- [ ] **Clients** — `jan-klod-ui` (and the TUI) consume the SSE stream, rendering
-  deltas live; Telegram stays non-streaming (edit-message batching later).
+- [x] **Client** — `jan-klod-ui` gained `stream_turn` (`Accept: text/event-stream`,
+  line-parses `event:/data:` frames after the headers) + a pure `parse_frame`
+  (`StreamEvent`, 2 tests); the REPL renders deltas live and notices to stderr.
+  Verified end-to-end against a live `serve` (fallback warnings + terminal error
+  streamed and rendered). The `ratatui` TUI + Telegram stay non-streaming for now.
 
 **Exit gate:** ✓ `api_rest.rs` — an external HTTP client sending `Accept:
 text/event-stream` receives `Content-Type: text/event-stream` + ordered frames

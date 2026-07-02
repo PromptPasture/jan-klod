@@ -15,7 +15,7 @@ mod tui;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use jan_klod_ui::send_turn;
+use jan_klod_ui::{stream_turn, StreamEvent};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1).peekable();
@@ -57,9 +57,30 @@ fn main() -> ExitCode {
         if message.is_empty() || message == "quit" || message == "exit" {
             break;
         }
-        match send_turn(&addr, &session, message) {
-            Ok(answer) => println!("klod › {answer}"),
-            Err(err) => eprintln!("error: {err}"),
+        // Stream the turn: print deltas live; notices to stderr. `done` is the
+        // authoritative answer — printed only if nothing was streamed (e.g. a
+        // finalize-only rewrite).
+        print!("klod › ");
+        let _ = io::stdout().flush();
+        let mut streamed = String::new();
+        let mut final_answer = String::new();
+        let outcome = stream_turn(&addr, &session, message, &mut |event| match event {
+            StreamEvent::Delta(text) => {
+                print!("{text}");
+                let _ = io::stdout().flush();
+                streamed.push_str(&text);
+            }
+            StreamEvent::Done(text) => final_answer = text,
+            StreamEvent::Tool(name) => eprint!("\n  ⚙ {name}… "),
+            StreamEvent::Warning(msg) => eprint!("\n  ⚠ {msg}"),
+            StreamEvent::Error(msg) => eprint!("\n  error: {msg}"),
+        });
+        if streamed.is_empty() && !final_answer.is_empty() {
+            print!("{final_answer}");
+        }
+        println!();
+        if let Err(err) = outcome {
+            eprintln!("error: {err}");
         }
     }
     ExitCode::SUCCESS

@@ -8,9 +8,94 @@
 
 pub mod app;
 
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
+
+/// One event streamed back over SSE as a turn runs (mirrors the core's
+/// `conductor::Event`, parsed from `event:/data:` frames).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamEvent {
+    /// A chunk of assistant text (preview).
+    Delta(String),
+    /// A tool is running.
+    Tool(String),
+    /// A non-fatal notice (provider fallback, retry).
+    Warning(String),
+    /// The turn finished with the authoritative answer.
+    Done(String),
+    /// The turn failed.
+    Error(String),
+}
+
+/// Parse one SSE frame (its `event` kind + `data` JSON) into a [`StreamEvent`].
+#[must_use]
+pub fn parse_frame(kind: &str, data: &str) -> StreamEvent {
+    let value: serde_json::Value = serde_json::from_str(data).unwrap_or(serde_json::Value::Null);
+    let field = |k: &str| value.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    match kind {
+        "delta" => StreamEvent::Delta(field("text")),
+        "tool" => StreamEvent::Tool(field("name")),
+        "warning" => StreamEvent::Warning(field("message")),
+        "done" => StreamEvent::Done(field("answer")),
+        _ => StreamEvent::Error(if kind == "error" { field("error") } else { format!("unknown event `{kind}`") }),
+    }
+}
+
+/// Drive one turn with **streaming**: `POST` with `Accept: text/event-stream` and
+/// invoke `on_event` for each SSE frame as it arrives (a live transcript).
+///
+/// # Errors
+/// Returns a human-readable error if the connection or read fails.
+pub fn stream_turn(
+    addr: &str,
+    session: &str,
+    message: &str,
+    on_event: &mut dyn FnMut(StreamEvent),
+) -> Result<(), String> {
+    let body = serde_json::json!({ "session": session, "message": message }).to_string();
+    let request = format!(
+        "POST /turn HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+         Accept: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let mut stream = TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
+    #[allow(clippy::duration_suboptimal_units)] // no stable Duration::from_mins
+    let read_timeout = Duration::from_secs(300);
+    stream
+        .set_read_timeout(Some(read_timeout))
+        .map_err(|err| err.to_string())?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| format!("sending request: {err}"))?;
+
+    // Read line by line: skip HTTP headers (up to the first blank line), then parse
+    // SSE frames (`event:`/`data:` lines, blank line = frame boundary).
+    let reader = BufReader::new(stream);
+    let mut in_body = false;
+    let mut kind: Option<String> = None;
+    let mut data: Option<String> = None;
+    for line in reader.lines() {
+        let line = line.map_err(|err| format!("reading response: {err}"))?;
+        if !in_body {
+            if line.is_empty() {
+                in_body = true;
+            }
+            continue;
+        }
+        if line.is_empty() {
+            if let (Some(k), Some(d)) = (kind.take(), data.take()) {
+                on_event(parse_frame(&k, &d));
+            }
+        } else if let Some(rest) = line.strip_prefix("event: ") {
+            kind = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("data: ") {
+            data = Some(rest.to_string());
+        }
+    }
+    Ok(())
+}
 
 /// Drive one turn against the core at `addr` (`host:port`): `POST` the message and
 /// return the answer text.
@@ -83,5 +168,25 @@ mod tests {
     #[test]
     fn parse_answer_rejects_garbage() {
         assert!(parse_answer("HTTP/1.1 200 OK\r\n\r\nnot json").is_err());
+    }
+
+    #[test]
+    fn parse_frame_maps_each_event_kind() {
+        assert_eq!(parse_frame("delta", r#"{"text":"hi"}"#), StreamEvent::Delta("hi".into()));
+        assert_eq!(parse_frame("tool", r#"{"name":"bash","id":"1"}"#), StreamEvent::Tool("bash".into()));
+        assert_eq!(
+            parse_frame("warning", r#"{"message":"falling back"}"#),
+            StreamEvent::Warning("falling back".into())
+        );
+        assert_eq!(
+            parse_frame("done", r#"{"answer":"result","agentic":true}"#),
+            StreamEvent::Done("result".into())
+        );
+        assert_eq!(parse_frame("error", r#"{"error":"boom"}"#), StreamEvent::Error("boom".into()));
+    }
+
+    #[test]
+    fn parse_frame_flags_unknown_kinds() {
+        assert!(matches!(parse_frame("weird", "{}"), StreamEvent::Error(_)));
     }
 }
