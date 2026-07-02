@@ -33,20 +33,17 @@ pub struct Entry {
 }
 
 /// Errors the store can surface. Mirrors `store-types.store-error`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StoreError {
     /// No entry for the requested namespace + key.
     #[error("entry not found")]
     NotFound,
-    /// A uniqueness/constraint conflict.
-    #[error("storage conflict")]
-    Conflict,
-    /// A value could not be (de)serialised.
-    #[error("serialization error")]
-    Serialization,
     /// Any other backend failure (I/O, SQL, …).
-    #[error("storage backend error")]
-    Backend,
+    #[error("storage backend error: {detail}")]
+    Backend {
+        /// The underlying SQL or I/O error message.
+        detail: String,
+    },
 }
 
 /// A SQLite-backed store. One [`Connection`]; the core owns a single instance and
@@ -62,7 +59,8 @@ impl Store {
     /// Returns [`StoreError::Backend`] if the database cannot be opened or the
     /// schema cannot be created.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let conn = Connection::open(path).map_err(|_| StoreError::Backend)?;
+        let conn = Connection::open(path)
+            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
         Self::init(conn)
     }
 
@@ -71,7 +69,8 @@ impl Store {
     /// # Errors
     /// Returns [`StoreError::Backend`] if the connection cannot be created.
     pub fn open_in_memory() -> Result<Self, StoreError> {
-        let conn = Connection::open_in_memory().map_err(|_| StoreError::Backend)?;
+        let conn = Connection::open_in_memory()
+            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
         Self::init(conn)
     }
 
@@ -86,7 +85,7 @@ impl Store {
                 PRIMARY KEY (namespace, key)
             );",
         )
-        .map_err(|_| StoreError::Backend)?;
+        .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
         Ok(Self { conn })
     }
 
@@ -94,8 +93,9 @@ impl Store {
     /// `created_at` is preserved across updates; `updated_at` advances.
     ///
     /// # Errors
-    /// Returns [`StoreError::Backend`] on a SQL failure, or [`StoreError::NotFound`]
-    /// if the row cannot be read back (should not happen after a successful write).
+    /// Returns [`StoreError::Backend`] (with the SQL error message) on a SQL failure,
+    /// or [`StoreError::NotFound`] if the row cannot be read back (should not happen
+    /// after a successful write).
     pub fn set(&self, namespace: &str, key: &str, value: &str) -> Result<Entry, StoreError> {
         let now = now_secs();
         self.conn
@@ -106,7 +106,7 @@ impl Store {
                  DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
                 params![namespace, key, value, i64::try_from(now).unwrap_or(i64::MAX)],
             )
-            .map_err(|_| StoreError::Backend)?;
+            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
         self.get(namespace, key)
     }
 
@@ -132,7 +132,7 @@ impl Store {
                 },
             )
             .optional()
-            .map_err(|_| StoreError::Backend)?
+            .map_err(|e| StoreError::Backend { detail: e.to_string() })?
             .ok_or(StoreError::NotFound)
     }
 
@@ -147,7 +147,7 @@ impl Store {
                 params![namespace, key],
             )
             .map(|_| ())
-            .map_err(|_| StoreError::Backend)
+            .map_err(|e| StoreError::Backend { detail: e.to_string() })
     }
 
     /// List every key in `namespace`, newest-first, **without** the value payload.
@@ -198,7 +198,7 @@ impl Store {
         self.conn
             .execute("DELETE FROM entries WHERE namespace = ?1", params![namespace])
             .map(|_| ())
-            .map_err(|_| StoreError::Backend)
+            .map_err(|e| StoreError::Backend { detail: e.to_string() })
     }
 
     /// Run a `SELECT key, value, created_at, updated_at` query into `Entry`s.
@@ -208,7 +208,7 @@ impl Store {
         params: impl rusqlite::Params,
         namespace: &str,
     ) -> Result<Vec<Entry>, StoreError> {
-        let mut stmt = self.conn.prepare(sql).map_err(|_| StoreError::Backend)?;
+        let mut stmt = self.conn.prepare(sql).map_err(|e| StoreError::Backend { detail: e.to_string() })?;
         let rows = stmt
             .query_map(params, |row| {
                 let key: String = row.get(0)?;
@@ -221,8 +221,8 @@ impl Store {
                     updated_at: to_u64(row.get::<_, i64>(3)?),
                 })
             })
-            .map_err(|_| StoreError::Backend)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|_| StoreError::Backend)
+            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| StoreError::Backend { detail: e.to_string() })
     }
 }
 
@@ -321,5 +321,15 @@ mod tests {
             assert_eq!(store.get("session", "history").unwrap().value, "durable");
         }
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn backend_error_carries_detail() {
+        // A path whose parent directory does not exist cannot be opened.
+        let result = Store::open("/nonexistent/deep/path/cannot/exist/db.sqlite");
+        let Err(StoreError::Backend { detail }) = result else {
+            panic!("expected Err(Backend), got Ok or a different error variant");
+        };
+        assert!(!detail.is_empty(), "detail must describe the failure, got empty string");
     }
 }

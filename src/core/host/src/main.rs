@@ -135,11 +135,24 @@ fn telegram(args: &[String]) -> ExitCode {
 
     println!("jan-klod: telegram bot polling (Ctrl-C to stop)");
     let mut offset = 0;
+    let mut consecutive_errors: u32 = 0;
+    const MAX_CONSECUTIVE_ERRORS: u32 = 10;
     loop {
         match jan_klod_core::telegram::poll_once(&mut agent, &fetch, &token, offset) {
-            Ok(next) => offset = next,
+            Ok(next) => {
+                consecutive_errors = 0;
+                offset = next;
+            }
             Err(err) => {
-                eprintln!("jan-klod: telegram poll error: {err}; retrying in 5s");
+                consecutive_errors += 1;
+                eprintln!("jan-klod: telegram poll error ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {err}");
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    eprintln!(
+                        "jan-klod: {MAX_CONSECUTIVE_ERRORS} consecutive poll failures — \
+                         check TELEGRAM_BOT_TOKEN and network connectivity"
+                    );
+                    return ExitCode::FAILURE;
+                }
                 std::thread::sleep(std::time::Duration::from_secs(5));
             }
         }

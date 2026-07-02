@@ -31,7 +31,10 @@ pub enum StreamEvent {
 /// Parse one SSE frame (its `event` kind + `data` JSON) into a [`StreamEvent`].
 #[must_use]
 pub fn parse_frame(kind: &str, data: &str) -> StreamEvent {
-    let value: serde_json::Value = serde_json::from_str(data).unwrap_or(serde_json::Value::Null);
+    let value: serde_json::Value = match serde_json::from_str(data) {
+        Ok(v) => v,
+        Err(err) => return StreamEvent::Error(format!("malformed SSE frame ({kind}): {err}")),
+    };
     let field = |k: &str| value.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
     match kind {
         "delta" => StreamEvent::Delta(field("text")),
@@ -188,5 +191,14 @@ mod tests {
     #[test]
     fn parse_frame_flags_unknown_kinds() {
         assert!(matches!(parse_frame("weird", "{}"), StreamEvent::Error(_)));
+    }
+
+    #[test]
+    fn parse_frame_surfaces_malformed_json_as_error() {
+        let ev = parse_frame("delta", "not json at all");
+        assert!(matches!(ev, StreamEvent::Error(_)), "expected Error, got {ev:?}");
+        if let StreamEvent::Error(msg) = ev {
+            assert!(msg.contains("malformed SSE frame"), "{msg}");
+        }
     }
 }

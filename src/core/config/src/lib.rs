@@ -77,8 +77,9 @@ impl Config {
     ///
     /// # Errors
     /// Returns a [`ConfigError`] if the YAML is malformed, the structure is not
-    /// the expected category→instance mapping, an enabled instance references an
-    /// unset `${VAR}`, or more than one store is enabled.
+    /// the expected category→instance mapping, an enabled instance contains an
+    /// unterminated `${` or references an unset `${VAR}`, or more than one store
+    /// is enabled.
     pub fn from_yaml(yaml: &str) -> Result<Self, ConfigError> {
         let root: Value = serde_yaml_ng::from_str(yaml)?;
         let Value::Object(mut root) = root else {
@@ -187,8 +188,8 @@ fn expand_env(value: &mut Value, id: &str) -> Result<(), ConfigError> {
 }
 
 /// Replace every `${NAME}` in `s` with the environment value of `NAME`.
-/// Returns `None` when there is nothing to expand. An unterminated `${` is left
-/// literal; an unset variable is an error.
+/// Returns `None` when there is nothing to expand. An unterminated `${` is an
+/// error; an unset variable is an error.
 fn expand_str(s: &str, id: &str) -> Result<Option<String>, ConfigError> {
     if !s.contains("${") {
         return Ok(None);
@@ -199,8 +200,7 @@ fn expand_str(s: &str, id: &str) -> Result<Option<String>, ConfigError> {
         out.push_str(&rest[..start]);
         let after = &rest[start + 2..];
         let Some(end) = after.find('}') else {
-            out.push_str(&rest[start..]); // unterminated — keep literally
-            return Ok(Some(out));
+            return Err(ConfigError::UnterminatedExpansion { id: id.to_string() });
         };
         let var = &after[..end];
         let val = std::env::var(var).map_err(|_| ConfigError::MissingEnv {
@@ -272,6 +272,12 @@ pub enum ConfigError {
     MultipleStores {
         /// Comma-separated ids of the conflicting stores.
         names: String,
+    },
+    /// A `${` in a config string has no matching `}`.
+    #[error("{id}: unterminated `${{` in config value (missing closing `}}`)")]
+    UnterminatedExpansion {
+        /// The instance whose config contains the unterminated placeholder.
+        id: String,
     },
 }
 
@@ -466,5 +472,20 @@ extensions:
         )
         .unwrap_err();
         assert!(matches!(err, ConfigError::InstanceNotMap { .. }));
+    }
+
+    #[test]
+    fn unterminated_expansion_is_an_error() {
+        let err = Config::from_yaml(
+            "
+extensions:
+  provider:
+    openai:
+      enabled: true
+      api-key: ${MISSING_BRACE
+",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigError::UnterminatedExpansion { .. }), "{err}");
     }
 }
