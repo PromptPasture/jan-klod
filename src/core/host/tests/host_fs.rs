@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 
 use jan_klod_core::host_fs::Workspace;
+use jan_klod_core::host_process::ProcessRunner;
 use jan_klod_core::tool_host::ToolExtension;
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -36,8 +37,9 @@ fn host_fs_round_trips_through_a_guest() {
     std::fs::create_dir_all(&workspace_dir).unwrap();
     let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
 
-    let mut tool = ToolExtension::instantiate(&engine, "tool.fs-probe", &component, Some(workspace))
-        .expect("tool instantiates");
+    let mut tool =
+        ToolExtension::instantiate(&engine, "tool.fs-probe", &component, Some(workspace), ProcessRunner::disabled())
+            .expect("tool instantiates");
 
     // A normal write→read round-trips through host-fs.
     let out = tool
@@ -60,8 +62,9 @@ fn host_fs_is_default_deny_without_a_workspace() {
     let Some(component) = probe_component(&engine) else { return };
 
     // No workspace configured -> every host-fs op is denied.
-    let mut tool = ToolExtension::instantiate(&engine, "tool.fs-probe", &component, None)
-        .expect("tool instantiates");
+    let mut tool =
+        ToolExtension::instantiate(&engine, "tool.fs-probe", &component, None, ProcessRunner::disabled())
+            .expect("tool instantiates");
     let out = tool.invoke(r#"{"path":"any.txt","contents":"x"}"#);
     assert!(out.is_err(), "with no workspace, host-fs must deny: {out:?}");
 }

@@ -29,8 +29,10 @@ world tool-world {
     import host-log;
     import host-config;
     import host-http;
-    // Phase 7: file tools route their I/O through the host's path-jailed workspace.
+    // Phase 7: file tools route their I/O through the host's path-jailed workspace;
+    // execution tools run commands through the bounded host-process substrate.
     import host-fs;
+    import host-process;
 
     export extension-lifecycle;
     export tool-callable;

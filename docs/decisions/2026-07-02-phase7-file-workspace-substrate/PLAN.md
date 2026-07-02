@@ -52,7 +52,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Slice | Flag |
 |---|---|
 | 7a — `host-fs` capability | `done` |
-| 7b — `host-process` capability | `in-progress` |
+| 7b — `host-process` capability | `done` |
 | 7c — Exit gate | `not-started` |
 
 ---
@@ -91,11 +91,14 @@ through `host-fs`, a `..` escape is denied, and a call with **no workspace** is 
   `ProcessRunner::disabled`. 7 host-side tests with real commands (echo/false/cat +
   disabled-deny, cwd-escape-deny, timeout via `sleep`, output cap). Pipe-deadlock on
   huge output noted as a v1 caveat.
-- [ ] **Probe guest** — a guest that runs a trivial command (`echo`) and reads back
-  stdout. *(Next increment: `host-process` on `tool-world` + `tool_host` + probe.)*
+- [x] **Wire + probe guest** — `host-process` added to `tool-world`; `tool_host`
+  provides it (backed by `ProcessRunner`) and grew a `process` param. `tool-proc-probe`
+  (a `tool-callable` guest importing `host-process`) runs a command and returns stdout.
+  Built + staged.
 
-**Exit gate:** a sandboxed guest runs a command through `host-process` and receives
-its stdout/exit code; a disabled/over-timeout/escaping call is denied — offline.
+**Exit gate:** ✓ `host/tests/host_process.rs` — the guest runs a command through
+`host-process` and receives its stdout; a call with execution **disabled** is denied
+(default-deny) — offline. Wired into `make harness`.
 
 ---
 

@@ -24,6 +24,7 @@ go in `deps.toml`.
 | `host-event.wit` | host-provided | `host-event` |
 | `host-storage.wit` | host-provided | `host-storage` |
 | `host-fs.wit` | host-provided | `host-fs` (path-jailed workspace read/write; default-deny) |
+| `host-process.wit` | host-provided | `host-process` (bounded run-to-completion exec; default-deny) |
 
 ## Validate
 

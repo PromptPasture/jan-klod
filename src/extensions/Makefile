@@ -9,7 +9,7 @@ WIT_DIR := $(ROOT)/wit
 # Rust guests, by directory name (= staged ext/<name>.wasm). Add a guest here and
 # it gets `make <name>` + `make <name>-docker` + a slot in `all`/`clean` for free.
 # The cargo artifact swaps '-' for '_' (e.g. store-memory -> store_memory.wasm).
-GUESTS := store-memory provider-openai interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router tool-fs-probe
+GUESTS := store-memory provider-openai interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router tool-fs-probe tool-proc-probe
 DOCKER_GUESTS := $(addsuffix -docker,$(GUESTS))
 
 # Container runtime + image for guests when the host has no rustup (Homebrew rust

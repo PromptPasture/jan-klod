@@ -109,10 +109,12 @@ supply-chain: deny audit sbom
 #                       is sent (Phase 4 Slice 4b), offline.
 #   host_fs           — a guest writes+reads a workspace file through host-fs; an
 #                       escape and a no-workspace call are denied (Phase 7 Slice 7a).
+#   host_process      — a guest runs a command through host-process; a disabled
+#                       runner denies (Phase 7 Slice 7b).
 # Both run against a canned host-http reply (no network, no api key) and skip any
 # guest not staged, so this target stages them first.
 harness: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence --test api_rest --test telegram --test host_fs
+	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence --test api_rest --test telegram --test host_fs --test host_process
 
 # Phase 2 exit gate: boot the real core from a config with two providers, a routing
 # table, and all v1 interceptors enabled, and run the full thin loop offline —

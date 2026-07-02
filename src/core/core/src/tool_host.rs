@@ -11,6 +11,7 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::host_fs::{FsError, Workspace};
+use crate::host_process::{ProcError, ProcessRunner};
 use crate::CoreError;
 
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
@@ -25,14 +26,17 @@ use bind::jan_klod::interfaces::host_config as g_config;
 use bind::jan_klod::interfaces::host_fs as g_fs;
 use bind::jan_klod::interfaces::host_http as g_http;
 use bind::jan_klod::interfaces::host_log as g_log;
+use bind::jan_klod::interfaces::host_process as g_proc;
 
 /// Host state for a tool guest.
 struct ToolHost {
     wasi: WasiCtx,
     table: ResourceTable,
     component_id: String,
-    /// The path-jailed workspace, or `None` for default-deny.
+    /// The path-jailed workspace, or `None` for default-deny (`host-fs`).
     workspace: Option<Workspace>,
+    /// The bounded command runner (default-deny unless enabled) (`host-process`).
+    process: ProcessRunner,
 }
 
 impl WasiView for ToolHost {
@@ -108,6 +112,29 @@ const fn to_gen_fs_error(err: FsError) -> g_fs::FsError {
     }
 }
 
+impl g_proc::Host for ToolHost {
+    fn exec(
+        &mut self,
+        command: String,
+        args: Vec<String>,
+        cwd: Option<String>,
+        stdin: Option<String>,
+    ) -> Result<g_proc::Exit, g_proc::ProcError> {
+        match self.process.exec(&command, &args, cwd.as_deref(), stdin.as_deref()) {
+            Ok(exit) => Ok(g_proc::Exit { code: exit.code, stdout: exit.stdout, stderr: exit.stderr }),
+            Err(err) => Err(to_gen_proc_error(err)),
+        }
+    }
+}
+
+const fn to_gen_proc_error(err: ProcError) -> g_proc::ProcError {
+    match err {
+        ProcError::Denied => g_proc::ProcError::Denied,
+        ProcError::Timeout => g_proc::ProcError::Timeout,
+        ProcError::SpawnFailed => g_proc::ProcError::SpawnFailed,
+    }
+}
+
 /// An instantiated, started `tool-*` extension, ready to `invoke`.
 pub struct ToolExtension {
     id: String,
@@ -126,6 +153,7 @@ impl ToolExtension {
         id: &str,
         component: &Component,
         workspace: Option<Workspace>,
+        process: ProcessRunner,
     ) -> Result<Self, CoreError> {
         let mut linker: Linker<ToolHost> = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
@@ -133,12 +161,14 @@ impl ToolExtension {
         g_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
         g_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
         g_fs::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
+        g_proc::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = ToolHost {
             wasi: WasiCtxBuilder::new().inherit_stdio().build(),
             table: ResourceTable::new(),
             component_id: id.to_string(),
             workspace,
+            process,
         };
         let mut store = Store::new(engine, host);
         let world = bind::ToolWorld::instantiate(&mut store, component, &linker)
