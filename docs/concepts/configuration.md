@@ -98,6 +98,20 @@ extensions:
       enabled: false
 ```
 
+The `permission` interceptor is enabled/disabled like any other, but its policy
+is also tunable. Each list-valued key **replaces** the built-in default when
+present (it does not extend it); scope checks are toggled independently. Omit a
+key to keep its default:
+
+```yaml
+    permission:
+      enabled: true
+      dangerous-names: [bash, shell, exec, eval, rm, delete, remove, write, kill, sudo]
+      dangerous-ops:   [write, delete, remove, exec, run]
+      allow-absolute-paths: false     # true = absolute-path args skip the scope gate
+      allow-parent-traversal: false   # true = `..` traversal skips the scope gate
+```
+
 ## Inspecting a config
 
 `make config` resolves the repo's `config.yaml` and prints the plan (each

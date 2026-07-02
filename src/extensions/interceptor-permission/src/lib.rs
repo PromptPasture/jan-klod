@@ -21,7 +21,8 @@ mod rules;
 
 #[cfg(target_arch = "wasm32")]
 mod component {
-    use crate::rules;
+    use crate::rules::{self, Policy};
+    use core::cell::RefCell;
 
     #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
     mod bindings {
@@ -38,10 +39,26 @@ mod component {
         BlockReason, Decision, Guest as Interceptor, HookState, InterceptInput, InterceptorError,
         Phase, UserPrompt,
     };
+    use bindings::jan_klod::interfaces::host_config;
     use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
+
+    thread_local! {
+        /// Resolved permission policy, read once from `host-config` at `init`.
+        static POLICY: RefCell<Policy> = RefCell::new(Policy::default());
+    }
 
     fn log(level: LogLevel, message: &str) {
         host_log::log(level, "interceptor-permission", message, &[]);
+    }
+
+    /// Read and cache the policy from this extension's `config.yaml` section. A
+    /// missing/unreadable section or absent keys fall back to the built-in
+    /// defaults (see [`Policy::from_config`]).
+    fn load_policy() {
+        let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
+        let section = serde_json::from_str::<serde_json::Value>(&raw)
+            .unwrap_or(serde_json::Value::Null);
+        POLICY.with(|p| *p.borrow_mut() = Policy::from_config(&section));
     }
 
     struct Component;
@@ -49,6 +66,7 @@ mod component {
     impl Lifecycle for Component {
         fn init(ctx: ExtensionContext) -> Result<(), String> {
             log(LogLevel::Info, &format!("init id={} version={}", ctx.id, ctx.version));
+            load_policy();
             Ok(())
         }
         fn start() -> Result<(), String> {
@@ -74,15 +92,21 @@ mod component {
                 return Err(InterceptorError::InvalidState);
             };
 
-            let reason = if rules::is_dangerous(&call.name) {
-                Some(format!("tool `{}` has a high-risk name", call.name))
-            } else if rules::args_are_dangerous(&call.arguments) {
-                Some(format!("tool `{}` selects a high-risk operation", call.name))
-            } else if rules::args_escape_scope(&call.arguments) {
-                Some(format!("tool `{}` arguments reference a path outside the workspace", call.name))
-            } else {
-                None
-            };
+            let reason = POLICY.with(|p| {
+                let policy = p.borrow();
+                if policy.is_dangerous(&call.name) {
+                    Some(format!("tool `{}` has a high-risk name", call.name))
+                } else if policy.args_are_dangerous(&call.arguments) {
+                    Some(format!("tool `{}` selects a high-risk operation", call.name))
+                } else if policy.args_escape_scope(&call.arguments) {
+                    Some(format!(
+                        "tool `{}` arguments reference a path outside the workspace",
+                        call.name
+                    ))
+                } else {
+                    None
+                }
+            });
 
             let Some(reason) = reason else {
                 return Ok(Decision::Proceed);

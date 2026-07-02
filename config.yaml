@@ -77,6 +77,17 @@ extensions:
       enabled: false           # select-tools: expose the active tool set (Slice 2d)
     permission:
       enabled: false           # tool-call: gate dangerous calls (Slice 2d)
+      # Optional policy overrides. Each list, when present, REPLACES the built-in
+      # default (it does not extend it); omit a key to keep the default.
+      #   dangerous-names       — tool-name substrings that force a confirmation
+      #   dangerous-ops         — `op` arg values that force a confirmation
+      #   allow-absolute-paths  — when true, absolute-path args skip the scope gate
+      #   allow-parent-traversal— when true, `..` traversal skips the scope gate
+      # Defaults shown below; delete keys to accept them.
+      # dangerous-names: [bash, shell, exec, eval, rm, delete, remove, write, kill, sudo]
+      # dangerous-ops:   [write, delete, remove, exec, run]
+      # allow-absolute-paths: false
+      # allow-parent-traversal: false
 
   # ---- Capability catalogues ----
   registry:
