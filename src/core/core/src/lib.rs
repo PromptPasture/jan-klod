@@ -24,6 +24,7 @@ pub mod route;
 pub mod serve;
 pub mod store;
 pub mod telegram;
+pub mod tool_host;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

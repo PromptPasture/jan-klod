@@ -23,6 +23,7 @@ go in `deps.toml`.
 | `host-config.wit` | host-provided | `host-config` |
 | `host-event.wit` | host-provided | `host-event` |
 | `host-storage.wit` | host-provided | `host-storage` |
+| `host-fs.wit` | host-provided | `host-fs` (path-jailed workspace read/write; default-deny) |
 
 ## Validate
 

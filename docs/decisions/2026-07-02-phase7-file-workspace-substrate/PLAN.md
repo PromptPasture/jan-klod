@@ -51,7 +51,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Slice | Flag |
 |---|---|
-| 7a — `host-fs` capability | `in-progress` |
+| 7a — `host-fs` capability | `done` |
 | 7b — `host-process` capability | `not-started` |
 | 7c — Exit gate | `not-started` |
 
@@ -67,14 +67,16 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
   absolute + `..` escapes denied. `Workspace` also does `read`/`write`/`list_dir`/
   `exists`. 5 tests (roundtrip, not-found, escapes denied, inner `..` allowed, sorted
   list). Symlink-escape hardening noted as a v1 caveat.
-- [ ] **Host impl in core** — a `host-fs` backed by a configured workspace root;
-  `add_to_linker` so an interceptor/tool guest importing `host-fs` gets it. No
-  workspace configured → all ops `denied`.
-- [ ] **Probe guest** — a minimal guest importing `host-fs` that writes then reads a
-  file back, to exercise the capability across the CM boundary offline.
+- [x] **Host impl in core** — `tool_host::ToolExtension` instantiates a `tool-world`
+  guest and satisfies its imports (`host-log`/`host-config`/`host-http` + `host-fs`);
+  `host-fs` is backed by an `Option<Workspace>` — **default-deny** when `None`.
+  `host-fs` added to `tool-world` (the world Phase 8 file tools use).
+- [x] **Probe guest** — `tool-fs-probe` (a `tool-callable` guest importing `host-fs`):
+  `invoke({path, contents})` writes then reads back. Built + staged.
 
-**Exit gate:** a sandboxed guest writes and reads a workspace file through `host-fs`,
-and a `..`/absolute path escape is denied — verified offline.
+**Exit gate:** ✓ `host/tests/host_fs.rs` — the guest round-trips a workspace file
+through `host-fs`, a `..` escape is denied, and a call with **no workspace** is denied
+(default-deny) — all offline. Wired into `make harness`.
 
 ---
 

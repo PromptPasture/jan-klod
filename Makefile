@@ -107,10 +107,12 @@ supply-chain: deny audit sbom
 #                       driving the loop over the host-side REST surface (3b gate).
 #   telegram          — a canned inbound Telegram message drives a turn and a reply
 #                       is sent (Phase 4 Slice 4b), offline.
+#   host_fs           — a guest writes+reads a workspace file through host-fs; an
+#                       escape and a no-workspace call are denied (Phase 7 Slice 7a).
 # Both run against a canned host-http reply (no network, no api key) and skip any
 # guest not staged, so this target stages them first.
 harness: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence --test api_rest --test telegram
+	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence --test api_rest --test telegram --test host_fs
 
 # Phase 2 exit gate: boot the real core from a config with two providers, a routing
 # table, and all v1 interceptors enabled, and run the full thin loop offline —

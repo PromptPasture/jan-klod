@@ -29,6 +29,8 @@ world tool-world {
     import host-log;
     import host-config;
     import host-http;
+    // Phase 7: file tools route their I/O through the host's path-jailed workspace.
+    import host-fs;
 
     export extension-lifecycle;
     export tool-callable;
