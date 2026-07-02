@@ -2,6 +2,7 @@
 
 Session handoffs and architecture decision records, newest first.
 
+- [2026-07-02 — Phase 8: Tool Fleet](2026-07-02-phase8-tool-fleet/PLAN.md) — execution plan + TBD leans for wiring the loop to tools (`ToolFleet` over `ToolExtension`s as a `ToolInvoker`) and a first real set (`tool-fs-read`/`write`/`grep` over host-fs, `tool-shell` over host-process); tools stay behind the default-deny substrates
 - [2026-07-02 — Phase 7: File-workspace Substrate](2026-07-02-phase7-file-workspace-substrate/PLAN.md) — execution plan + safety model for `host-fs` (path-jailed workspace read/write) and `host-process` (bounded run-to-completion exec); both default-deny, opt-in, workspace-jailed — the mediated capabilities file/exec tools need
 - [2026-07-02 — Phase 6: Streaming & Steering](2026-07-02-phase6-streaming-steering/PLAN.md) — execution plan + TBD leans for the run-handle event stream (push-based `EventSink` fitting the sync loop), SSE on the REST surface, and cancel/steering; streaming stays push, no async runtime
 - [2026-07-02 — Phase 5: Distribution & Ops](2026-07-02-phase5-distribution-ops/PLAN.md) — execution plan + TBD leans for the tiny Go supervisor/updater (blue/green stage→flip→health-check→rollback) and Configurator/curated bundles; deploy unit is the host-side core binary + provider/interceptor guests (store/REST now in-core)
