@@ -219,8 +219,29 @@ pub fn run_turn(
         };
         final_text = text;
 
-        if flow == Flow::Stop || completion.tool_calls.is_empty() {
+        if flow == Flow::Stop {
             break;
+        }
+        if completion.tool_calls.is_empty() {
+            // The turn would end. A driver may steer it with a follow-up message;
+            // otherwise finish.
+            let Some(follow_up) = driver.follow_up() else { break };
+            // prepare-next-turn: optional model/context swap before continuing.
+            let mut next_state = HookState::PrepareNextTurn(request.clone());
+            let _ = dispatcher.dispatch(Phase::PrepareNextTurn, &mut next_state, driver);
+            if let HookState::PrepareNextTurn(shaped) = next_state {
+                request = shaped;
+            }
+            request.messages.push(Message {
+                role: Role::User,
+                content: follow_up,
+                tool_call_id: None,
+            });
+            iterations += 1;
+            if iterations >= MAX_ITERATIONS {
+                break;
+            }
+            continue;
         }
         iterations += 1;
         if iterations >= MAX_ITERATIONS {
@@ -777,6 +798,39 @@ mod tests {
                 Event::Done { text: "final answer".into(), agentic: true },
             ]
         );
+    }
+
+    /// A driver that injects one follow-up message, then stops steering.
+    struct SteeringDriver {
+        follow_ups: std::cell::RefCell<Vec<&'static str>>,
+    }
+    impl Driver for SteeringDriver {
+        fn ask(&mut self, _p: &UserPrompt) -> String {
+            panic!("no ask expected");
+        }
+        fn follow_up(&mut self) -> Option<String> {
+            self.follow_ups.borrow_mut().pop().map(str::to_string)
+        }
+    }
+
+    #[test]
+    fn a_follow_up_injects_another_cycle() {
+        let mut d = Dispatcher::new(vec![]);
+        // Two text completions (no tools): the first would end the turn, but the
+        // driver steers with a follow-up, producing a second completion.
+        let seen = Rc::new(RefCell::new(vec![]));
+        let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
+            id: "p".into(),
+            replies: RefCell::new(VecDeque::from(vec![
+                Ok(with_tools("first", vec![])),
+                Ok(with_tools("second", vec![])),
+            ])),
+            seen: Rc::clone(&seen),
+        })];
+        let mut driver = SteeringDriver { follow_ups: std::cell::RefCell::new(vec!["and now this"]) };
+        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut driver, &mut NoSink, "s", "go");
+        assert_eq!(out, RunResult::Answered { text: "second".into(), agentic: true });
+        assert_eq!(seen.borrow().len(), 2, "the follow-up drove a second completion");
     }
 
     #[test]

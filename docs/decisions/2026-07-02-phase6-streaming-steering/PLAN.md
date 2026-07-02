@@ -46,7 +46,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 |---|---|
 | 6a — Conductor emits events via an `EventSink` | `done` |
 | 6b — SSE on the REST surface | `done` |
-| 6c — Cancel + steering (follow-up queue) | `not-started` |
+| 6c — Cancel + steering (follow-up queue) | `done` |
 | 6d — Exit gate | `not-started` |
 
 ---
@@ -97,11 +97,15 @@ ending in `event: done` with the answer, offline.
   event) and stops cleanly, still emitting the terminal `Done`. The `SseSink` returns
   `Stop` when a frame write fails, so a **disconnected client cancels the turn** for
   free. Tested (`CancelAfter` sink stops an otherwise-infinite ReAct loop).
-- [ ] **Steering / follow-up queue** — a queue the driver appends to; the conductor
-  drains it at `prepare-next-turn`, injecting follow-up user messages into the run.
+- [x] **Steering / follow-up** — `Driver` gained a default `follow_up() -> Option<String>`
+  (no signature churn — the driver is already threaded). When a turn would end (no
+  pending tool calls) the conductor calls it: `Some(msg)` dispatches
+  `prepare-next-turn` (optional model/context swap), injects `msg` as a user message,
+  and runs another cycle; `None` ends the turn. Tested (a `SteeringDriver` injects one
+  follow-up → a second completion).
 
-**Exit gate:** ✓ (cancel) a sink returning `Stop` ends the run at the next boundary
-with a terminal `Done`; *(steering follow-up pending.)*
+**Exit gate:** ✓ a sink returning `Stop` ends the run at the next boundary with a
+terminal `Done`; a driver `follow_up` injects another cycle.
 
 ---
 

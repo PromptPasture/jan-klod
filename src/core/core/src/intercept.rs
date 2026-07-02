@@ -266,6 +266,14 @@ pub trait Interceptor {
 pub trait Driver {
     /// Surface `prompt` and return the user's answer (or a default when headless).
     fn ask(&mut self, prompt: &UserPrompt) -> String;
+
+    /// A follow-up user message to inject instead of ending the turn — the driver's
+    /// **steering** hook. The loop calls this when a turn would otherwise finish (no
+    /// pending tool calls): `Some(msg)` injects `msg` and runs another cycle; `None`
+    /// ends the turn. Default: none.
+    fn follow_up(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// The result of dispatching one phase.
