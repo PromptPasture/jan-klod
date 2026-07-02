@@ -1,10 +1,10 @@
 ---
 type: concept
 title: Roadmap
-description: Phased plan from the Rust + Wasmtime + Component Model foundation decision to a shippable, polyglot-extension agent runtime.
+description: Phased plan from the Rust + Wasmtime + Component Model foundation decision to a shippable, polyglot-extension agent runtime, then on to a file-workspace-capable agent (streaming, host-fs/host-process, tool fleet).
 tags: [roadmap, planning, rust, wasmtime, component-model, phases]
 created: 2026-06-29
-updated: 2026-07-01
+updated: 2026-07-02
 ---
 
 # Roadmap
@@ -76,6 +76,9 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 3 — Persistence + inbound network | `done` | [PLAN.md](../decisions/2026-07-02-phase3-persistence-network/PLAN.md) (2026-07-02). **Exit gate passed** (`make phase3-gate` in CI): durable state survives a `Runtime` restart (host-side SQLite `Store` via `rusqlite` bundled — persistence is host-side, not SQLite-in-wasm; session transcripts persisted) **and** an external HTTP client drives the loop over the host-side REST surface (`jan_klod_core::serve` on `tiny_http`, launchable via `jan-klod serve`). Boundary calls: store proxied host-side (no store guest); REST surface host-side/sync (not an `api-rest` guest / `axum`). Carried-forward, non-blocking: SSE streaming (with the run-handle), interceptor `host-storage` backed by the shared `Store`. |
 | 4 — Clients & integrations | `done` | [PLAN.md](../decisions/2026-07-02-phase4-clients-integrations/PLAN.md) (2026-07-02). **Exit gate passed** (`make phase4-gate` in CI): a UI client (`jan-klod-ui` — line REPL + `ratatui` TUI, a separate process over REST) drives core, and an inbound `chat-telegram` message drives a turn + reply, both offline. `agent-*` ACP delegation via the conductor's `ToolInvoker` seam (`delegate`). Decisions: clients are separate processes over the host-side REST surface; Telegram needs no `host-socket` (outbound HTTP suffices). Carried-forward: GUI (Tauri), concrete ACP-over-HTTP transport + `build_agent` wiring, `host-socket`. |
 | 5 — Distribution & ops | `done` | [PLAN.md](../decisions/2026-07-02-phase5-distribution-ops/PLAN.md) (2026-07-02). **Exit gate passed** (`make phase5-gate` in CI): the tiny Go supervisor (`src/supervisor/`, stdlib-only) runs blue/green flip→health→commit/rollback (probes `GET /health`), unit-tested both ways; `make bundle` produces a self-contained archive whose extracted `jan-klod` boots offline. Deploy unit = host-side core binary + provider/interceptor guests. Carried-forward: staging (download + checksum/WIT validation), the bundle matrix, the interactive web Configurator. |
+| 6 — Streaming & steering | `not-started` | Promotes the Phase 2 carry-forward: a **run-handle** (`run` / `next-event` streaming deltas + tool events + warnings + `done` / `cancel` / `provide-answer` for the `ask` resume / steering + follow-up queue), **SSE** on the REST surface, and the driver-capability WIT. |
+| 7 — File-workspace substrate | `not-started` | The two host-mediated capabilities the sandbox otherwise denies — **`host-fs`** (scoped workspace read/write; COW/checkpoint candidate) and **`host-process`** (spawn + hold a long-lived child: code exec, ssh, lsp/debug/browser). *Nothing file- or execution-shaped can be built until these land.* |
+| 8 — Tool fleet | `not-started` | The sandboxed `tool-*` components over the substrates: `host-fs` (read/write/edit/ast-edit/find/grep/ast-grep/checkpoint/git), `host-process` (bash/eval/ssh/job/lsp/debug/browser), `host-http` (fetch; web-search built). Cheap to add once Phase 7 lands. |
 
 Built-extension language assignments and their own status live in the
 [Extension Technologies brainstorm](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md#near-term-assignments-provisional--confirmed-at-the-phase-1-gate).
@@ -167,6 +170,71 @@ answer, driven end-to-end through the core-exposed loop entry.
 - The tiny **Go launcher/updater**: blue/green stage → flip → health-check → rollback.
 - [Configurator](configurator.md) (web ZIP generator) + curated bundles.
 
+## Phase 6 — Streaming & steering
+
+**Goal:** the loop streams incrementally, and a driver can interrupt and steer it.
+Promotes the Phase 2 carry-forward — the run-handle was prototyped as a core Rust
+entry (`build_agent`/`run_with`) but the loop currently returns a whole answer.
+
+- **Run-handle** — `run(session, message)` → a handle; `next-event` streams
+  `text-delta` / `tool-invoked` / `tool-result` / `warning` / `done`; `cancel` /
+  `close`; a `pending-prompt` event + `provide-answer` resuming the interceptor
+  `ask`; a **steering + follow-up-injection** queue. Preview-vs-authoritative
+  streaming (see [`wit/interceptor.wit`](../../wit/interceptor.wit) `finalize`).
+- **SSE on the REST surface** — `serve` streams `next-event` as Server-Sent Events
+  (the deferred `/turn` streaming); the UI client + Telegram consume incrementally.
+- **Driver-capability WIT** — promote the core Rust loop-entry to the WIT shape an
+  `api-*`/`chat-*` guest would import, if/when those become guests.
+
+**Exit gate:** a driver runs a multi-step turn, receives events incrementally over
+SSE, answers an `ask` mid-turn, and cancels a run — offline.
+
+## Phase 7 — File-workspace substrate
+
+**Goal:** give the sandbox **mediated** file and process access — the two
+capabilities everything file- or execution-shaped depends on. Neither exists yet by
+design (the sandbox grants no filesystem, no process); both are added as host-owned,
+routed capabilities.
+
+- **`host-fs`** — a scoped, path-jailed read/write view of a workspace directory.
+  Every file-touching tool (read/write, edit, grep/find) needs it. Copy-on-write /
+  overlay isolation for safe edits + checkpoint/restore is a candidate model.
+- **`host-process`** — spawn and **hold a long-lived child process**. A *co-equal*
+  substrate, not a sub-case: **code execution** (`bash`/`eval`) depends on it, as do
+  `ssh`, background jobs, and the language-server / debugger / browser bridges.
+- **Open** — whether these are two capabilities or one; the isolation model (path
+  jail, resource limits, COW). Resolve at this phase and record as a dated decision.
+
+**Exit gate:** a sandboxed extension reads and writes a workspace file through
+`host-fs` (jailed to the workspace) and runs a command through `host-process`, both
+core-mediated — verified offline.
+
+## Phase 8 — Tool fleet
+
+**Goal:** the ordinary sandboxed `tool-*` components — cheap to add once Phase 7
+lands — grouped by the capability they route through. The only shared design work is
+routed I/O: file/exec tools go through `host-fs`/`host-process`, never raw OS.
+
+| Routes through | `tool-*` |
+|---|---|
+| `host-fs` | read, write, edit, ast-edit, find (glob), grep, ast-grep, checkpoint, git |
+| `host-process` | **bash/shell**, **eval (code exec)**, ssh, job, lsp, debug (dap), browser |
+| `host-http` (have it) | fetch, web-search *(built)* |
+| none / local | bm25 local search |
+
+Tools are advertised to the loop at `select-tools` (`interceptor-tool-selector`),
+gated at `tool-call` (`interceptor-permission`), and dispatched through the
+conductor's `ToolInvoker`. **Deferred / out of tier:** curated-memory tools (the
+[open memory question](#curated-memory--open-question-not-a-phase)) and multimodal
+(image/tts — need capable providers, off-target for small text models). **Not
+tools:** `ask` (interceptor decision), subagent dispatch (`agent-*` delegation),
+skills (`registry-skills`), a per-turn watcher/critic and code-review-with-verdict
+(`interceptor-*`).
+
+**Exit gate:** the loop completes a multi-step task using at least one `host-fs` tool
+(e.g. read + edit a file) and one `host-process` tool (e.g. run a command),
+end-to-end.
+
 ---
 
 ## Cross-cutting (continuous, not a phase)
@@ -188,50 +256,17 @@ baseline, `tokio` at `host-http`), host-side SQLite library (Phase 3), and
 carry-over agent-loop tunables (retry limit, context compression, ACP delegation
 timeout — Phase 2).
 
-## File-workspace tier (not yet scoped)
+## Curated memory — open question (not a phase)
 
-The runtime today can *reason and call tools*, but it cannot yet *work with files* —
-the sandbox grants no filesystem access. Three gaps stand between the current design
-and an agent that can operate on a workspace of files (coding is one use of this, not
-the only one). All are **post-v1** and recorded here as scope, not commitments.
+The file-workspace tier (files, processes, and the `tool-*` fleet) is now scoped as
+**Phases 7–8**. One item from that original scope stays **out** of the roadmap as a
+deliberate open question: **long-term / curated memory.**
 
-1. **Two substrate capabilities.** The sandbox grants no filesystem and no process
-   access by design, so both must be added as host-mediated, routed capabilities:
-   - **`host-fs`** — a scoped, read/write view of a workspace directory. Every
-     file-touching tool (read/write, edit, grep/find) needs it. (Copy-on-write /
-     overlay isolation for safe edits + checkpoint/restore is a candidate model.)
-   - **`host-process`** — spawn and **hold a long-lived child process**. This is a
-     *co-equal* substrate, not a sub-case: the single most important agent tool —
-     **code execution** (`bash`/`eval`) — depends on it, as do `ssh`, background
-     jobs, and the language-server / debugger / browser bridges.
-
-   Open question: whether these are two capabilities or one; either way, *nothing
-   file- or execution-shaped can be built as a sandboxed extension until they land.*
-
-2. **Long-term / curated memory — open, and maybe not ours.** Beyond `store-sqlite`
-   (durable KV/history persistence, already planned), a coding agent benefits from
-   *curated* memory: working vs episodic recall, semantic search, consolidation. It is
-   **unresolved whether jan-klod should ship this at all** — it may belong in a
-   third-party `store-*`/`tool-*` extension, an MCP server via `registry-mcp`, or an
-   external service, rather than a first-party contract. Decide *if* before *how*; do
-   not add a memory-curation interface speculatively (YAGNI). Persistence is planned;
-   curation is deliberately parked as a question.
-
-3. **A fleet of `tool-*` extensions.** All ordinary sandboxed `tool-*` components,
-   cheap to add *once #1 exists*, grouped by the capability they route through:
-
-   | Needs | Candidate `tool-*` |
-   |---|---|
-   | `host-fs` | read, write, edit, ast-edit, find (glob), grep, ast-grep, checkpoint, git |
-   | `host-process` | **bash/shell**, **eval (code exec)**, ssh, job, lsp, debug (dap), browser |
-   | `host-http` (have it) | web-search *(built)*, fetch |
-   | none / local | bm25 local search |
-
-   The only shared design work is routed I/O — file/exec tools go through
-   `host-fs`/`host-process`, never raw OS. **Deferred / out of this tier:** curated
-   memory tools (recall/retain — the [open memory question](#file-workspace-tier-not-yet-scoped)),
-   and multimodal tools (image/tts — need capable providers, off-target for small text
-   models). **Not tools:** `ask` is the interceptor `ask` decision; subagent dispatch
-   is `agent-*` delegation; skills are `registry-skills`; a per-turn *watcher/critic*
-   and *code-review-with-verdict* are `interceptor-*` (mechanism already supports them,
-   just not in the v1 set).
+Beyond `store-sqlite` (durable KV/history persistence, delivered in Phase 3), a
+coding agent benefits from *curated* memory — working vs episodic recall, semantic
+search, consolidation. It is **unresolved whether jan-klod should ship this at all**:
+it may belong in a third-party `store-*`/`tool-*` extension, an MCP server via
+`registry-mcp`, or an external service, rather than a first-party contract. Decide
+*if* before *how*; do not add a memory-curation interface speculatively (YAGNI).
+Persistence is done; curation is deliberately parked as a question, and the
+memory-tool row is excluded from the Phase 8 fleet accordingly.
