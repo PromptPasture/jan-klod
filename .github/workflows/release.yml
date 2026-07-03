@@ -1,0 +1,118 @@
+name: Release
+
+# Builds cross-platform bundles and publishes a GitHub release when a version
+# tag (v*) is pushed. Each platform job produces a .tar.gz in dist/ and
+# uploads it as a release asset via the GitHub CLI.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed to create/upload release assets
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-latest
+            os: darwin
+            arch: arm64
+            target: aarch64-apple-darwin
+          - runner: macos-13
+            os: darwin
+            arch: x86_64
+            target: x86_64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2,${{ matrix.target }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/core
+
+      - name: Fetch WIT spike deps
+        run: cd wit && wkg wit fetch --wit-dir spike || true
+
+      - name: Install wkg (WIT package manager)
+        run: cargo install wkg --locked 2>/dev/null || true
+
+      - name: Build bundle
+        env:
+          JK_VERSION: ${{ github.ref_name }}
+        run: make bundle
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for changelog generation
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Grab commits since the previous tag for the release notes.
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV" ]; then
+            NOTES=$(git log --oneline "${PREV}..HEAD" | head -30)
+          else
+            NOTES=$(git log --oneline -30)
+          fi
+          printf '%s\n' "$NOTES" > /tmp/release_notes.txt
+          echo "notes_file=/tmp/release_notes.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "jan-klod $GITHUB_REF_NAME" \
+            --notes-file "${{ steps.changelog.outputs.notes_file }}" \
+            dist/*.tar.gz dist/SHA256SUMS.txt

@@ -1,20 +1,48 @@
-# Jan-Klod 🥷
+# jan-klod
 
-> Minimal, stable AI agent core that does the splits between extensions.
+A sandboxed coding agent powered by the WebAssembly Component Model.
 
-Jan-Klod is a Java/Quarkus AI agent runtime inspired by the Linux kernel philosophy: the core is small, versioned, and almost never changes. Everything domain-specific — LLM providers, memory, context management, tools, UI — lives in extensions that can be added, swapped, or disabled independently.
+## What makes it different
 
-A core-only boot starts up and does nothing. That is intentional.
+Most coding agents run extensions (tools, providers, interceptors) in the same
+process with full system access. jan-klod runs each extension as an isolated
+WebAssembly component: typed WIT contracts define exactly what it can import,
+and the Wasmtime host enforces fail-closed permission gates — without a container.
 
-> **Status:** design phase — no code yet.
+## Install
+
+```sh
+curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh
+```
+
+## Quick start
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
+jan-klod serve config.yaml ext
+# in another terminal:
+jan-klod-ui 127.0.0.1:8787 my-session
+```
+
+See the [quickstart guide](docs/quickstart.md) for a full walkthrough.
+
+## Architecture
+
+- **Host** — Rust + Wasmtime; owns the session loop, HTTP surface, and SQLite store.
+- **Extensions** — WebAssembly components compiled to `wasm32-wasip2`:
+  - `provider-anthropic` / `provider-openai` — LLM providers
+  - `tool-fs` / `tool-shell` — sandboxed file and shell tools
+  - `registry-skills` — named skill shortcuts from `.agents/skills/`
+  - `registry-mcp` — SSE MCP server gateway
+  - `interceptor-*` — typed hooks into the conductor pipeline
+- **WIT contracts** (`wit/`) — the interfaces extensions implement and host capabilities they may import.
 
 ## Documentation
 
-See [`docs/`](docs/) for architecture, design decisions, and concept details.
-
-## Contributing
-
-See the org-wide [CONTRIBUTING.md](https://github.com/PromptPasture/.github/blob/main/CONTRIBUTING.md).
+- [Quickstart](docs/quickstart.md)
+- [Concepts](docs/concepts/)
+- [Architecture decisions](docs/decisions/)
+- [Roadmap](docs/concepts/roadmap.md)
 
 ## License
 
