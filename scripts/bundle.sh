@@ -8,9 +8,10 @@
 set -eu
 
 CORE_BIN="$1"
-EXT_DIR="$2"
-CONFIG="$3"
-OUT="$4"
+UI_BIN="$2"
+EXT_DIR="$3"
+CONFIG="$4"
+OUT="$5"
 
 VERSION="${JK_VERSION:-0.1.0}"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -21,6 +22,7 @@ DIR="${OUT}/${NAME}"
 rm -rf "$DIR"
 mkdir -p "$DIR/ext"
 cp "$CORE_BIN" "$DIR/jan-klod"
+cp "$UI_BIN" "$DIR/jan-klod-ui"
 cp "$CONFIG" "$DIR/config.yaml"
 # Copy staged guests, if any (a bundle with none still boots headless).
 if [ -d "$EXT_DIR" ]; then
@@ -37,8 +39,8 @@ core — no separate store/REST guests.
 ## Run
 
 \`\`\`sh
-./jan-klod config.yaml ext            # boot + print the extension plan
-./jan-klod serve config.yaml ext 127.0.0.1:8787   # serve turns over REST
+./jan-klod serve config.yaml ext 127.0.0.1:8787   # start the server
+./jan-klod-ui 127.0.0.1:8787 my-session           # connect the TUI
 \`\`\`
 EOF
 

@@ -65,9 +65,11 @@ EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}"
 
 mkdir -p "${INSTALL_DIR}"
 cp "${EXTRACTED}/jan-klod" "${INSTALL_DIR}/jan-klod"
-chmod +x "${INSTALL_DIR}/jan-klod"
+cp "${EXTRACTED}/jan-klod-ui" "${INSTALL_DIR}/jan-klod-ui"
+chmod +x "${INSTALL_DIR}/jan-klod" "${INSTALL_DIR}/jan-klod-ui"
 
 echo "Installed: ${INSTALL_DIR}/jan-klod"
+echo "Installed: ${INSTALL_DIR}/jan-klod-ui"
 
 # Check PATH.
 case ":${PATH}:" in

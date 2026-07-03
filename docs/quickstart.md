@@ -51,17 +51,7 @@ the current directory as the workspace — file tools are jailed to it.
 
 ## 4. Connect the TUI
 
-`jan-klod-ui` is a separate binary that is not yet included in the install bundle.
-Build it from source:
-
-```sh
-git clone https://github.com/PromptPasture/jan-klod
-cd jan-klod
-cargo build --release -p jan-klod-ui
-cp target/release/jan-klod-ui ~/.local/bin/
-```
-
-Then connect to a running server:
+In another terminal:
 
 ```sh
 jan-klod-ui 127.0.0.1:8787 my-session

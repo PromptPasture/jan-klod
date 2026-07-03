@@ -69,8 +69,8 @@ supervisor:
 # the REST surface are in-core, so ext/ holds only provider/interceptor/tool guests.
 BUNDLE_OUT ?= $(abspath dist)
 bundle: extensions
-	cd $(CORE) && cargo build --release -p jan-klod-host
-	sh scripts/bundle.sh $(CORE)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT)
+	cd $(CORE) && cargo build --release -p jan-klod-host -p jan-klod-ui
+	sh scripts/bundle.sh $(CORE)/target/release/jan-klod $(CORE)/target/release/jan-klod-ui $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT)
 
 clippy:
 	$(MAKE) -C $(CORE) clippy
