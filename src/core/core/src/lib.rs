@@ -25,6 +25,7 @@ pub mod route;
 pub mod serve;
 pub mod store;
 pub mod telegram;
+pub mod registry_host;
 pub mod tool_host;
 
 use std::fmt;
@@ -227,17 +228,20 @@ impl Runtime {
     ) -> Result<AgentSession, CoreError> {
         let mut providers: Vec<Box<dyn conductor::Completer>> = Vec::new();
         let mut tool_extensions: Vec<tool_host::ToolExtension> = Vec::new();
+        let mut skills_extensions: Vec<registry_host::SkillsExtension> = Vec::new();
+        let mut mcp_extensions: Vec<registry_host::McpExtension> = Vec::new();
 
         // Shared, default-deny substrates for tools (opt-in via config).
         let workspace = self.open_workspace();
         let process = self.open_process_runner(workspace.as_ref());
 
-        // Pass 1: providers + tools. (Tools first so the interceptors — notably
-        // tool-selector — can be handed the fleet's advertised metadata.)
+        // Pass 1: providers + tools + registries. (Before interceptors so tool-selector
+        // can be handed the combined advertised metadata.)
         for ext in &self.extensions {
             let LoadState::Compiled(component) = &ext.state else {
                 continue;
             };
+            let config_json = ext.instance.config.to_string();
             match ext.instance.category.as_str() {
                 "provider" => providers.push(Box::new(route::ProviderCompleter::instantiate(
                     &self.engine,
@@ -252,11 +256,30 @@ impl Runtime {
                     workspace.clone(),
                     process.clone(),
                 )?),
+                "registry" if ext.instance.kind == "skills" => {
+                    skills_extensions.push(registry_host::SkillsExtension::instantiate(
+                        &self.engine,
+                        &ext.instance.id,
+                        component,
+                        config_json,
+                        workspace.clone(),
+                    )?);
+                }
+                "registry" if ext.instance.kind == "mcp" => {
+                    mcp_extensions.push(registry_host::McpExtension::instantiate(
+                        &self.engine,
+                        &ext.instance.id,
+                        component,
+                        config_json,
+                    )?);
+                }
                 _ => {}
             }
         }
-        let tools = tool_host::ToolFleet::new(tool_extensions);
-        let tools_advert = tools_metadata_json(&tools);
+        let tool_fleet = tool_host::ToolFleet::new(tool_extensions);
+        let registry_fleet = registry_host::RegistryFleet::new(skills_extensions, mcp_extensions);
+        let mut tools = CombinedFleet { tools: tool_fleet, registry: registry_fleet };
+        let tools_advert = tools.all_metas_json();
 
         // Pass 2: interceptors, each served the tool set at `select-tools`.
         let mut interceptors: Vec<Box<dyn intercept::Interceptor>> = Vec::new();
@@ -288,6 +311,7 @@ impl Runtime {
             store: self.open_store()?,
             tools,
         })
+
     }
 
     /// Open the host-side workspace for `host-fs` from the top-level `workspace:`
@@ -368,14 +392,57 @@ impl Runtime {
     }
 }
 
+/// Combined tool + registry fleet implementing [`conductor::ToolInvoker`].
+///
+/// Dispatches first to the `tool-*` fleet, then to the registry fleet (skills + MCP).
+struct CombinedFleet {
+    tools: tool_host::ToolFleet,
+    registry: registry_host::RegistryFleet,
+}
+
+impl conductor::ToolInvoker for CombinedFleet {
+    fn invoke(&mut self, call: &intercept::ToolCall) -> Option<String> {
+        self.tools.invoke(call).or_else(|| self.registry.invoke(call))
+    }
+}
+
+impl CombinedFleet {
+    fn tool_names(&self) -> Vec<String> {
+        self.tools.tool_names()
+    }
+
+    fn all_metas_json(&mut self) -> serde_json::Value {
+        let mut metas: Vec<serde_json::Value> = self
+            .tools
+            .metas()
+            .into_iter()
+            .map(|m| {
+                serde_json::json!({
+                    "name": m.name,
+                    "description": m.description,
+                    "parameters-schema": m.arguments_schema,
+                })
+            })
+            .collect();
+        for (name, description, schema) in self.registry.all_metas() {
+            metas.push(serde_json::json!({
+                "name": name,
+                "description": description,
+                "parameters-schema": schema,
+            }));
+        }
+        serde_json::Value::Array(metas)
+    }
+}
+
 /// A booted thin-loop agent: the interceptor dispatcher and the provider fallback
 /// chain, ready to run turns through the [`conductor`].
 pub struct AgentSession {
     dispatcher: intercept::Dispatcher,
     providers: Vec<Box<dyn conductor::Completer>>,
     store: store::Store,
-    /// The enabled `tool-*` extensions, dispatched by the loop as a `ToolInvoker`.
-    tools: tool_host::ToolFleet,
+    /// The enabled tool + registry extensions, dispatched by the loop as a `ToolInvoker`.
+    tools: CombinedFleet,
 }
 
 impl AgentSession {
@@ -484,6 +551,12 @@ impl AgentSession {
         self.tools.tool_names()
     }
 
+    /// All tool + registry metadata as JSON (used in tests).
+    #[must_use]
+    pub fn all_metas_json(&mut self) -> serde_json::Value {
+        self.tools.all_metas_json()
+    }
+
     /// The durable transcript for `session`, oldest turn first. Reads from the
     /// host-side store, so it survives a `Runtime` restart against the same DB.
     #[must_use]
@@ -520,24 +593,6 @@ fn run_and_persist(
     result
 }
 
-/// Serialize a fleet's tool metadata as the `tools` array `interceptor-tool-selector`
-/// reads from `host-config` to fill `pending-request.tools` (name / description /
-/// `parameters-schema`).
-fn tools_metadata_json(tools: &tool_host::ToolFleet) -> serde_json::Value {
-    serde_json::Value::Array(
-        tools
-            .metas()
-            .into_iter()
-            .map(|meta| {
-                serde_json::json!({
-                    "name": meta.name,
-                    "description": meta.description,
-                    "parameters-schema": meta.arguments_schema,
-                })
-            })
-            .collect(),
-    )
-}
 
 /// Headless driver: no interactive surface, so an `ask` takes the prompt's
 /// `default-answer`.

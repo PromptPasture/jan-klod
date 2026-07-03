@@ -35,6 +35,7 @@ interface skill-registry {
 world skill-registry-world {
     import host-log;
     import host-config;
+    import host-fs;
 
     export extension-lifecycle;
     export skill-registry;
