@@ -4,7 +4,7 @@ title: Architecture
 description: High-level architecture of the Jan-Klod agent runtime
 tags: [architecture, core, extensions, rust, wasm, wasmtime]
 created: 2026-06-28T00:00:00Z
-updated: 2026-07-01T00:00:00Z
+updated: 2026-07-03T00:00:00Z
 ---
 
 > **Foundation:** the core is **Rust + Wasmtime** running WebAssembly
@@ -18,7 +18,7 @@ updated: 2026-07-01T00:00:00Z
 > on 2026-07-01: its thin *mechanism* now lives in **core**, and every agent
 > *decision* is a sandboxed **interceptor** extension — see
 > [Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
-> Items still being re-decided for Rust are marked **(TBD)**.
+> All implementation choices are resolved as of v0.1.0.
 
 ## Philosophy
 
@@ -176,8 +176,8 @@ how it is launched:
 
 | Launch | Surface | Technology |
 |---|---|---|
-| `jan-klod-ui` (default) | Terminal UI | Rust TUI toolkit **(TBD — e.g. `ratatui`)** |
-| `jan-klod-ui --gui` | Native window | Rust desktop/WebView shell **(TBD — e.g. Tauri)** |
+| `jan-klod-ui` (default) | Terminal UI | `ratatui` |
+| `jan-klod-ui --gui` | Native window | Tauri *(planned, not yet implemented)* |
 | browser → `api-rest` | Web UI | served by the `api-rest` extension; open a browser tab |
 
 All three are clients of the same `api-*` surface, so they share one backend and
@@ -269,22 +269,20 @@ for the rationale.
 
 ## Transport
 
-The HTTP surface is **not in core** — it is provided by an `api-*` extension
-(e.g. `api-rest`) that binds a listener through the host `host-serve` capability
-and exposes core over **REST + Server-Sent Events (SSE)**. UI clients, browsers,
-and remote ACP callers all consume this surface. Curl-debuggable,
-browser-compatible, no stub generation. Rust HTTP framework inside the extension
-**(TBD — e.g. `axum`)**.
+The HTTP surface is **host-side** (not an extension) — `jan_klod_core::serve`
+runs a synchronous `tiny_http` listener and exposes core over **REST + Server-Sent
+Events (SSE)**. UI clients, browsers, and remote ACP callers all consume this
+surface. Curl-debuggable, browser-compatible, no stub generation. Endpoints:
+`GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`,
+`POST /session/:id/message` (SSE or JSON).
 
 ## Storage
 
 | Extension | Backend | Notes |
 |---|---|---|
-| `store-sqlite` | SQLite | Default — zero-ops; Rust SQLite library **(TBD — `rusqlite` bundled vs. pure options)** |
-| `store-postgres` | PostgreSQL | Self-hosted, multi-user; Rust driver **(TBD — e.g. `sqlx`/`tokio-postgres`)** |
-| `store-supabase` | Supabase | Hosted Postgres + realtime + auth |
-
-SQL layer: type-safe Rust SQL **(TBD — e.g. `sqlx` compile-time-checked queries)**.
+| `store-sqlite` | SQLite | Default — zero-ops; `rusqlite` bundled (host-side, not SQLite-in-wasm) |
+| `store-postgres` | PostgreSQL | Self-hosted, multi-user *(planned)* |
+| `store-supabase` | Supabase | Hosted Postgres + realtime + auth *(planned)* |
 
 The persistent store is a **host-side capability** the core exposes through the
 `memory-store` / `host-storage` contract — it is *not* SQLite-in-wasm (which the
@@ -299,9 +297,9 @@ selected via `config.yaml`.
 | Process model | `core` = standalone process under the user's privileges, hosting the WASM sandbox; UI clients connect over an `api-*` HTTP+SSE surface |
 | WASM host | Wasmtime (Rust-native, no CGo) |
 | Extension format | WASM Component Model + WIT interfaces (`wit-bindgen`) — every extension, incl. `api-*`/`chat-*` |
-| HTTP surface | provided by `api-*` extensions (REST + SSE) via the `host-serve` capability; framework **(TBD — e.g. `axum`)** |
-| SQL (host-side) | type-safe Rust SQL **(TBD — e.g. `sqlx`)** |
-| UI clients (separate, optional) | one client binary: TUI default, GUI by launch flag, web via browser — toolkits **(TBD)** |
+| HTTP surface | host-side `tiny_http` (sync); REST + SSE; `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message` |
+| SQL (host-side) | `rusqlite` bundled; host-side store (not SQLite-in-wasm) |
+| UI clients (separate, optional) | `jan-klod-ui`: TUI (`ratatui`); GUI via Tauri *(planned)*; web via browser |
 | Build | Cargo (native binary; no CGo in the core) |
 | Linting | Clippy (Rust core); `golangci-lint` for any Go-language tooling/guests |
 | Observability | Structured logging + Prometheus + OpenTelemetry |

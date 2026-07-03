@@ -51,7 +51,17 @@ the current directory as the workspace — file tools are jailed to it.
 
 ## 4. Connect the TUI
 
-In another terminal:
+`jan-klod-ui` is a separate binary that is not yet included in the install bundle.
+Build it from source:
+
+```sh
+git clone https://github.com/PromptPasture/jan-klod
+cd jan-klod
+cargo build --release -p jan-klod-ui
+cp target/release/jan-klod-ui ~/.local/bin/
+```
+
+Then connect to a running server:
 
 ```sh
 jan-klod-ui 127.0.0.1:8787 my-session
@@ -72,13 +82,24 @@ By default, only file access is enabled. To enable shell execution, set `extensi
 
 ## 6. Resume a session
 
-Sessions persist across server restarts (with a SQLite store):
+Sessions persist across server restarts (SQLite store). The REST API:
 
 ```sh
 # List past sessions
 curl http://127.0.0.1:8787/sessions
 
-# Resume in the TUI (use the session id from the list)
+# Create a named session explicitly
+curl -X POST http://127.0.0.1:8787/sessions
+
+# Get a session transcript
+curl http://127.0.0.1:8787/session/my-session
+
+# Send a message (JSON response)
+curl -X POST http://127.0.0.1:8787/session/my-session/message \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "hello"}'
+
+# Resume in the TUI (session id from the list above)
 jan-klod-ui 127.0.0.1:8787 <session-id>
 ```
 
