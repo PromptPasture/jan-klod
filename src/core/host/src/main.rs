@@ -98,6 +98,7 @@ fn serve(args: &[String]) -> ExitCode {
 /// Boot the agent and drive it from a Telegram bot (long-poll) until killed. The
 /// bot token comes from the `TELEGRAM_BOT_TOKEN` environment variable.
 fn telegram(args: &[String]) -> ExitCode {
+    const MAX_CONSECUTIVE_ERRORS: u32 = 10;
     let config_path = arg(args, 0, "config.yaml");
     let ext_dir = arg(args, 1, "ext");
 
@@ -136,7 +137,6 @@ fn telegram(args: &[String]) -> ExitCode {
     println!("jan-klod: telegram bot polling (Ctrl-C to stop)");
     let mut offset = 0;
     let mut consecutive_errors: u32 = 0;
-    const MAX_CONSECUTIVE_ERRORS: u32 = 10;
     loop {
         match jan_klod_core::telegram::poll_once(&mut agent, &fetch, &token, offset) {
             Ok(next) => {

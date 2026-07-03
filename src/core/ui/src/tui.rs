@@ -1,15 +1,21 @@
 //! Terminal-UI shell over the [`app`](jan_klod_ui::app) model and
-//! [`send_turn`](jan_klod_ui::send_turn). This is thin, terminal-bound glue (not
+//! [`stream_turn`](jan_klod_ui::stream_turn). This is thin, terminal-bound glue (not
 //! unit-tested); all state logic lives in the tested `App` model.
 
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
 use jan_klod_ui::app::{App, Who};
-use jan_klod_ui::send_turn;
+use jan_klod_ui::{stream_turn, StreamEvent};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
+
+const POLL_MS: u64 = 50;
 
 /// Run the TUI against the core at `addr` with the given `session`, restoring the
 /// terminal on exit.
@@ -27,9 +33,46 @@ fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std:
     let mut app = App::default();
     app.record_status(format!("connected to {addr} (session `{session}`); Esc to quit"));
 
+    // Channel carrying stream events from a background turn thread.
+    let mut rx: Option<mpsc::Receiver<Result<StreamEvent, String>>> = None;
+
     while !app.should_quit {
+        // Drain all pending stream events before redrawing.
+        if let Some(receiver) = &rx {
+            loop {
+                match receiver.try_recv() {
+                    Ok(Ok(StreamEvent::Delta(text))) => app.apply_delta(&text),
+                    Ok(Ok(StreamEvent::Done(answer))) => {
+                        app.finish_turn(answer);
+                        rx = None;
+                        break;
+                    }
+                    Ok(Ok(StreamEvent::Tool(name))) => {
+                        app.record_status(format!("· {name}"));
+                    }
+                    Ok(Ok(StreamEvent::Warning(msg))) => {
+                        app.record_status(format!("⚠ {msg}"));
+                    }
+                    Ok(Ok(StreamEvent::Error(err)) | Err(err)) => {
+                        app.record_error(err);
+                        rx = None;
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        rx = None;
+                        break;
+                    }
+                }
+            }
+        }
+
         terminal.draw(|frame| render(frame, &app))?;
 
+        // Short poll so we redraw incrementally during streaming.
+        if !event::poll(Duration::from_millis(POLL_MS))? {
+            continue;
+        }
         let Event::Key(key) = event::read()? else { continue };
         if key.kind != KeyEventKind::Press {
             continue;
@@ -38,15 +81,21 @@ fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std:
             KeyCode::Esc => app.quit(),
             KeyCode::Backspace => app.backspace(),
             KeyCode::Char(c) => app.push_char(c),
-            KeyCode::Enter => {
+            KeyCode::Enter if rx.is_none() => {
                 if let Some(message) = app.take_submission() {
-                    // Show the user's line before the (blocking) turn.
-                    terminal.draw(|frame| render(frame, &app))?;
-                    match send_turn(addr, session, &message) {
-                        Ok(answer) => app.record_answer(answer),
-                        Err(err) => app.record_error(err),
+                        let addr = addr.to_string();
+                        let session = session.to_string();
+                        let (tx, new_rx) = mpsc::channel();
+                        thread::spawn(move || {
+                            let result = stream_turn(&addr, &session, &message, &mut |event| {
+                                let _ = tx.send(Ok(event));
+                            });
+                            if let Err(err) = result {
+                                let _ = tx.send(Err(err));
+                            }
+                        });
+                        rx = Some(new_rx);
                     }
-                }
             }
             _ => {}
         }

@@ -66,6 +66,26 @@ impl App {
         self.record(Who::Klod, text);
     }
 
+    /// Append a streaming text delta to the in-progress assistant message,
+    /// starting one if the last entry is not already a [`Who::Klod`] line.
+    pub fn apply_delta(&mut self, text: &str) {
+        if let Some(entry) = self.transcript.last_mut().filter(|e| e.who == Who::Klod) {
+            entry.text.push_str(text);
+        } else {
+            self.record(Who::Klod, text.to_string());
+        }
+    }
+
+    /// Finish a streaming turn with the authoritative answer. Replaces the
+    /// partial streamed entry if one exists, otherwise records it fresh.
+    pub fn finish_turn(&mut self, answer: String) {
+        if let Some(entry) = self.transcript.last_mut().filter(|e| e.who == Who::Klod) {
+            entry.text = answer;
+        } else {
+            self.record_answer(answer);
+        }
+    }
+
     /// Record a client/transport error.
     pub fn record_error(&mut self, text: impl Into<String>) {
         self.record(Who::Error, text);
