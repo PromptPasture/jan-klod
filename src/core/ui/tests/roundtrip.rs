@@ -18,7 +18,6 @@ fn send_turn_round_trips_against_a_server() {
         let mut body = String::new();
         request.as_reader().read_to_string(&mut body).unwrap();
         assert!(body.contains("\"message\":\"how are you\""), "request body: {body}");
-        assert!(body.contains("\"session\":\"s1\""), "request body: {body}");
         let reply = Response::from_string(r#"{"answer":"doing well","agentic":true}"#);
         request.respond(reply).unwrap();
     });

@@ -192,6 +192,21 @@ impl Store {
 
     /// Delete every entry in `namespace`.
     ///
+    /// List all distinct namespaces in the store (i.e. all session ids).
+    ///
+    /// # Errors
+    /// [`StoreError::Backend`] on a SQL failure.
+    pub fn list_namespaces(&self) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT namespace FROM entries ORDER BY MIN(created_at) DESC")
+            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| StoreError::Backend { detail: e.to_string() })
+    }
+
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
     pub fn purge_namespace(&self, namespace: &str) -> Result<(), StoreError> {

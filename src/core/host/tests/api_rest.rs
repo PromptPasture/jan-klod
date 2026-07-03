@@ -58,12 +58,12 @@ extensions:
     let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
     let port = server.server_addr().to_ip().expect("ip addr").port();
 
-    // Client on a separate thread: POST a turn, read the raw HTTP response.
+    // Client on a separate thread: POST a message, read the raw HTTP response.
     let client = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
-        let body = r#"{"session":"http-1","message":"hello"}"#;
+        let body = r#"{"message":"hello"}"#;
         let request = format!(
-            "POST /turn HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+            "POST /session/http-1/message HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
@@ -100,9 +100,9 @@ extensions:
     // event frames ending in a `done` frame with the answer.
     let sse_client = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
-        let body = r#"{"session":"http-1","message":"hello"}"#;
+        let body = r#"{"message":"hello"}"#;
         let request = format!(
-            "POST /turn HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+            "POST /session/http-1/message HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
              Accept: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body

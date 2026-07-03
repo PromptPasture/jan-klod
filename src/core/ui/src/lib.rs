@@ -4,7 +4,7 @@
 //! any HTTP client would (the LSP/server model). This library holds the transport
 //! ([`send_turn`]); the binary layers a REPL over it (a `ratatui` TUI is a later
 //! step). It depends on neither the core runtime nor Wasmtime — only the REST
-//! contract: `POST /turn` with `{session, message}` → `{answer, agentic}`.
+//! contract: `POST /session/:id/message` with `{"message":"..."}` → `{"answer","agentic"}`.
 
 pub mod app;
 
@@ -56,9 +56,9 @@ pub fn stream_turn(
     message: &str,
     on_event: &mut dyn FnMut(StreamEvent),
 ) -> Result<(), String> {
-    let body = serde_json::json!({ "session": session, "message": message }).to_string();
+    let body = serde_json::json!({ "message": message }).to_string();
     let request = format!(
-        "POST /turn HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+        "POST /session/{session}/message HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
          Accept: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
@@ -107,9 +107,9 @@ pub fn stream_turn(
 /// Returns a human-readable error if the connection fails, the response is not
 /// well-formed, or core reports a turn failure (`{"error": …}`).
 pub fn send_turn(addr: &str, session: &str, message: &str) -> Result<String, String> {
-    let body = serde_json::json!({ "session": session, "message": message }).to_string();
+    let body = serde_json::json!({ "message": message }).to_string();
     let request = format!(
-        "POST /turn HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+        "POST /session/{session}/message HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body

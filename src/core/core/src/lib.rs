@@ -314,10 +314,22 @@ impl Runtime {
 
     }
 
-    /// Open the host-side workspace for `host-fs` from the top-level `workspace:`
-    /// config key. Absent or un-openable → `None` (default-deny).
+    /// Open the host-side workspace for `host-fs`. Uses the top-level `workspace:`
+    /// config key, falling back to `$PWD` when the key is absent. Un-openable →
+    /// `None` (default-deny).
     fn open_workspace(&self) -> Option<host_fs::Workspace> {
-        let root = self.agent.get("workspace").and_then(serde_json::Value::as_str)?;
+        let root_owned;
+        let root: &str = if let Some(r) = self.agent.get("workspace").and_then(serde_json::Value::as_str) {
+            r
+        } else {
+            root_owned = std::env::current_dir()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if root_owned.is_empty() {
+                return None;
+            }
+            &root_owned
+        };
         host_fs::Workspace::open(root).map_or_else(
             |_| {
                 eprintln!("WARN [core] workspace `{root}` could not be opened; host-fs is default-deny");
@@ -564,6 +576,12 @@ impl AgentSession {
         let mut entries = self.store.recent(session, u32::MAX).unwrap_or_default();
         entries.reverse(); // `recent` is newest-first; a transcript reads oldest-first
         entries
+    }
+
+    /// All known session ids, newest first.
+    #[must_use]
+    pub fn list_sessions(&self) -> Vec<String> {
+        self.store.list_namespaces().unwrap_or_default()
     }
 }
 
