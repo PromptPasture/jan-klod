@@ -113,15 +113,30 @@ before rendering. Fix: consume `text-delta` events in the TUI's event loop and a
 to the active message buffer on each event, triggering a re-render. No architectural
 change — wiring only.
 
+### REST API surface (decided 2026-07-03)
+
+The v1 REST surface is a proper resource model. `POST /turn` (Phase 3, session id
+in body) is replaced before v0.1.0 ships — the change is contained to `serve.rs`
+and the UI client.
+
+```
+GET  /health                    liveness (blue/green supervisor probe)
+GET  /sessions                  list sessions {id, created, preview}
+POST /sessions                  create session → {id}
+GET  /session/:id               transcript + metadata
+POST /session/:id/message       send message, stream SSE response
+```
+
+No `PUT` or `DELETE` in v0.1.0 — sessions are append-only and pruning is post-v0.1.0.
+
 ### Session list and resume
 
-- `GET /sessions` on the REST surface returns a list of past sessions (id, created,
-  last message preview) from the SQLite store.
+- `GET /sessions` returns past sessions from the SQLite store.
 - `jan-klod-ui --session <id>` (or `/sessions` REPL command) fetches the list and
   lets the user pick a session to resume.
-- `POST /turn` with an existing session id resumes from that session's transcript.
-  The conductor replays the stored history into the context interceptor before the
-  first new turn.
+- `POST /session/:id/message` with an existing id resumes from that session's
+  transcript. The conductor replays stored history into the context interceptor
+  before the first new turn.
 
 ### Workspace auto-detection
 
