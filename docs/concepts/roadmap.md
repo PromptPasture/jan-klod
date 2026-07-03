@@ -1,10 +1,10 @@
 ---
 type: concept
 title: Roadmap
-description: Phased plan from the Rust + Wasmtime + Component Model foundation decision to a shippable, polyglot-extension agent runtime, then on to a file-workspace-capable agent (streaming, host-fs/host-process, tool fleet).
+description: Phased plan from the Rust + Wasmtime + Component Model foundation decision to a shippable, polyglot-extension agent runtime, then on to a file-workspace-capable agent (streaming, host-fs/host-process, tool fleet), and finally to a publicly released product (v0.1.0).
 tags: [roadmap, planning, rust, wasmtime, component-model, phases]
 created: 2026-06-29
-updated: 2026-07-02
+updated: 2026-07-03
 ---
 
 # Roadmap
@@ -79,6 +79,10 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 6 — Streaming & steering | `done` | [PLAN.md](../decisions/2026-07-02-phase6-streaming-steering/PLAN.md) (2026-07-02). **Exit gate passed** (`make phase6-gate` in CI): the conductor emits events via a push `EventSink` (fits the sync loop) → **SSE** over the REST surface (`tiny_http` streaming, `jan-klod-ui` consumes it live) → **cancel** (a sink `Stop`, incl. client-disconnect) → **steering** (a `Driver::follow_up` injects another cycle at `prepare-next-turn`). Carried-forward: per-token deltas, TUI/Telegram streaming. |
 | 7 — File-workspace substrate | `done` | [PLAN.md](../decisions/2026-07-02-phase7-file-workspace-substrate/PLAN.md) (2026-07-02). **Exit gate passed** (`make phase7-gate` in CI): **`host-fs`** (path-jailed workspace read/write; `..`/absolute/no-workspace denied) and **`host-process`** (bounded run-to-completion exec — workspace-jailed cwd, timeout, output cap; disabled denied), both unit-tested host-side and driven **across the CM boundary** by probe guests (`tool-fs-probe` — since retired, its tests retargeted to `tool-fs`; `tool-proc-probe`) through `tool_host::ToolExtension`. Default-deny + workspace-jailed. Carried-forward: symlink hardening/COW, long-lived children/OS isolation, wiring the substrates into the loop's tools. |
 | 8 — Tool fleet | `done` | [PLAN.md](../decisions/2026-07-02-phase8-tool-fleet/PLAN.md) (2026-07-02). **Exit gate passed** (`make phase8-gate` in CI): a model tool call runs through the whole loop — advertised at `select-tools`, gated at `tool-call` (permission ask→approve), dispatched by the `ToolFleet` (`conductor::ToolInvoker`) to a real tool that writes through `host-fs`, result fed back, grounded answer. Fleet: `tool-fs` (a single host-fs tool with read/write/grep ops), `tool-shell` (host-process); `build_agent` instantiates enabled `tool.*` with the default-deny substrates from config. The rest of the fleet follows the same pattern. |
+| 9 — Anthropic provider | `not-started` | [PLAN.md](../2026-07-03-shipping-plan/PLAN.md). `provider-anthropic` guest: native Messages API, streaming SSE, tool-call blocks, auth/rate-limit error mapping. Gate: offline canned-reply test + live `make probe PROVIDER=anthropic`. |
+| 10 — Skills + MCP registry | `not-started` | [PLAN.md](../2026-07-03-shipping-plan/PLAN.md). `registry-skills` (workspace `skills/*.md` → `tool-callable` templates) + `registry-mcp` (MCP server → `ToolFleet` proxy, via `host-http`/`host-process`). Gate: model calls an MCP tool + invokes a skill, offline with canned stub. |
+| 11 — UX polish | `not-started` | [PLAN.md](../2026-07-03-shipping-plan/PLAN.md). Per-token streaming in TUI (Phase 6 carry-forward); session list + resume (`GET /sessions`, `--session <id>`); workspace auto-detection (default `$PWD`). Gate: resume a prior session with streaming in the TUI. |
+| 12 — Release: GitHub + web | `not-started` | [PLAN.md](../2026-07-03-shipping-plan/PLAN.md). GitHub Actions release workflow (tag → multi-arch bundle assets); install script (`curl \| sh`); GitHub Pages site under `pages/`; quickstart doc; README rewrite. Gate: cold-start install + quickstart completes in ≤15 min. |
 
 Built-extension language assignments and their own status live in the
 [Extension Technologies brainstorm](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md#near-term-assignments-provisional--confirmed-at-the-phase-1-gate).
@@ -234,6 +238,86 @@ skills (`registry-skills`), a per-turn watcher/critic and code-review-with-verdi
 **Exit gate:** the loop completes a multi-step task using at least one `host-fs` tool
 (e.g. read + edit a file) and one `host-process` tool (e.g. run a command),
 end-to-end.
+
+## Phase 9 — Anthropic provider
+
+**Goal:** Claude works natively without an OpenAI-compat proxy.
+
+- **`provider-anthropic` extension** — Rust guest implementing `llm-provider`. Calls
+  the Anthropic Messages API (`/v1/messages`) via `host-http`. Handles native SSE
+  streaming → `completion-chunk` sequence; `tool_use` content blocks → `tool-call-request`
+  chunks; error mapping (`401/403` → `auth-failed`, `429` → `rate-limited`, else
+  `transient`). `init` reads `api-key` + `model` from `host-config`. Extended thinking
+  passthrough via config flag.
+- Config: `extensions.provider.anthropic: {enabled: true, api-key: ${ANTHROPIC_API_KEY},
+  model: claude-sonnet-4-6}`.
+
+**Exit gate:** enable `provider.anthropic` in `config.yaml` and run `make probe` with
+a live `ANTHROPIC_API_KEY`. Offline: canned `host-http` reply → correct chunk sequence.
+(`make probe` runs against the enabled provider in config; no `PROVIDER=` flag exists.)
+
+## Phase 10 — Skills + MCP registry
+
+**Goal:** named workflow shortcuts and ecosystem tool access.
+
+- **`registry-skills`** — implements `skill-registry` (`wit/skill-registry.wit`).
+  Scans `.agents/skills/` for Markdown files with a YAML `name:` field; exposes them
+  via `list-skills` / `invoke` / `reload`. The `ToolFleet` calls `list-skills` at
+  `select-tools` and `invoke` at dispatch — the same seam as `tool-callable` but
+  through the `skill-registry` interface.
+- **`registry-mcp`** — implements `mcp-registry` (`wit/mcp-registry.wit`). Connects
+  to configured MCP servers via **SSE only** (via `host-http`; stdio deferred —
+  requires long-lived `host-process` carry-forward from Phase 7). Exposes
+  `list-tools` / `invoke-tool` / `reconnect`; uses `host-event` for crash
+  notifications. `ToolFleet` calls `list-tools` at `select-tools` and `invoke-tool`
+  at dispatch. Permission gate fires on each outbound MCP call.
+- **Prerequisite:** verify `host-event` is granted to `mcp-registry-world` guests
+  before starting `registry-mcp`.
+
+**Exit gate:** model calls an MCP tool via a canned SSE stub (offline); model invokes
+a skill from `.agents/skills/review.md` and the template is injected correctly.
+
+## Phase 11 — UX polish
+
+**Goal:** the daily-use experience is complete. Per-token streaming has no dependency
+on Phases 9–10 and can start immediately in parallel with them.
+
+- **Per-token streaming in TUI** (Phase 6 carry-forward) — `jan-klod-ui`'s `ratatui`
+  TUI consumes `text-delta` SSE events incrementally, appending to the active message
+  buffer and re-rendering on each event. Wiring only; no architectural change.
+- **Session list + resume** — `GET /sessions` returns past sessions from SQLite (id,
+  created, preview). `jan-klod-ui --session <id>` or `/sessions` REPL command picks
+  a session to resume. `POST /turn` with an existing session id replays stored history
+  into the context interceptor before the first new turn.
+- **Workspace auto-detection** — when `jan-klod serve` is launched without an explicit
+  `workspace:` config key, default to `$PWD`. Config-defaulting change in `Runtime::boot`.
+
+**Exit gate:** launch in a repo, send a message, disconnect, relaunch, resume by id,
+receive per-token streaming output in the TUI.
+
+## Phase 12 — Release: GitHub + web
+
+**Goal:** a developer unfamiliar with Jan-Klod can find it, install it, and have a
+working session within 15 minutes.
+
+- **GitHub releases** — GitHub Actions workflow: on `git tag v*`, build
+  `dist/jan-klod-<version>-<os>-<arch>.tar.gz` for the matrix (linux-amd64,
+  linux-arm64, darwin-arm64, darwin-amd64) and publish as release assets. `make bundle`
+  already produces the archive; this wires it into CI.
+- **Install script** — `scripts/install.sh`: detects OS/arch, downloads the matching
+  bundle from the latest GitHub release, verifies checksum, extracts to
+  `~/.local/bin/jan-klod`. Stdlib sh, no dependencies. Usage:
+  `curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh`.
+- **GitHub Pages site** (`pages/`) — static site served from `pages/` on `main`.
+  Content: what Jan-Klod is, the WASM sandboxing differentiator, install command,
+  quickstart link. Plain HTML + minimal CSS; no build framework.
+- **Quickstart doc** (`docs/quickstart.md`) — install → set API key → `jan-klod serve`
+  → first TUI session → fix a bug in a real repo. Under 500 words; golden path only.
+- **README rewrite** — what it is (one sentence), differentiator vs Pi (one sentence),
+  install, quickstart link, TUI screenshot.
+
+**Exit gate:** cold-start install from the README command completes and the quickstart
+produces a model-driven file edit in under 15 minutes.
 
 ---
 
