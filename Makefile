@@ -69,8 +69,8 @@ supervisor:
 # the REST surface are in-core, so ext/ holds only provider/interceptor/tool guests.
 BUNDLE_OUT ?= $(abspath dist)
 bundle: extensions
-	cd $(CORE) && cargo build --release -p jan-klod-host -p jan-klod-ui
-	sh scripts/bundle.sh $(CORE)/target/release/jan-klod $(CORE)/target/release/jan-klod-ui $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT)
+	cd $(CORE) && cargo build --release -p jan-klod-host -p jan-klod
+	sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT)
 
 clippy:
 	$(MAKE) -C $(CORE) clippy
@@ -136,14 +136,14 @@ harness: extensions
 #   tool_fleet/tool_wiring — fleet dispatch by name + build_agent wiring from config.
 #   jan-klod-core   — streaming (event stream + SSE), cancel, steering, and the
 #                     host-fs/host-process host-side units.
-#   jan-klod-ui     — a UI client drives core over REST.
+#   jan-klod        — a UI client drives core over REST.
 # The Go supervisor's flip/health/rollback cycle is covered by `make test`.
 gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-host \
 		--test gate --test persistence --test api_rest --test telegram \
 		--test host_fs --test host_process --test tool_fleet --test tool_wiring
 	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up host_fs host_process
-	cd $(CORE) && cargo test -p jan-klod-ui
+	cd $(CORE) && cargo test -p jan-klod
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.
@@ -152,17 +152,17 @@ run:
 
 # Serve the loop over the host-side REST surface (default 127.0.0.1:8787). Uses
 # live host-http (real provider calls), so the enabled provider needs its api-key
-# env. POST {"session":"…","message":"…"} to drive a turn. Override BIND=host:port.
+# env. Override BIND=host:port.
 BIND ?= 127.0.0.1:8787
 serve:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host -- serve $(CONFIG) $(EXT_DIR) $(BIND)
 
-# REPL client for a running `jan-klod serve` — a separate client process that drives
-# core over the REST surface. Override ADDR=host:port and SESSION=id.
+# TUI client — connects to the gateway (auto-starting it if not running).
+# Override ADDR=host:port and SESSION=id.
 ADDR ?= 127.0.0.1:8787
 SESSION ?= cli
 chat:
-	cd $(CORE) && cargo run --quiet -p jan-klod-ui -- $(ADDR) $(SESSION)
+	cd $(CORE) && cargo run --quiet -p jan-klod -- $(ADDR) $(SESSION)
 
 # Run the Telegram bot (headless chat access, no UI client). Needs
 # TELEGRAM_BOT_TOKEN in the environment and network access.

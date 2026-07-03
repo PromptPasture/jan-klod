@@ -11,7 +11,7 @@ description: Install jan-klod, start the server, and run your first session in u
 curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh
 ```
 
-This installs the `jan-klod` binary to `~/.local/bin`. Add it to your PATH if it isn't already:
+This installs `jan-klod` (TUI) and `jan-klod-gateway` (server) to `~/.local/bin`. Add it to your PATH if it isn't already:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -37,24 +37,23 @@ export OPENAI_API_KEY=sk-...
 
 The default `config.yaml` has `provider.openai` enabled.
 
-## 3. Start the server
+## 3. Start a session
 
 From inside a repository you want to work on:
 
 ```sh
 cd ~/my-project
-jan-klod serve config.yaml ext
+jan-klod my-session
 ```
 
-The server listens on `127.0.0.1:8787` by default. jan-klod automatically uses
-the current directory as the workspace — file tools are jailed to it.
+`jan-klod` automatically starts `jan-klod-gateway` in the background if it isn't
+already running. The gateway listens on `127.0.0.1:8787` and uses the current
+directory as the workspace — file tools are jailed to it.
 
-## 4. Connect the TUI
-
-In another terminal:
+To start the gateway manually (e.g. as a background service):
 
 ```sh
-jan-klod-ui 127.0.0.1:8787 my-session
+jan-klod-gateway serve config.yaml ext
 ```
 
 Type a message and press **Enter** to send it. The model's response streams in token by token. Press **Esc** to quit.
@@ -90,7 +89,7 @@ curl -X POST http://127.0.0.1:8787/session/my-session/message \
   -d '{"message": "hello"}'
 
 # Resume in the TUI (session id from the list above)
-jan-klod-ui 127.0.0.1:8787 <session-id>
+jan-klod 127.0.0.1:8787 <session-id>
 ```
 
 ## Next steps

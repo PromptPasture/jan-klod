@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "jan-klod"
+name = "jan-klod-gateway"
 path = "src/main.rs"
 
 [dependencies]

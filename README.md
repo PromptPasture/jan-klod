@@ -19,9 +19,13 @@ curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
-jan-klod serve config.yaml ext
-# in another terminal:
-jan-klod-ui 127.0.0.1:8787 my-session
+jan-klod my-session
+```
+
+`jan-klod` starts the gateway automatically. To run the gateway manually:
+
+```sh
+jan-klod-gateway serve config.yaml ext
 ```
 
 See the [quickstart guide](docs/quickstart.md) for a full walkthrough.

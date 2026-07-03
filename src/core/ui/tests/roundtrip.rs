@@ -22,7 +22,7 @@ fn send_turn_round_trips_against_a_server() {
         request.respond(reply).unwrap();
     });
 
-    let answer = jan_klod_ui::send_turn(&addr, "s1", "how are you").expect("client succeeds");
+    let answer = jan_klod::send_turn(&addr, "s1", "how are you").expect("client succeeds");
     assert_eq!(answer, "doing well");
 
     server_thread.join().unwrap();

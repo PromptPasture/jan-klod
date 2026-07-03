@@ -1324,6 +1324,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jan-klod"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "serde_json",
+ "tiny_http",
+]
+
+[[package]]
 name = "jan-klod-config"
 version = "0.1.0"
 dependencies = [
@@ -1356,15 +1365,6 @@ dependencies = [
  "tiny_http",
  "wasmtime",
  "wasmtime-wasi",
-]
-
-[[package]]
-name = "jan-klod-ui"
-version = "0.1.0"
-dependencies = [
- "ratatui",
- "serde_json",
- "tiny_http",
 ]
 
 [[package]]

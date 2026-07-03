@@ -65,11 +65,11 @@ EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}"
 
 mkdir -p "${INSTALL_DIR}"
 cp "${EXTRACTED}/jan-klod" "${INSTALL_DIR}/jan-klod"
-cp "${EXTRACTED}/jan-klod-ui" "${INSTALL_DIR}/jan-klod-ui"
-chmod +x "${INSTALL_DIR}/jan-klod" "${INSTALL_DIR}/jan-klod-ui"
+cp "${EXTRACTED}/jan-klod-gateway" "${INSTALL_DIR}/jan-klod-gateway"
+chmod +x "${INSTALL_DIR}/jan-klod" "${INSTALL_DIR}/jan-klod-gateway"
 
 echo "Installed: ${INSTALL_DIR}/jan-klod"
-echo "Installed: ${INSTALL_DIR}/jan-klod-ui"
+echo "Installed: ${INSTALL_DIR}/jan-klod-gateway"
 
 # Check PATH.
 case ":${PATH}:" in
@@ -85,4 +85,4 @@ esac
 echo ""
 echo "Quick start:"
 echo "  export ANTHROPIC_API_KEY=sk-..."
-echo "  jan-klod serve config.yaml ext"
+echo "  jan-klod my-session"

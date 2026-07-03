@@ -1,13 +1,13 @@
-//! Terminal-UI shell over the [`app`](jan_klod_ui::app) model and
-//! [`stream_turn`](jan_klod_ui::stream_turn). This is thin, terminal-bound glue (not
+//! Terminal-UI shell over the [`app`](jan_klod::app) model and
+//! [`stream_turn`](jan_klod::stream_turn). This is thin, terminal-bound glue (not
 //! unit-tested); all state logic lives in the tested `App` model.
 
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use jan_klod_ui::app::{App, Who};
-use jan_klod_ui::{stream_turn, StreamEvent};
+use jan_klod::app::{App, Who};
+use jan_klod::{stream_turn, StreamEvent};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style};

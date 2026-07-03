@@ -7,7 +7,7 @@
 # Usage: bundle.sh <core-binary> <ext-dir> <config> <out-dir>
 set -eu
 
-CORE_BIN="$1"
+GATEWAY_BIN="$1"
 UI_BIN="$2"
 EXT_DIR="$3"
 CONFIG="$4"
@@ -21,8 +21,8 @@ DIR="${OUT}/${NAME}"
 
 rm -rf "$DIR"
 mkdir -p "$DIR/ext"
-cp "$CORE_BIN" "$DIR/jan-klod"
-cp "$UI_BIN" "$DIR/jan-klod-ui"
+cp "$GATEWAY_BIN" "$DIR/jan-klod-gateway"
+cp "$UI_BIN" "$DIR/jan-klod"
 cp "$CONFIG" "$DIR/config.yaml"
 # Copy staged guests, if any (a bundle with none still boots headless).
 if [ -d "$EXT_DIR" ]; then
@@ -39,8 +39,14 @@ core — no separate store/REST guests.
 ## Run
 
 \`\`\`sh
-./jan-klod serve config.yaml ext 127.0.0.1:8787   # start the server
-./jan-klod-ui 127.0.0.1:8787 my-session           # connect the TUI
+./jan-klod my-session    # starts the gateway automatically if not running
+\`\`\`
+
+Or manually:
+
+\`\`\`sh
+./jan-klod-gateway serve config.yaml ext 127.0.0.1:8787
+./jan-klod 127.0.0.1:8787 my-session
 \`\`\`
 EOF
 

@@ -1,11 +1,15 @@
-//! `jan-klod-ui` — a client for a running core.
+//! `jan-klod` — TUI client for the jan-klod gateway.
 //!
 //! Usage:
-//!   `jan-klod-ui [addr] [session]`       — line REPL
-//!   `jan-klod-ui tui [addr] [session]`   — full-screen terminal UI (`ratatui`)
+//!   `jan-klod [addr] [session]`       — line REPL
+//!   `jan-klod tui [addr] [session]`   — full-screen terminal UI (`ratatui`)
 //!
-//!   addr     `host:port` of a running `jan-klod serve` (default: 127.0.0.1:8787)
+//!   addr     `host:port` of the gateway (default: 127.0.0.1:8787)
 //!   session  session id, shared across the conversation (default: cli)
+//!
+//! If the gateway is not already running at `addr`, jan-klod will attempt to
+//! start `jan-klod-gateway serve config.yaml ext <addr>` automatically,
+//! looking for the binary next to its own executable first, then in PATH.
 //!
 //! In the REPL, type a message and press enter to drive a turn; empty input,
 //! `quit`, or EOF exits.
@@ -13,9 +17,14 @@
 mod tui;
 
 use std::io::{self, Write};
+use std::net::TcpStream;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use std::process::ExitCode;
 
-use jan_klod_ui::{stream_turn, StreamEvent};
+use jan_klod::{stream_turn, StreamEvent};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1).peekable();
@@ -26,27 +35,29 @@ fn main() -> ExitCode {
     let addr = args.next().unwrap_or_else(|| "127.0.0.1:8787".to_string());
     let session = args.next().unwrap_or_else(|| "cli".to_string());
 
+    // Ensure the gateway is up; spawn it if not.
+    let _gateway = ensure_gateway(&addr);
+
     if use_tui {
         return match tui::run(&addr, &session) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
-                eprintln!("jan-klod-ui: {err}");
+                eprintln!("jan-klod: {err}");
                 ExitCode::FAILURE
             }
         };
     }
 
-    println!("jan-klod-ui → {addr} (session `{session}`); type a message, `quit` to exit.");
+    println!("jan-klod → {addr} (session `{session}`); type a message, `quit` to exit.");
 
     loop {
         print!("you › ");
         if io::stdout().flush().is_err() {
             return ExitCode::FAILURE;
         }
-        // Read one line per turn — no persistent stdin lock held across the loop.
         let mut line = String::new();
         match io::stdin().read_line(&mut line) {
-            Ok(0) => break, // EOF
+            Ok(0) => break,
             Ok(_) => {}
             Err(err) => {
                 eprintln!("input error: {err}");
@@ -57,9 +68,6 @@ fn main() -> ExitCode {
         if message.is_empty() || message == "quit" || message == "exit" {
             break;
         }
-        // Stream the turn: print deltas live; notices to stderr. `done` is the
-        // authoritative answer — printed only if nothing was streamed (e.g. a
-        // finalize-only rewrite).
         print!("klod › ");
         let _ = io::stdout().flush();
         let mut streamed = String::new();
@@ -84,4 +92,64 @@ fn main() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Check if the gateway is reachable; if not, spawn it and wait until it
+/// responds to a TCP connection (up to 10 s). Returns the child handle so the
+/// caller keeps it alive for the duration of the process.
+fn ensure_gateway(addr: &str) -> Option<Child> {
+    if is_up(addr) {
+        return None;
+    }
+    let bin = gateway_bin();
+    eprintln!("jan-klod: gateway not found at {addr}, starting {bin:?} …");
+    let child = Command::new(&bin)
+        .args(["serve", "config.yaml", "ext", addr])
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn();
+    match child {
+        Err(err) => {
+            eprintln!("jan-klod: could not start gateway ({bin:?}): {err}");
+            eprintln!("jan-klod: start it manually: jan-klod-gateway serve config.yaml ext {addr}");
+            None
+        }
+        Ok(child) => {
+            wait_for_gateway(addr, Duration::from_secs(10));
+            Some(child)
+        }
+    }
+}
+
+/// Resolve the `jan-klod-gateway` binary: sibling of the current exe first,
+/// then fall back to PATH.
+fn gateway_bin() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        let sibling = exe.with_file_name("jan-klod-gateway");
+        if sibling.exists() {
+            return sibling;
+        }
+    }
+    PathBuf::from("jan-klod-gateway")
+}
+
+/// Poll TCP connect until the gateway accepts connections or the deadline passes.
+fn wait_for_gateway(addr: &str, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if is_up(addr) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    eprintln!("jan-klod: gateway did not become ready within {timeout:?}");
+}
+
+fn is_up(addr: &str) -> bool {
+    TcpStream::connect_timeout(
+        &addr.parse().unwrap_or_else(|_| "127.0.0.1:8787".parse().unwrap()),
+        Duration::from_millis(300),
+    )
+    .is_ok()
 }
