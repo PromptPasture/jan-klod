@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean
+.PHONY: help wit all core extensions supervisor bundle test harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks
 
 .DEFAULT_GOAL := all
 
@@ -36,6 +36,7 @@ help:
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
 	@echo "  wit         validate the WIT contracts"
+	@echo "  install-hooks  configure git to use .githooks/"
 	@echo "  clean       remove build artifacts"
 
 # Validate the root-level WIT contract set (canonical, language-neutral — it sits
@@ -180,6 +181,9 @@ config:
 	cd $(CORE) && cargo run --quiet -p jan-klod-config --example dump -- $(CONFIG)
 
 # Clean both subtrees.
+install-hooks:
+	git config core.hooksPath .githooks
+
 clean:
 	$(MAKE) -C $(CORE) clean
 	$(MAKE) -C $(EXT) clean
