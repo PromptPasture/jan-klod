@@ -37,7 +37,7 @@ help:
 	@echo "  config      print the resolved extension plan"
 	@echo "  wit         validate the WIT contracts"
 	@echo "  setup       install cargo plugins + configure git hooks"
-	@echo "  install-hooks  configure git to use .githooks/"
+	@echo "  install-hooks  configure git to use .github/hooks/"
 	@echo "  clean       remove build artifacts"
 
 # Validate the root-level WIT contract set (canonical, language-neutral — it sits
@@ -188,7 +188,7 @@ setup:
 	$(MAKE) install-hooks
 
 install-hooks:
-	git config core.hooksPath .githooks
+	git config core.hooksPath .github/hooks
 
 clean:
 	$(MAKE) -C $(CORE) clean
