@@ -1,5 +1,5 @@
 #![allow(missing_docs)]
-use jan_klod_ui::{parse_frame, StreamEvent};
+use jan_klod::{parse_frame, StreamEvent};
 
 #[test]
 fn parse_frame_maps_each_event_kind() {

@@ -1,5 +1,5 @@
 #![allow(missing_docs)]
-use jan_klod_ui::app::{App, Entry, Who};
+use jan_klod::app::{App, Entry, Who};
 
 #[test]
 fn typing_and_backspace_edit_the_input() {
