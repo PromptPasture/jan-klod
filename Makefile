@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks
+.PHONY: help wit all core extensions supervisor bundle test harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
 
 .DEFAULT_GOAL := all
 
@@ -31,11 +31,12 @@ help:
 	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go)"
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
-	@echo "  sbom        generate sbom.spdx.json for the repo (syft)"
+	@echo "  sbom        generate sbom.cdx.json for Rust workspace (cargo-cyclonedx)"
 	@echo "  run         boot the core against config.yaml + ext/"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
 	@echo "  wit         validate the WIT contracts"
+	@echo "  setup       install cargo plugins + configure git hooks"
 	@echo "  install-hooks  configure git to use .githooks/"
 	@echo "  clean       remove build artifacts"
 
@@ -84,10 +85,11 @@ audit deny:
 	$(MAKE) -C $(CORE) $@
 	$(MAKE) -C $(EXT) $@
 
-# Software bill of materials for the whole deploy unit, SPDX-JSON. syft reads the
-# committed lockfiles (Cargo.lock, go.sum) — no build required.
+# Software bill of materials for all Rust crates in the workspace, CycloneDX JSON.
+# cargo-cyclonedx reads Cargo.lock — no build required. Install once with:
+#   cargo install cargo-cyclonedx
 sbom:
-	syft dir:. --source-name jan-klod -o spdx-json=sbom.spdx.json
+	cargo cyclonedx --format json --output-file sbom.cdx.json
 
 # The full gate: Rust license/advisory/source policy + RUSTSEC audit (host +
 # guests), every Go module's verified-readonly vuln scan (guests + supervisor),
@@ -180,7 +182,11 @@ probe:
 config:
 	cd $(CORE) && cargo run --quiet -p jan-klod-config --example dump -- $(CONFIG)
 
-# Clean both subtrees.
+# One-time developer setup: install cargo supply-chain plugins and wire git hooks.
+setup:
+	cargo install cargo-audit cargo-deny cargo-cyclonedx
+	$(MAKE) install-hooks
+
 install-hooks:
 	git config core.hooksPath .githooks
 

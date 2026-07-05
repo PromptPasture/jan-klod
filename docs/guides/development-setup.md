@@ -151,10 +151,11 @@ Per the [extension-technology policy](../decisions/2026-06-29-extension-technolo
 the build pipeline is not protected by the runtime sandbox, so the CI gates use:
 
 ```shell
-go install golang.org/x/vuln/cmd/govulncheck@latest   # Go guest vuln scan
-cargo install cargo-deny                               # Rust deps/licenses/advisories
-brew install syft                                      # SBOM generation
+cargo install cargo-deny        # Rust deps/licenses/advisories
+cargo install cargo-cyclonedx  # SBOM generation (Rust workspace, CycloneDX JSON)
 ```
+
+`govulncheck` for Go modules is invoked via `go run golang.org/x/vuln/cmd/govulncheck@latest` — no install needed.
 
 These run in CI, not as a local prerequisite — listed here so the full picture is
 in one place.

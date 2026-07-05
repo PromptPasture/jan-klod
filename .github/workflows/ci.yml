@@ -109,7 +109,7 @@ jobs:
       # Prebuilt binaries — far faster than `cargo install` from source.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny,cargo-audit
+          tool: cargo-deny,cargo-audit,cargo-cyclonedx
 
       - name: cargo-deny (license / advisory / source policy)
         run: make deny
@@ -125,20 +125,15 @@ jobs:
           go-version: stable
           cache-dependency-path: src/extensions/*/go.sum
 
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-
       - name: Go supply-chain (mod verify + govulncheck)
         run: make -C src/extensions go-supply-chain
 
-      # SBOM for the whole deploy unit. download-syft puts the pinned binary on
-      # PATH; `make sbom` is the same command a developer runs locally.
-      - uses: anchore/sbom-action/download-syft@v0
-
+      # SBOM for the Rust workspace (CycloneDX JSON). cargo-cyclonedx installed
+      # above via taiki-e/install-action alongside cargo-deny and cargo-audit.
       - name: Generate SBOM
         run: make sbom
 
       - uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: sbom.spdx.json
+          path: sbom.cdx.json

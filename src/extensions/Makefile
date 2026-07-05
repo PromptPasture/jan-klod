@@ -58,7 +58,7 @@ deny:
 go-supply-chain: export GOFLAGS = -mod=readonly
 go-supply-chain:
 	@for mod in $(GO_MODULES); do dir=$$(dirname $$mod); echo "== go supply-chain $$dir =="; \
-		( cd $$dir && go mod verify && govulncheck ./... ) || exit 1; done
+		( cd $$dir && go mod verify && go run golang.org/x/vuln/cmd/govulncheck@latest ./... ) || exit 1; done
 
 # Resolve the spike world's WIT deps (wasi:cli and friends) into wit/spike/deps.
 spike-deps:
