@@ -89,7 +89,9 @@ audit deny:
 # cargo-cyclonedx reads Cargo.lock — no build required. Install once with:
 #   cargo install cargo-cyclonedx
 sbom:
-	cargo cyclonedx --format json --output-file sbom.cdx.json
+	cd src/core && cargo cyclonedx --format json --quiet
+	jq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
+	  src/core/**/*.cdx.json > sbom.cdx.json
 
 # The full gate: Rust license/advisory/source policy + RUSTSEC audit (host +
 # guests), every Go module's verified-readonly vuln scan (guests + supervisor),
