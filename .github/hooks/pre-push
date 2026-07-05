@@ -24,6 +24,8 @@ make -C src/extensions spike-deps \
   && pass "spike WIT deps fetched" \
   || { fail "spike-deps failed"; exit 1; }
 
+rm -rf ext/
+
 make test \
   && pass "make test" \
   || { fail "make test failed"; exit 1; }
