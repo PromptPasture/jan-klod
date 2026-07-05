@@ -102,7 +102,7 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
         return None;
     }
     let bin = gateway_bin();
-    eprintln!("jan-klod: gateway not found at {addr}, starting {bin:?} …");
+    eprintln!("jan-klod: gateway not found at {addr}, starting {} …", bin.display());
     let child = Command::new(&bin)
         .args(["serve", "config.yaml", "ext", addr])
         .stdin(Stdio::null())
@@ -111,7 +111,7 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
         .spawn();
     match child {
         Err(err) => {
-            eprintln!("jan-klod: could not start gateway ({bin:?}): {err}");
+            eprintln!("jan-klod: could not start gateway ({}): {err}", bin.display());
             eprintln!("jan-klod: start it manually: jan-klod-gateway serve config.yaml ext {addr}");
             None
         }
