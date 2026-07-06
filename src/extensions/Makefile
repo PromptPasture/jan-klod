@@ -63,7 +63,7 @@ audit:
 	cargo audit
 
 deny:
-	cargo deny --manifest-path Cargo.toml check --config $(DENY_CONFIG)
+	cargo deny -L error --manifest-path Cargo.toml check --config $(DENY_CONFIG)
 
 # Supply-chain gate for every Go module under src/extensions (currently only the
 # TinyGo Slice 1a canary): verified module sums + a govulncheck scan. GOFLAGS pins

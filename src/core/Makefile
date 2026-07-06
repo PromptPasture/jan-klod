@@ -33,7 +33,7 @@ audit:
 	cargo audit
 
 deny:
-	cargo deny check --config $(DENY_CONFIG)
+	cargo deny -L error check --config $(DENY_CONFIG)
 
 clean:
 	cargo clean
