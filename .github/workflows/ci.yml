@@ -96,12 +96,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # Every committed Cargo.lock must already be current — a stale lock means the
-      # audited/denied tree is not the tree that builds. The glob picks up the host
-      # workspace plus every Rust guest (the Go spike has no Cargo.toml), so a new
-      # guest is covered automatically.
+      # audited/denied tree is not the tree that builds. Two workspaces: the host
+      # workspace and the guest extensions workspace (one shared Cargo.lock across
+      # all guests), so a new guest added to src/extensions/Cargo.toml's members is
+      # covered automatically without editing this list.
       - name: Verify lockfiles (--locked)
         run: |
-          for m in src/core/Cargo.toml src/extensions/*/Cargo.toml; do
+          for m in src/core/Cargo.toml src/extensions/Cargo.toml; do
             cargo metadata --locked --format-version 1 \
               --manifest-path "$m" >/dev/null
           done

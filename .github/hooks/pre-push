@@ -48,7 +48,7 @@ make gate \
 # ── Job 3: supply-chain gates ─────────────────────────────────────────────────
 step "Job 3/3 · supply-chain gates"
 
-for m in src/core/Cargo.toml src/extensions/*/Cargo.toml; do
+for m in src/core/Cargo.toml src/extensions/Cargo.toml; do
   cargo metadata --locked --format-version 1 --manifest-path "$m" >/dev/null \
     && pass "lockfile current: $m" \
     || { fail "stale lockfile: $m (run: cargo update --manifest-path $m)"; exit 1; }
