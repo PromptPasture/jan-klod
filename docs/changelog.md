@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-06
+
+- **Refactor**: **Guest extensions merged into one Cargo workspace.** [src/extensions/Cargo.toml](../src/extensions/Cargo.toml) is now a real workspace for all 13 first-party Rust guests — shared `workspace.dependencies` (`wit-bindgen`, `serde_json`, `whatlang`), shared `workspace.lints` (each guest previously declared the strict policy locally, since guests lived outside any workspace), and one `[profile.release]` (`opt-level = "s"`, `strip`, `lto` — Cargo profiles only apply at a workspace root, so this moved out of each guest's own `Cargo.toml`). Consolidated the 13 per-guest `Cargo.lock` files into one shared lock. Disk: one target dir (169MB) instead of 13 separate ones (~4.5GB total). [src/extensions/Makefile](../src/extensions/Makefile): `audit`/`deny` now run once for the whole workspace instead of looping per guest; `deny.toml`'s stale "each guest has its own Cargo.lock" comment corrected.
+- **Optimize**: **Extension builds run in parallel.** `make -C src/extensions all` now builds all 13 guests in one `cargo build` invocation instead of 13 sequential `make` recipes, letting cargo's own scheduler compile independent guests concurrently across cores — cold build dropped from ~26-30s to ~14s. `make <guest-name>` still builds a single guest standalone for targeted dev iteration.
+- **Fix**: **`src/core` debug builds were consuming 48GB, 15GB of it stale incremental cache.** `cargo clean` reclaimed 80.9GiB; added `[profile.dev] debug = "line-tables-only"` to [src/core/Cargo.toml](../src/core/Cargo.toml) to keep it from growing back — backtraces still resolve to file:line, full variable inspection in a debugger is reduced.
+- **Fix**: **Pre-commit hook faster fail-fast.** Added a `check` target to [src/core/Makefile](../src/core/Makefile) (`cargo check` — no codegen/linking) and pointed [.github/hooks/pre-commit](../.github/hooks/pre-commit) at it instead of `build`: `cargo test` (which runs right after in the same hook) already does the real build, so the prior `cargo build` step was redundant work.
+- **Fix**: **Lockfile-freshness check de-duplicated.** [.github/hooks/pre-push](../.github/hooks/pre-push) and [.github/workflows/ci.yml](../.github/workflows/ci.yml) globbed `src/extensions/*/Cargo.toml` (13 identical checks against the same now-shared lock); both now check `src/extensions/Cargo.toml` (the workspace root) once.
+
 ## 2026-07-05
 
 - **Fix**: `make go-supply-chain` — replaced the `govulncheck` binary with `go run golang.org/x/vuln/cmd/govulncheck@latest` so no pre-install is required ([src/extensions/Makefile](../src/extensions/Makefile)).
