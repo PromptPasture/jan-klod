@@ -1,9 +1,9 @@
 [package]
 name = "store-memory"
 version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
-publish = false
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
 description = "In-memory memory-store extension (dev default, no persistence)."
 
 [lib]
@@ -11,20 +11,7 @@ description = "In-memory memory-store extension (dev default, no persistence)."
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.58"
+wit-bindgen.workspace = true
 
-# Same strict policy as the core workspace (this crate is standalone — guests
-# live outside `src/core/`, so the levels are declared here rather than inherited).
-[lints.rust]
-unsafe_code = "deny"
-missing_docs = "warn"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
-nursery = "warn"
-
-[profile.release]
-opt-level = "s"
-strip = true
-lto = true
+[lints]
+workspace = true

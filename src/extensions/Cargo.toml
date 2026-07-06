@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "store-memory",
+    "provider-openai",
+    "provider-anthropic",
+    "registry-skills",
+    "registry-mcp",
+    "interceptor-intent-router",
+    "interceptor-permission",
+    "interceptor-tool-selector",
+    "interceptor-context",
+    "interceptor-task-router",
+    "tool-proc-probe",
+    "tool-fs",
+    "tool-shell",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+wit-bindgen = "0.58"
+serde_json = "1"
+whatlang = "0.16"
+
+# Linting policy, declared once and inherited by every guest via `lints.workspace =
+# true`. Same strict policy as the core workspace (src/core/Cargo.toml) — guests
+# live outside src/core/, so it's declared again here rather than inherited across
+# workspaces.
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+# Every guest is a wasm32-wasip2 component: shared size/LTO profile. Cargo only
+# reads [profile.*] from a workspace root, which is why this moved here from each
+# guest's own Cargo.toml when they merged into one workspace.
+[profile.release]
+opt-level = "s"
+strip = true
+lto = true

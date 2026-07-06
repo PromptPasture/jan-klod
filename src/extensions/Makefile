@@ -2,6 +2,10 @@
 # the Rust ones in <repo>/ext. Works standalone (`make -C src/extensions ...`) or
 # via the root Makefile. Repo-root artifacts (wit/, ext/) resolve against ROOT so
 # the launch directory does not matter.
+#
+# The Rust guests share one Cargo workspace (this directory's Cargo.toml), so all
+# builds/tests below run with `-p <guest>` from here rather than `cd`-ing into
+# each guest — the workspace target dir and Cargo.lock are shared, not per-guest.
 ROOT := $(abspath $(CURDIR)/../..)
 EXT_DIR := $(ROOT)/ext
 WIT_DIR := $(ROOT)/wit
@@ -32,25 +36,25 @@ all: $(GUESTS)
 # Run the guests' native unit tests (host target, no wasm). Skips guests without
 # host-testable modules by only iterating TESTABLE_GUESTS.
 test:
-	@for g in $(TESTABLE_GUESTS); do echo "== test $$g =="; ( cd $$g && cargo test ) || exit 1; done
+	@for g in $(TESTABLE_GUESTS); do echo "== test $$g =="; cargo test -p $$g || exit 1; done
 
 # Build one guest and stage it in ext/. Rust guests need no cargo-component — the
 # wasm32-wasip2 target emits a component directly and the `wit-bindgen` crate
 # generates the bindings. Requires rustup (`rustup target add wasm32-wasip2`).
 $(GUESTS):
-	cd $@ && cargo build --release --target wasm32-wasip2
+	cargo build --release --target wasm32-wasip2 -p $@
 	mkdir -p $(EXT_DIR)
-	cp $@/target/wasm32-wasip2/release/$(subst -,_,$@).wasm $(EXT_DIR)/$@.wasm
+	cp target/wasm32-wasip2/release/$(subst -,_,$@).wasm $(EXT_DIR)/$@.wasm
 
 
-# Supply-chain gates for the Rust guests (Slice 1b gate). Each guest is a
-# standalone crate with its own Cargo.lock, so audit/deny run once per guest.
+# Supply-chain gates for the Rust guests (Slice 1b gate). One shared Cargo.lock
+# for the whole workspace, so a single invocation covers every guest's resolved
+# dependency graph — no need to loop per guest.
 audit:
-	@for g in $(GUESTS); do echo "== audit $$g =="; ( cd $$g && cargo audit ) || exit 1; done
+	cargo audit
 
 deny:
-	@for g in $(GUESTS); do echo "== deny $$g =="; \
-		cargo deny --manifest-path $$g/Cargo.toml check --config $(DENY_CONFIG) || exit 1; done
+	cargo deny --manifest-path Cargo.toml check --config $(DENY_CONFIG)
 
 # Supply-chain gate for every Go module under src/extensions (currently only the
 # TinyGo Slice 1a canary): verified module sums + a govulncheck scan. GOFLAGS pins
@@ -73,6 +77,5 @@ spike-guest: spike-deps
 		-wit-package $(SPIKE_WIT) -wit-world spike -o spike.wasm .
 
 clean:
-	rm -rf $(SPIKE_DIR)/spike.wasm \
-		$(addsuffix /target,$(GUESTS)) \
+	rm -rf $(SPIKE_DIR)/spike.wasm target \
 		$(addprefix $(EXT_DIR)/,$(addsuffix .wasm,$(GUESTS)))

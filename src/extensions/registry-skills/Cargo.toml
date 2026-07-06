@@ -1,27 +1,16 @@
 [package]
 name = "registry-skills"
 version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
-publish = false
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
 description = "Skill catalog: discovers named skills from .agents/skills/ and exposes them as tools."
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.58"
+wit-bindgen.workspace = true
 
-[lints.rust]
-unsafe_code = "deny"
-missing_docs = "warn"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
-nursery = "warn"
-
-[profile.release]
-opt-level = "s"
-strip = true
-lto = true
+[lints]
+workspace = true

@@ -1,9 +1,9 @@
 [package]
 name = "interceptor-permission"
 version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
-publish = false
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
 description = "tool-call interceptor: a thin single-rule permission gate that asks the driver to confirm a potentially dangerous tool call, then blocks or proceeds on the answer."
 
 [lib]
@@ -11,21 +11,8 @@ description = "tool-call interceptor: a thin single-rule permission gate that as
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.58"
-serde_json = "1"
+wit-bindgen.workspace = true
+serde_json.workspace = true
 
-# Same strict policy as the core workspace (guests live outside src/core/, so the
-# levels are declared here rather than inherited).
-[lints.rust]
-unsafe_code = "deny"
-missing_docs = "warn"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
-nursery = "warn"
-
-[profile.release]
-opt-level = "s"
-strip = true
-lto = true
+[lints]
+workspace = true

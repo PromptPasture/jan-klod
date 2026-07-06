@@ -1,28 +1,17 @@
 [package]
 name = "registry-mcp"
 version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
-publish = false
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
 description = "MCP gateway: connects to SSE MCP servers and proxies tool calls via mcp-registry WIT."
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.58"
-serde_json = "1"
+wit-bindgen.workspace = true
+serde_json.workspace = true
 
-[lints.rust]
-unsafe_code = "deny"
-missing_docs = "warn"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
-nursery = "warn"
-
-[profile.release]
-opt-level = "s"
-strip = true
-lto = true
+[lints]
+workspace = true

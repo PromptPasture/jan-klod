@@ -1,4 +1,4 @@
-.PHONY: build test clippy audit deny clean
+.PHONY: build check test clippy audit deny clean
 
 # Builds, tests, and lints the Rust host workspace (core + config + host crates).
 # Strictly core: actually running the integrated system needs the guests staged in
@@ -11,6 +11,12 @@ DENY_CONFIG := $(abspath $(CURDIR)/../../deny.toml)
 # Compile the host workspace without running it.
 build:
 	cargo build
+
+# Type-check the host workspace without codegen or linking — a faster fail-fast
+# gate than `build` for callers (e.g. pre-commit) that follow up with `cargo test`
+# anyway, which does the real build.
+check:
+	cargo check
 
 # Host-side unit tests (config/boot + ureq status mapping).
 test:

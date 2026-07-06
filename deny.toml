@@ -1,10 +1,9 @@
 # cargo-deny policy — the primary supply-chain gate for the Rust host workspace
-# (src/core) and every first-party guest extension (src/extensions/*). Each guest
-# is a standalone crate with its own Cargo.lock; one shared policy keeps the
-# license / advisory / source rules identical across all of them. Every invocation
-# points here with `--config`, so the file's location is not significant. Closes
-# the Phase 1 supply-chain gate
-# (docs/decisions/2026-06-29-extension-technologies/PLAN.md).
+# (src/core) and the guest extensions workspace (src/extensions/*, one shared
+# Cargo.lock across all guests). One shared policy keeps the license / advisory /
+# source rules identical across both workspaces. Every invocation points here with
+# `--config`, so the file's location is not significant. Closes the Phase 1
+# supply-chain gate (docs/decisions/2026-06-29-extension-technologies/PLAN.md).
 #
 # cargo-deny config schema (v2 semantics): anything not explicitly allowed — a
 # license, an advisory, or a source — is denied by default. There is no implicit

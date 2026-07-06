@@ -21,9 +21,9 @@ step "Build + test"
 
 rm -rf ext/
 
-make -C src/core build \
-  && pass "core build" \
-  || { fail "core build failed"; exit 1; }
+make -C src/core check \
+  && pass "core check" \
+  || { fail "core check failed"; exit 1; }
 
 make test \
   && pass "make test" \
