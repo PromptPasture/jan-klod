@@ -30,17 +30,26 @@ TESTABLE_GUESTS := interceptor-intent-router interceptor-permission interceptor-
 
 .PHONY: all clean test audit deny go-supply-chain spike-deps spike-guest $(GUESTS)
 
-# Build every Rust guest (the polyglot TinyGo spike stays opt-in: `make spike-guest`).
-all: $(GUESTS)
+# Build every Rust guest in one cargo invocation, not 13 serial `make` recipes —
+# cargo's own scheduler compiles independent guests in parallel across cores. The
+# polyglot TinyGo spike stays opt-in: `make spike-guest`.
+all:
+	cargo build --release --target wasm32-wasip2 $(addprefix -p ,$(GUESTS))
+	mkdir -p $(EXT_DIR)
+	@for g in $(GUESTS); do \
+		cp target/wasm32-wasip2/release/$$(echo $$g | tr - _).wasm $(EXT_DIR)/$$g.wasm; \
+	done
 
 # Run the guests' native unit tests (host target, no wasm). Skips guests without
 # host-testable modules by only iterating TESTABLE_GUESTS.
 test:
 	@for g in $(TESTABLE_GUESTS); do echo "== test $$g =="; cargo test -p $$g || exit 1; done
 
-# Build one guest and stage it in ext/. Rust guests need no cargo-component — the
-# wasm32-wasip2 target emits a component directly and the `wit-bindgen` crate
-# generates the bindings. Requires rustup (`rustup target add wasm32-wasip2`).
+# Build a single guest and stage it in ext/ (`make store-memory`, e.g., for
+# targeted dev iteration — `all` above builds every guest at once). Rust guests
+# need no cargo-component — the wasm32-wasip2 target emits a component directly
+# and the `wit-bindgen` crate generates the bindings. Requires rustup (`rustup
+# target add wasm32-wasip2`).
 $(GUESTS):
 	cargo build --release --target wasm32-wasip2 -p $@
 	mkdir -p $(EXT_DIR)
