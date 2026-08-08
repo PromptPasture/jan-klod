@@ -29,3 +29,25 @@ fn parse_frame_surfaces_malformed_json_as_error() {
         assert!(msg.contains("malformed SSE frame"), "{msg}");
     }
 }
+
+#[test]
+fn parse_frame_reads_a_prompt_with_its_options() {
+    let data = r#"{"question":"Allow tool `bash`?","options":["yes","no","always","never"],"default":"no","session":"s1"}"#;
+    assert_eq!(
+        parse_frame("prompt", data),
+        StreamEvent::Prompt {
+            question: "Allow tool `bash`?".into(),
+            options: vec!["yes".into(), "no".into(), "always".into(), "never".into()],
+            default: "no".into(),
+        }
+    );
+}
+
+#[test]
+fn a_prompt_without_options_still_parses() {
+    // A future/odd prompt must not turn into an Error the user cannot answer.
+    assert_eq!(
+        parse_frame("prompt", r#"{"question":"Proceed?","default":"no"}"#),
+        StreamEvent::Prompt { question: "Proceed?".into(), options: vec![], default: "no".into() }
+    );
+}

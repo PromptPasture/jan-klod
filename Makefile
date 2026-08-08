@@ -141,11 +141,13 @@ harness: extensions
 #   tool_fleet/tool_wiring — fleet dispatch by name + build_agent wiring from config.
 #   jan-klod-core   — streaming (event stream + SSE), cancel, steering, and the
 #                     host-fs/host-process host-side units.
+#   api_prompt      — a mid-turn confirmation asked over SSE and answered on a
+#                     second connection (the permission gate's user-facing half).
 #   jan-klod        — a UI client drives core over REST.
 # The Go supervisor's flip/health/rollback cycle is covered by `make test`.
 gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-host \
-		--test gate --test persistence --test api_rest --test telegram \
+		--test gate --test persistence --test api_rest --test api_prompt --test telegram \
 		--test host_fs --test host_process --test tool_fleet --test tool_wiring
 	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up host_fs host_process
 	cd $(CORE) && cargo test -p jan-klod

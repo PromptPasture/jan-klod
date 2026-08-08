@@ -77,7 +77,9 @@ or `tool.shell` (any command, from the model). Every write and command is confir
 with you first by the `permission` interceptor, which is on by default; turning it off
 removes that prompt.
 
-At a confirmation you can answer `yes`/`no` for that one call, or `always`/`never` to
+The confirmation appears in the TUI as a question with the answers it accepts; the
+next Enter answers the waiting turn instead of sending a new message (an empty line
+takes the safe default). You can answer `yes`/`no` for that one call, or `always`/`never` to
 decide for that whole kind of action — `fs:write`, `shell:cargo` — for the rest of the
 run. Those standing decisions are held in memory only: restart and it asks again. They
 also never cover an argument pointing outside the workspace, so "always allow writes"

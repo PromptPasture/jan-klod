@@ -24,7 +24,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::process::ExitCode;
 
-use jan_klod::{stream_turn, StreamEvent};
+use jan_klod::{answer_prompt, stream_turn, StreamEvent};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1).peekable();
@@ -82,6 +82,21 @@ fn main() -> ExitCode {
             StreamEvent::Tool(name) => eprint!("\n  ⚙ {name}… "),
             StreamEvent::Warning(msg) => eprint!("\n  ⚠ {msg}"),
             StreamEvent::Error(msg) => eprint!("\n  error: {msg}"),
+            // The turn is blocked until this is answered, so ask right here on
+            // the same stdin the REPL already owns.
+            StreamEvent::Prompt { question, options, default } => {
+                eprintln!("\n  ? {question}");
+                eprint!("  [{}] (Enter = {default}): ", options.join("/"));
+                let _ = io::stderr().flush();
+                let mut typed = String::new();
+                let answer = match io::stdin().read_line(&mut typed) {
+                    Ok(_) if !typed.trim().is_empty() => typed.trim().to_string(),
+                    _ => default,
+                };
+                if let Err(err) = answer_prompt(&addr, &session, &answer) {
+                    eprintln!("  error sending answer: {err}");
+                }
+            }
         });
         if streamed.is_empty() && !final_answer.is_empty() {
             print!("{final_answer}");

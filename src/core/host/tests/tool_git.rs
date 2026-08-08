@@ -34,8 +34,7 @@ fn git(dir: &std::path::Path, args: &[&str]) -> bool {
         .args(args)
         .current_dir(dir)
         .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|out| out.status.success())
 }
 
 #[test]

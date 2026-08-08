@@ -6,16 +6,47 @@
 //!   POST /sessions                 create session → `{"id":"<id>"}`
 //!   GET  /session/:id              transcript + metadata
 //!   POST /session/:id/message      send a message; SSE or JSON response
+//!   POST /session/:id/answer       answer a pending confirmation
 //!
 //! Synchronous/blocking (`tiny_http`) — one request is served at a time on the
 //! thread that owns the `!Send` `AgentSession`.
+//!
+//! ## Answering a mid-turn confirmation without threads
+//!
+//! An interceptor can stop a turn to ask the user something (the permission gate
+//! does exactly this). The loop is synchronous, so the turn *blocks* inside
+//! `Driver::ask` — which means the answer has to arrive on a different request
+//! while this one is still open, and a single-threaded server cannot accept it.
+//!
+//! Rather than make `AgentSession` `Send` and put turns on worker threads, the
+//! waiting driver **serves the socket itself**: it emits a `prompt` SSE frame,
+//! then keeps calling `Server::recv_timeout` until a matching
+//! `POST /session/:id/answer` arrives, replying `409` to anything else that comes
+//! in meanwhile. The concurrency stays exactly where it was — one request at a
+//! time — and the sync-Wasmtime, no-`tokio` posture of the rest of the core holds.
+//! An unanswered prompt times out at [`ANSWER_TIMEOUT`] and takes the prompt's own
+//! default, which for the permission gate is a denial.
 
+use std::cell::RefCell;
 use std::io::Write;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::conductor::{Event, EventSink, Flow, RunResult};
+use crate::intercept::{Driver, UserPrompt};
 use crate::AgentSession;
+
+/// How long a turn waits for a confirmation before giving up and taking the
+/// prompt's default answer. Long enough for a person to read and decide; short
+/// enough that a client that vanished mid-prompt cannot pin the server open.
+#[allow(clippy::duration_suboptimal_units)] // no stable `Duration::from_mins`
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// The response socket, shared between the event sink and the prompt driver —
+/// both write frames to the same stream while the turn runs.
+type SharedWriter = Rc<RefCell<Box<dyn Write + Send>>>;
 
 /// A ready HTTP reply: status code + JSON body.
 pub struct Reply {
@@ -63,6 +94,17 @@ pub fn serve_once(server: &Server, agent: &mut AgentSession) -> std::io::Result<
         }
     }
 
+    // POST /session/:id/answer — only meaningful while a turn is waiting; the
+    // waiting driver intercepts it there. Reaching the main loop means nothing
+    // asked, so say that rather than 404-ing on a route that does exist.
+    if method == Method::Post {
+        if let Some(rest) = strip_prefix(path, "/session/") {
+            if rest.strip_suffix("/answer").is_some() {
+                return respond_json(request, error_reply(409, "no confirmation is pending"));
+            }
+        }
+    }
+
     // POST /session/:id/message
     if method == Method::Post {
         if let Some(rest) = strip_prefix(path, "/session/") {
@@ -71,7 +113,7 @@ pub fn serve_once(server: &Server, agent: &mut AgentSession) -> std::io::Result<
                 let mut body = String::new();
                 request.as_reader().read_to_string(&mut body)?;
                 return if wants_sse {
-                    serve_message_sse(request, agent, id, &body)
+                    serve_message_sse(server, request, agent, id, &body)
                 } else {
                     respond_json(request, handle_message(agent, id, &body))
                 };
@@ -150,13 +192,14 @@ fn handle_message(agent: &mut AgentSession, session: &str, body: &str) -> Reply 
 
 /// `POST /session/:id/message` (SSE variant) — stream turn events.
 fn serve_message_sse(
+    server: &Server,
     request: Request,
     agent: &mut AgentSession,
     session: &str,
     body: &str,
 ) -> std::io::Result<()> {
-    let mut writer = request.into_writer();
-    writer.write_all(
+    let writer: SharedWriter = Rc::new(RefCell::new(request.into_writer()));
+    writer.borrow_mut().write_all(
         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
           Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
     )?;
@@ -164,21 +207,92 @@ fn serve_message_sse(
     let message = match parse_message_body(body) {
         Ok(m) => m,
         Err(err) => {
-            let _ =
-                write_frame(&mut writer, "error", &serde_json::json!({ "error": err }).to_string());
+            let _ = write_frame(
+                &mut *writer.borrow_mut(),
+                "error",
+                &serde_json::json!({ "error": err }).to_string(),
+            );
             return Ok(());
         }
     };
 
-    let mut sink = SseSink { writer: &mut writer, live: true };
-    if let RunResult::Failed(reason) = agent.run_streaming_headless(&mut sink, session, &message) {
+    let mut sink = SseSink { writer: Rc::clone(&writer), live: true };
+    let mut driver = PromptDriver { server, writer: Rc::clone(&writer), session: session.to_string() };
+    if let RunResult::Failed(reason) =
+        agent.run_streaming_with_driver(&mut driver, &mut sink, session, &message)
+    {
         let _ = write_frame(
-            &mut writer,
+            &mut *writer.borrow_mut(),
             "error",
             &serde_json::json!({ "error": reason }).to_string(),
         );
     }
     Ok(())
+}
+
+/// Puts an interceptor's question to the client over the open SSE stream and
+/// waits, on this same thread, for the answer to arrive as its own request.
+struct PromptDriver<'a> {
+    server: &'a Server,
+    writer: SharedWriter,
+    session: String,
+}
+
+impl Driver for PromptDriver<'_> {
+    fn ask(&mut self, prompt: &UserPrompt) -> String {
+        let payload = serde_json::json!({
+            "question": prompt.question,
+            "options": prompt.options,
+            "default": prompt.default_answer,
+            "session": self.session,
+        });
+        if write_frame(&mut *self.writer.borrow_mut(), "prompt", &payload.to_string()).is_err() {
+            // The client is gone; nobody can answer, so take the safe default.
+            return prompt.default_answer.clone();
+        }
+        self.wait_for_answer().unwrap_or_else(|| prompt.default_answer.clone())
+    }
+}
+
+impl PromptDriver<'_> {
+    /// Serve the socket until this session's answer arrives, or the wait expires.
+    ///
+    /// Anything else received meanwhile is refused with `409` rather than queued:
+    /// the agent is mid-turn and single-threaded, and a client that is told
+    /// "busy" can retry, while one left hanging cannot.
+    fn wait_for_answer(&self) -> Option<String> {
+        let deadline = Instant::now() + ANSWER_TIMEOUT;
+        let route = format!("/session/{}/answer", self.session);
+        loop {
+            let remaining = deadline.checked_duration_since(Instant::now())?;
+            let mut request = self.server.recv_timeout(remaining).ok().flatten()?;
+            let path = request.url().split('?').next().unwrap_or("").to_string();
+            if *request.method() == Method::Post && path == route {
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let _ = respond_json(request, error_reply(400, "unreadable body"));
+                    continue;
+                }
+                match parse_answer_body(&body) {
+                    Ok(answer) => {
+                        let _ = respond_json(
+                            request,
+                            Reply { status: 200, body: r#"{"accepted":true}"#.to_string() },
+                        );
+                        return Some(answer);
+                    }
+                    Err(err) => {
+                        let _ = respond_json(request, error_reply(400, &err));
+                    }
+                }
+            } else {
+                let _ = respond_json(
+                    request,
+                    error_reply(409, "the agent is waiting for an answer to a confirmation"),
+                );
+            }
+        }
+    }
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -201,12 +315,12 @@ fn respond_json(request: Request, reply: Reply) -> std::io::Result<()> {
 }
 
 /// An [`EventSink`] that writes each event as an SSE frame to the socket.
-struct SseSink<'a> {
-    writer: &'a mut dyn Write,
+struct SseSink {
+    writer: SharedWriter,
     live: bool,
 }
 
-impl EventSink for SseSink<'_> {
+impl EventSink for SseSink {
     fn emit(&mut self, event: &Event) -> Flow {
         if !self.live {
             return Flow::Stop;
@@ -225,7 +339,7 @@ impl EventSink for SseSink<'_> {
                 ("done", serde_json::json!({ "answer": text, "agentic": agentic }))
             }
         };
-        if write_frame(self.writer, kind, &data.to_string()).is_err() {
+        if write_frame(&mut *self.writer.borrow_mut(), kind, &data.to_string()).is_err() {
             self.live = false;
             return Flow::Stop;
         }
@@ -237,6 +351,17 @@ impl EventSink for SseSink<'_> {
 fn write_frame(writer: &mut dyn Write, kind: &str, data: &str) -> std::io::Result<()> {
     write!(writer, "event: {kind}\ndata: {data}\n\n")?;
     writer.flush()
+}
+
+/// Extract `answer` from a `POST /session/:id/answer` body (`{"answer":"yes"}`).
+fn parse_answer_body(body: &str) -> Result<String, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("invalid JSON body: {e}"))?;
+    let answer = value
+        .get("answer")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("missing string field `answer`")?;
+    Ok(answer.to_string())
 }
 
 /// Extract `message` from a `POST /session/:id/message` body (`{"message":"..."}`).

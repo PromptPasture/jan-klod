@@ -6,8 +6,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use jan_klod::app::{App, Who};
-use jan_klod::{stream_turn, StreamEvent};
+use jan_klod::app::{App, Prompt, Who};
+use jan_klod::{answer_prompt, stream_turn, StreamEvent};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style};
@@ -53,6 +53,9 @@ fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std:
                     Ok(Ok(StreamEvent::Warning(msg))) => {
                         app.record_status(format!("⚠ {msg}"));
                     }
+                    Ok(Ok(StreamEvent::Prompt { question, options, default })) => {
+                        app.ask(Prompt { question, options, default });
+                    }
                     Ok(Ok(StreamEvent::Error(err)) | Err(err)) => {
                         app.record_error(err);
                         rx = None;
@@ -81,6 +84,19 @@ fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std:
             KeyCode::Esc => app.quit(),
             KeyCode::Backspace => app.backspace(),
             KeyCode::Char(c) => app.push_char(c),
+            // A pending confirmation is answered even though a turn is running —
+            // that turn is precisely what is blocked waiting for it.
+            KeyCode::Enter if app.pending_prompt.is_some() => {
+                if let Some(answer) = app.take_answer() {
+                    let addr = addr.to_string();
+                    let session = session.to_string();
+                    // Off-thread: the answer POST blocks until core acknowledges,
+                    // and the UI must keep drawing the stream meanwhile.
+                    thread::spawn(move || {
+                        let _ = answer_prompt(&addr, &session, &answer);
+                    });
+                }
+            }
             KeyCode::Enter if rx.is_none() => {
                 if let Some(message) = app.take_submission() {
                         let addr = addr.to_string();
@@ -126,7 +142,10 @@ fn render(frame: &mut Frame, app: &App) {
     let transcript = List::new(items).block(Block::bordered().title("jan-klod"));
     frame.render_widget(transcript, transcript_area);
 
-    let input = Paragraph::new(app.input.as_str())
-        .block(Block::bordered().title("message — Enter to send, Esc to quit"));
+    let title = app.pending_prompt.as_ref().map_or_else(
+        || "message — Enter to send, Esc to quit".to_string(),
+        |prompt| format!("answer [{}] — Enter for `{}`", prompt.options.join("/"), prompt.default),
+    );
+    let input = Paragraph::new(app.input.as_str()).block(Block::bordered().title(title));
     frame.render_widget(input, input_area);
 }

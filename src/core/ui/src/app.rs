@@ -35,6 +35,21 @@ pub struct App {
     pub transcript: Vec<Entry>,
     /// Set when the user asked to quit.
     pub should_quit: bool,
+    /// Set while a turn is blocked on a confirmation. The next submission is that
+    /// answer, not a new message — a turn is already running and typing a fresh
+    /// message would go nowhere.
+    pub pending_prompt: Option<Prompt>,
+}
+
+/// A confirmation a running turn is waiting on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    /// What is being asked.
+    pub question: String,
+    /// The answers core recognises.
+    pub options: Vec<String>,
+    /// What core assumes if nobody answers.
+    pub default: String,
 }
 
 impl App {
@@ -84,6 +99,29 @@ impl App {
         } else {
             self.record_answer(answer);
         }
+    }
+
+    /// Record that a turn is waiting on a confirmation, and show it.
+    pub fn ask(&mut self, prompt: Prompt) {
+        self.record(
+            Who::Status,
+            format!("{} [{}] (default: {})", prompt.question, prompt.options.join("/"), prompt.default),
+        );
+        self.pending_prompt = Some(prompt);
+    }
+
+    /// Take a pending confirmation's answer from the input, if one is pending.
+    ///
+    /// An empty submission answers with the prompt's own default rather than
+    /// sending an empty string, so pressing Enter on a confirmation does the safe
+    /// thing instead of something undefined.
+    pub fn take_answer(&mut self) -> Option<String> {
+        let prompt = self.pending_prompt.take()?;
+        let typed = self.input.trim().to_string();
+        self.input.clear();
+        let answer = if typed.is_empty() { prompt.default } else { typed };
+        self.record(Who::You, answer.clone());
+        Some(answer)
     }
 
     /// Record a client/transport error.

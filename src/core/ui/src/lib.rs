@@ -24,6 +24,17 @@ pub enum StreamEvent {
     Warning(String),
     /// The turn finished with the authoritative answer.
     Done(String),
+    /// The turn stopped to ask the user something and is blocked until answered
+    /// (see [`answer_prompt`]). An unanswered prompt eventually times out on the
+    /// core side and takes `default`.
+    Prompt {
+        /// What the interceptor wants to know.
+        question: String,
+        /// The answers it recognises, in the order to offer them.
+        options: Vec<String>,
+        /// What core assumes if nobody answers — a denial, for the permission gate.
+        default: String,
+    },
     /// The turn failed.
     Error(String),
 }
@@ -41,6 +52,15 @@ pub fn parse_frame(kind: &str, data: &str) -> StreamEvent {
         "tool" => StreamEvent::Tool(field("name")),
         "warning" => StreamEvent::Warning(field("message")),
         "done" => StreamEvent::Done(field("answer")),
+        "prompt" => StreamEvent::Prompt {
+            question: field("question"),
+            options: value
+                .get("options")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| items.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default(),
+            default: field("default"),
+        },
         _ => StreamEvent::Error(if kind == "error" { field("error") } else { format!("unknown event `{kind}`") }),
     }
 }
@@ -98,6 +118,49 @@ pub fn stream_turn(
         }
     }
     Ok(())
+}
+
+/// Answer a [`StreamEvent::Prompt`] that is holding a turn open.
+///
+/// This is a **second connection** while the turn's SSE stream is still open —
+/// which is the whole point: the turn blocks on this request arriving. Core is
+/// single-threaded and mid-turn, so it refuses anything else with `409` until the
+/// answer lands.
+///
+/// # Errors
+/// Returns a human-readable error if the connection fails or core rejects the
+/// answer (e.g. nothing was actually pending).
+pub fn answer_prompt(addr: &str, session: &str, answer: &str) -> Result<(), String> {
+    let body = serde_json::json!({ "answer": answer }).to_string();
+    let request = format!(
+        "POST /session/{session}/answer HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let mut stream = TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|err| err.to_string())?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| format!("sending answer: {err}"))?;
+
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .map_err(|err| format!("reading response: {err}"))?;
+    let body = raw.split_once("\r\n\r\n").map_or(raw.as_str(), |(_h, b)| b).trim();
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|err| format!("malformed response body: {err} (in {body:?})"))?;
+    if value.get("accepted").and_then(serde_json::Value::as_bool) == Some(true) {
+        Ok(())
+    } else {
+        Err(value
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(|| format!("unexpected response: {body}"), |e| format!("core: {e}")))
+    }
 }
 
 /// Drive one turn against the core at `addr` (`host:port`): `POST` the message and

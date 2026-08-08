@@ -601,8 +601,34 @@ impl AgentSession {
         )
     }
 
-    /// Headless streaming turn using the session's tool fleet — the entry the REST
-    /// surface's SSE handler uses. Events go to `sink` as the turn runs.
+    /// Streaming turn using the session's own tool fleet, with `driver` answering
+    /// any interceptor `ask` — the entry the REST surface's SSE handler uses.
+    ///
+    /// [`Self::run_streaming`] exists for callers that bring their own fleet;
+    /// this one borrows `self.tools`, which a caller cannot do while also holding
+    /// `&mut self`.
+    pub fn run_streaming_with_driver(
+        &mut self,
+        driver: &mut dyn intercept::Driver,
+        sink: &mut dyn conductor::EventSink,
+        session: &str,
+        message: &str,
+    ) -> conductor::RunResult {
+        run_and_persist(
+            &mut self.dispatcher,
+            &mut self.providers,
+            &self.store,
+            &mut self.tools,
+            driver,
+            sink,
+            session,
+            message,
+        )
+    }
+
+    /// Headless streaming turn using the session's tool fleet: an `ask` takes the
+    /// prompt's default answer, which for the permission gate is a denial. Used by
+    /// the non-interactive surfaces (Telegram, the blocking JSON turn).
     pub fn run_streaming_headless(
         &mut self,
         sink: &mut dyn conductor::EventSink,
