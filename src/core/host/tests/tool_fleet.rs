@@ -89,6 +89,39 @@ fn fs_tool_writes_reads_and_greps_through_the_fleet() {
     assert_eq!(read.as_deref(), Some("fn main(){}\nlet x=1;"));
     let grep_hits = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"fn","path":"src/main.rs"}"#));
     assert_eq!(grep_hits.as_deref(), Some("1:fn main(){}"));
+
+    // A directory path (or none at all) greps the whole tree: hits carry their
+    // path, so "where is this symbol?" is one call rather than find-then-read.
+    fleet
+        .invoke(&call("fs", r#"{"op":"write","path":"src/util/helper.rs","contents":"fn help(){}"}"#))
+        .expect("write succeeds");
+    fleet
+        .invoke(&call("fs", r#"{"op":"write","path":"notes.md","contents":"fn in prose"}"#))
+        .expect("write succeeds");
+
+    let tree_hits = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"fn "}"#));
+    assert_eq!(
+        tree_hits.as_deref(),
+        Some("notes.md:1:fn in prose\nsrc/main.rs:1:fn main(){}\nsrc/util/helper.rs:1:fn help(){}")
+    );
+
+    // `glob` narrows the tree search to the files worth reading.
+    let scoped = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"fn ","glob":"**/*.rs"}"#));
+    assert_eq!(
+        scoped.as_deref(),
+        Some("src/main.rs:1:fn main(){}\nsrc/util/helper.rs:1:fn help(){}")
+    );
+
+    // `path` scopes it to a subtree — the .md file above is out of range.
+    let subtree = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"fn ","path":"src"}"#));
+    assert_eq!(
+        subtree.as_deref(),
+        Some("src/main.rs:1:fn main(){}\nsrc/util/helper.rs:1:fn help(){}")
+    );
+
+    // No match is an explicit statement, not an empty string.
+    let empty = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"zzz"}"#));
+    assert_eq!(empty.as_deref(), Some("no matches for zzz"));
 }
 
 #[test]

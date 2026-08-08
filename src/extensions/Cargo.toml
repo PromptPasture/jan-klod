@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    # Shared pure-Rust library, not a component: compiled into the guests below.
+    "guest-fs",
     "store-memory",
     "provider-openai",
     "provider-anthropic",
@@ -24,6 +26,7 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+guest-fs = { path = "guest-fs" }
 wit-bindgen = "0.58"
 serde_json = "1"
 whatlang = "0.16"

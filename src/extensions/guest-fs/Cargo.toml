@@ -1,0 +1,10 @@
+[package]
+name = "guest-fs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "shared pure-Rust helpers for host-fs-routed guests: glob matching, a bounded tree walk, and output capping. Not a component — a compile-time library."
+
+[lints]
+workspace = true

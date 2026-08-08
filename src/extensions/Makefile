@@ -22,6 +22,10 @@ DENY_CONFIG := $(ROOT)/deny.toml
 # canary). Globbed so a new Go guest is gated without editing this Makefile.
 GO_MODULES := $(wildcard */go.mod)
 
+# Shared pure-Rust libraries: workspace members that are NOT components, so they
+# are tested but never built to wasm or staged in ext/.
+LIBS := guest-fs
+
 # Guests with native (host-target) unit tests. Their WIT/component code is gated
 # behind `#[cfg(target_arch = "wasm32")]`, so a host `cargo test` compiles only
 # the pure logic modules (e.g. the intent router) + their `#[cfg(test)]` tests —
@@ -41,9 +45,10 @@ all:
 	done
 
 # Run the guests' native unit tests (host target, no wasm). Skips guests without
-# host-testable modules by only iterating TESTABLE_GUESTS.
+# host-testable modules by only iterating TESTABLE_GUESTS; LIBS are pure Rust and
+# always testable.
 test:
-	@for g in $(TESTABLE_GUESTS); do echo "== test $$g =="; cargo test -p $$g || exit 1; done
+	@for g in $(LIBS) $(TESTABLE_GUESTS); do echo "== test $$g =="; cargo test -p $$g || exit 1; done
 
 # Build a single guest and stage it in ext/ (`make store-memory`, e.g., for
 # targeted dev iteration — `all` above builds every guest at once). Rust guests

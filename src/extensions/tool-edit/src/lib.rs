@@ -25,14 +25,9 @@
 //! The patch logic is pure Rust (unit-tested natively); the Component-Model glue
 //! below only compiles for `wasm32`.
 
-/// Tool-result byte cap — keeps a single `view` from consuming the entire context
-/// budget.
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
-
 // Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod edit {
-    use crate::MAX_OUTPUT_BYTES;
 
     /// FNV-1a 32-bit offset basis.
     const FNV_OFFSET: u32 = 0x811c_9dc5;
@@ -177,24 +172,10 @@ mod edit {
         Ok((join_lines(&lines, trailing_newline), inserted))
     }
 
-    /// Cap `output` at [`MAX_OUTPUT_BYTES`], backing off to a valid UTF-8 boundary
-    /// and appending a truncation marker when it overflows.
-    pub fn truncate(output: String) -> String {
-        if output.len() <= MAX_OUTPUT_BYTES {
-            return output;
-        }
-        // Back off to a valid UTF-8 boundary at or below the cap; slicing at a
-        // non-boundary would panic.
-        let mut safe_len = MAX_OUTPUT_BYTES;
-        while safe_len > 0 && !output.is_char_boundary(safe_len) {
-            safe_len -= 1;
-        }
-        format!("{}\n…[truncated: {} bytes omitted]", &output[..safe_len], output.len() - safe_len)
-    }
-
     #[cfg(test)]
     mod tests {
-        use super::{anchor, insert, render_view, replace, truncate, MAX_OUTPUT_BYTES};
+        use super::{anchor, insert, render_view, replace};
+        use guest_fs::{truncate, MAX_OUTPUT_BYTES};
 
         /// The anchor of line `lineno` in `content`, as `view` would render it.
         fn anchor_of(content: &str, lineno: usize) -> String {
@@ -392,7 +373,7 @@ mod component {
             let content = host_fs::read(&path).map_err(|_| ToolError::ExecutionFailed)?;
 
             if op == "view" {
-                return Ok(edit::truncate(edit::render_view(&content)));
+                return Ok(guest_fs::truncate(edit::render_view(&content)));
             }
 
             // `contents` must be *present* even when empty: an absent key on a

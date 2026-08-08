@@ -51,6 +51,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "guest-fs"
+version = "0.1.0"
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -301,6 +305,7 @@ dependencies = [
 name = "tool-edit"
 version = "0.1.0"
 dependencies = [
+ "guest-fs",
  "serde_json",
  "wit-bindgen",
 ]
@@ -309,6 +314,7 @@ dependencies = [
 name = "tool-find"
 version = "0.1.0"
 dependencies = [
+ "guest-fs",
  "serde_json",
  "wit-bindgen",
 ]
@@ -317,6 +323,7 @@ dependencies = [
 name = "tool-fs"
 version = "0.1.0"
 dependencies = [
+ "guest-fs",
  "serde_json",
  "wit-bindgen",
 ]
