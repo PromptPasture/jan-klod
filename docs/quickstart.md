@@ -70,9 +70,12 @@ File reads, writes, and shell commands go through permission-gated sandboxed ext
 Enabled by default: `tool.fs` (read / write / grep — `grep` searches the whole
 workspace tree by default), `tool.edit` (partial edits), and `tool.find` (glob the
 workspace, e.g. `**/*.rs`).
-Shell execution is off — set `extensions.tool.shell.enabled: true` in `config.yaml` to
-allow it. Every write and command is confirmed with you first by the `permission`
-interceptor, which is on by default; turning it off removes that prompt.
+Command execution is off entirely: set `execution.enabled: true` in `config.yaml` to
+turn on the substrate, then enable the tool you want on top of it — `tool.git`
+(read-only `status`/`diff`/`log`/`show`/`branch`, which cannot modify the repository)
+or `tool.shell` (any command, from the model). Every write and command is confirmed
+with you first by the `permission` interceptor, which is on by default; turning it off
+removes that prompt.
 
 `tool.edit` changes part of a file instead of rewriting it. It first shows the model
 each line with an **anchor** (a hash of the line's position and text), and edits name

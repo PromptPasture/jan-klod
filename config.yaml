@@ -110,8 +110,15 @@ extensions:
       enabled: true            # hash-anchored partial edits (view -> replace/insert)
     find:
       enabled: true            # glob the workspace tree (discovery for read/grep)
+    git:
+      enabled: false           # read-only repo inspection (status/diff/log/show/
+                               # branch) through host-process. Needs `execution:`
+                               # below; it cannot modify the repository, so it is
+                               # safe to enable wherever execution is allowed.
     shell:
-      enabled: false           # run a command through host-process; off by default
+      enabled: false           # run ANY command through host-process. Needs
+                               # `execution:` below. Off by default: unlike
+                               # tool.git, the command comes from the model.
     web-search:
       enabled: false
       base-url: http://localhost:8080/search
@@ -140,6 +147,22 @@ extensions:
 # not the core container itself.
 # References below use provider *instance names* from extensions.provider above.
 # ============================================================================
+
+# The directory the file and execution substrates are jailed to. Every path a
+# tool touches is resolved against this root and anything escaping it is denied.
+# Omit the key to default to $PWD — the repo you launched `jan-klod serve` in.
+# workspace: /path/to/your/repo
+
+# The execution substrate (host-process), used by tool.git and tool.shell.
+# DEFAULT-DENY: with this block absent or `enabled: false`, every exec is denied
+# and those tools fail closed no matter what `extensions.tool` says. Enabling it
+# does not by itself let the model run arbitrary commands — that takes
+# `tool.shell` as well; `tool.git` alone can only run the read-only git
+# subcommands its contract allows.
+execution:
+  enabled: false
+  timeout-secs: 30            # a command that outruns this is killed
+  output-cap: 65536           # captured stdout/stderr bytes per run
 
 # Provider/model fallback chain. Tried top-to-bottom; within a provider, each
 # model is tried in order before moving to the next provider. If all are

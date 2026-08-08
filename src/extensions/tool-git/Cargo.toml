@@ -1,0 +1,19 @@
+[package]
+name = "tool-git"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "git tool: read-only repository inspection through host-process, restricted to an allowlist of subcommands with repo-supplied code execution disabled."
+
+[lib]
+# A reactor component: exports tool-world, no `main`.
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen.workspace = true
+serde_json.workspace = true
+guest-fs.workspace = true
+
+[lints]
+workspace = true
