@@ -298,6 +298,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tool-edit"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "tool-fs"
 version = "0.1.0"
 dependencies = [

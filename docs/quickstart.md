@@ -67,7 +67,15 @@ Type a message and press **Enter** to send it. The model's response streams in t
 ```
 
 File reads, writes, and shell commands go through permission-gated sandboxed extensions.
-By default, only file access is enabled. To enable shell execution, set `extensions.interceptor.permission.enabled: true` in `config.yaml`.
+Enabled by default: `tool.fs` (read / write / grep) and `tool.edit` (partial edits).
+Shell execution is off — set `extensions.tool.shell.enabled: true` in `config.yaml` to
+allow it. Every write and command is confirmed with you first by the `permission`
+interceptor, which is on by default; turning it off removes that prompt.
+
+`tool.edit` changes part of a file instead of rewriting it. It first shows the model
+each line with an **anchor** (a hash of the line's position and text), and edits name
+those anchors. If the file changed since the model looked, the anchors no longer match
+and the edit is refused rather than applied to the wrong lines.
 
 ## 6. Resume a session
 

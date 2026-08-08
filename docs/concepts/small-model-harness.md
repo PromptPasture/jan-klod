@@ -44,29 +44,39 @@ The mitigations below split cleanly:
    - **Tier 2: LLM classifier** — everything that passes through goes to the active `llm-provider` with a single constrained-decoding call; output is one token: `simple` | `agentic`. Handles all languages naturally. No separate embedding model; reuses the already-loaded provider.
 7. **Retry/correction** *(core mechanism)* — on malformed output, inject a correction hint and retry (up to N times) before failing. Retry is loop-iteration control, so it lives in the core loop; the policy (on/off, N, hint template) is read from `host-config`.
 
-## Edit reliability (future `tool-edit`)
+## Edit reliability (`tool-edit`) — built
 
 Small models produce shaky file edits: they hallucinate line numbers, re-emit whole
-files, or anchor a change to text that has since moved. A sandboxed `tool-edit`
-mitigates this with a **hash-anchored patch format** — the same idea as constrained
-decoding, applied to edits.
+files, or anchor a change to text that has since moved. The sandboxed
+[`tool-edit`](../../src/extensions/tool-edit/src/lib.rs) guest mitigates this with a
+**hash-anchored patch format** — the same idea as constrained decoding, applied to
+edits.
 
 Two properties make it reliable:
 
-1. **Content-hash anchoring.** Each patch section names its target file *and* a short
-   hash of the file's current content. Before applying, the tool re-hashes the live
-   file: if it no longer matches, the patch is **rejected** (or offered for
-   recovery) rather than applied to shifted lines. Stale edits fail loudly instead of
-   corrupting code.
-2. **A grammar for the format.** The patch syntax (replace-lines, replace-block,
-   insert-before/after, delete, move/rename) has a formal grammar, so the model can be
-   **constrained to emit only valid patches** via the loop's `grammar` field — the
-   biggest small-model win (see *Constrained decoding* above) carried into editing.
+1. **Content-hash anchoring.** Every line is addressed by an **anchor** — a short
+   hash of that line's *number and text* (`fnv1a32(lineno \0 text)`), handed to the
+   model by `op=view` as `anchor|lineno|text`. An edit names anchors, never raw line
+   numbers. Before applying, the tool re-derives the anchors from the live file: if
+   the line moved or changed, no anchor resolves and the edit is **rejected with
+   nothing written**. Stale edits fail loudly instead of corrupting code. A hash
+   collision fails the same way (ambiguous → rejected), so it costs a retry, never a
+   bad write.
+2. **A grammar for the format.** The patch syntax is a small JSON op set (`view`,
+   `replace` over an anchor span, `insert` before/after an anchor; delete is
+   `replace` with empty contents), so the model can be **constrained to emit only
+   valid patches** via the loop's `grammar` field — the biggest small-model win (see
+   *Constrained decoding* above) carried into editing. *(Wiring the schema into the
+   grammar field is a follow-up; the op set is already narrow enough to validate.)*
 
-Because the patcher works on file *content* (disk, in-memory, or supplied by the
-host), it fits a WASM tool with **no raw filesystem access**: the host hands the tool
-the file text and the tool returns a patch to apply. Not a Phase 2 item; recorded here
-as the intended edit-reliability lever for a sandboxed `tool-edit`.
+Rejections come back as an **ok result whose text says how to recover** ("run
+op=view again and retry with fresh anchors"), not as a `tool-error` — `tool-error`
+carries no message, and the model needs the reason to self-correct. `err` is reserved
+for malformed arguments and `host-fs` failures.
+
+Because the patcher works on file *content*, it needs **no raw filesystem access**:
+every read and write goes through the path-jailed `host-fs` substrate, so the tool is
+confined to the workspace like any other guest.
 
 ## Recommended models
 

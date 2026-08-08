@@ -74,9 +74,13 @@ extensions:
     context:
       enabled: false           # select-context: history + compression (Slice 2d)
     tool-selector:
-      enabled: false           # select-tools: expose the active tool set (Slice 2d)
+      enabled: true            # select-tools: expose the active tool set (Slice 2d).
+                               # On by default: without it the enabled tool.* below
+                               # are never offered to the model.
     permission:
-      enabled: false           # tool-call: gate dangerous calls (Slice 2d)
+      enabled: true            # tool-call: gate dangerous calls (Slice 2d).
+                               # On by default: the file tools below can write, and
+                               # a write must be confirmed before it happens.
       # Optional policy overrides. Each list, when present, REPLACES the built-in
       # default (it does not extend it); omit a key to keep the default.
       #   dangerous-names       — tool-name substrings that force a confirmation
@@ -97,7 +101,15 @@ extensions:
       enabled: false
 
   # ---- Discrete callable tools ----
+  # File tools are jailed to the workspace (the `workspace:` key below, or $PWD
+  # when it is absent) and their writes are gated by interceptor.permission.
   tool:
+    fs:
+      enabled: true            # read / write / grep a workspace file
+    edit:
+      enabled: true            # hash-anchored partial edits (view -> replace/insert)
+    shell:
+      enabled: false           # run a command through host-process; off by default
     web-search:
       enabled: false
       base-url: http://localhost:8080/search
