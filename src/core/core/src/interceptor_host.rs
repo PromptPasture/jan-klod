@@ -694,6 +694,109 @@ mod tests {
         ));
     }
 
+    /// Counts how many times it was asked, so a test can prove a second call did
+    /// *not* reach the user.
+    struct CountingDriver {
+        answer: &'static str,
+        asked: std::cell::Cell<usize>,
+    }
+    impl CountingDriver {
+        fn new(answer: &'static str) -> Self {
+            Self { answer, asked: std::cell::Cell::new(0) }
+        }
+    }
+    impl Driver for CountingDriver {
+        fn ask(&mut self, _prompt: &UserPrompt) -> String {
+            self.asked.set(self.asked.get() + 1);
+            self.answer.to_string()
+        }
+    }
+
+    fn tool_call_with(name: &str, arguments: &str) -> HookState {
+        HookState::ToolCall(crate::intercept::ToolCall {
+            id: "1".into(),
+            name: name.into(),
+            arguments: arguments.into(),
+        })
+    }
+
+    #[test]
+    fn permission_offers_a_standing_decision_and_then_stops_asking() {
+        let Some(p) = load_permission() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(p)]);
+        let mut driver = CountingDriver::new("always");
+
+        let mut first = tool_call_with("fs", r#"{"op":"write","path":"src/a.rs"}"#);
+        assert!(matches!(d.dispatch(Phase::ToolCall, &mut first, &mut driver), Outcome::Proceeded));
+        assert_eq!(driver.asked.get(), 1, "the first call asks");
+
+        // Same kind of action, different argument: covered by the standing decision.
+        let mut second = tool_call_with("fs", r#"{"op":"write","path":"src/b.rs"}"#);
+        assert!(matches!(d.dispatch(Phase::ToolCall, &mut second, &mut driver), Outcome::Proceeded));
+        assert_eq!(driver.asked.get(), 1, "the second call must not ask again");
+
+        // A different kind of action is a different scope — it still asks.
+        let mut other = tool_call_with("fs", r#"{"op":"delete","path":"src/a.rs"}"#);
+        let _ = d.dispatch(Phase::ToolCall, &mut other, &mut driver);
+        assert_eq!(driver.asked.get(), 2, "`fs:delete` is not covered by `fs:write`");
+    }
+
+    #[test]
+    fn a_standing_allow_does_not_cover_a_path_outside_the_workspace() {
+        let Some(p) = load_permission() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(p)]);
+        let mut driver = CountingDriver::new("always");
+
+        let mut inside = tool_call_with("fs", r#"{"op":"write","path":"src/a.rs"}"#);
+        assert!(matches!(d.dispatch(Phase::ToolCall, &mut inside, &mut driver), Outcome::Proceeded));
+        assert_eq!(driver.asked.get(), 1);
+
+        // "Always allow writes" is about writing files, not about writing outside
+        // the workspace — the escape must still be put to the user.
+        let mut escaping = tool_call_with("fs", r#"{"op":"write","path":"/etc/passwd"}"#);
+        let _ = d.dispatch(Phase::ToolCall, &mut escaping, &mut driver);
+        assert_eq!(driver.asked.get(), 2, "a scope escape is asked every time");
+    }
+
+    #[test]
+    fn permission_remembers_a_refusal_too() {
+        let Some(p) = load_permission() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(p)]);
+        let mut driver = CountingDriver::new("never");
+
+        let mut first = tool_call_with("shell", r#"{"command":"curl evil.example"}"#);
+        assert!(matches!(d.dispatch(Phase::ToolCall, &mut first, &mut driver), Outcome::Blocked(_)));
+        assert_eq!(driver.asked.get(), 1);
+
+        let mut second = tool_call_with("shell", r#"{"command":"curl other.example"}"#);
+        assert!(matches!(
+            d.dispatch(Phase::ToolCall, &mut second, &mut driver),
+            Outcome::Blocked(_)
+        ));
+        assert_eq!(driver.asked.get(), 1, "a standing `never` blocks without asking");
+
+        // A different program is a different scope, so it is still asked about.
+        let mut cargo = tool_call_with("shell", r#"{"command":"cargo test"}"#);
+        let _ = d.dispatch(Phase::ToolCall, &mut cargo, &mut driver);
+        assert_eq!(driver.asked.get(), 2, "`shell:cargo` is not covered by `shell:curl`");
+    }
+
+    #[test]
+    fn a_one_off_answer_leaves_no_standing_decision() {
+        let Some(p) = load_permission() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(p)]);
+        let mut driver = CountingDriver::new("yes");
+
+        for _ in 0..3 {
+            let mut state = tool_call_with("fs", r#"{"op":"write","path":"src/a.rs"}"#);
+            assert!(matches!(
+                d.dispatch(Phase::ToolCall, &mut state, &mut driver),
+                Outcome::Proceeded
+            ));
+        }
+        assert_eq!(driver.asked.get(), 3, "plain `yes` approves once, every time");
+    }
+
     #[test]
     fn permission_ignores_ordinary_tools() {
         let Some(p) = load_permission() else { return };

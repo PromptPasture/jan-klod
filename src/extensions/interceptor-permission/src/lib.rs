@@ -12,6 +12,23 @@
 //! the user; on the answer it [`Decision::Proceed`]s or [`Decision::Block`]s.
 //! Ordinary, in-scope calls proceed untouched.
 //!
+//! ## Standing decisions ("always" / "never")
+//!
+//! A gate that asks the same question forty times is a gate people switch off,
+//! and a switched-off gate protects nothing — so the confirmation can be answered
+//! `always` or `never`, recorded per *kind of action* (`fs:write`, `shell:cargo`)
+//! and consulted before asking again. Three properties keep that from eroding the
+//! boundary:
+//!
+//! - **Run-scoped, never persisted.** Decisions live in `host-storage`, which for
+//!   an interceptor is memory owned by this instance. Restart the agent and it
+//!   asks again — a permission boundary should not quietly become permanently
+//!   open because of a click last week.
+//! - **A scope escape is never remembered** ([`rules::Concern::is_rememberable`]).
+//!   "Always allow writes" covers writing files, not writing `/etc/passwd`.
+//! - **Unreadable state means ask.** A storage error or an unrecognised stored
+//!   value falls back to the question, never to approval.
+//!
 //! The rules are pure Rust with no WIT dependency, so they are unit-tested
 //! natively (`cargo test`); the Component-Model glue below only compiles for
 //! `wasm32`.
@@ -21,8 +38,11 @@ mod rules;
 
 #[cfg(target_arch = "wasm32")]
 mod component {
-    use crate::rules::{self, Policy};
+    use crate::rules::{Answer, Policy, Verdict};
     use core::cell::RefCell;
+
+    /// `host-storage` namespace holding this run's standing decisions.
+    const NAMESPACE: &str = "permission";
 
     #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
     mod bindings {
@@ -41,6 +61,7 @@ mod component {
     };
     use bindings::jan_klod::interfaces::host_config;
     use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
+    use bindings::jan_klod::interfaces::host_storage;
 
     thread_local! {
         /// Resolved permission policy, read once from `host-config` at `init`.
@@ -59,6 +80,47 @@ mod component {
         let section = serde_json::from_str::<serde_json::Value>(&raw)
             .unwrap_or(serde_json::Value::Null);
         POLICY.with(|p| *p.borrow_mut() = Policy::from_config(&section));
+    }
+
+    /// Look up a standing decision for `key`.
+    ///
+    /// A storage failure, a missing entry, or a value that is not a verdict all
+    /// return `None` — the caller then asks. Nothing here can turn a broken read
+    /// into an approval.
+    fn recall(key: &str) -> Option<Verdict> {
+        let entry = host_storage::get(NAMESPACE, key).ok()?;
+        Verdict::parse(&entry.value)
+    }
+
+    /// Record a standing decision for the rest of this run.
+    ///
+    /// A failed write is logged and otherwise ignored: the user's call still takes
+    /// effect for *this* invocation, they will simply be asked again next time.
+    /// Failing to persist a convenience must never fail the security decision.
+    fn remember(key: &str, verdict: Verdict) {
+        if host_storage::set(NAMESPACE, key, verdict.as_str()).is_err() {
+            log(LogLevel::Warn, &format!("could not record the decision for `{key}`; will ask again"));
+        } else {
+            log(LogLevel::Info, &format!("`{key}` set to {} for this run", verdict.as_str()));
+        }
+    }
+
+    /// The confirmation to put to the driver. `always`/`never` are only offered
+    /// when there is a scope to file them against.
+    fn prompt(tool: &str, reason: &str, scope: Option<&str>) -> UserPrompt {
+        let mut options = vec!["yes".to_string(), "no".to_string()];
+        let question = match scope {
+            Some(key) => {
+                options.push("always".to_string());
+                options.push("never".to_string());
+                format!(
+                    "Allow tool `{tool}`? Reason: {reason}. \
+                     (`always`/`never` apply to `{key}` for the rest of this run.)"
+                )
+            }
+            None => format!("Allow tool `{tool}`? Reason: {reason}"),
+        };
+        UserPrompt { question, options, default_answer: "no".to_string() }
     }
 
     struct Component;
@@ -92,36 +154,47 @@ mod component {
                 return Err(InterceptorError::InvalidState);
             };
 
-            let reason = POLICY.with(|p| {
-                let policy = p.borrow();
-                if policy.is_dangerous(&call.name) {
-                    Some(format!("tool `{}` has a high-risk name", call.name))
-                } else if policy.args_are_dangerous(&call.arguments) {
-                    Some(format!("tool `{}` selects a high-risk operation", call.name))
-                } else if policy.args_escape_scope(&call.arguments) {
-                    Some(format!(
-                        "tool `{}` arguments reference a path outside the workspace",
-                        call.name
-                    ))
-                } else {
-                    None
-                }
-            });
-
-            let Some(reason) = reason else {
+            let Some(concern) =
+                POLICY.with(|p| p.borrow().review(&call.name, &call.arguments))
+            else {
                 return Ok(Decision::Proceed);
             };
+            let reason = concern.describe(&call.name);
+            // Only a rememberable concern gets a scope; an escape has none, which
+            // is what makes it un-rememberable rather than merely un-remembered.
+            let scope = concern
+                .is_rememberable()
+                .then(|| crate::rules::scope_key(&call.name, &call.arguments));
 
             match input.answer {
-                // First pass: ask the driver to confirm.
-                None => Ok(Decision::Ask(UserPrompt {
-                    question: format!("Allow tool `{}`? Reason: {reason}", call.name),
-                    options: vec!["yes".to_string(), "no".to_string()],
-                    default_answer: "no".to_string(),
-                })),
-                // Resumed with the driver's answer: proceed only on an explicit yes.
+                None => {
+                    // A standing decision from earlier in this run answers for the
+                    // user. Anything unreadable falls through to asking.
+                    if let Some(key) = &scope {
+                        match recall(key) {
+                            Some(Verdict::Allow) => {
+                                log(LogLevel::Info, &format!("`{key}` allowed by a standing decision"));
+                                return Ok(Decision::Proceed);
+                            }
+                            Some(Verdict::Deny) => {
+                                log(LogLevel::Info, &format!("`{key}` denied by a standing decision"));
+                                return Ok(Decision::Block(BlockReason {
+                                    message: format!("`{key}` was denied for this run"),
+                                }));
+                            }
+                            None => {}
+                        }
+                    }
+                    Ok(Decision::Ask(prompt(&call.name, &reason, scope.as_deref())))
+                }
+                // Resumed with the driver's answer. `always`/`never` also record a
+                // standing decision for this run before acting on it.
                 Some(answer) => {
-                    if rules::is_affirmative(&answer) {
+                    let answer = Answer::parse(&answer);
+                    if let (Some(key), Some(verdict)) = (&scope, answer.standing()) {
+                        remember(key, verdict);
+                    }
+                    if answer.approves() {
                         log(LogLevel::Info, &format!("tool `{}` approved", call.name));
                         Ok(Decision::Proceed)
                     } else {

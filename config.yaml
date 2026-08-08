@@ -81,6 +81,11 @@ extensions:
       enabled: true            # tool-call: gate dangerous calls (Slice 2d).
                                # On by default: the file tools below can write, and
                                # a write must be confirmed before it happens.
+                               # Answer `always`/`never` to decide for a whole kind
+                               # of action (`fs:write`, `shell:cargo`) instead of
+                               # one call. Those decisions last for the run only —
+                               # a restart asks again — and never cover an argument
+                               # pointing outside the workspace.
       # Optional policy overrides. Each list, when present, REPLACES the built-in
       # default (it does not extend it); omit a key to keep the default.
       #   dangerous-names       — tool-name substrings that force a confirmation

@@ -135,6 +135,28 @@ impl Policy {
             .any(|s| self.path_escapes(s))
     }
 
+    /// Run all three checks and report the concern that governs the call.
+    ///
+    /// **The scope check runs first, and that ordering is the security property.**
+    /// A concern is what a standing "always allow" gets filed against, and only
+    /// [`Concern::EscapesScope`] is un-rememberable — so if a path escape were
+    /// reported second, `{"op":"write","path":"/etc/passwd"}` would surface as the
+    /// *rememberable* `DangerousOp` and a prior "always allow fs:write" would wave
+    /// it through. Escapes dominate; the narrower concern only shows when the
+    /// arguments stay inside the workspace.
+    #[must_use]
+    pub fn review(&self, name: &str, arguments: &str) -> Option<Concern> {
+        if self.args_escape_scope(arguments) {
+            Some(Concern::EscapesScope)
+        } else if self.is_dangerous(name) {
+            Some(Concern::DangerousName)
+        } else if self.args_are_dangerous(arguments) {
+            Some(Concern::DangerousOp)
+        } else {
+            None
+        }
+    }
+
     /// Whether a path string escapes the workspace root, honouring the toggles.
     fn path_escapes(&self, s: &str) -> bool {
         if !self.allow_absolute_paths && s.starts_with('/') {
@@ -170,14 +192,140 @@ fn string_values_recursive(value: &serde_json::Value) -> Vec<&str> {
     }
 }
 
-/// Whether the driver's answer approves the call. Anything else denies it — the
-/// safe default for a permission gate.
+/// Why a call needs confirming — and, crucially, whether that reason is one a
+/// standing decision may cover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Concern {
+    /// The tool's name contains a high-risk verb.
+    DangerousName,
+    /// The `op` argument selects a mutating operation.
+    DangerousOp,
+    /// An argument names a path outside the workspace.
+    EscapesScope,
+}
+
+impl Concern {
+    /// A caller-facing explanation naming the tool.
+    #[must_use]
+    pub fn describe(self, tool: &str) -> String {
+        match self {
+            Self::DangerousName => format!("tool `{tool}` has a high-risk name"),
+            Self::DangerousOp => format!("tool `{tool}` selects a high-risk operation"),
+            Self::EscapesScope => {
+                format!("tool `{tool}` arguments reference a path outside the workspace")
+            }
+        }
+    }
+
+    /// Whether "don't ask again" may apply to this concern.
+    ///
+    /// **A scope escape is never remembered.** Standing decisions are about a
+    /// *kind of action* ("yes, this agent may write files"), and a path leaving
+    /// the workspace is about a *specific argument* — the one thing a blanket
+    /// approval must not silently cover. Approving one write to `src/` must never
+    /// become approval for a write to `/etc/passwd`.
+    #[must_use]
+    pub const fn is_rememberable(self) -> bool {
+        !matches!(self, Self::EscapesScope)
+    }
+}
+
+/// The key a standing decision is filed under: the *kind* of action, not the
+/// exact arguments (which never repeat) and not the bare tool (too broad).
+///
+/// A multi-op tool keys on its `op` (`fs:write`), a command runner on the program
+/// it runs (`shell:cargo`), anything else on its name. So approving `cargo` for
+/// the session does not also approve `curl`.
 #[must_use]
-pub fn is_affirmative(answer: &str) -> bool {
-    matches!(
-        answer.trim().to_lowercase().as_str(),
-        "y" | "yes" | "allow" | "approve" | "ok"
-    )
+pub fn scope_key(name: &str, arguments: &str) -> String {
+    let value = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
+    if let Some(op) = value.get("op").and_then(serde_json::Value::as_str) {
+        return format!("{name}:{}", op.to_lowercase());
+    }
+    if let Some(command) = value.get("command").and_then(serde_json::Value::as_str) {
+        // The program, not the whole command line: `shell:cargo`, never
+        // `shell:cargo test --workspace`, which would never match twice.
+        let program = command.split_whitespace().next().unwrap_or(command);
+        let program = program.rsplit('/').next().unwrap_or(program);
+        return format!("{name}:{}", program.to_lowercase());
+    }
+    name.to_lowercase()
+}
+
+/// What the driver answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// Allow this one call.
+    Once,
+    /// Allow this kind of call for the rest of the run.
+    Always,
+    /// Deny this one call.
+    No,
+    /// Deny this kind of call for the rest of the run.
+    Never,
+}
+
+impl Answer {
+    /// Parse a driver's answer. **Anything unrecognised denies** — the safe
+    /// default for a permission gate, including the empty answer a disconnected
+    /// or confused driver sends.
+    #[must_use]
+    pub fn parse(answer: &str) -> Self {
+        match answer.trim().to_lowercase().as_str() {
+            "y" | "yes" | "allow" | "approve" | "ok" => Self::Once,
+            "a" | "always" | "yes-always" | "allow-always" => Self::Always,
+            "never" | "no-never" | "deny-always" => Self::Never,
+            _ => Self::No,
+        }
+    }
+
+    /// Whether the call may run.
+    #[must_use]
+    pub const fn approves(self) -> bool {
+        matches!(self, Self::Once | Self::Always)
+    }
+
+    /// The verdict to remember for this scope, if any.
+    #[must_use]
+    pub const fn standing(self) -> Option<Verdict> {
+        match self {
+            Self::Always => Some(Verdict::Allow),
+            Self::Never => Some(Verdict::Deny),
+            Self::Once | Self::No => None,
+        }
+    }
+}
+
+/// A remembered decision for a scope key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Run without asking again.
+    Allow,
+    /// Block without asking again.
+    Deny,
+}
+
+impl Verdict {
+    /// The stored representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
+
+    /// Read a stored value back. **An unrecognised value is not a verdict**, so a
+    /// corrupted or half-written entry falls back to asking rather than to
+    /// allowing.
+    #[must_use]
+    pub fn parse(stored: &str) -> Option<Self> {
+        match stored.trim() {
+            "allow" => Some(Self::Allow),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -204,11 +352,92 @@ mod tests {
     #[test]
     fn only_explicit_yes_approves() {
         for yes in ["y", "Yes", " ALLOW ", "approve", "ok"] {
-            assert!(is_affirmative(yes), "{yes:?} should approve");
+            assert!(Answer::parse(yes).approves(), "{yes:?} should approve");
         }
         for no in ["", "n", "no", "nope", "cancel", "later", "maybe"] {
-            assert!(!is_affirmative(no), "{no:?} should deny");
+            assert!(!Answer::parse(no).approves(), "{no:?} should deny");
         }
+    }
+
+    #[test]
+    fn standing_answers_are_parsed_and_carry_a_verdict() {
+        assert_eq!(Answer::parse("always"), Answer::Always);
+        assert_eq!(Answer::parse(" ALWAYS "), Answer::Always);
+        assert_eq!(Answer::parse("never"), Answer::Never);
+
+        assert!(Answer::Always.approves());
+        assert!(!Answer::Never.approves());
+        assert_eq!(Answer::Always.standing(), Some(Verdict::Allow));
+        assert_eq!(Answer::Never.standing(), Some(Verdict::Deny));
+        // A one-off answer leaves nothing behind.
+        assert_eq!(Answer::Once.standing(), None);
+        assert_eq!(Answer::No.standing(), None);
+    }
+
+    #[test]
+    fn an_unreadable_stored_verdict_falls_back_to_asking() {
+        assert_eq!(Verdict::parse("allow"), Some(Verdict::Allow));
+        assert_eq!(Verdict::parse("deny"), Some(Verdict::Deny));
+        // Corrupt/half-written/legacy values must not read as approval.
+        for junk in ["", "yes", "true", "1", "ALLOW", "allowed"] {
+            assert_eq!(Verdict::parse(junk), None, "{junk:?} must not be a verdict");
+        }
+    }
+
+    #[test]
+    fn a_scope_escape_outranks_a_rememberable_concern() {
+        let policy = Policy::default();
+        // Both a dangerous op AND a path escape. If the op were reported, a prior
+        // "always allow fs:write" would wave through a write to /etc/passwd.
+        let concern = policy.review("fs", r#"{"op":"write","path":"/etc/passwd"}"#);
+        assert_eq!(concern, Some(Concern::EscapesScope));
+        assert!(!concern.unwrap().is_rememberable(), "an escape is never remembered");
+
+        // In-workspace, the narrower rememberable concern surfaces as usual.
+        assert_eq!(
+            policy.review("fs", r#"{"op":"write","path":"src/main.rs"}"#),
+            Some(Concern::DangerousOp)
+        );
+    }
+
+    #[test]
+    fn review_passes_ordinary_calls() {
+        let policy = Policy::default();
+        assert_eq!(policy.review("fs", r#"{"op":"read","path":"src/main.rs"}"#), None);
+        assert_eq!(policy.review("find", r#"{"pattern":"**/*.rs"}"#), None);
+    }
+
+    #[test]
+    fn a_standing_decision_is_keyed_by_the_kind_of_action() {
+        // Multi-op tools key on the op, so approving reads never approves writes.
+        assert_eq!(scope_key("fs", r#"{"op":"write","path":"a"}"#), "fs:write");
+        assert_ne!(
+            scope_key("fs", r#"{"op":"write","path":"a"}"#),
+            scope_key("fs", r#"{"op":"delete","path":"a"}"#)
+        );
+        // The same kind of action keys the same regardless of its arguments —
+        // otherwise "always" would never match a second time.
+        assert_eq!(
+            scope_key("fs", r#"{"op":"write","path":"a"}"#),
+            scope_key("fs", r#"{"op":"write","path":"b","contents":"x"}"#)
+        );
+    }
+
+    #[test]
+    fn a_command_runner_keys_on_the_program_not_the_command_line() {
+        assert_eq!(scope_key("shell", r#"{"command":"cargo test --workspace"}"#), "shell:cargo");
+        assert_eq!(scope_key("shell", r#"{"command":"/usr/bin/cargo"}"#), "shell:cargo");
+        // Approving `cargo` for the run must not also approve `curl`.
+        assert_ne!(
+            scope_key("shell", r#"{"command":"cargo"}"#),
+            scope_key("shell", r#"{"command":"curl"}"#)
+        );
+    }
+
+    #[test]
+    fn a_tool_without_a_discriminator_keys_on_its_name() {
+        assert_eq!(scope_key("delete_all", "{}"), "delete_all");
+        assert_eq!(scope_key("Delete_All", "not json"), "delete_all");
     }
 
     #[test]

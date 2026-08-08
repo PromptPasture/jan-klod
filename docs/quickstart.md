@@ -77,6 +77,12 @@ or `tool.shell` (any command, from the model). Every write and command is confir
 with you first by the `permission` interceptor, which is on by default; turning it off
 removes that prompt.
 
+At a confirmation you can answer `yes`/`no` for that one call, or `always`/`never` to
+decide for that whole kind of action — `fs:write`, `shell:cargo` — for the rest of the
+run. Those standing decisions are held in memory only: restart and it asks again. They
+also never cover an argument pointing outside the workspace, so "always allow writes"
+does not become permission to write `/etc/passwd`.
+
 `tool.edit` changes part of a file instead of rewriting it. It first shows the model
 each line with an **anchor** (a hash of the line's position and text), and edits name
 those anchors. If the file changed since the model looked, the anchors no longer match
