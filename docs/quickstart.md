@@ -67,7 +67,8 @@ Type a message and press **Enter** to send it. The model's response streams in t
 ```
 
 File reads, writes, and shell commands go through permission-gated sandboxed extensions.
-Enabled by default: `tool.fs` (read / write / grep) and `tool.edit` (partial edits).
+Enabled by default: `tool.fs` (read / write / grep), `tool.edit` (partial edits), and
+`tool.find` (glob the workspace, e.g. `**/*.rs`).
 Shell execution is off — set `extensions.tool.shell.enabled: true` in `config.yaml` to
 allow it. Every write and command is confirmed with you first by the `permission`
 interceptor, which is on by default; turning it off removes that prompt.

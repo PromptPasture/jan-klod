@@ -13,7 +13,7 @@ WIT_DIR := $(ROOT)/wit
 # Rust guests, by directory name (= staged ext/<name>.wasm). Add a guest here and
 # it gets `make <name>` + a slot in `all`/`clean` for free.
 # The cargo artifact swaps '-' for '_' (e.g. store-memory -> store_memory.wasm).
-GUESTS := store-memory provider-openai provider-anthropic registry-skills registry-mcp interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router tool-proc-probe tool-fs tool-shell tool-edit
+GUESTS := store-memory provider-openai provider-anthropic registry-skills registry-mcp interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router tool-proc-probe tool-fs tool-shell tool-edit tool-find
 
 # Shared cargo-deny policy (repo root) — the same file the host workspace uses.
 DENY_CONFIG := $(ROOT)/deny.toml
@@ -26,7 +26,7 @@ GO_MODULES := $(wildcard */go.mod)
 # behind `#[cfg(target_arch = "wasm32")]`, so a host `cargo test` compiles only
 # the pure logic modules (e.g. the intent router) + their `#[cfg(test)]` tests —
 # no wasm target required. Add a guest here once it carries such tests.
-TESTABLE_GUESTS := interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router tool-fs tool-shell tool-edit
+TESTABLE_GUESTS := interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router tool-fs tool-shell tool-edit tool-find
 
 .PHONY: all clean test audit deny go-supply-chain spike-deps spike-guest $(GUESTS)
 

@@ -15,6 +15,7 @@ members = [
     "tool-fs",
     "tool-shell",
     "tool-edit",
+    "tool-find",
 ]
 
 [workspace.package]

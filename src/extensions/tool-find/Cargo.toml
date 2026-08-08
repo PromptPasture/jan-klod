@@ -1,0 +1,18 @@
+[package]
+name = "tool-find"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "find tool: bounded glob search of the workspace tree through host-fs; walks only what the jail exposes."
+
+[lib]
+# A reactor component: exports tool-world, no `main`.
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

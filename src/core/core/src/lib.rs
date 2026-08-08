@@ -148,17 +148,81 @@ impl Runtime {
     /// lifecycle (`init` → `start`). Missing components are skipped. Returns the
     /// ids that were started.
     ///
+    /// Categories whose world imports more than the neutral `extension-world`
+    /// grants are instantiated through **their own** seam — the same one
+    /// [`Self::build_agent`] uses — rather than the shared linker: a `tool-*`
+    /// guest imports `host-fs`/`host-process`, and `registry-*` imports
+    /// `host-fs`/`host-event`, none of which the neutral linker can satisfy. They
+    /// get the same default-deny substrates here, so this boot-plan path proves
+    /// exactly what the agent path will do.
+    ///
     /// # Errors
     /// Returns [`CoreError::Instantiate`] if a component cannot be instantiated,
     /// [`CoreError::Lifecycle`] if a lifecycle call traps, or
     /// [`CoreError::LifecycleRejected`] if an extension refuses to start.
     pub fn start_all(&self) -> Result<Vec<String>, CoreError> {
         let mut started = Vec::new();
+        let workspace = self.open_workspace();
+        let process = self.open_process_runner(workspace.as_ref());
         for ext in &self.extensions {
             let LoadState::Compiled(component) = &ext.state else {
                 continue;
             };
             let id = &ext.instance.id;
+
+            // Own-seam categories: instantiate + lifecycle happen inside the seam.
+            let config_json = ext.instance.config.to_string();
+            match (ext.instance.category.as_str(), ext.instance.kind.as_str()) {
+                ("tool", _) => {
+                    tool_host::ToolExtension::instantiate(
+                        &self.engine,
+                        id,
+                        component,
+                        workspace.clone(),
+                        process.clone(),
+                    )?;
+                    started.push(id.clone());
+                    continue;
+                }
+                ("registry", "skills") => {
+                    registry_host::SkillsExtension::instantiate(
+                        &self.engine,
+                        id,
+                        component,
+                        config_json,
+                        workspace.clone(),
+                    )?;
+                    started.push(id.clone());
+                    continue;
+                }
+                ("registry", "mcp") => {
+                    registry_host::McpExtension::instantiate(
+                        &self.engine,
+                        id,
+                        component,
+                        config_json,
+                    )?;
+                    started.push(id.clone());
+                    continue;
+                }
+                ("interceptor", _) => {
+                    // Same safe-default classifier `build_agent` uses; this path
+                    // only proves the guest instantiates and starts.
+                    let provider_fn: interceptor_host::ProviderFn =
+                        Box::new(|_prompt| "agentic".to_string());
+                    interceptor_host::WasmInterceptor::instantiate(
+                        &self.engine,
+                        id,
+                        component,
+                        ConfigSection::new(self.interceptor_config(&ext.instance)),
+                        provider_fn,
+                    )?;
+                    started.push(id.clone());
+                    continue;
+                }
+                _ => {}
+            }
+
             let section = ConfigSection::new(ext.instance.config.clone());
             let mut store = Store::new(&self.engine, HostState::new(id.clone(), section));
 

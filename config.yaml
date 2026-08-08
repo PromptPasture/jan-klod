@@ -108,6 +108,8 @@ extensions:
       enabled: true            # read / write / grep a workspace file
     edit:
       enabled: true            # hash-anchored partial edits (view -> replace/insert)
+    find:
+      enabled: true            # glob the workspace tree (discovery for read/grep)
     shell:
       enabled: false           # run a command through host-process; off by default
     web-search:
