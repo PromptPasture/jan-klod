@@ -117,18 +117,12 @@ impl g_config::Host for InterceptorHost {
 }
 
 impl g_event::Host for InterceptorHost {
-    // Observation-only: publish logs; there is no in-loop subscriber yet, so
-    // subscribe/poll are inert but well-formed.
+    /// One-way: the host records what an extension reports. There is no delivery
+    /// side — see `wit/host-event.wit` for why the polling half was removed
+    /// rather than left as a queue nobody fills.
     fn publish(&mut self, topic: String, payload: String) {
         eprintln!("EVENT [{}] {topic}: {payload}", self.component_id);
     }
-    fn subscribe(&mut self, _topic_prefix: String) -> u32 {
-        0
-    }
-    fn next_event(&mut self, _handle: u32) -> Option<g_event::Event> {
-        None
-    }
-    fn unsubscribe(&mut self, _handle: u32) {}
 }
 
 impl g_storage::Host for InterceptorHost {

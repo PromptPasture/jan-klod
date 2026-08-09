@@ -1,28 +1,24 @@
 package jan-klod:interfaces@0.1.0;
 
-/// Event bus — extensions publish and subscribe to system events.
+/// One-way observation channel — an extension reports something notable and the
+/// host decides what to do with it (log it today; metrics or a subscriber later).
+///
+/// **Publish only, deliberately.** This interface used to declare
+/// `subscribe`/`next-event`/`unsubscribe` as well, backed by host stubs that
+/// returned a handle and then `none` forever. Nothing published, nothing
+/// subscribed, and a guest that started polling would have waited on an empty
+/// queue for the life of the process with no error to explain it. The delivery
+/// half comes back when something delivers: a bus with no deliverer is not a bus,
+/// it is a promise.
+///
+/// `publish` is kept because it works — the host records it — and because a
+/// gateway noticing its upstream has died wants somewhere to say so that is not a
+/// log level.
 interface host-event {
-    /// Publish an event on the bus.
-    /// `topic` is a dot-separated string, e.g. "mcp.server.down".
+    /// Report an event. `topic` is dot-separated (e.g. `mcp.server.down`);
     /// `payload` is a JSON-encoded value.
+    ///
+    /// Fire-and-forget: there is no delivery guarantee and no reader to observe.
+    /// An extension must not depend on anyone acting on this.
     publish: func(topic: string, payload: string);
-
-    /// Subscribe to a topic pattern (prefix match, e.g. "mcp." catches all MCP events).
-    /// Returns a subscription handle used to poll events.
-    subscribe: func(topic-prefix: string) -> subscription-handle;
-
-    /// Poll the next event for a subscription. Returns none if the queue is empty.
-    next-event: func(handle: subscription-handle) -> option<event>;
-
-    /// Unsubscribe and release the handle.
-    unsubscribe: func(handle: subscription-handle);
-
-    record event {
-        topic: string,
-        payload: string,
-        /// Unix timestamp (milliseconds).
-        timestamp: u64,
-    }
-
-    type subscription-handle = u32;
 }

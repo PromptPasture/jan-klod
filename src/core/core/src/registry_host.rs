@@ -5,7 +5,6 @@
 //! The two registry types share a `RegistryFleet` that implements `ToolInvoker`
 //! so the conductor dispatches skill and MCP tool calls through the same seam.
 
-use std::collections::HashMap;
 
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime::{Engine, Store};
@@ -126,58 +125,11 @@ const fn to_sk_fs_err(err: FsError) -> sk_fs::FsError {
 
 // ─── mcp host state ──────────────────────────────────────────────────────────
 
-/// Simple per-store in-memory event bus for `host-event`.
-struct EventBus {
-    next_handle: u32,
-    /// topic-prefix → queued events for that subscription
-    subs: HashMap<u32, (String, Vec<mcp_event::Event>)>,
-    /// pending published events (drained into matching subs)
-    pending: Vec<mcp_event::Event>,
-}
-
-impl EventBus {
-    fn new() -> Self {
-        Self { next_handle: 1, subs: HashMap::new(), pending: Vec::new() }
-    }
-
-    fn publish(&mut self, topic: &str, payload: String) {
-        #[allow(clippy::cast_possible_truncation)]
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
-        let event = mcp_event::Event { topic: topic.to_owned(), payload, timestamp: ts };
-        for (prefix, queue) in self.subs.values_mut() {
-            if topic.starts_with(prefix.as_str()) {
-                queue.push(event.clone());
-            }
-        }
-        self.pending.push(event);
-    }
-
-    fn subscribe(&mut self, prefix: String) -> u32 {
-        let handle = self.next_handle;
-        self.next_handle = self.next_handle.wrapping_add(1);
-        self.subs.insert(handle, (prefix, Vec::new()));
-        handle
-    }
-
-    fn next_event(&mut self, handle: u32) -> Option<mcp_event::Event> {
-        self.subs.get_mut(&handle).and_then(|(_, queue)| {
-            if queue.is_empty() { None } else { Some(queue.remove(0)) }
-        })
-    }
-
-    fn unsubscribe(&mut self, handle: u32) {
-        self.subs.remove(&handle);
-    }
-}
-
 struct McpHost {
     wasi: WasiCtx,
     table: ResourceTable,
     component_id: String,
     config_json: String,
-    events: EventBus,
 }
 
 impl WasiView for McpHost {
@@ -254,17 +206,12 @@ const fn to_mcp_http_err(err: &crate::http::WireError) -> mcp_http::HttpError {
 }
 
 impl mcp_event::Host for McpHost {
+    /// One-way: the host records what the gateway reports. There is no delivery
+    /// side — `host-event` narrowed to `publish` when it turned out the queue
+    /// behind it was real here, stubbed for interceptors, and called by neither.
+    /// See `wit/host-event.wit`.
     fn publish(&mut self, topic: String, payload: String) {
-        self.events.publish(&topic, payload);
-    }
-    fn subscribe(&mut self, topic_prefix: String) -> u32 {
-        self.events.subscribe(topic_prefix)
-    }
-    fn next_event(&mut self, handle: u32) -> Option<mcp_event::Event> {
-        self.events.next_event(handle)
-    }
-    fn unsubscribe(&mut self, handle: u32) {
-        self.events.unsubscribe(handle);
+        eprintln!("EVENT [{}] {topic}: {payload}", self.component_id);
     }
 }
 
@@ -382,7 +329,6 @@ impl McpExtension {
             table: ResourceTable::new(),
             component_id: id.to_string(),
             config_json,
-            events: EventBus::new(),
         };
         let mut store = Store::new(engine, host);
         let world = mcp_bind::McpRegistryWorld::instantiate(&mut store, component, &linker)
