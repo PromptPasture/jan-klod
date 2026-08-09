@@ -12,6 +12,18 @@
 //! code: it is the host-side REST surface (`jan_klod_core::serve`) — an orchestrator
 //! `POST`s a task as a turn and reads the answer. The concrete ACP↔REST framing is
 //! a thin adapter over that surface.
+//!
+//! # Not wired
+//!
+//! **Nothing constructs this.** `Runtime::build_agent` assembles providers, tools,
+//! registries, and interceptors; the `agent` category is ranked for boot ordering
+//! and never instantiated, and no `AgentDelegate` reaches the `CombinedFleet`. So a
+//! model emitting a `delegate` tool call today gets "no tool named `delegate`".
+//!
+//! It is kept rather than deleted because it misleads nobody: it is host-side, so
+//! no extension can import it and wait forever the way `host-event`'s removed
+//! polling half could. What it needs is a transport and one line in `build_agent`,
+//! and until it has them this notice is the honest state of it.
 
 use std::collections::HashMap;
 

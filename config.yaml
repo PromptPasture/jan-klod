@@ -162,9 +162,12 @@ extensions:
       api-key: ${SEARCH_API_KEY}
 
   # ---- AI agent delegation via ACP ----
-  agent:
-    claude-code:
-      enabled: false
+  # NOTE: inert. `Runtime::build_agent` never instantiates the `agent` category,
+  # and no `agent-*` component exists to instantiate — enabling an entry here
+  # resolves to an `ext/agent-claude-code.wasm` that is not built, which `verify`
+  # reports as missing. The outbound seam is written (`delegate.rs`, unit-tested)
+  # and needs a transport plus wiring; the inbound direction is already possible
+  # by POSTing a turn to the REST surface.
 
   # ---- Network API surfaces ----
   # NOTE: there is no `api.*` extension. The REST surface is built into the core
