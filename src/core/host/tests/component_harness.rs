@@ -26,6 +26,8 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Result, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
+mod common;
+
 /// `store-world`: lifecycle + `memory-store`, imports `host-log` + `host-config`.
 mod store_bind {
     wasmtime::component::bindgen!({
@@ -184,11 +186,7 @@ fn staged_component(engine: &Engine, file: &str) -> Option<Component> {
     let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "..", "ext", file]
         .iter()
         .collect();
-    if !path.exists() {
-        eprintln!(
-            "skipping: {} not staged — run `make extensions` (or `make harness`)",
-            path.display()
-        );
+    if !common::guests_staged(&[file]) {
         return None;
     }
     Some(Component::from_file(engine, &path).expect("staged component should compile"))

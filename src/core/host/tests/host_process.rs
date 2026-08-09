@@ -19,8 +19,7 @@ mod common;
 
 fn probe_component(engine: &Engine) -> Option<Component> {
     let path = common::repo_root().join("ext").join("tool-proc-probe.wasm");
-    if !path.exists() {
-        eprintln!("skipping: tool-proc-probe.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["tool-proc-probe.wasm"]) {
         return None;
     }
     Some(Component::from_file(engine, &path).expect("component compiles"))

@@ -24,8 +24,7 @@ fn call(name: &str, arguments: &str) -> ToolCall {
 fn fleet_dispatches_a_tool_call_by_name() {
     let engine = Engine::default();
     let path = common::repo_root().join("ext").join("tool-fs.wasm");
-    if !path.exists() {
-        eprintln!("skipping: tool-fs.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["tool-fs.wasm"]) {
         return;
     }
     let component = Component::from_file(&engine, &path).expect("component compiles");
@@ -54,8 +53,7 @@ fn fleet_dispatches_a_tool_call_by_name() {
 
 fn load_tool(engine: &Engine, name: &str, workspace: Workspace) -> Option<ToolExtension> {
     let path = common::repo_root().join("ext").join(format!("{name}.wasm"));
-    if !path.exists() {
-        eprintln!("skipping: {name}.wasm not staged — run `make ext`");
+    if !common::guests_staged(&[&format!("{name}.wasm")]) {
         return None;
     }
     let component = Component::from_file(engine, &path).expect("component compiles");
@@ -130,8 +128,7 @@ fn shell_tool_runs_a_command_through_the_fleet() {
 
     let engine = Engine::default();
     let path = common::repo_root().join("ext").join("tool-shell.wasm");
-    if !path.exists() {
-        eprintln!("skipping: tool-shell.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["tool-shell.wasm"]) {
         return;
     }
     let component = Component::from_file(&engine, &path).expect("component compiles");

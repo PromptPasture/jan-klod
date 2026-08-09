@@ -21,8 +21,7 @@ mod common;
 
 fn git_component(engine: &Engine) -> Option<Component> {
     let path = common::repo_root().join("ext").join("tool-git.wasm");
-    if !path.exists() {
-        eprintln!("skipping: tool-git.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["tool-git.wasm"]) {
         return None;
     }
     Some(Component::from_file(engine, &path).expect("component compiles"))

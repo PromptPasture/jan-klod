@@ -112,11 +112,8 @@ fn post_answer(port: u16, session: &str, answer: &str) -> String {
 #[test]
 fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
     let ext_dir = common::repo_root().join("ext");
-    for guest in GUESTS {
-        if !ext_dir.join(guest).exists() {
-            eprintln!("skipping: {guest} not staged — run `make ext`");
-            return;
-        }
+    if !common::guests_staged(&GUESTS) {
+        return;
     }
 
     let dir = std::env::temp_dir().join(format!("jk-apiprompt-{}", std::process::id()));
@@ -187,8 +184,7 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
 #[test]
 fn an_answer_with_nothing_pending_is_refused() {
     let ext_dir = common::repo_root().join("ext");
-    if !ext_dir.join("provider-openai.wasm").exists() {
-        eprintln!("skipping: provider-openai.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["provider-openai.wasm"]) {
         return;
     }
 

@@ -17,11 +17,8 @@ mod common;
 #[test]
 fn telegram_message_drives_a_turn_and_replies() {
     let ext_dir = common::repo_root().join("ext");
-    for guest in ["provider-openai.wasm", "interceptor-intent-router.wasm"] {
-        if !ext_dir.join(guest).exists() {
-            eprintln!("skipping: {guest} not staged — run `make ext`");
-            return;
-        }
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
+        return;
     }
 
     let dir = std::env::temp_dir().join(format!("jk-telegram-{}", std::process::id()));
@@ -126,11 +123,8 @@ fn write_then_answer_http() -> jan_klod_core::route::HttpFn {
 #[test]
 fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
     let ext_dir = common::repo_root().join("ext");
-    for guest in ["provider-openai.wasm", "tool-fs.wasm", "interceptor-permission.wasm"] {
-        if !ext_dir.join(guest).exists() {
-            eprintln!("skipping: {guest} not staged — run `make ext`");
-            return;
-        }
+    if !common::guests_staged(&["provider-openai.wasm", "tool-fs.wasm", "interceptor-permission.wasm"]) {
+        return;
     }
 
     let dir = std::env::temp_dir().join(format!("jk-tg-prompt-{}", std::process::id()));

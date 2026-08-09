@@ -145,11 +145,8 @@ impl Driver for ApprovingDriver {
 #[test]
 fn phase2_exit_gate() {
     let ext_dir = common::repo_root().join("ext");
-    for guest in PHASE2_GUESTS {
-        if !ext_dir.join(guest).exists() {
-            eprintln!("skipping: {guest} not staged — run `make ext`");
-            return;
-        }
+    if !common::guests_staged(&PHASE2_GUESTS) {
+        return;
     }
 
     let dir = std::env::temp_dir().join(format!("jk-phase2-{}", std::process::id()));
@@ -235,11 +232,8 @@ routing:
 #[test]
 fn phase2_gate_react_tool_call_with_permission() {
     let ext_dir = common::repo_root().join("ext");
-    for guest in PHASE2_GUESTS {
-        if !ext_dir.join(guest).exists() {
-            eprintln!("skipping: {guest} not staged — run `make ext`");
-            return;
-        }
+    if !common::guests_staged(&PHASE2_GUESTS) {
+        return;
     }
 
     let dir = std::env::temp_dir().join(format!("jk-phase2-tools-{}", std::process::id()));
@@ -300,11 +294,8 @@ routing:
 #[test]
 fn phase8_exit_gate_tool_runs_through_the_loop() {
     let ext_dir = common::repo_root().join("ext");
-    for guest in PHASE8_GUESTS {
-        if !ext_dir.join(guest).exists() {
-            eprintln!("skipping: {guest} not staged — run `make gate`");
-            return;
-        }
+    if !common::guests_staged(&PHASE8_GUESTS) {
+        return;
     }
 
     let dir = std::env::temp_dir().join(format!("jk-phase8-{}", std::process::id()));

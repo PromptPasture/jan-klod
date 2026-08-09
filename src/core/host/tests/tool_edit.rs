@@ -17,8 +17,7 @@ mod common;
 
 fn edit_component(engine: &Engine) -> Option<Component> {
     let path = common::repo_root().join("ext").join("tool-edit.wasm");
-    if !path.exists() {
-        eprintln!("skipping: tool-edit.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["tool-edit.wasm"]) {
         return None;
     }
     Some(Component::from_file(engine, &path).expect("component compiles"))

@@ -13,11 +13,8 @@ mod common;
 #[test]
 fn build_agent_wires_enabled_tools_into_the_fleet() {
     let ext_dir = common::repo_root().join("ext");
-    for guest in ["provider-openai.wasm", "interceptor-intent-router.wasm", "tool-fs.wasm"] {
-        if !ext_dir.join(guest).exists() {
-            eprintln!("skipping: {guest} not staged — run `make ext`");
-            return;
-        }
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm", "tool-fs.wasm"]) {
+        return;
     }
 
     let dir = std::env::temp_dir().join(format!("jk-toolwire-{}", std::process::id()));

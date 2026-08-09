@@ -148,6 +148,13 @@ harness: extensions
 #   provider_chain  — the `providers:` list actually orders the fallback chain.
 #   jan-klod        — a UI client drives core over REST.
 # The Go supervisor's flip/health/rollback cycle is covered by `make test`.
+#
+# JK_REQUIRE_GUESTS turns "guest not staged, skip" into a hard failure. These
+# tests skip so a bare `cargo test` works before `make ext`, but a skipped test
+# reports as passing — which once kept a `shipped_defaults` assertion that could
+# never hold green for a day. The gate stages the guests first, so here a skip
+# can only mean something is wrong.
+gate: export JK_REQUIRE_GUESTS = 1
 gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-host \
 		--test gate --test persistence --test api_rest --test api_prompt --test telegram \

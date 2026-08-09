@@ -18,11 +18,8 @@ mod common;
 #[test]
 fn thin_loop_runs_turns_from_config() {
     let ext_dir = common::repo_root().join("ext");
-    for file in ["provider-openai.wasm", "interceptor-intent-router.wasm"] {
-        if !ext_dir.join(file).exists() {
-            eprintln!("skipping: {file} not staged — run `make ext`");
-            return;
-        }
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
+        return;
     }
 
     let dir = std::env::temp_dir().join(format!("jk-thinloop-{}", std::process::id()));

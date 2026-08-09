@@ -62,8 +62,7 @@ fn shipped_config_with_workspace(dir: &std::path::Path) -> String {
 #[test]
 fn every_extension_the_shipped_config_enables_boots_and_starts() {
     let ext_dir = common::repo_root().join("ext");
-    if !ext_dir.join("provider-openai.wasm").exists() {
-        eprintln!("skipping: guests not staged — run `make ext`");
+    if !common::guests_staged(&["provider-openai.wasm"]) {
         return;
     }
     stub_env();
@@ -154,8 +153,7 @@ fn post_answer(port: u16, session: &str, answer: &str) -> String {
 #[test]
 fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
     let ext_dir = common::repo_root().join("ext");
-    if !ext_dir.join("tool-fs.wasm").exists() {
-        eprintln!("skipping: guests not staged — run `make ext`");
+    if !common::guests_staged(&["tool-fs.wasm"]) {
         return;
     }
     stub_env();
@@ -219,8 +217,7 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
 #[test]
 fn a_refused_confirmation_leaves_the_workspace_untouched() {
     let ext_dir = common::repo_root().join("ext");
-    if !ext_dir.join("tool-fs.wasm").exists() {
-        eprintln!("skipping: guests not staged — run `make ext`");
+    if !common::guests_staged(&["tool-fs.wasm"]) {
         return;
     }
     stub_env();

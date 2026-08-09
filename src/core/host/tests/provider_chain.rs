@@ -79,8 +79,7 @@ fn answer(config: &std::path::Path, ext_dir: &std::path::Path) -> String {
 #[test]
 fn the_configured_chain_decides_which_provider_is_tried_first() {
     let ext_dir = common::repo_root().join("ext");
-    if !ext_dir.join("provider-openai.wasm").exists() {
-        eprintln!("skipping: provider-openai.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["provider-openai.wasm"]) {
         return;
     }
 
@@ -108,8 +107,7 @@ fn the_configured_chain_decides_which_provider_is_tried_first() {
 #[test]
 fn an_unknown_name_in_the_chain_does_not_break_the_agent() {
     let ext_dir = common::repo_root().join("ext");
-    if !ext_dir.join("provider-openai.wasm").exists() {
-        eprintln!("skipping: provider-openai.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["provider-openai.wasm"]) {
         return;
     }
 
@@ -130,8 +128,7 @@ fn an_unknown_name_in_the_chain_does_not_break_the_agent() {
 #[test]
 fn a_provider_the_chain_omits_is_still_reachable() {
     let ext_dir = common::repo_root().join("ext");
-    if !ext_dir.join("provider-openai.wasm").exists() {
-        eprintln!("skipping: provider-openai.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["provider-openai.wasm"]) {
         return;
     }
 

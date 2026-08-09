@@ -17,8 +17,7 @@ mod common;
 
 fn fs_component(engine: &Engine) -> Option<Component> {
     let path = common::repo_root().join("ext").join("tool-fs.wasm");
-    if !path.exists() {
-        eprintln!("skipping: tool-fs.wasm not staged — run `make ext`");
+    if !common::guests_staged(&["tool-fs.wasm"]) {
         return None;
     }
     Some(Component::from_file(engine, &path).expect("component compiles"))

@@ -15,11 +15,8 @@ mod common;
 #[test]
 fn transcript_survives_a_runtime_restart() {
     let ext_dir = common::repo_root().join("ext");
-    for guest in ["provider-openai.wasm", "interceptor-intent-router.wasm"] {
-        if !ext_dir.join(guest).exists() {
-            eprintln!("skipping: {guest} not staged — run `make ext`");
-            return;
-        }
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
+        return;
     }
 
     let dir = std::env::temp_dir().join(format!("jk-persist-{}", std::process::id()));
