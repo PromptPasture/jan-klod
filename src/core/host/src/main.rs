@@ -6,6 +6,7 @@
 //! Usage:
 //!   `jan-klod [config-path] [ext-dir]`            — boot + print the plan
 //!   `jan-klod serve [config-path] [ext-dir] [bind]` — boot + serve REST turns
+//!   `jan-klod serve --bind <addr>`                  — serve, resolving paths
 //!   `jan-klod verify [config-path] [ext-dir]`     — check the install, then exit
 //!
 //!   config-path  path to config.yaml   (default: config.yaml)
@@ -139,9 +140,10 @@ fn boot_plan(args: &[String]) -> ExitCode {
 
 /// Boot the agent and serve turns over the host-side REST surface until killed.
 fn serve(args: &[String]) -> ExitCode {
-    let config_path = arg_or(args, 0, "config.yaml");
-    let ext_dir = arg_or(args, 1, "ext");
-    let bind = arg(args, 2, "127.0.0.1:8787");
+    let (positional, flagged_bind) = split_serve_args(args);
+    let config_path = arg_or(&positional, 0, "config.yaml");
+    let ext_dir = arg_or(&positional, 1, "ext");
+    let bind = flagged_bind.unwrap_or_else(|| arg(&positional, 2, "127.0.0.1:8787"));
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
@@ -246,8 +248,72 @@ fn arg(args: &[String], index: usize, default: &str) -> String {
     args.get(index).cloned().unwrap_or_else(|| default.to_string())
 }
 
+/// Split `serve`'s arguments into positionals and an optional `--bind <addr>`.
+///
+/// The flag exists so a caller can name the address *without* claiming the
+/// config and ext slots. Those are what [`arg_or`] resolves against the installed
+/// data directory, and naming them explicitly — which the UI had to do to reach
+/// the third positional — defeated that resolution: an installed jan-klod
+/// launched from the user's own repository looked for `./config.yaml` and failed
+/// to boot. The positional form still works for anyone naming all three.
+fn split_serve_args(args: &[String]) -> (Vec<String>, Option<String>) {
+    let mut positional = Vec::new();
+    let mut bind = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        if arg == "--bind" {
+            bind = rest.next().cloned();
+        } else {
+            positional.push(arg.clone());
+        }
+    }
+    (positional, bind)
+}
+
 /// Like [`arg`], but a missing config/ext argument falls back to the installed
 /// copy next to the binary rather than to a bare relative name.
 fn arg_or(args: &[String], index: usize, default: &str) -> String {
     args.get(index).cloned().unwrap_or_else(|| resolve_default(default))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_serve_args;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn the_bind_flag_does_not_consume_a_positional_slot() {
+        // The whole point: config and ext stay unset, so they resolve against the
+        // installed data directory rather than the user's working directory.
+        let (positional, bind) = split_serve_args(&args(["--bind", "127.0.0.1:9000"].as_ref()));
+        assert!(positional.is_empty(), "no positionals claimed: {positional:?}");
+        assert_eq!(bind.as_deref(), Some("127.0.0.1:9000"));
+    }
+
+    #[test]
+    fn the_positional_form_still_names_all_three() {
+        let (positional, bind) = split_serve_args(&args(["c.yaml", "e", "1.2.3.4:1"].as_ref()));
+        assert_eq!(positional, args(["c.yaml", "e", "1.2.3.4:1"].as_ref()));
+        assert_eq!(bind, None, "no flag, so the third positional is the address");
+    }
+
+    #[test]
+    fn a_bind_address_is_never_mistaken_for_a_path() {
+        // Filtering by *value* would drop a positional that happened to equal the
+        // address; consuming the token after the flag cannot.
+        let (positional, bind) =
+            split_serve_args(&args(["c.yaml", "--bind", "c.yaml"].as_ref()));
+        assert_eq!(positional, args(["c.yaml"].as_ref()), "the config path survives");
+        assert_eq!(bind.as_deref(), Some("c.yaml"));
+    }
+
+    #[test]
+    fn a_dangling_flag_falls_back_to_the_default_address() {
+        let (positional, bind) = split_serve_args(&args(["--bind"].as_ref()));
+        assert!(positional.is_empty());
+        assert_eq!(bind, None, "nothing followed it, so the caller gets the default");
+    }
 }

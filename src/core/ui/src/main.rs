@@ -8,8 +8,10 @@
 //!   session  session id, shared across the conversation (default: cli)
 //!
 //! If the gateway is not already running at `addr`, jan-klod will attempt to
-//! start `jan-klod-gateway serve config.yaml ext <addr>` automatically,
-//! looking for the binary next to its own executable first, then in PATH.
+//! start `jan-klod-gateway serve --bind <addr>` automatically, looking for the
+//! binary next to its own executable first, then in PATH. It deliberately does
+//! *not* name `config.yaml`/`ext`, so the gateway resolves them itself — the
+//! working directory when it holds them, otherwise the installed copies.
 //!
 //! In the REPL, type a message and press enter to drive a turn; empty input,
 //! `quit`, or EOF exits.
@@ -119,7 +121,11 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
     let bin = gateway_bin();
     eprintln!("jan-klod: gateway not found at {addr}, starting {} …", bin.display());
     let child = Command::new(&bin)
-        .args(["serve", "config.yaml", "ext", addr])
+        // `--bind` rather than positional paths: naming `config.yaml`/`ext`
+        // explicitly (the only way to reach the third positional) overrode the
+        // gateway's own resolution, so an installed jan-klod launched from the
+        // user's repository looked for files that are not there.
+        .args(["serve", "--bind", addr])
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -127,7 +133,7 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
     match child {
         Err(err) => {
             eprintln!("jan-klod: could not start gateway ({}): {err}", bin.display());
-            eprintln!("jan-klod: start it manually: jan-klod-gateway serve config.yaml ext {addr}");
+            eprintln!("jan-klod: start it manually: jan-klod-gateway serve --bind {addr}");
             None
         }
         Ok(child) => {

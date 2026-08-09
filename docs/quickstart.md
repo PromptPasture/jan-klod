@@ -53,8 +53,13 @@ directory as the workspace — file tools are jailed to it.
 To start the gateway manually (e.g. as a background service):
 
 ```sh
-jan-klod-gateway serve config.yaml ext
+jan-klod-gateway serve --bind 127.0.0.1:8787
 ```
+
+Naming `config.yaml` and `ext` explicitly also works, but is only right inside a
+checkout: without them the gateway uses the current directory when it holds them
+and the installed copies otherwise, which is what makes `cd my-repo && jan-klod`
+work.
 
 Type a message and press **Enter** to send it. The model's response streams in token by token. Press **Esc** to quit.
 
