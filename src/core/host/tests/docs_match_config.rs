@@ -75,14 +75,29 @@ fn required_key_vars() -> BTreeSet<String> {
 }
 
 /// Every `export SOMETHING=` a document tells the reader to run.
+///
+/// Found anywhere in a line, not just at its start: the README puts it in a code
+/// fence, the installer inside an `echo`. Anchoring to the start silently skipped
+/// the installer, which is the sort of near-miss that makes a check reassuring
+/// rather than useful.
 fn exported_vars(doc: &str) -> BTreeSet<String> {
     let text = std::fs::read_to_string(common::repo_root().join(doc))
         .unwrap_or_else(|err| panic!("{doc} is readable: {err}"));
-    text.lines()
-        .filter_map(|line| line.trim().strip_prefix("export "))
-        .filter_map(|rest| rest.split('=').next())
-        .map(str::to_string)
-        .collect()
+    let mut vars = BTreeSet::new();
+    for line in text.lines() {
+        let mut rest = line;
+        while let Some(at) = rest.find("export ") {
+            rest = &rest[at + "export ".len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                vars.insert(name);
+            }
+        }
+    }
+    vars
 }
 
 /// A document that tells a reader to set a key must name the one the shipped
@@ -119,6 +134,43 @@ fn the_landing_page_names_the_key_the_shipped_config_needs() {
 #[test]
 fn the_quickstart_names_the_key_the_shipped_config_needs() {
     assert_names_a_required_key("docs/quickstart.md");
+}
+
+/// The installer prints a quick start too, and it drifted the same way.
+#[test]
+fn the_installer_names_the_key_the_shipped_config_needs() {
+    assert_names_a_required_key("scripts/install.sh");
+}
+
+/// The asset name the installer builds must be one the release workflow
+/// publishes.
+///
+/// They spell 64-bit ARM differently per OS — `aarch64` on Linux, `arm64` on
+/// macOS — and the installer normalised both to `aarch64`, so it asked for a file
+/// that is never built: a 404 on every Apple Silicon Mac, which is most people
+/// who would try it. Compared as sets rather than by reading either file.
+#[test]
+fn the_installer_asks_for_arch_names_the_release_actually_builds() {
+    let workflow = std::fs::read_to_string(
+        common::repo_root().join(".github/workflows/release.yml"),
+    )
+    .expect("the release workflow is readable");
+    let installer = std::fs::read_to_string(common::repo_root().join("scripts/install.sh"))
+        .expect("install.sh is readable");
+
+    let published: BTreeSet<String> = workflow
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("arch:"))
+        .map(|a| a.trim().to_string())
+        .collect();
+    assert!(!published.is_empty(), "the workflow names the architectures it builds");
+
+    for arch in &published {
+        assert!(
+            installer.contains(arch.as_str()),
+            "install.sh never mentions `{arch}`, which the release publishes —              a user on it would get a 404. Published: {published:?}"
+        );
+    }
 }
 
 /// The parser has to actually distinguish enabled from disabled, or the checks

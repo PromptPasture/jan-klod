@@ -15,18 +15,19 @@ INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 
-case "${ARCH}" in
-  x86_64)  ARCH="x86_64" ;;
-  aarch64|arm64) ARCH="aarch64" ;;
-  *)
+# The asset name must match what .github/workflows/release.yml builds, which
+# spells 64-bit ARM differently per OS: `aarch64` on Linux, `arm64` on macOS.
+# Normalising both to `aarch64` (as this did) asked for a file that is never
+# published — a 404 on every Apple Silicon Mac, i.e. most people who try this.
+case "${OS}/${ARCH}" in
+  linux/x86_64)          ARCH="x86_64"  ;;
+  linux/aarch64|linux/arm64) ARCH="aarch64" ;;
+  darwin/x86_64)         ARCH="x86_64"  ;;
+  darwin/arm64|darwin/aarch64) ARCH="arm64" ;;
+  linux/*|darwin/*)
     echo "error: unsupported architecture: ${ARCH}" >&2
     exit 1
     ;;
-esac
-
-case "${OS}" in
-  linux)  ;;
-  darwin) ;;
   *)
     echo "error: unsupported OS: ${OS}" >&2
     exit 1
@@ -54,22 +55,50 @@ trap 'rm -rf "${TMP}"' EXIT
 curl -sSfL "${URL}" -o "${TMP}/${BUNDLE}"
 curl -sSfL "${CHECKSUMS_URL}" -o "${TMP}/SHA256SUMS.txt"
 
-# Verify checksum.
+# Verify checksum. macOS ships `shasum`, not `sha256sum`; using only the latter
+# made every darwin install abort here under `set -e`, after downloading.
+if command -v sha256sum > /dev/null 2>&1; then
+  SHA_CHECK="sha256sum -c -"
+elif command -v shasum > /dev/null 2>&1; then
+  SHA_CHECK="shasum -a 256 -c -"
+else
+  echo "error: no sha256sum or shasum available to verify the download" >&2
+  exit 1
+fi
 cd "${TMP}"
-grep "${BUNDLE}" SHA256SUMS.txt | sha256sum -c -
+grep "${BUNDLE}" SHA256SUMS.txt | ${SHA_CHECK}
 cd - > /dev/null
 
 # Extract and install.
+#
+# The components are the product. This used to copy the two binaries and stop,
+# leaving `config.yaml` and `ext/*.wasm` in the temp directory to be deleted —
+# so the installed agent booted with every extension missing and no tools at all.
+# Everything the bundle carries is installed; the gateway finds the data
+# directory relative to its own path, so `cd` into any repository and run.
 tar -xzf "${TMP}/${BUNDLE}" -C "${TMP}"
 EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}"
+DATA_DIR="${DATA_DIR:-$(dirname "${INSTALL_DIR}")/share/jan-klod}"
 
-mkdir -p "${INSTALL_DIR}"
+mkdir -p "${INSTALL_DIR}" "${DATA_DIR}"
 cp "${EXTRACTED}/jan-klod" "${INSTALL_DIR}/jan-klod"
 cp "${EXTRACTED}/jan-klod-gateway" "${INSTALL_DIR}/jan-klod-gateway"
 chmod +x "${INSTALL_DIR}/jan-klod" "${INSTALL_DIR}/jan-klod-gateway"
+cp "${EXTRACTED}/config.yaml" "${DATA_DIR}/config.yaml"
+rm -rf "${DATA_DIR}/ext"
+cp -R "${EXTRACTED}/ext" "${DATA_DIR}/ext"
 
 echo "Installed: ${INSTALL_DIR}/jan-klod"
 echo "Installed: ${INSTALL_DIR}/jan-klod-gateway"
+echo "Installed: ${DATA_DIR}/ (config.yaml + $(ls "${DATA_DIR}/ext" | wc -l | tr -d " ") components)"
+
+# Prove it: the gateway resolves its own data directory and every enabled
+# extension loads. An install that cannot verify itself is not an install.
+if ! "${INSTALL_DIR}/jan-klod-gateway" verify > /dev/null 2>&1; then
+  echo "" >&2
+  echo "warning: the installed components did not all verify. Run:" >&2
+  echo "  ${INSTALL_DIR}/jan-klod-gateway verify" >&2
+fi
 
 # Check PATH.
 case ":${PATH}:" in
@@ -84,5 +113,5 @@ esac
 
 echo ""
 echo "Quick start:"
-echo "  export ANTHROPIC_API_KEY=sk-..."
+echo "  export OPENAI_API_KEY=sk-..."
 echo "  jan-klod my-session"

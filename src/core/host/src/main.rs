@@ -12,10 +12,38 @@
 //!   ext-dir      directory of *.wasm    (default: ext)
 //!   bind         host:port to listen on (default: 127.0.0.1:8787)
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
+
+/// Where the installed copies of `config.yaml` and `ext/` live, relative to the
+/// gateway binary: `<prefix>/bin/jan-klod-gateway` → `<prefix>/share/jan-klod/`.
+const INSTALLED_DATA: &str = "../share/jan-klod";
+
+/// Resolve a default config/ext path.
+///
+/// The working directory wins, so running inside a checkout uses that checkout.
+/// Otherwise the copy installed alongside the binary is used — without this, an
+/// installed jan-klod only worked when launched from a directory that happened to
+/// contain a `config.yaml` and an `ext/`, which for a coding agent is never: the
+/// whole point is to `cd` into *your* repository and run it there.
+fn resolve_default(name: &str) -> String {
+    let in_cwd = PathBuf::from(name);
+    if in_cwd.exists() {
+        return name.to_string();
+    }
+    let installed = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(INSTALLED_DATA).join(name)));
+    match installed {
+        Some(path) if path.exists() => path.to_string_lossy().into_owned(),
+        // Neither exists: keep the plain name so the error names what was looked
+        // for rather than an absolute path the user never typed.
+        _ => name.to_string(),
+    }
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,8 +66,8 @@ fn main() -> ExitCode {
 /// bundle so a broken one cannot be released, and a user can run it to answer
 /// "why is that tool not working?".
 fn verify(args: &[String]) -> ExitCode {
-    let config_path = arg(args, 0, "config.yaml");
-    let ext_dir = arg(args, 1, "ext");
+    let config_path = arg_or(args, 0, "config.yaml");
+    let ext_dir = arg_or(args, 1, "ext");
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
@@ -82,8 +110,8 @@ fn verify(args: &[String]) -> ExitCode {
 /// Boot the runtime and print the plan, running each present component's
 /// lifecycle. This is the default (no subcommand) mode.
 fn boot_plan(args: &[String]) -> ExitCode {
-    let config_path = arg(args, 0, "config.yaml");
-    let ext_dir = arg(args, 1, "ext");
+    let config_path = arg_or(args, 0, "config.yaml");
+    let ext_dir = arg_or(args, 1, "ext");
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
@@ -111,8 +139,8 @@ fn boot_plan(args: &[String]) -> ExitCode {
 
 /// Boot the agent and serve turns over the host-side REST surface until killed.
 fn serve(args: &[String]) -> ExitCode {
-    let config_path = arg(args, 0, "config.yaml");
-    let ext_dir = arg(args, 1, "ext");
+    let config_path = arg_or(args, 0, "config.yaml");
+    let ext_dir = arg_or(args, 1, "ext");
     let bind = arg(args, 2, "127.0.0.1:8787");
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
@@ -153,8 +181,8 @@ fn serve(args: &[String]) -> ExitCode {
 /// bot token comes from the `TELEGRAM_BOT_TOKEN` environment variable.
 fn telegram(args: &[String]) -> ExitCode {
     const MAX_CONSECUTIVE_ERRORS: u32 = 10;
-    let config_path = arg(args, 0, "config.yaml");
-    let ext_dir = arg(args, 1, "ext");
+    let config_path = arg_or(args, 0, "config.yaml");
+    let ext_dir = arg_or(args, 1, "ext");
 
     let Ok(token) = std::env::var("TELEGRAM_BOT_TOKEN") else {
         eprintln!("jan-klod: set TELEGRAM_BOT_TOKEN to run the telegram bot");
@@ -216,4 +244,10 @@ fn telegram(args: &[String]) -> ExitCode {
 /// Positional arg `index` (0-based within the subcommand's args), or `default`.
 fn arg(args: &[String], index: usize, default: &str) -> String {
     args.get(index).cloned().unwrap_or_else(|| default.to_string())
+}
+
+/// Like [`arg`], but a missing config/ext argument falls back to the installed
+/// copy next to the binary rather than to a bare relative name.
+fn arg_or(args: &[String], index: usize, default: &str) -> String {
+    args.get(index).cloned().unwrap_or_else(|| resolve_default(default))
 }
