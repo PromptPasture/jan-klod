@@ -784,7 +784,9 @@ fn run_and_persist(
     session: &str,
     message: &str,
 ) -> conductor::RunResult {
-    let result = conductor::run_turn(dispatcher, providers, tools, driver, sink, session, message);
+    let history = replay(store, session);
+    let result =
+        conductor::run_turn(dispatcher, providers, tools, driver, sink, session, message, history);
     if let conductor::RunResult::Answered { text, .. } = &result {
         // Best-effort transcript append: a store failure never fails the answered turn.
         let turn = store.list_keys(session).map_or(0, |keys| keys.len()) + 1;
@@ -796,6 +798,44 @@ fn run_and_persist(
     result
 }
 
+
+/// How many past turns are replayed into a new one.
+///
+/// A bound belongs here, before the store read, as well as in `select-context`:
+/// loading a thousand turns to then drop most of them costs a query and the
+/// memory either way. The token-aware trimming on top is the context
+/// interceptor's job — this is only "do not read the whole history of the world".
+const REPLAYED_TURNS: u32 = 20;
+
+/// The conversation so far, oldest-first, as loop messages.
+///
+/// Each stored turn is `{"user":…,"answer":…}`; a malformed or unreadable entry
+/// is skipped rather than failing the turn — a corrupt transcript row should cost
+/// context, not the ability to talk.
+fn replay(store: &store::Store, session: &str) -> Vec<intercept::Message> {
+    use intercept::{Message, Role};
+    let mut entries = store.recent(session, REPLAYED_TURNS).unwrap_or_default();
+    entries.reverse(); // `recent` is newest-first; a conversation reads oldest-first
+    let mut messages = Vec::with_capacity(entries.len() * 2);
+    for entry in entries {
+        let Ok(turn) = serde_json::from_str::<serde_json::Value>(&entry.value) else { continue };
+        if let Some(user) = turn.get("user").and_then(serde_json::Value::as_str) {
+            messages.push(Message {
+                role: Role::User,
+                content: user.to_string(),
+                tool_call_id: None,
+            });
+        }
+        if let Some(answer) = turn.get("answer").and_then(serde_json::Value::as_str) {
+            messages.push(Message {
+                role: Role::Assistant,
+                content: answer.to_string(),
+                tool_call_id: None,
+            });
+        }
+    }
+    messages
+}
 
 /// The closure interceptors' `llm-provider` resolves to.
 ///

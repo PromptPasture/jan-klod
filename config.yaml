@@ -72,7 +72,12 @@ extensions:
     task-router:
       enabled: false           # select-model: task-type -> routing (Slice 2d)
     context:
-      enabled: false           # select-context: history + compression (Slice 2d)
+      enabled: true            # select-context: trims the replayed conversation to
+                               # the model's window, oldest non-system messages
+                               # first. On by default because turns now carry the
+                               # session's history — without it a long session
+                               # grows until the provider rejects the request.
+      # context-tokens: 8000   # budget; default suits a small local model
     tool-selector:
       enabled: true            # select-tools: expose the active tool set (Slice 2d).
                                # On by default: without it the enabled tool.* below
