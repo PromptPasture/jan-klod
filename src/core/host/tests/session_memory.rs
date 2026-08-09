@@ -275,3 +275,102 @@ fn the_model_is_told_what_it_is_before_anything_else() {
     );
     assert_eq!(roles.first().map(String::as_str), Some("system"), "still first: {roles:?}");
 }
+
+/// Config with the tool fleet and the interceptors that advertise it, so the
+/// assembled request is the one a shipped install sends.
+fn write_config_with_tools(dir: &std::path::Path) -> std::path::PathBuf {
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "
+extensions:
+  store:
+    sqlite:
+      enabled: true
+      path: {db}
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    intent-router:
+      enabled: true
+    tool-selector:
+      enabled: true
+  tool:
+    fs:
+      enabled: true
+    find:
+      enabled: true
+workspace: {ws}
+",
+            db = dir.join("jan-klod.db").display(),
+            ws = dir.display()
+        ),
+    )
+    .unwrap();
+    config
+}
+
+/// The whole chain from the fleet to the wire is only observable here.
+///
+/// Every offline test of tool use works with a canned provider that returns
+/// `tool_calls` regardless of what it was sent — so a request that carried no
+/// tool schemas at all would still drive a green `ReAct` test, while a real model,
+/// never having been told the tools exist, would answer in prose forever. This
+/// reads the schemas back off the request body.
+#[test]
+fn the_model_is_actually_told_which_tools_exist() {
+    if !common::guests_staged(&[
+        "provider-openai.wasm",
+        "interceptor-intent-router.wasm",
+        "interceptor-tool-selector.wasm",
+        "tool-fs.wasm",
+        "tool-find.wasm",
+    ]) {
+        return;
+    }
+    let ext_dir = common::repo_root().join("ext");
+    let dir = std::env::temp_dir().join(format!("jk-tools-wire-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    let config = write_config_with_tools(&dir);
+
+    let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&seen);
+    let factory = move || recording_http(&recorded);
+    let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+
+    agent.run("tools-1", "find the config file and then read it");
+
+    let recorded = seen.lock().unwrap();
+    let body = recorded.last().expect("the provider was called").clone();
+    drop(recorded);
+
+    let tools = body["tools"].as_array().unwrap_or_else(|| {
+        panic!("the request carries a `tools` array; body was {body}");
+    });
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|t| t["function"]["name"].as_str())
+        .collect();
+    assert!(names.contains(&"fs"), "the fs tool is advertised: {names:?}");
+    assert!(names.contains(&"find"), "the find tool is advertised: {names:?}");
+
+    // A name alone is not usable — the model needs the argument schema to build a
+    // call, and an empty `{}` here would look fine while making every call a guess.
+    let find = tools
+        .iter()
+        .find(|t| t["function"]["name"] == "find")
+        .expect("find is present");
+    let params = &find["function"]["parameters"];
+    assert_eq!(params["type"], "object", "a real JSON Schema, not a placeholder: {params}");
+    assert!(
+        params["properties"]["pattern"].is_object(),
+        "the schema names `find`'s required argument: {params}"
+    );
+}

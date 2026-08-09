@@ -141,7 +141,7 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
 }
 
 /// Turn one Chat Completions response body into the ordered chunk stream the
-/// host will drain: tool calls (if any) or a text delta, always closed by `done`.
+/// host will drain: any text, then any tool calls, always closed by `done`.
 fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| ProviderError::Transient)?;
     let choice = value
@@ -151,6 +151,17 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     let message = choice.get("message").ok_or(ProviderError::Transient)?;
 
     let mut chunks = VecDeque::new();
+    // Text *and* tool calls, not one or the other. A model routinely narrates
+    // before it acts ("I'll read the file first, then…"), and treating the two as
+    // alternatives dropped that text on the floor: it never reached the stream, so
+    // the UI showed nothing while tools ran, and it never reached the assistant
+    // message, so the next turn could not see what the model said it was doing.
+    // Text precedes the calls, which is the order the model emitted them in.
+    if let Some(content) = message.get("content").and_then(Value::as_str) {
+        if !content.is_empty() {
+            chunks.push_back(CompletionChunk::TextDelta(content.to_owned()));
+        }
+    }
     if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
         for call in tool_calls {
             let function = call.get("function");
@@ -159,10 +170,6 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
                 name: function.map_or_else(String::new, |f| str_field(f, "name")),
                 arguments: function.map_or_else(String::new, |f| str_field(f, "arguments")),
             }));
-        }
-    } else if let Some(content) = message.get("content").and_then(Value::as_str) {
-        if !content.is_empty() {
-            chunks.push_back(CompletionChunk::TextDelta(content.to_owned()));
         }
     }
 

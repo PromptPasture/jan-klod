@@ -452,3 +452,94 @@ fn provider_openai_maps_auth_error() -> Result<()> {
     );
     Ok(())
 }
+
+/// A reply carrying **both** a preamble and tool calls must yield both.
+///
+/// The parser treated them as alternatives (`if tool_calls … else if content …`),
+/// so a model that narrated before acting — which modern models routinely do —
+/// had its text dropped: it never reached the stream, so a UI showed nothing
+/// while tools ran, and it never reached the assistant message, so the next turn
+/// could not see what the model said it was doing. Only a reply with both fields
+/// shows the difference, which is why no existing test caught it.
+#[test]
+fn provider_openai_keeps_text_that_accompanies_tool_calls() -> Result<()> {
+    use provider_bind::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext;
+    use provider_bind::exports::jan_klod::interfaces::llm_provider::{
+        CompletionChunk, CompletionRequest, Message, Role,
+    };
+    use provider_bind::jan_klod::interfaces::{host_config, host_http, host_log};
+    use provider_bind::ProviderWorld;
+
+    let engine = Engine::default();
+    let Some(component) = staged_component(&engine, "provider-openai.wasm") else {
+        return Ok(());
+    };
+
+    let body = json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "I'll read the file first.",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "function": { "name": "fs", "arguments": "{\"op\":\"read\"}" }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }]
+    });
+    let host = TestHost::new(
+        json!({ "base-url": "http://mock/v1", "model": "mock-1", "api-key": "test" }),
+        MockHttp { status: 200, body: serde_json::to_vec(&body).unwrap() },
+    );
+
+    let mut linker: Linker<TestHost> = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    host_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    host_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    host_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+
+    let mut store = Store::new(&engine, host);
+    let world = ProviderWorld::instantiate(&mut store, &component, &linker)?;
+    let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
+    let provider = world.jan_klod_interfaces_llm_provider();
+    let ctx = ExtensionContext { id: "provider.openai".to_string(), version: "0.0.0".to_string() };
+    lifecycle.call_init(&mut store, &ctx)?.map_err(wasmtime::Error::msg)?;
+    lifecycle.call_start(&mut store)?.map_err(wasmtime::Error::msg)?;
+
+    let request = CompletionRequest {
+        model: String::new(),
+        messages: vec![Message {
+            role: Role::User,
+            content: "read it".to_string(),
+            tool_call_id: None,
+        }],
+        tools: vec![],
+        grammar: None,
+        max_tokens: None,
+        temperature: None,
+    };
+    let handle = provider
+        .call_complete(&mut store, &request)?
+        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
+
+    let mut text = String::new();
+    let mut calls = Vec::new();
+    let mut done_reason = None;
+    while let Some(chunk) = provider.call_next_chunk(&mut store, handle)? {
+        match chunk {
+            CompletionChunk::TextDelta(t) => text.push_str(&t),
+            CompletionChunk::ToolCallRequest(call) => calls.push(call.name),
+            CompletionChunk::Done(reason) => {
+                done_reason = Some(reason);
+                break;
+            }
+        }
+    }
+    provider.call_close_stream(&mut store, handle)?;
+
+    assert_eq!(text, "I'll read the file first.", "the preamble survives alongside the calls");
+    assert_eq!(calls, vec!["fs".to_string()], "the tool call still arrives");
+    assert_eq!(done_reason.as_deref(), Some("tool_calls"));
+    Ok(())
+}
