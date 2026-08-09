@@ -135,7 +135,7 @@ pub fn serve_once_authed(
                 let mut body = String::new();
                 request.as_reader().read_to_string(&mut body)?;
                 return if wants_sse {
-                    serve_message_sse(server, request, agent, id, &body)
+                    serve_message_sse(server, request, agent, id, &body, token)
                 } else {
                     respond_json(request, handle_message(agent, id, &body))
                 };
@@ -219,6 +219,7 @@ fn serve_message_sse(
     agent: &mut AgentSession,
     session: &str,
     body: &str,
+    token: Option<&str>,
 ) -> std::io::Result<()> {
     let writer: SharedWriter = Rc::new(RefCell::new(request.into_writer()));
     writer.borrow_mut().write_all(
@@ -239,7 +240,12 @@ fn serve_message_sse(
     };
 
     let mut sink = SseSink { writer: Rc::clone(&writer), live: true };
-    let mut driver = PromptDriver { server, writer: Rc::clone(&writer), session: session.to_string() };
+    let mut driver = PromptDriver {
+        server,
+        writer: Rc::clone(&writer),
+        session: session.to_string(),
+        token,
+    };
     if let RunResult::Failed(reason) =
         agent.run_streaming_with_driver(&mut driver, &mut sink, session, &message)
     {
@@ -258,6 +264,14 @@ struct PromptDriver<'a> {
     server: &'a Server,
     writer: SharedWriter,
     session: String,
+    /// The bearer token, if one is configured.
+    ///
+    /// This driver serves the socket itself while a turn is parked, so it does
+    /// **not** pass through `serve_once_authed` and has to check the token on its
+    /// own. Missing that is how the answer route — the one that approves a write
+    /// or a command — became the single unguarded endpoint the moment auth was
+    /// added everywhere else.
+    token: Option<&'a str>,
 }
 
 impl Driver for PromptDriver<'_> {
@@ -289,6 +303,21 @@ impl PromptDriver<'_> {
             let remaining = deadline.checked_duration_since(Instant::now())?;
             let mut request = self.server.recv_timeout(remaining).ok().flatten()?;
             let path = request.url().split('?').next().unwrap_or("").to_string();
+            if !authorised(&request, self.token, &path) {
+                // Drain before replying: the body is still in the socket, and
+                // answering a POST without consuming it leaves the connection
+                // mid-message — the client then waits for bytes that never come.
+                let mut discard = String::new();
+                let _ = request.as_reader().read_to_string(&mut discard);
+                // Refuse and keep waiting: an unauthenticated caller must not be
+                // able to answer a permission prompt, nor to cancel one by
+                // consuming the wait.
+                let _ = respond_json(
+                    request,
+                    error_reply(401, "missing or invalid bearer token"),
+                );
+                continue;
+            }
             if *request.method() == Method::Post && path == route {
                 let mut body = String::new();
                 if request.as_reader().read_to_string(&mut body).is_err() {

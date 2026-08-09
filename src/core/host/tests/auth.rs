@@ -44,7 +44,14 @@ extensions:
 /// line plus body.
 fn request(port: u16, target: &str, auth: Option<&str>) -> String {
     let header = auth.map_or_else(String::new, |t| format!("Authorization: Bearer {t}\r\n"));
-    let body = r#"{"message":"hello"}"#;
+    // The answer route takes a different body. Sending the wrong one gets a 400,
+    // which the waiting driver treats as "still no answer" — so a test that got
+    // this wrong would sit out the full answer timeout and look like a deadlock.
+    let body = if target.ends_with("/answer") {
+        r#"{"answer":"yes"}"#
+    } else {
+        r#"{"message":"hello"}"#
+    };
     let raw = if target == "/health" {
         format!("GET /health HTTP/1.1\r\nHost: localhost\r\n{header}Connection: close\r\n\r\n")
     } else {
@@ -131,4 +138,123 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     // not loopback.
     assert!(response.contains("200 OK"), "no token configured means no gate: {response}");
     assert!(response.contains("pong"), "and the turn runs: {response}");
+}
+
+/// The one endpoint that must never be open.
+///
+/// While a turn is parked on a confirmation, the waiting driver serves the socket
+/// itself — it does not pass through the router, so it needs its own token check.
+/// Without one, the single unguarded route on an otherwise authenticated surface
+/// would be the route that **approves a write or a command**: an unauthenticated
+/// caller could answer "yes" to a permission prompt.
+#[test]
+fn an_unauthenticated_caller_cannot_answer_a_permission_prompt() {
+    if !common::guests_staged(&[
+        "provider-openai.wasm",
+        "interceptor-tool-selector.wasm",
+        "interceptor-permission.wasm",
+    ]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-auth-prompt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        "
+extensions:
+  store:
+    memory:
+      enabled: true
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    tool-selector:
+      enabled: true
+    permission:
+      enabled: true
+",
+    )
+    .unwrap();
+
+    // First completion calls a dangerous tool, so the gate asks; then it answers.
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let counted = std::sync::Arc::clone(&calls);
+    let factory = move || -> jan_klod_core::route::HttpFn {
+        let calls = std::sync::Arc::clone(&counted);
+        Box::new(move |_m, _u, _h, _b, _t| {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let body = if n == 0 {
+                serde_json::json!({"choices":[{"message":{"role":"assistant","tool_calls":[
+                    {"id":"c1","function":{"name":"bash","arguments":"{}"}}]},
+                    "finish_reason":"tool_calls"}]})
+            } else {
+                serde_json::json!({"choices":[{"message":{"role":"assistant",
+                    "content":"all done"},"finish_reason":"stop"}]})
+            };
+            Ok(jan_klod_core::http::WireResponse {
+                status: 200,
+                headers: vec![],
+                body: serde_json::to_vec(&body).unwrap(),
+            })
+        })
+    };
+
+    let ext_dir = common::repo_root().join("ext");
+    let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let server = Server::http("127.0.0.1:0").expect("binds");
+    let port = server.server_addr().to_ip().expect("ip").port();
+
+    let client = thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
+        let body = r#"{"message":"use bash to clean up"}"#;
+        let raw = format!(
+            "POST /session/p/message HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+             Accept: text/event-stream\r\nAuthorization: Bearer {TOKEN}\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(raw.as_bytes()).unwrap();
+
+        let mut refused = String::new();
+        let mut collected = String::new();
+        let reader = BufReader::new(stream);
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            collected.push_str(&line);
+            collected.push('\n');
+            if line.starts_with("event: prompt") && refused.is_empty() {
+                // An outsider tries to approve the tool call first…
+                refused = request(port, "/session/p/answer", None);
+                // …then the legitimate client answers.
+                let _ = request(port, "/session/p/answer", Some(TOKEN));
+            }
+        }
+        (refused, collected)
+    });
+
+    serve_once_authed(&server, &mut agent, Some(TOKEN)).expect("serves the turn");
+    let (refused, stream_text) = client.join().expect("client thread");
+
+    assert!(
+        refused.contains("401"),
+        "an unauthenticated answer to a permission prompt must be refused: {refused}"
+    );
+    assert!(
+        !refused.contains("accepted"),
+        "and must not be accepted: {refused}"
+    );
+    // The turn still completed — refusing the outsider did not consume the wait.
+    assert!(
+        stream_text.contains("event: done"),
+        "the legitimate answer still landed: {stream_text}"
+    );
 }
