@@ -185,6 +185,14 @@ execution:
   timeout-secs: 30            # a command that outruns this is killed
   output-cap: 65536           # captured stdout/stderr bytes per run
 
+# Which provider answers interceptors' model calls (the intent router's
+# simple-vs-agentic classification). Names an instance from
+# `extensions.provider` above; omit to use the head of the chain below.
+# Classification is a two-token question, so pointing this at a small local
+# model is the reason the key exists. An unknown name warns and falls back to
+# the conservative label, and a classifier failure never fails the turn.
+# classifier: ollama
+
 # Provider fallback chain: the order enabled providers are tried in. Each entry
 # names an instance from `extensions.provider` above. On a provider error the
 # next one is tried; when the chain is exhausted the error surfaces to the user

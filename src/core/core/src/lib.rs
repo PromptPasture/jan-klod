@@ -206,10 +206,11 @@ impl Runtime {
                     continue;
                 }
                 ("interceptor", _) => {
-                    // Same safe-default classifier `build_agent` uses; this path
-                    // only proves the guest instantiates and starts.
+                    // A constant classifier: this path only proves the guest
+                    // instantiates and starts, and must not make a model call to
+                    // do it. `build_agent` supplies the real one.
                     let provider_fn: interceptor_host::ProviderFn =
-                        Box::new(|_prompt| "agentic".to_string());
+                        Box::new(|_request| "agentic".to_string());
                     interceptor_host::WasmInterceptor::instantiate(
                         &self.engine,
                         id,
@@ -280,8 +281,7 @@ impl Runtime {
     ///
     /// `http_factory` mints a fresh `host-http` backend per provider (each provider
     /// instance owns its own store). In v1 an interceptor's `llm-provider` import is
-    /// backed by a safe-default classifier (`"agentic"`); routing it to the real
-    /// providers is a follow-up.
+    /// backed by a dedicated provider instance (see [`Self::open_classifier`]).
     ///
     /// # Errors
     /// Returns a [`CoreError`] if any interceptor or provider fails to instantiate
@@ -364,6 +364,14 @@ impl Runtime {
         let mut tools = CombinedFleet { tools: tool_fleet, registry: registry_fleet };
         let tools_advert = tools.all_metas_json();
 
+        // An interceptor that consults a model (the intent router classifies simple
+        // vs agentic) gets its **own** provider instance rather than a handle into
+        // the chain above: the conductor holds the chain mutably for the whole
+        // turn, so an interceptor reaching into it mid-dispatch would alias it. A
+        // second instance costs one more component + client and keeps the seam
+        // straightforward.
+        let classifier = self.open_classifier(http_factory)?;
+
         // Pass 2: interceptors, each served the tool set at `select-tools`.
         let mut interceptors: Vec<Box<dyn intercept::Interceptor>> = Vec::new();
         for ext in &self.extensions {
@@ -377,8 +385,7 @@ impl Runtime {
             if let serde_json::Value::Object(map) = &mut config {
                 map.entry("tools").or_insert_with(|| tools_advert.clone());
             }
-            // v1: safe-default classifier; real routing is a follow-up.
-            let provider_fn: interceptor_host::ProviderFn = Box::new(|_prompt| "agentic".to_string());
+            let provider_fn = classifier_fn(classifier.clone());
             interceptors.push(Box::new(interceptor_host::WasmInterceptor::instantiate(
                 &self.engine,
                 &ext.instance.id,
@@ -455,6 +462,48 @@ impl Runtime {
             }
             _ => host_process::ProcessRunner::disabled(),
         }
+    }
+
+    /// Instantiate the provider that answers interceptors' `llm-provider` calls.
+    ///
+    /// Which instance: the top-level `classifier:` key names one, otherwise the
+    /// head of the fallback chain. Pointing it at a small local model is the
+    /// reason the key exists — classification is a two-token question and does
+    /// not want the expensive model the turn itself uses.
+    ///
+    /// Returns `None` when no provider is enabled; callers then fall back to the
+    /// conservative default rather than failing the boot.
+    ///
+    /// # Errors
+    /// Returns a [`CoreError`] if the chosen provider cannot be instantiated.
+    fn open_classifier(
+        &self,
+        http_factory: &dyn Fn() -> route::HttpFn,
+    ) -> Result<Option<std::sync::Arc<std::sync::Mutex<route::ProviderCompleter>>>, CoreError> {
+        let named = self.agent.get("classifier").and_then(serde_json::Value::as_str);
+        let chosen = self.extensions.iter().find(|ext| {
+            ext.instance.category == "provider"
+                && matches!(ext.state, LoadState::Compiled(_))
+                && named.is_none_or(|name| ext.instance.id == format!("provider.{name}"))
+        });
+        let Some(ext) = chosen else {
+            if let Some(name) = named {
+                eprintln!(
+                    "jan-klod: `classifier:` names `{name}`, which is not an enabled \
+                     provider — interceptors will use the conservative default"
+                );
+            }
+            return Ok(None);
+        };
+        let LoadState::Compiled(component) = &ext.state else { return Ok(None) };
+        Ok(Some(std::sync::Arc::new(std::sync::Mutex::new(
+            route::ProviderCompleter::instantiate(
+                &self.engine,
+                &ext.instance,
+                component,
+                http_factory(),
+            )?,
+        ))))
     }
 
     /// Open the host-side persistent store from config: the enabled `store.sqlite`
@@ -747,6 +796,36 @@ fn run_and_persist(
     result
 }
 
+
+/// The closure interceptors' `llm-provider` resolves to.
+///
+/// **A classification failure is not a turn failure.** With no provider
+/// available, a poisoned lock, or a call that errors, the answer is `"agentic"`
+/// — the conservative label, which routes the prompt through the full loop
+/// rather than short-circuiting it. Defaulting the other way would silently
+/// downgrade real work on any provider hiccup.
+///
+/// The classifier is shared by `Arc` rather than borrowed: the closure outlives
+/// the call that builds it, and a lifetime cast to pretend otherwise is exactly
+/// what this workspace's `unsafe_code = "deny"` exists to prevent.
+fn classifier_fn(
+    classifier: Option<std::sync::Arc<std::sync::Mutex<route::ProviderCompleter>>>,
+) -> interceptor_host::ProviderFn {
+    use crate::conductor::Completer;
+    let Some(classifier) = classifier else {
+        return Box::new(|_request| "agentic".to_string());
+    };
+    Box::new(move |request| {
+        classifier.lock().map_or_else(
+            |_| "agentic".to_string(),
+            |mut provider| {
+                provider
+                    .complete(request)
+                    .map_or_else(|_| "agentic".to_string(), |completion| completion.text)
+            },
+        )
+    })
+}
 
 /// Resolve the configured fallback chain into an ordering of `ids`.
 ///

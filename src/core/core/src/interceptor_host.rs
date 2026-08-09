@@ -45,9 +45,19 @@ use bind::jan_klod::interfaces::llm_provider as g_llm;
 use bind::jan_klod::interfaces::llm_types as g_types;
 use bind::exports::jan_klod::interfaces::interceptor as g_icept;
 
-/// Canned completion backend: given the request's last user message, return the
-/// assistant text. Injected so an interceptor's LLM tier runs offline.
-pub type ProviderFn = Box<dyn Fn(&str) -> String + Send + Sync>;
+/// The completion backend an interceptor's `llm-provider` import resolves to:
+/// given the request the guest assembled, return the assistant text.
+///
+/// It takes the **whole request**, not just the prompt. An interceptor that
+/// consults a model constrains it — `interceptor-intent-router` sets a grammar
+/// admitting exactly two labels — and a seam that passed only the last user
+/// message would silently drop that constraint, turning a two-token classifier
+/// into free-form generation the guest then has to parse.
+///
+/// Injected so the tier runs offline in tests; `Runtime::build_agent` backs it
+/// with a real provider instance.
+pub type ProviderFn =
+    Box<dyn Fn(&crate::intercept::PendingRequest) -> String + Send + Sync>;
 
 /// Host state for one interceptor guest.
 struct InterceptorHost {
@@ -208,19 +218,42 @@ impl InterceptorHost {
     }
 }
 
+/// Convert the guest's generated request into the core's neutral shape, so the
+/// backing provider sees the model, grammar, and full message list the
+/// interceptor actually asked for.
+fn to_pending_request(request: &g_llm::CompletionRequest) -> crate::intercept::PendingRequest {
+    use crate::intercept::{Message, PendingRequest, Role};
+    PendingRequest {
+        model: Some(request.model.clone()).filter(|m| !m.is_empty()),
+        messages: request
+            .messages
+            .iter()
+            .map(|m| Message {
+                role: match m.role {
+                    g_types::Role::System => Role::System,
+                    g_types::Role::User => Role::User,
+                    g_types::Role::Assistant => Role::Assistant,
+                    g_types::Role::Tool => Role::Tool,
+                },
+                content: m.content.clone(),
+                tool_call_id: m.tool_call_id.clone(),
+            })
+            .collect(),
+        // An interceptor's classification call offers no tools: it is asking a
+        // question, not running a turn.
+        tools: Vec::new(),
+        grammar: request.grammar.clone(),
+        max_tokens: request.max_tokens,
+        temperature: request.temperature,
+    }
+}
+
 impl g_llm::Host for InterceptorHost {
     fn complete(
         &mut self,
         request: g_llm::CompletionRequest,
     ) -> Result<u32, g_llm::ProviderError> {
-        // The classifier's prompt is the last user message.
-        let prompt = request
-            .messages
-            .iter()
-            .rev()
-            .find(|m| matches!(m.role, g_types::Role::User))
-            .map_or_else(String::new, |m| m.content.clone());
-        let text = (self.provider)(&prompt);
+        let text = (self.provider)(&to_pending_request(&request));
         let handle = self.next_handle;
         self.next_handle += 1;
         let chunks = VecDeque::from(vec![
@@ -591,6 +624,7 @@ mod tests {
     };
     use serde_json::json;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
 
     fn repo_root() -> PathBuf {
         [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
@@ -1094,5 +1128,35 @@ mod tests {
             d.dispatch(Phase::BeforeLoop, &mut state, &mut NoDriver),
             Outcome::Blocked(_)
         ));
+    }
+
+    #[test]
+    fn the_seam_hands_the_provider_the_whole_request_not_just_a_prompt() {
+        // The router constrains its classifier to two labels. A seam that passed
+        // only the last user message would drop that grammar, and the "classifier"
+        // would become free-form generation the guest then has to parse.
+        let seen: Arc<Mutex<Option<crate::intercept::PendingRequest>>> =
+            Arc::new(Mutex::new(None));
+        let captured = Arc::clone(&seen);
+        let Some((_engine, router)) = load_intent_router(Box::new(move |request| {
+            *captured.lock().unwrap() = Some(request.clone());
+            "agentic".into()
+        })) else {
+            return;
+        };
+        let mut d = Dispatcher::new(vec![Box::new(router)]);
+        let mut state = before_loop("Tell me a fact and then do three unrelated things please");
+        let _ = d.dispatch(Phase::BeforeLoop, &mut state, &mut NoDriver);
+
+        let request = seen.lock().unwrap().clone().expect("the provider was consulted");
+        let grammar = request.grammar.expect("the classifier's grammar survives the seam");
+        assert!(grammar.contains("simple"), "grammar admits `simple`: {grammar}");
+        assert!(grammar.contains("agentic"), "grammar admits `agentic`: {grammar}");
+        assert!(
+            request.messages.iter().any(|m| m.content.contains("three unrelated things")),
+            "the prompt reaches the provider: {:?}",
+            request.messages
+        );
+        assert!(request.tools.is_empty(), "a classification offers no tools");
     }
 }
