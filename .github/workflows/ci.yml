@@ -57,7 +57,19 @@ jobs:
       - name: Fetch spike WIT deps
         run: make -C src/extensions spike-deps
 
+      # Stage the guests before testing. Without this the integration tests do not
+      # fail — they *skip*, because an absent component is a legitimate state for a
+      # developer who has not run `make ext` yet. That made this job's roughly
+      # thirty component tests no-ops while it reported success, the same way the
+      # pre-commit hook did until it was fixed. The `gate` job below was unaffected:
+      # it stages guests first.
+      - name: Stage guest components
+        run: make -C src/extensions all
+
+      # …and make a skip a failure, so this can never hollow out silently again.
       - run: make test
+        env:
+          JK_REQUIRE_GUESTS: "1"
 
       - run: make clippy
 
