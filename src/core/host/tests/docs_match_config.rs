@@ -173,6 +173,97 @@ fn the_installer_asks_for_arch_names_the_release_actually_builds() {
     }
 }
 
+/// Every key in the shipped config must have code that reads it.
+///
+/// This is the check I kept performing by hand and got wrong. Asking "which code
+/// reads this block?" found `providers:` inert, `routing:` inert and naming
+/// endpoints it could not reach, and an `api-key:` advertising authentication
+/// that did not exist. Then I declared the sweep complete and had missed
+/// `extensions.agent`, which a two-minute grep disproved.
+///
+/// A confident summary is cheap and expensive when wrong, so the enumeration
+/// lives here instead. Adding a category or a top-level key now fails until
+/// someone either wires it or deletes it — the same shape as
+/// `intercept::is_dispatched` making an unreached phase a compile error.
+///
+/// Deliberately a whitelist, not a parser: it does not try to prove the reader
+/// exists, only that a human said which one it is. That is the part that was
+/// being skipped.
+#[test]
+fn every_config_key_is_one_the_runtime_reads() {
+    // `extensions.<category>` values the runtime instantiates.
+    //   store       — Runtime::open_store
+    //   provider    — build_agent, pass 1
+    //   interceptor — build_agent, pass 2
+    //   registry    — build_agent, pass 1 (skills / mcp)
+    //   tool        — build_agent, pass 1
+    const CONSUMED_CATEGORIES: [&str; 5] =
+        ["store", "provider", "interceptor", "registry", "tool"];
+    // Top-level keys, and what reads each.
+    //   extensions — Config::from_path
+    //   workspace  — Runtime::open_workspace
+    //   execution  — Runtime::open_process_runner
+    //   classifier — Runtime::open_classifier
+    //   providers  — order_chain, applied in build_agent
+    //   routing    — interceptor-task-router, via host-config
+    const CONSUMED_TOP_LEVEL: [&str; 6] =
+        ["extensions", "workspace", "execution", "classifier", "providers", "routing"];
+
+    let config = std::fs::read_to_string(common::repo_root().join("config.yaml"))
+        .expect("the shipped config.yaml is readable");
+
+    let mut top_level = Vec::new();
+    let mut categories = Vec::new();
+    let mut in_extensions = false;
+    for line in config.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        // `key:` and `key: value` both count. Matching only the first missed every
+        // scalar — `workspace: /path` would have sailed past the check meant to
+        // catch it, which is the same near-miss as the extractor that only saw
+        // `export` at the start of a line.
+        let Some((key, _)) = line.trim().split_once(':') else { continue };
+        let key = key.trim();
+        if key.is_empty() || key.contains(' ') {
+            continue;
+        }
+        if indent == 0 {
+            in_extensions = key == "extensions";
+            top_level.push(key.to_string());
+        } else if indent == 2 && in_extensions {
+            categories.push(key.to_string());
+        }
+    }
+
+    let unknown_top: Vec<&String> =
+        top_level.iter().filter(|k| !CONSUMED_TOP_LEVEL.contains(&k.as_str())).collect();
+    assert!(
+        unknown_top.is_empty(),
+        "top-level {unknown_top:?} in config.yaml — name the code that reads each, or \
+         remove it. Known: {CONSUMED_TOP_LEVEL:?}"
+    );
+
+    let unknown_category: Vec<&String> =
+        categories.iter().filter(|k| !CONSUMED_CATEGORIES.contains(&k.as_str())).collect();
+    assert!(
+        unknown_category.is_empty(),
+        "extensions.{unknown_category:?} is not instantiated by anything — `build_agent` \
+         assembles {CONSUMED_CATEGORIES:?}. Wire it, or make the block a note saying \
+         it is inert (as `api`, `chat` and `agent` are)."
+    );
+
+    // And the reverse: a category the runtime handles but the shipped config never
+    // shows is a feature nobody will find.
+    for consumed in CONSUMED_CATEGORIES {
+        assert!(
+            categories.iter().any(|c| c == consumed),
+            "`{consumed}` is instantiated but absent from the shipped config"
+        );
+    }
+}
+
 /// No test may skip except through the shared policy.
 ///
 /// A skipped test reports as passing. That is tolerable when the skip is
