@@ -19,7 +19,18 @@ cd "$ROOT"
 
 step "Build + test"
 
+# Stage the guests fresh. This used to be `rm -rf ext/` alone, which defeated its
+# own purpose: the integration tests skip when a guest is absent, so removing them
+# turned roughly thirty tests into no-ops and the hook still printed "passed".
+# Removing *and rebuilding* gets what the removal was reaching for — no stale
+# artifact — while leaving the tests something to run against.
 rm -rf ext/
+make -C src/extensions all \
+  && pass "guests staged" \
+  || { fail "guest build failed"; exit 1; }
+
+# A skipped test must now fail rather than pass quietly (see common::guests_staged).
+export JK_REQUIRE_GUESTS=1
 
 make -C src/core check \
   && pass "core check" \

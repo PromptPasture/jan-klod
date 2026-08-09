@@ -24,7 +24,14 @@ make -C src/extensions spike-deps \
   && pass "spike WIT deps fetched" \
   || { fail "spike-deps failed"; exit 1; }
 
+# Rebuild rather than merely remove: an absent guest makes the integration tests
+# skip, so `rm -rf ext/` on its own quietly emptied this job of most of its value.
 rm -rf ext/
+make -C src/extensions all \
+  && pass "guests staged" \
+  || { fail "guest build failed"; exit 1; }
+
+export JK_REQUIRE_GUESTS=1
 
 make test \
   && pass "make test" \
