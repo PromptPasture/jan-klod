@@ -170,6 +170,9 @@ fn serve(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Some(warning) = exposure_warning(&bind) {
+        eprintln!("{warning}");
+    }
     println!("jan-klod: serving on http://{bind} — POST {{\"session\":\"…\",\"message\":\"…\"}}");
 
     if let Err(err) = jan_klod_core::serve::serve(&server, &mut agent) {
@@ -248,6 +251,38 @@ fn arg(args: &[String], index: usize, default: &str) -> String {
     args.get(index).cloned().unwrap_or_else(|| default.to_string())
 }
 
+/// A warning when `bind` puts the REST surface somewhere other than loopback.
+///
+/// **The surface has no authentication.** Anyone who can reach it can start a
+/// turn, and the agent behind it reads and writes a workspace and — where the
+/// deployment allows it — runs commands. That is fine on `127.0.0.1`, which is
+/// the default and what the TUI connects to. On a routable address it is an open
+/// door, and the config file used to imply otherwise by advertising an `api-key:`
+/// nothing ever read.
+///
+/// A warning rather than a refusal: binding elsewhere is legitimate behind a
+/// reverse proxy that does authenticate, and a runtime that refuses a documented
+/// address would be its own kind of lie. It should not be *quiet*, though.
+fn exposure_warning(bind: &str) -> Option<String> {
+    let host = bind.rsplit_once(':').map_or(bind, |(host, _)| host);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let loopback = host == "localhost"
+        || host == "::1"
+        || host.strip_prefix("127.").is_some_and(|rest| rest.contains('.'));
+    if loopback {
+        return None;
+    }
+    Some(
+        [
+            format!("jan-klod: WARNING — binding to {bind}, which is not loopback."),
+            "jan-klod: the REST surface has NO authentication. Anyone who can reach".to_string(),
+            "jan-klod: it can drive the agent, which reads and writes your workspace.".to_string(),
+            "jan-klod: Put it behind something that authenticates, or bind 127.0.0.1.".to_string(),
+        ]
+        .join("\n"),
+    )
+}
+
 /// Split `serve`'s arguments into positionals and an optional `--bind <addr>`.
 ///
 /// The flag exists so a caller can name the address *without* claiming the
@@ -282,6 +317,27 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn loopback_binds_are_not_warned_about() {
+        for quiet in ["127.0.0.1:8787", "localhost:8787", "[::1]:8787", "127.1.2.3:9"] {
+            assert!(
+                super::exposure_warning(quiet).is_none(),
+                "{quiet} is loopback and needs no warning"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reachable_bind_says_the_surface_is_unauthenticated() {
+        // The one that matters: 0.0.0.0 is what someone types when they want to
+        // reach it from another machine, which is exactly when they need telling.
+        for loud in ["0.0.0.0:8787", "192.168.1.10:8787", "[::]:8787", "10.0.0.5:80"] {
+            let warning = super::exposure_warning(loud)
+                .unwrap_or_else(|| panic!("{loud} is reachable and must warn"));
+            assert!(warning.contains("NO authentication"), "{warning}");
+        }
     }
 
     #[test]

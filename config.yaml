@@ -27,7 +27,9 @@ extensions:
       # type: store-sqlite
       path: ./jan-klod.db
     postgres:
-      enabled: false
+      enabled: false           # no component implements this yet — a placeholder,
+                               # like tool.web-search. `verify` reports it missing
+                               # if you enable it.
       # type: store-postgres
       dsn: ${DATABASE_URL}
 
@@ -164,18 +166,20 @@ extensions:
     claude-code:
       enabled: false
 
-  # ---- Network API surfaces (host-serve) ----
-  api:
-    rest:
-      enabled: false
-      bind: 127.0.0.1:8088
-      api-key: ${REST_API_KEY}
+  # ---- Network API surfaces ----
+  # NOTE: there is no `api.*` extension. The REST surface is built into the core
+  # binary and started with `jan-klod-gateway serve --bind <addr>`; an entry here
+  # would resolve to an `ext/api-rest.wasm` that does not exist. The block that
+  # used to sit here advertised `bind:` and `api-key:` — neither was read by
+  # anything, and the second was actively misleading: **the REST surface has no
+  # authentication**. Keep it on loopback. Binding it to a routable address
+  # exposes an unauthenticated agent that can read and write your workspace; the
+  # gateway warns if you do.
 
-  # ---- Chat platform integrations (host-socket) ----
-  chat:
-    telegram:
-      enabled: false
-      token: ${TELEGRAM_BOT_TOKEN}
+  # ---- Chat platform integrations ----
+  # NOTE: likewise host-side, started with `jan-klod-gateway telegram`. The bot
+  # token is read from the TELEGRAM_BOT_TOKEN environment variable, not from here
+  # — a `token:` key in this file would be inert (and a secret in a config file).
 
 # ============================================================================
 # Agent behaviour — consumed by the core loop and its interceptors (task-router),
