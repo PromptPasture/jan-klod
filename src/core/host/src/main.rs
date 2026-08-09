@@ -170,12 +170,17 @@ fn serve(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Some(warning) = exposure_warning(&bind) {
+    // A secret belongs in the environment, not in a file people paste into issues.
+    let token = std::env::var("JAN_KLOD_TOKEN").ok().filter(|t| !t.trim().is_empty());
+    if token.is_some() {
+        println!("jan-klod: requiring a bearer token (JAN_KLOD_TOKEN); /health stays open");
+    }
+    if let Some(warning) = exposure_warning(&bind, token.is_some()) {
         eprintln!("{warning}");
     }
     println!("jan-klod: serving on http://{bind} — POST {{\"session\":\"…\",\"message\":\"…\"}}");
 
-    if let Err(err) = jan_klod_core::serve::serve(&server, &mut agent) {
+    if let Err(err) = jan_klod_core::serve::serve_authed(&server, &mut agent, token.as_deref()) {
         eprintln!("jan-klod: serve loop failed: {err}");
         return ExitCode::FAILURE;
     }
@@ -251,7 +256,11 @@ fn arg(args: &[String], index: usize, default: &str) -> String {
     args.get(index).cloned().unwrap_or_else(|| default.to_string())
 }
 
-/// A warning when `bind` puts the REST surface somewhere other than loopback.
+/// A warning when `bind` exposes the surface with nothing guarding it.
+///
+/// Silent once a token is set: the point is to flag an *unguarded* exposure, and
+/// a warning that persists after the reader has done the thing it asked for is
+/// one they learn to ignore.
 ///
 /// **The surface has no authentication.** Anyone who can reach it can start a
 /// turn, and the agent behind it reads and writes a workspace and — where the
@@ -263,7 +272,10 @@ fn arg(args: &[String], index: usize, default: &str) -> String {
 /// A warning rather than a refusal: binding elsewhere is legitimate behind a
 /// reverse proxy that does authenticate, and a runtime that refuses a documented
 /// address would be its own kind of lie. It should not be *quiet*, though.
-fn exposure_warning(bind: &str) -> Option<String> {
+fn exposure_warning(bind: &str, has_token: bool) -> Option<String> {
+    if has_token {
+        return None;
+    }
     let host = bind.rsplit_once(':').map_or(bind, |(host, _)| host);
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let loopback = host == "localhost"
@@ -275,9 +287,9 @@ fn exposure_warning(bind: &str) -> Option<String> {
     Some(
         [
             format!("jan-klod: WARNING — binding to {bind}, which is not loopback."),
-            "jan-klod: the REST surface has NO authentication. Anyone who can reach".to_string(),
-            "jan-klod: it can drive the agent, which reads and writes your workspace.".to_string(),
-            "jan-klod: Put it behind something that authenticates, or bind 127.0.0.1.".to_string(),
+            "jan-klod: nothing guards this surface. Anyone who can reach it can drive".to_string(),
+            "jan-klod: the agent, which reads and writes your workspace.".to_string(),
+            "jan-klod: Set JAN_KLOD_TOKEN to require a bearer token, or bind 127.0.0.1.".to_string(),
         ]
         .join("\n"),
     )
@@ -323,7 +335,7 @@ mod tests {
     fn loopback_binds_are_not_warned_about() {
         for quiet in ["127.0.0.1:8787", "localhost:8787", "[::1]:8787", "127.1.2.3:9"] {
             assert!(
-                super::exposure_warning(quiet).is_none(),
+                super::exposure_warning(quiet, false).is_none(),
                 "{quiet} is loopback and needs no warning"
             );
         }
@@ -334,10 +346,19 @@ mod tests {
         // The one that matters: 0.0.0.0 is what someone types when they want to
         // reach it from another machine, which is exactly when they need telling.
         for loud in ["0.0.0.0:8787", "192.168.1.10:8787", "[::]:8787", "10.0.0.5:80"] {
-            let warning = super::exposure_warning(loud)
+            let warning = super::exposure_warning(loud, false)
                 .unwrap_or_else(|| panic!("{loud} is reachable and must warn"));
-            assert!(warning.contains("NO authentication"), "{warning}");
+            assert!(warning.contains("nothing guards this surface"), "{warning}");
         }
+    }
+
+    #[test]
+    fn setting_a_token_silences_the_exposure_warning() {
+        // A warning that survives doing what it asked is one people learn to skip.
+        assert!(
+            super::exposure_warning("0.0.0.0:8787", true).is_none(),
+            "a guarded surface is not an unguarded one"
+        );
     }
 
     #[test]

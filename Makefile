@@ -164,7 +164,7 @@ gate: extensions
 		--test gate --test persistence --test api_rest --test api_prompt --test telegram \
 		--test shipped_defaults --test provider_chain --test tool_fetch \
 		--test classifier --test session_memory --test docs_match_config \
-		--test installed_layout \
+		--test installed_layout --test auth \
 		--test host_fs --test host_process --test tool_fleet --test tool_wiring
 	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up host_fs host_process
 	cd $(CORE) && cargo test -p jan-klod

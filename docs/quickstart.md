@@ -95,7 +95,22 @@ each line with an **anchor** (a hash of the line's position and text), and edits
 those anchors. If the file changed since the model looked, the anchors no longer match
 and the edit is refused rather than applied to the wrong lines.
 
-## 5. Check the install
+## 5. Reach it from another machine
+
+The gateway binds `127.0.0.1` by default and, unset, has no authentication —
+which is fine for a loopback socket and not fine anywhere else. To expose it:
+
+```sh
+export JAN_KLOD_TOKEN=$(openssl rand -hex 32)
+jan-klod-gateway serve --bind 0.0.0.0:8787
+```
+
+Every route except `/health` then requires `Authorization: Bearer <token>`. Set
+the same variable where you run `jan-klod` and the client sends it for you. There
+is no TLS: put it behind something that terminates it if the network is not
+trusted.
+
+## 6. Check the install
 
 If a tool seems missing, ask the runtime what it actually loaded:
 
@@ -107,7 +122,7 @@ It resolves every extension your config enables, reports anything absent from
 `ext/`, then starts them all — exiting non-zero if any part of the install is
 incomplete. The release bundles are built through the same check.
 
-## 6. Resume a session
+## 7. Resume a session
 
 Sessions persist across server restarts (SQLite store). The REST API:
 

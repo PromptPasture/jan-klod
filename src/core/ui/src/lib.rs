@@ -12,6 +12,18 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+/// The `Authorization` header line to send, or empty when no token is set.
+///
+/// Read from the environment on every request rather than cached: a client is a
+/// short-lived process, and a token that changed under a long-running TUI should
+/// take effect on the next turn rather than at the next restart.
+fn auth_header() -> String {
+    std::env::var("JAN_KLOD_TOKEN")
+        .ok()
+        .filter(|t| !t.trim().is_empty())
+        .map_or_else(String::new, |token| format!("Authorization: Bearer {token}\r\n"))
+}
+
 /// One event streamed back over SSE as a turn runs (mirrors the core's
 /// `conductor::Event`, parsed from `event:/data:` frames).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +91,8 @@ pub fn stream_turn(
     let body = serde_json::json!({ "message": message }).to_string();
     let request = format!(
         "POST /session/{session}/message HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
-         Accept: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+         Accept: text/event-stream\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        auth_header(),
         body.len(),
         body
     );
@@ -134,7 +147,8 @@ pub fn answer_prompt(addr: &str, session: &str, answer: &str) -> Result<(), Stri
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(
         "POST /session/{session}/answer HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+         {}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        auth_header(),
         body.len(),
         body
     );
@@ -173,7 +187,8 @@ pub fn send_turn(addr: &str, session: &str, message: &str) -> Result<String, Str
     let body = serde_json::json!({ "message": message }).to_string();
     let request = format!(
         "POST /session/{session}/message HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+         {}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        auth_header(),
         body.len(),
         body
     );

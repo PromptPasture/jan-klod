@@ -64,11 +64,33 @@ pub struct Reply {
 /// Returns the underlying I/O error if the request cannot be received, read, or
 /// answered.
 pub fn serve_once(server: &Server, agent: &mut AgentSession) -> std::io::Result<()> {
+    serve_once_authed(server, agent, None)
+}
+
+/// Serve one request, requiring `Bearer <token>` when `token` is `Some`.
+///
+/// # Errors
+/// Returns the underlying I/O error if the request cannot be received, read, or
+/// answered.
+pub fn serve_once_authed(
+    server: &Server,
+    agent: &mut AgentSession,
+    token: Option<&str>,
+) -> std::io::Result<()> {
     let mut request = server.recv()?;
     let method = request.method().clone();
     let url = request.url().to_string();
     // Strip query string for routing.
     let path = url.split('?').next().unwrap_or(&url);
+
+    // Auth first, before any route can act. `/health` stays open: it carries no
+    // session data and the blue/green supervisor probes it without credentials.
+    if !authorised(&request, token, path) {
+        return respond_json(
+            request,
+            error_reply(401, "missing or invalid bearer token"),
+        );
+    }
 
     // GET /health
     if method == Method::Get && path == "/health" {
@@ -297,6 +319,34 @@ impl PromptDriver<'_> {
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
+/// Whether a request may proceed.
+///
+/// `None` means no token is configured, and everything is allowed — the
+/// historical behaviour, kept because the default bind is loopback and requiring
+/// a secret to talk to your own machine would be friction without a threat. When
+/// a token *is* configured it is required everywhere except `/health`, which
+/// leaks nothing and is what the supervisor probes.
+///
+/// Comparison is length-then-bytes rather than `==` on `&str` only in the sense
+/// that it compares the whole string every time; this is a local single-user
+/// surface, not a service where timing analysis of a bearer token is the
+/// realistic attack. The realistic attack is that there was no token at all.
+fn authorised(request: &Request, token: Option<&str>, path: &str) -> bool {
+    let Some(expected) = token else { return true };
+    if path == "/health" {
+        return true;
+    }
+    request
+        .headers()
+        .iter()
+        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("authorization"))
+        .and_then(|h| {
+            let value = h.value.as_str();
+            value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))
+        })
+        .is_some_and(|presented| presented.trim() == expected)
+}
+
 /// Whether the client asked for an SSE stream (`Accept: text/event-stream`).
 fn accepts_event_stream(request: &Request) -> bool {
     request.headers().iter().any(|h| {
@@ -406,8 +456,20 @@ fn new_session_id() -> String {
 /// # Errors
 /// Propagates the first I/O error from [`serve_once`].
 pub fn serve(server: &Server, agent: &mut AgentSession) -> std::io::Result<()> {
+    serve_authed(server, agent, None)
+}
+
+/// Serve until killed, requiring `Bearer <token>` when one is configured.
+///
+/// # Errors
+/// Propagates the first I/O error from the accept loop.
+pub fn serve_authed(
+    server: &Server,
+    agent: &mut AgentSession,
+    token: Option<&str>,
+) -> std::io::Result<()> {
     loop {
-        serve_once(server, agent)?;
+        serve_once_authed(server, agent, token)?;
     }
 }
 

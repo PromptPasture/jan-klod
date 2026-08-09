@@ -169,12 +169,14 @@ extensions:
   # ---- Network API surfaces ----
   # NOTE: there is no `api.*` extension. The REST surface is built into the core
   # binary and started with `jan-klod-gateway serve --bind <addr>`; an entry here
-  # would resolve to an `ext/api-rest.wasm` that does not exist. The block that
-  # used to sit here advertised `bind:` and `api-key:` — neither was read by
-  # anything, and the second was actively misleading: **the REST surface has no
-  # authentication**. Keep it on loopback. Binding it to a routable address
-  # exposes an unauthenticated agent that can read and write your workspace; the
-  # gateway warns if you do.
+  # would resolve to an `ext/api-rest.wasm` that does not exist.
+  #
+  # Authentication is off unless JAN_KLOD_TOKEN is set in the gateway's
+  # environment. Set it and every route except /health requires
+  # `Authorization: Bearer <token>`; the TUI reads the same variable and sends it.
+  # Unset, the surface is open — fine on the default loopback bind, and the
+  # gateway warns when you bind elsewhere without one. The key lives in the
+  # environment rather than here: a secret in a config file ends up in issues.
 
   # ---- Chat platform integrations ----
   # NOTE: likewise host-side, started with `jan-klod-gateway telegram`. The bot
