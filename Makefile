@@ -148,6 +148,8 @@ harness: extensions
 #   provider_chain  — the `providers:` list actually orders the fallback chain.
 #   docs_match_config— the README/landing page name the API key the shipped
 #                     config actually reads (the first five minutes work).
+#   installed_layout— a real bin/+share/ install, started the way the UI starts
+#                     it, from a directory that is not a checkout.
 #   jan-klod        — a UI client drives core over REST.
 # The Go supervisor's flip/health/rollback cycle is covered by `make test`.
 #
@@ -162,6 +164,7 @@ gate: extensions
 		--test gate --test persistence --test api_rest --test api_prompt --test telegram \
 		--test shipped_defaults --test provider_chain --test tool_fetch \
 		--test classifier --test session_memory --test docs_match_config \
+		--test installed_layout \
 		--test host_fs --test host_process --test tool_fleet --test tool_wiring
 	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up host_fs host_process
 	cd $(CORE) && cargo test -p jan-klod
