@@ -27,7 +27,7 @@ curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/
 ## Quick start
 
 ```sh
-export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
 jan-klod my-session
 ```
 
