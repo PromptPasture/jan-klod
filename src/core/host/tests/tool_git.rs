@@ -45,10 +45,10 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
     std::fs::create_dir_all(&workspace_dir).unwrap();
     let _guard = common::TempDir(workspace_dir.clone());
 
-    if !git(&workspace_dir, &["init", "--quiet"]) {
-        eprintln!("skipping: git is not available");
+    if !common::tool_available("git") {
         return;
     }
+    assert!(git(&workspace_dir, &["init", "--quiet"]), "git init succeeds");
     // A committer identity, set locally so the test never depends on (or touches)
     // the machine's global git config.
     git(&workspace_dir, &["config", "user.email", "test@example.com"]);

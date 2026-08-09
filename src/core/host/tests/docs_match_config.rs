@@ -173,6 +173,49 @@ fn the_installer_asks_for_arch_names_the_release_actually_builds() {
     }
 }
 
+/// No test may skip except through the shared policy.
+///
+/// A skipped test reports as passing. That is tolerable when the skip is
+/// governed — `JK_REQUIRE_GUESTS` turns it into a failure wherever the
+/// prerequisite is meant to be present — and corrosive otherwise, because the
+/// test occupies the space where a real check would be while proving nothing.
+///
+/// This repository learned that three times in a week: a broken assertion sat
+/// green in `shipped_defaults` because `ext/` was empty; a new suite reported
+/// three passes in 0.00 s on its first run for the same reason; and the
+/// pre-commit hook deleted `ext/` before testing, so roughly thirty component
+/// tests were no-ops on every commit while it printed success. Each was found by
+/// eye. This one is found by the suite.
+#[test]
+fn every_test_that_skips_does_so_through_the_shared_policy() {
+    let tests = common::repo_root().join("src/core/host/tests");
+    let mut offenders = Vec::new();
+
+    for entry in std::fs::read_dir(&tests).expect("the test directory is readable").flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("a test file is readable");
+        for (line_no, line) in source.lines().enumerate() {
+            // The policy helpers own the word; anywhere else it is a bare skip.
+            if line.contains("skipping") && !line.contains("common::") {
+                let file = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                offenders.push(format!("{file}:{}: {}", line_no + 1, line.trim()));
+            }
+        }
+    }
+    // `common/mod.rs` is where the policy lives, so its own messages are the point.
+    offenders.retain(|o| !o.starts_with("mod.rs"));
+
+    assert!(
+        offenders.is_empty(),
+        "these skip without going through `common::guests_staged` / \
+         `common::tool_available`, so they cannot be made to fail:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// The parser has to actually distinguish enabled from disabled, or the checks
 /// above pass for the wrong reason.
 #[test]

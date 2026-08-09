@@ -54,6 +54,32 @@ pub fn guests_staged(guests: &[&str]) -> bool {
     false
 }
 
+/// Whether an external program a test needs is on `PATH`.
+///
+/// Same policy as [`guests_staged`], for the same reason: a test that quietly
+/// vanishes because a prerequisite is missing occupies the space where a real
+/// check would be. `tool_git`'s assertions — that the write half of git is not
+/// expressible, that a refused call leaves the repository untouched — are worth
+/// nothing if they silently do not run.
+pub fn tool_available(program: &str) -> bool {
+    let found = std::process::Command::new(program)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if found {
+        return true;
+    }
+    assert!(
+        std::env::var(REQUIRE).is_err(),
+        "{REQUIRE} is set, so this test must not be skipped, but `{program}` is not \
+         on PATH"
+    );
+    eprintln!("skipping: `{program}` is not available");
+    false
+}
+
 /// A canned chat-completions reply, so the routed provider completes offline.
 pub fn canned_http(content: &'static str) -> HttpFn {
     Box::new(move |_m, _u, _h, _b, _t| {
