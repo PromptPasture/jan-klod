@@ -413,12 +413,10 @@ fn drive(
 
 const fn to_gen_phase(phase: Phase) -> g_icept::Phase {
     match phase {
-        Phase::SessionStart => g_icept::Phase::SessionStart,
         Phase::BeforeLoop => g_icept::Phase::BeforeLoop,
         Phase::SelectModel => g_icept::Phase::SelectModel,
         Phase::SelectContext => g_icept::Phase::SelectContext,
         Phase::SelectTools => g_icept::Phase::SelectTools,
-        Phase::OnError => g_icept::Phase::OnError,
         Phase::AfterResponse => g_icept::Phase::AfterResponse,
         Phase::ToolCall => g_icept::Phase::ToolCall,
         Phase::ToolResult => g_icept::Phase::ToolResult,
@@ -429,12 +427,10 @@ const fn to_gen_phase(phase: Phase) -> g_icept::Phase {
 
 const fn from_gen_phase(phase: g_icept::Phase) -> Phase {
     match phase {
-        g_icept::Phase::SessionStart => Phase::SessionStart,
         g_icept::Phase::BeforeLoop => Phase::BeforeLoop,
         g_icept::Phase::SelectModel => Phase::SelectModel,
         g_icept::Phase::SelectContext => Phase::SelectContext,
         g_icept::Phase::SelectTools => Phase::SelectTools,
-        g_icept::Phase::OnError => Phase::OnError,
         g_icept::Phase::AfterResponse => Phase::AfterResponse,
         g_icept::Phase::ToolCall => Phase::ToolCall,
         g_icept::Phase::ToolResult => Phase::ToolResult,
@@ -533,9 +529,6 @@ fn from_gen_request(r: g_icept::PendingRequest) -> intercept::PendingRequest {
 
 fn to_gen_state(state: &HookState) -> g_icept::HookState {
     match state {
-        HookState::SessionStart(s) => g_icept::HookState::SessionStart(g_icept::SessionCtx {
-            session: s.session.clone(),
-        }),
         HookState::BeforeLoop(t) => g_icept::HookState::BeforeLoop(g_icept::UserTurn {
             session: t.session.clone(),
             user_message: t.user_message.clone(),
@@ -543,10 +536,6 @@ fn to_gen_state(state: &HookState) -> g_icept::HookState {
         HookState::SelectModel(r) => g_icept::HookState::SelectModel(to_gen_request(r)),
         HookState::SelectContext(r) => g_icept::HookState::SelectContext(to_gen_request(r)),
         HookState::SelectTools(r) => g_icept::HookState::SelectTools(to_gen_request(r)),
-        HookState::OnError(e) => g_icept::HookState::OnError(g_icept::ErrorInfo {
-            failed_phase: to_gen_phase(e.failed_phase),
-            message: e.message.clone(),
-        }),
         HookState::AfterResponse(r) => g_icept::HookState::AfterResponse(g_icept::RawResponse {
             text: r.text.clone(),
             finish_reason: r.finish_reason.clone(),
@@ -565,9 +554,6 @@ fn to_gen_state(state: &HookState) -> g_icept::HookState {
 
 fn from_gen_state(state: g_icept::HookState) -> HookState {
     match state {
-        g_icept::HookState::SessionStart(s) => HookState::SessionStart(intercept::SessionCtx {
-            session: s.session,
-        }),
         g_icept::HookState::BeforeLoop(t) => HookState::BeforeLoop(intercept::UserTurn {
             session: t.session,
             user_message: t.user_message,
@@ -575,10 +561,6 @@ fn from_gen_state(state: g_icept::HookState) -> HookState {
         g_icept::HookState::SelectModel(r) => HookState::SelectModel(from_gen_request(r)),
         g_icept::HookState::SelectContext(r) => HookState::SelectContext(from_gen_request(r)),
         g_icept::HookState::SelectTools(r) => HookState::SelectTools(from_gen_request(r)),
-        g_icept::HookState::OnError(e) => HookState::OnError(intercept::ErrorInfo {
-            failed_phase: from_gen_phase(e.failed_phase),
-            message: e.message,
-        }),
         g_icept::HookState::AfterResponse(r) => HookState::AfterResponse(intercept::RawResponse {
             text: r.text,
             finish_reason: r.finish_reason,

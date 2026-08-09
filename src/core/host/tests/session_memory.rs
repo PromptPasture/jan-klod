@@ -375,6 +375,22 @@ fn the_model_is_actually_told_which_tools_exist() {
     );
 }
 
+/// Collects the warnings a turn streams, the way the REST surface and TUI do.
+#[derive(Default)]
+struct WarningSink(Vec<String>);
+
+impl jan_klod_core::conductor::EventSink for WarningSink {
+    fn emit(
+        &mut self,
+        event: &jan_klod_core::conductor::Event,
+    ) -> jan_klod_core::conductor::Flow {
+        if let jan_klod_core::conductor::Event::Warning(message) = event {
+            self.0.push(message.clone());
+        }
+        jan_klod_core::conductor::Flow::Continue
+    }
+}
+
 /// A truncated completion reaches the user as a warning, not as a full stop.
 ///
 /// `finish_reason: "length"` was parsed by the provider guest and then thrown
@@ -414,17 +430,7 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     let mut agent = runtime.build_agent(&http).expect("agent boots");
 
     // Collect the streamed events the way the REST surface and TUI do.
-    #[derive(Default)]
-    struct Collect(Vec<String>);
-    impl jan_klod_core::conductor::EventSink for Collect {
-        fn emit(&mut self, event: &jan_klod_core::conductor::Event) -> jan_klod_core::conductor::Flow {
-            if let jan_klod_core::conductor::Event::Warning(message) = event {
-                self.0.push(message.clone());
-            }
-            jan_klod_core::conductor::Flow::Continue
-        }
-    }
-    let mut sink = Collect::default();
+    let mut sink = WarningSink::default();
     let out = agent.run_streaming_headless(&mut sink, "trunc-1", "explain everything");
 
     assert!(

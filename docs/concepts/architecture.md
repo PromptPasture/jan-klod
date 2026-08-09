@@ -200,7 +200,7 @@ and the steering/follow-up queue). The phases, in order:
 Session opens
     │
     ▼
-[phase: session-start]  once/session — load memory, set system prompt
+[phase: select-model]   interceptor-system — set the standing instructions
     │
     ▼
 User query (from an api-*/chat-* driver)
