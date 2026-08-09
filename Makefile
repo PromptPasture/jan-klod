@@ -145,12 +145,13 @@ harness: extensions
 #                     second connection (the permission gate's user-facing half).
 #   shipped_defaults— the repo's real config.yaml, driven through the real UI
 #                     client: what a user gets, not what a test constructs.
+#   provider_chain  — the `providers:` list actually orders the fallback chain.
 #   jan-klod        — a UI client drives core over REST.
 # The Go supervisor's flip/health/rollback cycle is covered by `make test`.
 gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-host \
 		--test gate --test persistence --test api_rest --test api_prompt --test telegram \
-		--test shipped_defaults \
+		--test shipped_defaults --test provider_chain \
 		--test host_fs --test host_process --test tool_fleet --test tool_wiring
 	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up host_fs host_process
 	cd $(CORE) && cargo test -p jan-klod

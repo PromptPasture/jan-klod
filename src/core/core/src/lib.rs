@@ -291,6 +291,9 @@ impl Runtime {
         http_factory: &dyn Fn() -> route::HttpFn,
     ) -> Result<AgentSession, CoreError> {
         let mut providers: Vec<Box<dyn conductor::Completer>> = Vec::new();
+        // Instance ids, parallel to `providers`, so the configured chain can be
+        // matched by name without downcasting a `dyn Completer`.
+        let mut provider_ids: Vec<String> = Vec::new();
         let mut tool_extensions: Vec<tool_host::ToolExtension> = Vec::new();
         let mut skills_extensions: Vec<registry_host::SkillsExtension> = Vec::new();
         let mut mcp_extensions: Vec<registry_host::McpExtension> = Vec::new();
@@ -307,12 +310,15 @@ impl Runtime {
             };
             let config_json = ext.instance.config.to_string();
             match ext.instance.category.as_str() {
-                "provider" => providers.push(Box::new(route::ProviderCompleter::instantiate(
-                    &self.engine,
-                    &ext.instance,
-                    component,
-                    http_factory(),
-                )?)),
+                "provider" => {
+                    providers.push(Box::new(route::ProviderCompleter::instantiate(
+                        &self.engine,
+                        &ext.instance,
+                        component,
+                        http_factory(),
+                    )?));
+                    provider_ids.push(ext.instance.id.clone());
+                }
                 "tool" => tool_extensions.push(tool_host::ToolExtension::instantiate(
                     &self.engine,
                     &ext.instance.id,
@@ -368,6 +374,12 @@ impl Runtime {
                 provider_fn,
             )?));
         }
+
+        // The fallback chain's *order* is what `providers:` configures; without
+        // this the chain was whatever boot order produced (alphabetical), so the
+        // documented "tried top-to-bottom" list had no effect at all.
+        let ordered = order_chain(self.agent.get("providers"), &provider_ids);
+        let providers = reorder(providers, &ordered);
 
         Ok(AgentSession {
             dispatcher: intercept::Dispatcher::new(interceptors),
@@ -723,6 +735,51 @@ fn run_and_persist(
 }
 
 
+/// Resolve the configured fallback chain into an ordering of `ids`.
+///
+/// `chain` is the top-level `providers:` list — `[{provider: openai, …}, …]`.
+/// Returns indices into `ids`, in the order the conductor should try them.
+///
+/// Two rules make this safe to apply to a config that has drifted from the
+/// enabled instance set, which is the normal state of an example config someone
+/// edited:
+///
+/// - **A named provider that is not enabled is skipped, with a warning.** The
+///   shipped config lists `ollama` as a "last resort" nobody has enabled; that
+///   should not be a boot failure, but silence would hide a typo.
+/// - **An enabled provider the list does not mention is kept, at the end.** It is
+///   enabled, so dropping it would be a worse surprise than ordering it last.
+fn order_chain(chain: Option<&serde_json::Value>, ids: &[String]) -> Vec<usize> {
+    let Some(entries) = chain.and_then(serde_json::Value::as_array) else {
+        return (0..ids.len()).collect();
+    };
+    let mut order = Vec::with_capacity(ids.len());
+    for entry in entries {
+        let Some(name) = entry.get("provider").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let wanted = format!("provider.{name}");
+        match ids.iter().position(|id| *id == wanted) {
+            Some(index) if !order.contains(&index) => order.push(index),
+            Some(_) => {}
+            None => eprintln!(
+                "jan-klod: `providers:` names `{name}`, which is not an enabled \
+                 provider — skipping it in the fallback chain"
+            ),
+        }
+    }
+    // Anything enabled but unlisted still runs, after the configured chain.
+    let unlisted: Vec<usize> = (0..ids.len()).filter(|index| !order.contains(index)).collect();
+    order.extend(unlisted);
+    order
+}
+
+/// Reorder `items` by `order` (a permutation of its indices).
+fn reorder<T>(items: Vec<T>, order: &[usize]) -> Vec<T> {
+    let mut slots: Vec<Option<T>> = items.into_iter().map(Some).collect();
+    order.iter().filter_map(|index| slots.get_mut(*index).and_then(Option::take)).collect()
+}
+
 /// Headless driver: no interactive surface, so an `ask` takes the prompt's
 /// `default-answer`.
 struct HeadlessDriver;
@@ -869,6 +926,58 @@ mod tests {
         assert!(section.has("limits.max-tokens"));
         assert!(!section.has("limits.missing"));
         assert!(section.get("nope").is_none());
+    }
+
+    fn ids(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| format!("provider.{n}")).collect()
+    }
+
+    #[test]
+    fn the_configured_chain_sets_the_fallback_order() {
+        // Boot order is alphabetical; the config asks for the reverse.
+        let ids = ids(&["anthropic", "openai"]);
+        let chain = serde_json::json!([{ "provider": "openai" }, { "provider": "anthropic" }]);
+        assert_eq!(order_chain(Some(&chain), &ids), vec![1, 0]);
+    }
+
+    #[test]
+    fn no_chain_keeps_boot_order() {
+        let ids = ids(&["anthropic", "openai"]);
+        assert_eq!(order_chain(None, &ids), vec![0, 1]);
+        // A malformed/empty list is the same as none, not "no providers".
+        assert_eq!(order_chain(Some(&serde_json::json!("nonsense")), &ids), vec![0, 1]);
+    }
+
+    #[test]
+    fn an_enabled_provider_the_chain_omits_still_runs_last() {
+        // Dropping something the user enabled would be a worse surprise than
+        // ordering it after the configured chain.
+        let ids = ids(&["anthropic", "openai"]);
+        let chain = serde_json::json!([{ "provider": "openai" }]);
+        assert_eq!(order_chain(Some(&chain), &ids), vec![1, 0]);
+    }
+
+    #[test]
+    fn a_named_provider_that_is_not_enabled_is_skipped() {
+        // The shipped config lists `ollama` as a last resort nobody enabled.
+        let ids = ids(&["openai"]);
+        let chain = serde_json::json!([{ "provider": "openai" }, { "provider": "ollama" }]);
+        assert_eq!(order_chain(Some(&chain), &ids), vec![0]);
+    }
+
+    #[test]
+    fn a_provider_listed_twice_is_tried_once() {
+        let ids = ids(&["anthropic", "openai"]);
+        let chain =
+            serde_json::json!([{ "provider": "openai" }, { "provider": "openai" }]);
+        assert_eq!(order_chain(Some(&chain), &ids), vec![1, 0]);
+    }
+
+    #[test]
+    fn reorder_applies_the_permutation() {
+        assert_eq!(reorder(vec!["a", "b", "c"], &[2, 0, 1]), vec!["c", "a", "b"]);
+        // Out-of-range indices cannot panic or duplicate an item.
+        assert_eq!(reorder(vec!["a", "b"], &[1, 9, 0]), vec!["b", "a"]);
     }
 
     #[test]

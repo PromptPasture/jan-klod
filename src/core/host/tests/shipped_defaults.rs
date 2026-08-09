@@ -78,8 +78,20 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
 
     // Nothing the shipped config enables may be missing from a built `ext/`: a
     // default that names a component nobody builds is a broken install.
-    let report = runtime.report().to_string();
-    assert!(!report.contains("missing"), "every enabled default must be staged:\n{report}");
+    //
+    // Asserted on the resolved state, not on the rendered report — the report's
+    // summary line says "0 missing", so string-matching it was always true.
+    let absent: Vec<&str> = runtime
+        .extensions()
+        .iter()
+        .filter(|ext| matches!(ext.state, jan_klod_core::LoadState::Missing(_)))
+        .map(|ext| ext.instance.id.as_str())
+        .collect();
+    assert!(
+        absent.is_empty(),
+        "every enabled default must be staged; missing: {absent:?}\n{}",
+        runtime.report()
+    );
 
     // And every one of them must actually instantiate and start. This is the
     // assertion `start_all`'s neutral-linker bug failed for months.
