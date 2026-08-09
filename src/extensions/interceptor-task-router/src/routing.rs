@@ -50,10 +50,24 @@ pub fn parse_task(text: &str, tasks: &[&str]) -> Option<String> {
 /// Pull the model out of a `<provider-instance>/<model>` routing entry.
 #[must_use]
 pub fn model_from_route(route: &str) -> Option<&str> {
-    route
-        .split_once('/')
-        .map(|(_provider, model)| model)
-        .filter(|model| !model.is_empty())
+    let model = route.split_once('/').map_or(route, |(_provider, model)| model);
+    Some(model.trim()).filter(|model| !model.is_empty())
+}
+
+/// The provider name a route names but the runtime cannot honour.
+///
+/// A route may be written `provider/model`, and only the **model** is applied:
+/// the fallback chain is fixed when the agent boots, so setting a model string
+/// does not move the request to a different endpoint. `groq/llama-3.3-70b` sends
+/// `llama-3.3-70b` to whichever provider answers — which is not groq, and will
+/// fail as an unknown model or, worse, quietly resolve to something else.
+///
+/// Returning it lets the caller say so rather than discard it silently, which is
+/// what this did before. Routing to a *provider* needs per-task reordering of the
+/// chain and is not built; a bare model name is the form that means what it says.
+#[must_use]
+pub fn unhonoured_provider(route: &str) -> Option<&str> {
+    route.split_once('/').map(|(provider, _)| provider.trim()).filter(|p| !p.is_empty())
 }
 
 #[cfg(test)]
@@ -77,10 +91,23 @@ mod tests {
     }
 
     #[test]
-    fn model_from_route_splits_provider_and_model() {
+    fn a_route_yields_its_model_in_either_form() {
+        // Bare is the form that means what it says.
+        assert_eq!(model_from_route("gpt-4o"), Some("gpt-4o"));
+        assert_eq!(model_from_route("qwen2.5:7b"), Some("qwen2.5:7b"));
+        // `provider/model` is accepted for the configs that already use it, but
+        // only the model is applied.
         assert_eq!(model_from_route("openai/gpt-4o"), Some("gpt-4o"));
         assert_eq!(model_from_route("ollama/qwen2.5:7b"), Some("qwen2.5:7b"));
-        assert_eq!(model_from_route("no-slash"), None);
         assert_eq!(model_from_route("openai/"), None);
+        assert_eq!(model_from_route("  "), None);
+    }
+
+    #[test]
+    fn a_provider_prefix_is_reported_rather_than_silently_dropped() {
+        // The chain is fixed at boot, so this half cannot be honoured. Saying so
+        // is the difference between a documented limit and a wrong endpoint.
+        assert_eq!(unhonoured_provider("groq/llama-3.3-70b"), Some("groq"));
+        assert_eq!(unhonoured_provider("gpt-4o"), None, "a bare model claims nothing");
     }
 }

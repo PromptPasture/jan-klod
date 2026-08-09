@@ -70,7 +70,10 @@ extensions:
     intent-router:
       enabled: true            # before-loop: simple vs agentic classification
     task-router:
-      enabled: false           # select-model: task-type -> routing (Slice 2d)
+      enabled: false           # select-model: applies the `routing:` table below.
+                               # Off by default: it costs an extra model call per
+                               # turn to classify the task. The routing block does
+                               # nothing until this is on.
     context:
       enabled: true            # select-context: trims the replayed conversation to
                                # the model's window, oldest non-system messages
@@ -222,19 +225,28 @@ providers:
   - provider: openai
   - provider: ollama          # local last resort — inert until enabled above
 
-# Task routing: task-type -> <provider-instance>/<model>. Built-in task types
-# are sensible defaults; add your own keys and the classifier picks the closest
-# match at runtime — no code change needed.
+# Task routing: task-type -> model. A classifier picks the closest matching key
+# at runtime, and the chosen model is used for that turn.
+#
+# INERT UNLESS `interceptor.task-router` IS ENABLED (it is off above). Editing
+# this block changes nothing on its own — the interceptor is what reads it, and
+# enabling it costs one extra model call per turn to classify the task.
+#
+# Values are **model names, not providers**. The fallback chain is fixed when the
+# agent boots, so routing cannot send a turn to a different endpoint; a value like
+# `groq/llama-3.3-70b` applies `llama-3.3-70b` to whichever provider answers —
+# which is not groq. The `provider/` form is still accepted (older configs use it)
+# and warns. To prefer a different endpoint, order `providers:` above instead.
 routing:
-  code-generation:  openai/gpt-4o
-  code-review:      openai/gpt-4o
-  file-edit:        openai/gpt-4o
-  reasoning:        openai/gpt-4o
-  planning:         openai/gpt-4o
-  web-search:       openai/gpt-4o-mini
-  research:         openai/gpt-4o-mini
-  chat:             openai/gpt-4o-mini
-  clarification:    openai/gpt-4o-mini
-  agent-delegation: openai/gpt-4o
+  code-generation:  gpt-4o
+  code-review:      gpt-4o
+  file-edit:        gpt-4o
+  reasoning:        gpt-4o
+  planning:         gpt-4o
+  web-search:       gpt-4o-mini
+  research:         gpt-4o-mini
+  chat:             gpt-4o-mini
+  clarification:    gpt-4o-mini
+  agent-delegation: gpt-4o
   # user-defined example:
-  # data-analysis:  groq/llama-3.3-70b
+  # data-analysis:  gpt-4o-mini

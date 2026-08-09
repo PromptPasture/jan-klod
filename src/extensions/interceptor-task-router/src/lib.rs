@@ -139,6 +139,19 @@ mod component {
                 return Ok(Decision::Proceed);
             };
 
+            if let Some(provider) = routing::unhonoured_provider(route) {
+                // Said out loud rather than dropped: the chain is fixed at boot,
+                // so this names an endpoint the request will not go to.
+                log(
+                    LogLevel::Warn,
+                    &format!(
+                        "route `{route}` names provider `{provider}`, which routing \
+                         cannot select — only the model is applied, and it goes to \
+                         whichever provider the fallback chain reaches. Use a bare \
+                         model name, or order `providers:` instead."
+                    ),
+                );
+            }
             log(LogLevel::Info, &format!("task={task} -> model={model}"));
             request.model = Some(model.to_string());
             Ok(Decision::Replace(HookState::SelectModel(request)))
