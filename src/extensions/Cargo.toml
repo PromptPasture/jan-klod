@@ -13,6 +13,7 @@ members = [
     "interceptor-tool-selector",
     "interceptor-context",
     "interceptor-task-router",
+    "interceptor-system",
     "tool-proc-probe",
     "tool-fs",
     "tool-shell",

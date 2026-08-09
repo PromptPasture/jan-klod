@@ -1,0 +1,18 @@
+[package]
+name = "interceptor-system"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "system-prompt interceptor: prepends the standing instructions a turn is run under, at select-model so the context budget accounts for them."
+
+[lib]
+# A reactor component: exports interceptor-world, no `main`.
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

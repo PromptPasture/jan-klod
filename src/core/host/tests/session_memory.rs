@@ -190,3 +190,88 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
         "the most recent turns are kept: {messages:?}"
     );
 }
+
+/// A config that also enables the system-prompt interceptor, so the assembled
+/// request is the one a shipped install produces.
+fn write_config_with_system(dir: &std::path::Path, prompt: &str) -> std::path::PathBuf {
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "
+extensions:
+  store:
+    sqlite:
+      enabled: true
+      path: {}
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    intent-router:
+      enabled: true
+    system:
+      enabled: true
+{prompt}
+",
+            dir.join("jan-klod.db").display()
+        ),
+    )
+    .unwrap();
+    config
+}
+
+/// The `role` of every message in the last recorded request.
+fn last_roles(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> Vec<String> {
+    let recorded = seen.lock().unwrap();
+    let last = recorded.last().expect("the provider was called").clone();
+    drop(recorded);
+    last["messages"]
+        .as_array()
+        .expect("a messages array")
+        .iter()
+        .map(|m| m["role"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+#[test]
+fn the_model_is_told_what_it_is_before_anything_else() {
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-system.wasm"]) {
+        return;
+    }
+    let ext_dir = common::repo_root().join("ext");
+    let dir = std::env::temp_dir().join(format!("jk-system-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    let config = write_config_with_system(&dir, "      prompt: \"you are a test agent\"");
+
+    let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&seen);
+    let factory = move || recording_http(&recorded);
+    let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+
+    // A prompt the intent router sends down the agentic path, where request
+    // shaping (and therefore this interceptor) runs.
+    agent.run("sys-1", "read src/main.rs and then add a test for it");
+    assert_eq!(
+        last_roles(&seen).first().map(String::as_str),
+        Some("system"),
+        "the instructions come first: {:?}",
+        last_messages(&seen)
+    );
+    assert_eq!(last_messages(&seen).first().map(String::as_str), Some("you are a test agent"));
+
+    // A second turn must not accumulate a second copy.
+    agent.run("sys-1", "now also update the docs for it");
+    let roles = last_roles(&seen);
+    assert_eq!(
+        roles.iter().filter(|r| *r == "system").count(),
+        1,
+        "exactly one system message per request: {roles:?}"
+    );
+    assert_eq!(roles.first().map(String::as_str), Some("system"), "still first: {roles:?}");
+}

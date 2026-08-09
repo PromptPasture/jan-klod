@@ -121,6 +121,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "interceptor-system"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "interceptor-task-router"
 version = "0.1.0"
 dependencies = [

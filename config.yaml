@@ -78,6 +78,12 @@ extensions:
                                # session's history — without it a long session
                                # grows until the provider rejects the request.
       # context-tokens: 8000   # budget; default suits a small local model
+    system:
+      enabled: true            # select-model: prepends the standing instructions
+                               # the turn runs under. On by default — without it
+                               # no system message reaches the model at all.
+      # prompt: |              # replaces the built-in text; empty string = none
+      #   You are a terse reviewer. Never write files.
     tool-selector:
       enabled: true            # select-tools: expose the active tool set (Slice 2d).
                                # On by default: without it the enabled tool.* below
