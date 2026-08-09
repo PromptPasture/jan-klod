@@ -24,10 +24,29 @@ mkdir -p "$DIR/ext"
 cp "$GATEWAY_BIN" "$DIR/jan-klod-gateway"
 cp "$UI_BIN" "$DIR/jan-klod"
 cp "$CONFIG" "$DIR/config.yaml"
-# Copy staged guests, if any (a bundle with none still boots headless).
+# Copy staged guests.
 if [ -d "$EXT_DIR" ]; then
 	find "$EXT_DIR" -maxdepth 1 -name '*.wasm' -exec cp {} "$DIR/ext/" \;
 fi
+
+# Verify the assembled bundle before tarring it. A missing guest is otherwise a
+# *silent* degradation: the runtime skips what it cannot find, so a bundle built
+# without `make ext` (or with one guest that failed to compile) would ship, boot
+# happily, and just be less capable than its own config claims. The core binary
+# does the checking — it already owns config resolution, so the release gate uses
+# the real resolver rather than a second, drifting copy of it in shell.
+#
+# The env vars are placeholders: `verify` only resolves and starts extensions, and
+# no provider call is made, but config expansion must not fail on an unset key.
+( cd "$DIR" && OPENAI_API_KEY="${OPENAI_API_KEY:-unset}" \
+	ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-unset}" \
+	GROQ_API_KEY="${GROQ_API_KEY:-unset}" \
+	SEARCH_API_KEY="${SEARCH_API_KEY:-unset}" \
+	./jan-klod-gateway verify config.yaml ext >/dev/null ) || {
+	echo "bundle: FAILED — the assembled bundle is incomplete (see above)" >&2
+	echo "bundle: run 'make ext' so every guest the config enables is staged" >&2
+	exit 1
+}
 
 cat > "$DIR/README.md" <<EOF
 # jan-klod ${VERSION} (${OS}-${ARCH})

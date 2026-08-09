@@ -1359,6 +1359,7 @@ dependencies = [
 name = "jan-klod-host"
 version = "0.1.0"
 dependencies = [
+ "jan-klod",
  "jan-klod-config",
  "jan-klod-core",
  "serde_json",

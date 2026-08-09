@@ -6,6 +6,7 @@
 //! Usage:
 //!   `jan-klod [config-path] [ext-dir]`            — boot + print the plan
 //!   `jan-klod serve [config-path] [ext-dir] [bind]` — boot + serve REST turns
+//!   `jan-klod verify [config-path] [ext-dir]`     — check the install, then exit
 //!
 //!   config-path  path to config.yaml   (default: config.yaml)
 //!   ext-dir      directory of *.wasm    (default: ext)
@@ -21,7 +22,60 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("serve") => serve(&args[1..]),
         Some("telegram") => telegram(&args[1..]),
+        Some("verify") => verify(&args[1..]),
         _ => boot_plan(&args),
+    }
+}
+
+/// Check that an install is complete: every extension the config enables resolves
+/// to a component that is present and instantiates. Prints the plan and exits
+/// non-zero if anything is missing or fails to start.
+///
+/// This exists because "the component is not there" is otherwise a *silent*
+/// degradation — the runtime skips what it cannot find, so a bundle assembled
+/// without a guest, or a config naming one nobody built, starts happily and is
+/// merely less capable than it claims. `bundle.sh` runs this against the assembled
+/// bundle so a broken one cannot be released, and a user can run it to answer
+/// "why is that tool not working?".
+fn verify(args: &[String]) -> ExitCode {
+    let config_path = arg(args, 0, "config.yaml");
+    let ext_dir = arg(args, 1, "ext");
+
+    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("jan-klod: boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("{}", runtime.report());
+
+    let missing: Vec<&str> = runtime
+        .extensions()
+        .iter()
+        .filter(|ext| matches!(ext.state, jan_klod_core::LoadState::Missing(_)))
+        .map(|ext| ext.instance.id.as_str())
+        .collect();
+    if !missing.is_empty() {
+        eprintln!(
+            "jan-klod: {} enabled extension(s) missing from {ext_dir}/: {}",
+            missing.len(),
+            missing.join(", ")
+        );
+        return ExitCode::FAILURE;
+    }
+
+    // Present is not the same as working: a component that cannot be instantiated
+    // or refuses to start would fail at the first turn instead of here.
+    match runtime.start_all() {
+        Ok(started) => {
+            println!("verified: {} extension(s) start cleanly", started.len());
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("jan-klod: start failed: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

@@ -26,6 +26,13 @@ wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 jan-klod-config = { path = "../config" }
 serde_json.workspace = true
+# The shipped-defaults gate drives core through the *real* UI client library
+# rather than a hand-rolled HTTP client, so the test exercises the same code a
+# user's TUI runs. Test-only: the `jan-klod` binary does not depend on the UI.
+# Renamed: `provider_probe`'s generated WIT bindings already occupy the
+# `jan_klod` namespace in this crate, so the client is imported as
+# `jan_klod_client` to keep the two unambiguous.
+jan-klod-client = { package = "jan-klod", path = "../ui" }
 
 [lints]
 workspace = true

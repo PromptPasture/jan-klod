@@ -58,7 +58,7 @@ jan-klod-gateway serve config.yaml ext
 
 Type a message and press **Enter** to send it. The model's response streams in token by token. Press **Esc** to quit.
 
-## 5. Ask it to do something
+## 4. Ask it to do something
 
 ```
 > Read src/main.rs and summarize what it does
@@ -89,6 +89,18 @@ does not become permission to write `/etc/passwd`.
 each line with an **anchor** (a hash of the line's position and text), and edits name
 those anchors. If the file changed since the model looked, the anchors no longer match
 and the edit is refused rather than applied to the wrong lines.
+
+## 5. Check the install
+
+If a tool seems missing, ask the runtime what it actually loaded:
+
+```sh
+jan-klod-gateway verify config.yaml ext
+```
+
+It resolves every extension your config enables, reports anything absent from
+`ext/`, then starts them all — exiting non-zero if any part of the install is
+incomplete. The release bundles are built through the same check.
 
 ## 6. Resume a session
 
