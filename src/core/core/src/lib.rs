@@ -601,6 +601,27 @@ impl AgentSession {
         )
     }
 
+    /// A non-streaming turn using the session's own tool fleet, with `driver`
+    /// answering any interceptor `ask` — the entry a chat surface uses, where
+    /// there is no event stream but there *is* someone to ask.
+    pub fn run_with_driver(
+        &mut self,
+        driver: &mut dyn intercept::Driver,
+        session: &str,
+        message: &str,
+    ) -> conductor::RunResult {
+        run_and_persist(
+            &mut self.dispatcher,
+            &mut self.providers,
+            &self.store,
+            &mut self.tools,
+            driver,
+            &mut conductor::NoSink,
+            session,
+            message,
+        )
+    }
+
     /// Streaming turn using the session's own tool fleet, with `driver` answering
     /// any interceptor `ask` — the entry the REST surface's SSE handler uses.
     ///
