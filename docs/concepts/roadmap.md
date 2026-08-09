@@ -224,7 +224,7 @@ routed I/O: file/exec tools go through `host-fs`/`host-process`, never raw OS.
 |---|---|
 | `host-fs` | read *(built)*, write *(built)*, grep *(built, tree-wide)*, **edit** *(built)*, **find/glob** *(built)*, ast-edit, ast-grep, checkpoint |
 | `host-process` | **bash/shell** *(built)*, **git** *(built, read-only)*, **eval (code exec)**, ssh, job, lsp, debug (dap), browser |
-| `host-http` (have it) | fetch, web-search |
+| `host-http` (have it) | **fetch** *(built)*, web-search |
 | none / local | bm25 local search |
 
 Tools are advertised to the loop at `select-tools` (`interceptor-tool-selector`),

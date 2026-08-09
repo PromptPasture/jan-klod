@@ -319,13 +319,26 @@ impl Runtime {
                     )?));
                     provider_ids.push(ext.instance.id.clone());
                 }
-                "tool" => tool_extensions.push(tool_host::ToolExtension::instantiate(
-                    &self.engine,
-                    &ext.instance.id,
-                    component,
-                    workspace.clone(),
-                    process.clone(),
-                )?),
+                "tool" => {
+                    // Egress is granted per instance, never by default: a tool
+                    // that never asked for the network must not have it, the same
+                    // way `host-fs` needs a workspace and `host-process` needs
+                    // `execution:`.
+                    let network = ext
+                        .instance
+                        .config
+                        .get("network")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    tool_extensions.push(tool_host::ToolExtension::instantiate_with_http(
+                        &self.engine,
+                        &ext.instance.id,
+                        component,
+                        workspace.clone(),
+                        process.clone(),
+                        network.then(|| http_factory()),
+                    )?);
+                }
                 "registry" if ext.instance.kind == "skills" => {
                     skills_extensions.push(registry_host::SkillsExtension::instantiate(
                         &self.engine,

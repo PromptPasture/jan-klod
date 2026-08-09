@@ -124,8 +124,24 @@ extensions:
       enabled: false           # run ANY command through host-process. Needs
                                # `execution:` below. Off by default: unlike
                                # tool.git, the command comes from the model.
+    fetch:
+      enabled: false           # GET a public http(s) URL as text (docs, an error
+                               # page). OFF by default on purpose: a fetch is a
+                               # read, but the URL is also an exfiltration channel
+                               # — path and query carry whatever the model puts
+                               # there, so a prompt-injected turn can post your
+                               # workspace out one request at a time. Private,
+                               # loopback and link-local addresses are refused
+                               # even when enabled; `allow-private: true` opts
+                               # into your own intranet.
+      network: true            # grants this tool outbound HTTP. Tools get no
+                               # egress unless their entry says so, so a file tool
+                               # cannot start making requests.
+      # allow-private: false
     web-search:
-      enabled: false
+      enabled: false           # no component implements this yet — the entry is a
+                               # placeholder, and `jan-klod verify` will report it
+                               # missing if you enable it.
       base-url: http://localhost:8080/search
       api-key: ${SEARCH_API_KEY}
 

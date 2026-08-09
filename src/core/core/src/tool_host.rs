@@ -37,6 +37,14 @@ struct ToolHost {
     workspace: Option<Workspace>,
     /// The bounded command runner (default-deny unless enabled) (`host-process`).
     process: ProcessRunner,
+    /// Outbound HTTP, or `None` for default-deny (`host-http`).
+    ///
+    /// `tool-world` imports `host-http`, but a tool having *access to the
+    /// interface* and a deployment having *granted egress* are different things:
+    /// a file tool that suddenly makes network calls is exactly what a sandbox is
+    /// for. So this is `None` unless the instance's config opts in, the same shape
+    /// as `workspace` for `host-fs` and `process` for `host-process`.
+    http: Option<crate::route::HttpFn>,
 }
 
 impl WasiView for ToolHost {
@@ -72,10 +80,32 @@ impl g_config::Host for ToolHost {
 impl g_http::Host for ToolHost {
     fn fetch(
         &mut self,
-        _request: g_http::HttpRequest,
+        request: g_http::HttpRequest,
     ) -> Result<g_http::HttpResponse, g_http::HttpError> {
-        // Outbound HTTP is injected per-deployment where needed; unused by fs tools.
-        Err(g_http::HttpError::Backend)
+        let Some(client) = &self.http else {
+            // Default-deny: the tool was not granted egress.
+            return Err(g_http::HttpError::Backend);
+        };
+        let headers: Vec<(String, String)> =
+            request.headers.into_iter().map(|h| (h.name, h.value)).collect();
+        match client(
+            &request.method,
+            &request.url,
+            &headers,
+            request.body.as_deref(),
+            request.timeout_ms,
+        ) {
+            Ok(response) => Ok(g_http::HttpResponse {
+                status: response.status,
+                headers: response
+                    .headers
+                    .into_iter()
+                    .map(|(name, value)| g_http::HttpHeader { name, value })
+                    .collect(),
+                body: response.body,
+            }),
+            Err(_) => Err(g_http::HttpError::ConnectionFailed),
+        }
     }
 }
 
@@ -155,6 +185,25 @@ impl ToolExtension {
         workspace: Option<Workspace>,
         process: ProcessRunner,
     ) -> Result<Self, CoreError> {
+        Self::instantiate_with_http(engine, id, component, workspace, process, None)
+    }
+
+    /// Instantiate a tool **with outbound HTTP granted** (`http = Some(client)`).
+    ///
+    /// Separate from [`Self::instantiate`] so granting egress is something a
+    /// caller does on purpose: the default stays no-network, and only an instance
+    /// whose config asks for it gets a client.
+    ///
+    /// # Errors
+    /// Returns a [`CoreError`] if wiring, instantiation, or lifecycle fails.
+    pub fn instantiate_with_http(
+        engine: &Engine,
+        id: &str,
+        component: &Component,
+        workspace: Option<Workspace>,
+        process: ProcessRunner,
+        http: Option<crate::route::HttpFn>,
+    ) -> Result<Self, CoreError> {
         let mut linker: Linker<ToolHost> = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
         g_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
@@ -169,6 +218,7 @@ impl ToolExtension {
             component_id: id.to_string(),
             workspace,
             process,
+            http,
         };
         let mut store = Store::new(engine, host);
         let world = bind::ToolWorld::instantiate(&mut store, component, &linker)

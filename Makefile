@@ -158,7 +158,7 @@ gate: export JK_REQUIRE_GUESTS = 1
 gate: extensions
 	cd $(CORE) && cargo test -p jan-klod-host \
 		--test gate --test persistence --test api_rest --test api_prompt --test telegram \
-		--test shipped_defaults --test provider_chain \
+		--test shipped_defaults --test provider_chain --test tool_fetch \
 		--test host_fs --test host_process --test tool_fleet --test tool_wiring
 	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up host_fs host_process
 	cd $(CORE) && cargo test -p jan-klod

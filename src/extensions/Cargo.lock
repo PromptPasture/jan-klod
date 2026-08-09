@@ -311,6 +311,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tool-fetch"
+version = "0.1.0"
+dependencies = [
+ "guest-fs",
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "tool-find"
 version = "0.1.0"
 dependencies = [

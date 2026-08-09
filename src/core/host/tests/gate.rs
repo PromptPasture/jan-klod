@@ -145,7 +145,7 @@ impl Driver for ApprovingDriver {
 #[test]
 fn phase2_exit_gate() {
     let ext_dir = common::repo_root().join("ext");
-    if !common::guests_staged(&PHASE2_GUESTS) {
+    if !common::guests_staged(PHASE2_GUESTS) {
         return;
     }
 
@@ -232,7 +232,7 @@ routing:
 #[test]
 fn phase2_gate_react_tool_call_with_permission() {
     let ext_dir = common::repo_root().join("ext");
-    if !common::guests_staged(&PHASE2_GUESTS) {
+    if !common::guests_staged(PHASE2_GUESTS) {
         return;
     }
 
@@ -294,7 +294,7 @@ routing:
 #[test]
 fn phase8_exit_gate_tool_runs_through_the_loop() {
     let ext_dir = common::repo_root().join("ext");
-    if !common::guests_staged(&PHASE8_GUESTS) {
+    if !common::guests_staged(PHASE8_GUESTS) {
         return;
     }
 
