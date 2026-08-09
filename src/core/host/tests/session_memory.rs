@@ -374,3 +374,67 @@ fn the_model_is_actually_told_which_tools_exist() {
         "the schema names `find`'s required argument: {params}"
     );
 }
+
+/// A truncated completion reaches the user as a warning, not as a full stop.
+///
+/// `finish_reason: "length"` was parsed by the provider guest and then thrown
+/// away when the host drained the chunk stream, so an answer the model cut off
+/// mid-sentence was indistinguishable from one it finished — the kind of wrong a
+/// user acts on. This drives the whole path with a canned reply that stops at the
+/// limit.
+#[test]
+fn a_truncated_answer_is_flagged_to_the_client() {
+    if !common::guests_staged(&["provider-openai.wasm"]) {
+        return;
+    }
+    let ext_dir = common::repo_root().join("ext");
+    let dir = std::env::temp_dir().join(format!("jk-truncated-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    let config = write_config(&dir);
+
+    // A reply the model ran out of room on, exactly as an endpoint reports it.
+    let http = || -> HttpFn {
+        Box::new(move |_m, _u, _h, _b, _t| {
+            let body = serde_json::json!({
+                "choices": [{
+                    "message": { "role": "assistant", "content": "the first half of the ans" },
+                    "finish_reason": "length"
+                }]
+            });
+            Ok(WireResponse {
+                status: 200,
+                headers: vec![],
+                body: serde_json::to_vec(&body).unwrap(),
+            })
+        })
+    };
+
+    let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
+    let mut agent = runtime.build_agent(&http).expect("agent boots");
+
+    // Collect the streamed events the way the REST surface and TUI do.
+    #[derive(Default)]
+    struct Collect(Vec<String>);
+    impl jan_klod_core::conductor::EventSink for Collect {
+        fn emit(&mut self, event: &jan_klod_core::conductor::Event) -> jan_klod_core::conductor::Flow {
+            if let jan_klod_core::conductor::Event::Warning(message) = event {
+                self.0.push(message.clone());
+            }
+            jan_klod_core::conductor::Flow::Continue
+        }
+    }
+    let mut sink = Collect::default();
+    let out = agent.run_streaming_headless(&mut sink, "trunc-1", "explain everything");
+
+    assert!(
+        sink.0.iter().any(|w| w.contains("cut off")),
+        "the client is told the answer is incomplete: {:?}",
+        sink.0
+    );
+    // The partial text is still the answer — a cut-off reply beats no reply.
+    assert!(
+        matches!(&out, RunResult::Answered { text, .. } if text.contains("first half")),
+        "the partial answer still comes back: {out:?}"
+    );
+}

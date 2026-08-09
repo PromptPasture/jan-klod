@@ -36,6 +36,29 @@ pub struct Completion {
     pub text: String,
     /// Tool calls the model wants run before it continues.
     pub tool_calls: Vec<ToolCall>,
+    /// Why the model stopped, verbatim from the provider (`stop`, `length`,
+    /// `tool_calls`, …). Empty when the provider did not say.
+    ///
+    /// Carried rather than discarded because `length` means the answer is **cut
+    /// off mid-thought**, and a truncated answer that looks like a finished one is
+    /// the kind of wrong a user acts on. See [`TRUNCATED`].
+    pub finish_reason: String,
+}
+
+/// The `finish-reason`s that mean the model ran out of room rather than finishing.
+///
+/// `length` is the OpenAI-compatible spelling, and what `provider-anthropic`
+/// normalises its `max_tokens` to. The raw `max_tokens` is accepted as well, since
+/// a third-party guest may pass the provider's own wording through rather than
+/// mapping it — a signal this specific should not be lost to a spelling.
+pub const TRUNCATED: [&str; 2] = ["length", "max_tokens"];
+
+impl Completion {
+    /// Whether the model stopped because it ran out of room.
+    #[must_use]
+    pub fn was_truncated(&self) -> bool {
+        TRUNCATED.contains(&self.finish_reason.as_str())
+    }
 }
 
 /// A completion backend the conductor can call. Implemented by the routed
@@ -418,6 +441,14 @@ fn complete_validated(
     let mut attempt_request = request.clone();
     for attempt in 0..=MAX_RETRIES {
         let completion = complete_with_fallback(providers, &attempt_request, sink)?;
+        if completion.was_truncated() {
+            // Not an error: the text so far is real and worth returning. But a
+            // truncated answer presented as a whole one is a wrong the user acts
+            // on, so say it rather than letting the sentence just stop.
+            sink.emit(&Event::Warning(
+                "the model stopped at its token limit — this answer is cut off".to_string(),
+            ));
+        }
         match validate(&completion) {
             Ok(()) => return Ok(completion),
             Err(reason) if attempt == MAX_RETRIES => {
@@ -523,7 +554,11 @@ mod tests {
 
     fn text_provider(id: &str, reply: Result<&str, &str>) -> Box<dyn Completer> {
         let reply = reply
-            .map(|t| Completion { text: t.into(), tool_calls: vec![] })
+            .map(|t| Completion {
+                text: t.into(),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
             .map_err(std::string::ToString::to_string);
         Box::new(ScriptedProvider {
             id: id.into(),
@@ -541,7 +576,7 @@ mod tests {
     }
 
     fn with_tools(text: &str, calls: Vec<ToolCall>) -> Completion {
-        Completion { text: text.into(), tool_calls: calls }
+        Completion { text: text.into(), tool_calls: calls, finish_reason: "stop".into() }
     }
 
     fn bad_call(id: &str, name: &str) -> ToolCall {
@@ -607,7 +642,11 @@ mod tests {
         ]);
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
             id: "p".into(),
-            replies: RefCell::new(VecDeque::from(vec![Ok(Completion { text: "done".into(), tool_calls: vec![] })])),
+            replies: RefCell::new(VecDeque::from(vec![Ok(Completion {
+                text: "done".into(),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })])),
             seen: Rc::clone(&seen),
         })];
         let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut NoSink, "s", "do many things", vec![]);
@@ -880,5 +919,75 @@ mod tests {
             sink.0
         );
         assert!(matches!(sink.0.last(), Some(Event::Done { .. })));
+    }
+
+    /// A provider whose single completion stopped at the token limit.
+    fn truncated_provider() -> Box<dyn Completer> {
+        Box::new(ScriptedProvider {
+            id: "cut".into(),
+            replies: RefCell::new(VecDeque::from(vec![Ok(Completion {
+                text: "the first half of the ans".into(),
+                tool_calls: vec![],
+                finish_reason: "length".into(),
+            })])),
+            seen: Rc::new(RefCell::new(vec![])),
+        })
+    }
+
+    #[test]
+    fn a_truncated_answer_says_so_instead_of_just_stopping() {
+        // The text is real and worth returning — but presented as a finished
+        // answer it is the kind of wrong a user acts on.
+        let mut d = Dispatcher::new(vec![]);
+        let mut providers = vec![truncated_provider()];
+        let mut sink = RecordingSink::default();
+        let out =
+            run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut sink, "s", "hi", vec![]);
+
+        assert!(
+            sink.0.iter().any(|e| matches!(e, Event::Warning(w) if w.contains("cut off"))),
+            "the truncation is surfaced: {:?}",
+            sink.0
+        );
+        // Still an answer, not a failure: the partial text is the best available.
+        assert!(
+            matches!(&out, RunResult::Answered { text, .. } if text.contains("first half")),
+            "the partial text is still returned: {out:?}"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_completion_warns_about_nothing() {
+        let mut d = Dispatcher::new(vec![]);
+        let mut providers = vec![text_provider("p", Ok("all of it"))];
+        let mut sink = RecordingSink::default();
+        run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut sink, "s", "hi", vec![]);
+        assert!(
+            !sink.0.iter().any(|e| matches!(e, Event::Warning(_))),
+            "a finished answer is not flagged: {:?}",
+            sink.0
+        );
+    }
+
+    #[test]
+    fn both_spellings_of_the_limit_count_as_truncated() {
+        // `length` is what both first-party guests emit (provider-anthropic maps
+        // Anthropic's `max_tokens` onto it); the raw spelling is accepted too.
+        for reason in TRUNCATED {
+            let completion = Completion {
+                text: "x".into(),
+                tool_calls: vec![],
+                finish_reason: (*reason).to_string(),
+            };
+            assert!(completion.was_truncated(), "`{reason}` is a truncation");
+        }
+        for reason in ["stop", "tool_calls", "tool-calls", ""] {
+            let completion = Completion {
+                text: "x".into(),
+                tool_calls: vec![],
+                finish_reason: reason.to_string(),
+            };
+            assert!(!completion.was_truncated(), "`{reason}` is not a truncation");
+        }
     }
 }

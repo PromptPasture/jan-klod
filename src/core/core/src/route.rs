@@ -270,6 +270,7 @@ impl crate::conductor::Completer for ProviderCompleter {
         // Drain the stream into text + tool calls.
         let mut text = String::new();
         let mut tool_calls = Vec::new();
+        let mut finish_reason = String::new();
         // Ok(None) / Err both end the stream by exiting the while-let.
         while let Ok(Some(chunk)) = iface.call_next_chunk(&mut self.store, handle) {
             match chunk {
@@ -281,11 +282,14 @@ impl crate::conductor::Completer for ProviderCompleter {
                         arguments: call.arguments,
                     });
                 }
-                p_llm::CompletionChunk::Done(_) => break,
+                p_llm::CompletionChunk::Done(reason) => {
+                    finish_reason = reason;
+                    break;
+                }
             }
         }
         let _ = iface.call_close_stream(&mut self.store, handle);
-        Ok(crate::conductor::Completion { text, tool_calls })
+        Ok(crate::conductor::Completion { text, tool_calls, finish_reason })
     }
 }
 
