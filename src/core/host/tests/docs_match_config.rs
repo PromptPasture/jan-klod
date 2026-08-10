@@ -566,17 +566,25 @@ fn no_shell_block_recommends_positional_serve_paths() {
             if !in_shell {
                 continue;
             }
-            let Some(rest) = trimmed.split_once("jan-klod-gateway serve") else { continue };
-            let tail = rest.1.trim();
-            let first = tail.split_whitespace().next().unwrap_or("");
-            assert!(
-                first.is_empty() || first.starts_with("--"),
-                "{name}:{} shows `jan-klod-gateway serve {first}` — a positional path \
-                 overrides the resolution that finds config.yaml beside the installed \
-                 binary, so this command works in a checkout and fails for everyone \
-                 who installed it",
-                line_no + 1
-            );
+            // Every subcommand that accepts `[config] [ext]` positionally, not just
+            // `serve`. The first version of this check named one, and the quickstart
+            // was showing `verify config.yaml ext` two screens further down — the
+            // same footgun, missed because the lint was written around the instance
+            // that prompted it.
+            for sub in ["serve", "verify", "telegram"] {
+                let Some(rest) = trimmed.split_once(&format!("jan-klod-gateway {sub}")) else {
+                    continue;
+                };
+                let first = rest.1.trim().split_whitespace().next().unwrap_or("");
+                assert!(
+                    first.is_empty() || first.starts_with("--"),
+                    "{name}:{} shows `jan-klod-gateway {sub} {first}` — a positional path \
+                     overrides the resolution that finds config.yaml beside the installed \
+                     binary, so this command works in a checkout and fails for everyone \
+                     who installed it",
+                    line_no + 1
+                );
+            }
         }
     }
 }

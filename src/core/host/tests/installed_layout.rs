@@ -284,3 +284,68 @@ extensions:
     // stdout is the answer and nothing else, so a script can pipe it.
     assert!(!stdout.contains('?'), "no prompt text leaked into stdout: {stdout:?}");
 }
+
+/// `verify --live` catches what the offline checks cannot.
+///
+/// Everything `verify` did before was offline — components resolve, instantiate
+/// and start — and all of it passes with a wrong API key, an endpoint that is not
+/// running, a model that does not exist, and a `base-url` egress will refuse.
+/// That is the whole list of things that actually go wrong on a first run, so
+/// "verified" was a claim about the parts nobody has trouble with.
+#[test]
+fn verify_live_reports_a_provider_that_does_not_answer() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let prefix = std::env::temp_dir().join(format!("jk-vlive-{}", std::process::id()));
+    let _guard = common::TempDir(prefix.clone());
+    let gateway = install_into(&prefix);
+    let work = elsewhere(&prefix);
+    let data = prefix.join("share/jan-klod");
+
+    // A port that is real and closed, which is what a stopped local model looks
+    // like — the most common first-run failure there is.
+    let dead = {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("binds");
+        listener.local_addr().expect("addr").port()
+    };
+    std::fs::write(
+        data.join("config.yaml"),
+        format!(
+            "
+extensions:
+  provider:
+    local:
+      enabled: true
+      type: openai
+      base-url: http://127.0.0.1:{dead}/v1
+      model: local
+"
+        ),
+    )
+    .unwrap();
+
+    // Offline verify passes: the component is present and starts.
+    let offline = Command::new(&gateway)
+        .arg("verify")
+        .current_dir(&work)
+        .output()
+        .expect("verify runs");
+    assert!(
+        offline.status.success(),
+        "the offline checks pass even though nothing answers — which is the point: {}",
+        String::from_utf8_lossy(&offline.stderr)
+    );
+
+    let live = Command::new(&gateway)
+        .args(["verify", "--live"])
+        .current_dir(&work)
+        .output()
+        .expect("verify --live runs");
+    let stderr = String::from_utf8_lossy(&live.stderr);
+    assert!(!live.status.success(), "--live fails when the model does not answer");
+    assert!(
+        stderr.contains(&dead.to_string()) && stderr.contains("could not be reached"),
+        "and names the endpoint and the cause: {stderr}"
+    );
+}

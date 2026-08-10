@@ -131,12 +131,19 @@ trusted.
 If a tool seems missing, ask the runtime what it actually loaded:
 
 ```sh
-jan-klod-gateway verify config.yaml ext
+jan-klod-gateway verify --live
 ```
 
 It resolves every extension your config enables, reports anything absent from
 `ext/`, then starts them all — exiting non-zero if any part of the install is
 incomplete. The release bundles are built through the same check.
+
+`--live` then asks the model one question. That part matters: everything above it
+is offline, and passes with a wrong API key, a local server that is not running, a
+model name that does not exist, or a `base-url` egress refuses — which is the whole
+list of things that go wrong on a first run. Drop `--live` in a build step, where
+spending a request would be rude; keep it when you are asking "why doesn't this
+work?".
 
 ## 7. Resume a session
 

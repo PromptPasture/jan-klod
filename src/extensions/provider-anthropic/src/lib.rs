@@ -220,6 +220,29 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     Ok(chunks)
 }
 
+/// A transport failure in words rather than a binding name.
+///
+/// The log line said `http error: HttpError::ConnectionFailed`, which names a
+/// generated Rust variant to somebody reading their terminal. The same class of
+/// leak reached the user through the provider error itself until yesterday; a
+/// binding identifier is never the thing to show.
+const fn describe_http(err: &HttpError) -> &'static str {
+    match err {
+        HttpError::ConnectionFailed => "the endpoint refused the connection or could not be resolved",
+        HttpError::Timeout => "the endpoint did not answer in time",
+        HttpError::TlsError => "TLS negotiation failed",
+        HttpError::InvalidUrl => "the configured URL could not be parsed",
+        HttpError::ClientError(status) => match status {
+            401 | 403 => "the endpoint rejected the credentials",
+            404 => "the endpoint has no such model or route",
+            429 => "the endpoint is rate-limiting requests",
+            _ => "the endpoint rejected the request",
+        },
+        HttpError::ServerError(_) => "the endpoint reported an internal error",
+        HttpError::Backend => "the host could not complete the request",
+    }
+}
+
 const fn map_http_error(err: HttpError) -> ProviderError {
     match err {
         HttpError::ClientError(401 | 403) => ProviderError::AuthFailed,
@@ -307,7 +330,7 @@ impl LlmProvider for Component {
         };
 
         let response = host_http::fetch(&http_request).map_err(|err| {
-            log(LogLevel::Warn, &format!("http error: {err:?}"));
+            log(LogLevel::Warn, &format!("request failed: {}", describe_http(&err)));
             map_http_error(err)
         })?;
         let chunks = parse_response(&response.body)?;

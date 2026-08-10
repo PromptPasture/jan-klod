@@ -54,6 +54,13 @@ stdout is the answer and nothing else, so it pipes. Confirmations are asked on t
 terminal; with stdin closed they take the default, which is a refusal — so a
 scripted `ask` reads and searches but will not write.
 
+If something is not working, one command says why — it starts every extension and
+then asks the model one question:
+
+```sh
+jan-klod-gateway verify --live
+```
+
 See the [quickstart guide](docs/quickstart.md) for a full walkthrough, and the
 [security model](docs/concepts/security-model.md) for what each capability is
 granted and which test proves it.

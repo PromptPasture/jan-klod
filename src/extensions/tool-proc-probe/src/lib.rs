@@ -73,7 +73,7 @@ mod component {
                 .unwrap_or_default();
 
             let exit = host_process::exec(command, &args, None, None).map_err(|err| {
-                log(LogLevel::Warn, &format!("exec {command} failed: {err:?}"));
+                log(LogLevel::Warn, &format!("exec {command} was refused or failed ({err:?})"));
                 ToolError::ExecutionFailed
             })?;
             Ok(exit.stdout)

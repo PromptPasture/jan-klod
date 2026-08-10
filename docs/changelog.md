@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-25
+
+- **Feature**: `verify --live` asks the model one question. Everything `verify` did before was offline — components resolve, instantiate, start — and *all of it passes* with a wrong API key, a local server that is not running, a model name that does not exist, and a `base-url` egress will refuse. That is the entire list of things that go wrong on a first run, so "verified: 6 extension(s) start cleanly" was a claim about the parts nobody has trouble with. Opt-in, because spending a request is a thing someone should choose; headless, because a diagnostic that could be talked into running a tool would be a strange diagnostic.
+- Demonstrated side by side: against a closed port, `verify` exits zero and `verify --live` prints `all providers failed (provider.local: http://127.0.0.1:… could not be reached. Is the server running, is the address right, and is that origin allowed egress? …)`.
+- **Correct**: yesterday's lint on positional paths in shell blocks named `serve` only, because that is the instance that prompted it — and the quickstart was showing `jan-klod-gateway verify config.yaml ext` two screens further down. Same footgun, same failure for anyone who installed the binary. It now covers `serve`, `verify` and `telegram`. This is the third time a check written around one instance missed its own class; the shape to watch for is a literal in the assertion where an enumeration belongs.
+- **Fix**: the guests' log lines said `http error: HttpError::ConnectionFailed`. A generated binding identifier is never the thing to show someone reading their terminal; they now say `request failed: the endpoint refused the connection or could not be resolved`.
+
 ## 2026-08-24
 
 - **Fix**: **the most likely first-run failure explained nothing.** A provider that could not be reached reported `provider error: ProviderError { code: 5, name: "transient", message: "Any other transient error." }` — three problems in one line. A wasm-binding internal reached the user; "transient" invited retrying something that could never succeed; and nothing named the endpoint the reader had to go and look at. I met this message myself two days ago while writing a negative test and read straight past it.

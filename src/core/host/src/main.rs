@@ -147,8 +147,13 @@ impl jan_klod_core::intercept::Driver for TerminalDriver {
 /// bundle so a broken one cannot be released, and a user can run it to answer
 /// "why is that tool not working?".
 fn verify(args: &[String]) -> ExitCode {
-    let config_path = arg_or(args, 0, "config.yaml");
-    let ext_dir = arg_or(args, 1, "ext");
+    // `--live` is opt-in because it spends a request: the offline checks are free
+    // and should stay runnable in a build step, while asking a paid endpoint to say
+    // one word is a thing someone should choose to do.
+    let live = args.iter().any(|arg| arg == "--live");
+    let paths: Vec<String> = args.iter().filter(|arg| !arg.starts_with("--")).cloned().collect();
+    let config_path = arg_or(&paths, 0, "config.yaml");
+    let ext_dir = arg_or(&paths, 1, "ext");
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
@@ -179,10 +184,57 @@ fn verify(args: &[String]) -> ExitCode {
     match runtime.start_all() {
         Ok(started) => {
             println!("verified: {} extension(s) start cleanly", started.len());
+            if live {
+                return verify_live(&runtime);
+            }
+            println!("(add --live to also ask the model one question)");
             ExitCode::SUCCESS
         }
         Err(err) => {
             eprintln!("jan-klod: start failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Ask the configured model one question, and report what happened.
+///
+/// Everything `verify` checked before this was offline: components resolve,
+/// instantiate and start. All of that passes with a wrong API key, an endpoint that
+/// is not running, a model name that does not exist, and a `base-url` egress will
+/// refuse — which is the entire list of things that actually go wrong on a first
+/// run. "verified" was therefore a claim about the parts nobody has trouble with.
+fn verify_live(runtime: &Runtime) -> ExitCode {
+    let policy = runtime.egress_policy();
+    let factory = move || -> HttpFn {
+        let policy = policy.clone();
+        Box::new(move |method, url, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+        })
+    };
+    let mut agent = match runtime.build_agent(&factory) {
+        Ok(agent) => agent,
+        Err(err) => {
+            eprintln!("jan-klod: agent boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let started = std::time::Instant::now();
+    // Headless: an unanswered confirmation takes its default, which is a refusal.
+    // Nothing here needs a tool, and a check that could be talked into running one
+    // would be a strange thing to put in a diagnostic.
+    let outcome = agent.run("verify", "Reply with the single word: ok");
+    let elapsed = started.elapsed();
+    match outcome {
+        jan_klod_core::conductor::RunResult::Answered { text, .. } => {
+            let reply = text.trim();
+            let shown: String = reply.chars().take(60).collect();
+            println!("live: the model answered in {elapsed:?} — {shown:?}");
+            ExitCode::SUCCESS
+        }
+        jan_klod_core::conductor::RunResult::Failed(message) => {
+            eprintln!("live: {message}");
             ExitCode::FAILURE
         }
     }
