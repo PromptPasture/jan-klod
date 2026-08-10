@@ -35,7 +35,12 @@ extensions:
       model: claude-sonnet-4-6
     ollama:
       enabled: false
-      type: ollama        # custom Ollama API -> provider-ollama.wasm
+      # `type: openai`, not `type: ollama`. Ollama serves an OpenAI-compatible
+      # API at /v1, and there is no provider-ollama.wasm — this block named one
+      # for months, so enabling the most common self-hosted setup resolved to a
+      # missing component and left you with no provider at all. No `api-key`
+      # either: the provider only sends an Authorization header when one is set.
+      type: openai
       base-url: http://localhost:11434/v1
       model: qwen2.5:7b
     lm-studio:

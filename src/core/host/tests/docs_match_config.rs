@@ -402,3 +402,62 @@ fn the_security_model_cites_tests_that_exist() {
          quiet, which is the failure mode it exists to prevent"
     );
 }
+
+/// Every `type:` in the shipped config resolves to a component that exists.
+///
+/// `provider.ollama` said `type: ollama`, which resolves to
+/// `provider-ollama.wasm`. There is no such component and never was. Enabling the
+/// single most common self-hosted setup therefore produced a missing component and
+/// no provider at all, and the comment beside it named the file as though it
+/// shipped.
+///
+/// This is the same failure as `extensions.store` advertising `store-postgres`:
+/// a config block is a promise, and an unenabled block's promise is never tested
+/// by anything — which is exactly why it needs a mechanical check rather than a
+/// reader's attention. `every_config_key_is_one_the_runtime_reads` checks the
+/// *keys*; this checks the values that name code.
+#[test]
+fn every_configured_type_names_a_component_that_exists() {
+    let root = common::repo_root();
+    let config = std::fs::read_to_string(root.join("config.yaml")).expect("config is readable");
+    let ext = root.join("ext");
+
+    // `<category>:` at two-space indent, then `type: <name>` deeper in.
+    let mut category = String::new();
+    let mut checked = Vec::new();
+    for line in config.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if indent == 2 {
+            if let Some(name) = trimmed.strip_suffix(':') {
+                category = name.to_string();
+            }
+        }
+        let Some((key, value)) = trimmed.split_once(": ") else { continue };
+        if key != "type" {
+            continue;
+        }
+        // Strip a trailing comment.
+        let kind = value.split('#').next().unwrap_or(value).trim();
+        if kind.is_empty() || category.is_empty() {
+            continue;
+        }
+        let file = format!("{category}-{kind}.wasm");
+        assert!(
+            ext.join(&file).exists(),
+            "config.yaml names `type: {kind}` under `{category}`, which resolves to \
+             {file} — and no such component exists. Enabling that block yields a \
+             missing component and no {category} at all."
+        );
+        checked.push(file);
+    }
+
+    assert!(
+        checked.len() >= 4,
+        "only {} types parsed, so this check went quiet — the config format changed",
+        checked.len()
+    );
+}

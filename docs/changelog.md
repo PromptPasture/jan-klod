@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-20
+
+- **Fix**: **the most common self-hosted setup named a component that has never existed.** `provider.ollama` shipped with `type: ollama`, which resolves to `provider-ollama.wasm`, and the comment beside it asserted that file as though it were there. Enabling it produced a missing component and no provider at all. Ollama serves an OpenAI-compatible API at `/v1`, so `type: openai` is both correct and already working; no `api-key` is needed either, because `provider-openai` sends `Authorization` only when one is set.
+- **Test**: `every_configured_type_names_a_component_that_exists` — a config block is a promise, and an *unenabled* block's promise is tested by nothing, which is exactly why it needs a mechanical check rather than a reader's attention. Same failure as `extensions.store` advertising `store-postgres`. `every_config_key_is_one_the_runtime_reads` checks the keys; this checks the values that name code. Verified red against the original `type: ollama`.
+- **Test**: `local_model.rs` drives a keyless provider on loopback over a **real socket** — every other provider test injects a canned `HttpFn`, which is right for testing the loop and wrong for testing this, because it skips the real HTTP client and the egress policy entirely. It proves three things nothing covered: a provider with no `api-key` boots and completes, no `Authorization` header is invented when none is configured, and the endpoint is reachable *because* a provider's `base-url` is lifted into the egress policy. Verified red on that last point: stop lifting `base-url` and the local model becomes unreachable, which is the concrete argument for the allowance being per-origin rather than a flag.
+
 ## 2026-08-19
 
 - **Fix**: **a refusal told the model nothing to do instead**, so it retried the same call — and every retry is another dialog in front of a person. The message was `tool `edit` denied by user`: true and useless. A denial now says what happened *and* what to do — "Do not repeat the same call. Either continue without it, or explain what you need and let the user decide" — and says something materially different once the refusal is standing, because "ask the user" and "stop asking" are opposite instructions and a model cannot follow both.
