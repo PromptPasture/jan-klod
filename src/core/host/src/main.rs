@@ -153,8 +153,17 @@ fn serve(args: &[String]) -> ExitCode {
         }
     };
 
-    // Live host-http: the provider's outbound calls hit the real network.
-    let factory = || -> HttpFn { Box::new(jan_klod_core::http::fetch) };
+    // Live host-http, bounded by the egress policy: outbound calls reach public
+    // destinations plus the endpoints config names, and nothing else. Handing a
+    // guest `jan_klod_core::http::fetch` directly would let it reach this
+    // gateway's own port, the cloud metadata service, and the LAN.
+    let policy = runtime.egress_policy();
+    let factory = move || -> HttpFn {
+        let policy = policy.clone();
+        Box::new(move |method, url, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+        })
+    };
     let mut agent = match runtime.build_agent(&factory) {
         Ok(agent) => agent,
         Err(err) => {
@@ -206,7 +215,15 @@ fn telegram(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let factory = || -> HttpFn { Box::new(jan_klod_core::http::fetch) };
+    // Same bounded egress as `serve`: a guest reaches public destinations and the
+    // endpoints config names.
+    let policy = runtime.egress_policy();
+    let factory = move || -> HttpFn {
+        let policy = policy.clone();
+        Box::new(move |method, url, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+        })
+    };
     let mut agent = match runtime.build_agent(&factory) {
         Ok(agent) => agent,
         Err(err) => {
@@ -215,7 +232,9 @@ fn telegram(args: &[String]) -> ExitCode {
         }
     };
 
-    // Bridge the telegram poller's fetch to the real host-http client. The read
+    // Bridge the telegram poller's fetch to the real host-http client. This one is
+    // the *host's* own call to api.telegram.org, not a guest's, so it uses the
+    // plain client — which now applies the public-only rule anyway. The read
     // timeout must exceed the server-side long-poll window.
     let fetch = |method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>| {
         let owned: Vec<(String, String)> =

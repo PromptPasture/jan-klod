@@ -16,6 +16,7 @@ mod bindings;
 pub mod conductor;
 pub mod delegate;
 mod host;
+pub mod egress;
 pub mod host_fs;
 pub mod host_process;
 pub mod http;
@@ -209,6 +210,7 @@ impl Runtime {
                         id,
                         component,
                         config_json,
+                        self.egress_policy(),
                     )?;
                     started.push(id.clone());
                     continue;
@@ -233,7 +235,10 @@ impl Runtime {
             }
 
             let section = ConfigSection::new(ext.instance.config.clone());
-            let mut store = Store::new(&self.engine, HostState::new(id.clone(), section));
+            let mut store = Store::new(
+                &self.engine,
+                HostState::new(id.clone(), section).with_egress(self.egress_policy()),
+            );
 
             let world = ExtensionWorld::instantiate(&mut store, component, &self.linker)
                 .map_err(|source| CoreError::Instantiate {
@@ -362,6 +367,7 @@ impl Runtime {
                         &ext.instance.id,
                         component,
                         config_json,
+                        self.egress_policy(),
                     )?);
                 }
                 _ => {}
@@ -440,6 +446,38 @@ impl Runtime {
             tools,
         })
 
+    }
+
+    /// The destinations guests may reach, derived from what the operator already
+    /// wrote down.
+    ///
+    /// Every enabled instance's `base-url` (and an MCP server's `endpoint`) is an
+    /// endpoint the operator chose, so it is allowed even when it is local — which
+    /// is the whole point, because a self-hosted model lives on `127.0.0.1`.
+    /// Everything else is public-only. A guest cannot widen this: the policy is
+    /// built here and closed over by the host's HTTP backend.
+    #[must_use]
+    pub fn egress_policy(&self) -> egress::EgressPolicy {
+        let mut policy = egress::EgressPolicy::public_only();
+        for ext in &self.extensions {
+            for key in ["base-url", "endpoint", "url"] {
+                if let Some(url) = ext.instance.config.get(key).and_then(serde_json::Value::as_str)
+                {
+                    policy = policy.allowing(url);
+                }
+            }
+        }
+        // An explicit escape hatch for anything config does not already name — a
+        // sidecar, a proxy — spelled out one origin at a time rather than as a
+        // switch that opens the machine.
+        if let Some(list) = self.agent.get("network").and_then(|n| n.get("allow")) {
+            for url in list.as_array().into_iter().flatten() {
+                if let Some(url) = url.as_str() {
+                    policy = policy.allowing(url);
+                }
+            }
+        }
+        policy
     }
 
     /// Open the host-side workspace for `host-fs`. Uses the top-level `workspace:`

@@ -73,6 +73,28 @@ pub fn fetch(
     body: Option<&[u8]>,
     timeout_ms: u32,
 ) -> Result<WireResponse, WireError> {
+    fetch_within(&crate::egress::EgressPolicy::public_only(), method, url, headers, body, timeout_ms)
+}
+
+/// As [`fetch`], but the destination must satisfy `policy` first.
+///
+/// This is the function the runtime hands to guests. [`fetch`] keeps the
+/// unparameterised signature for the host's own calls (a probe example, the
+/// `ask` CLI) and applies the default public-only rule, so there is no spelling
+/// of "send anywhere" left in the codebase.
+///
+/// # Errors
+/// The policy's refusal (see [`crate::egress::EgressPolicy::check`]) or any
+/// [`WireError`] from the exchange itself.
+pub fn fetch_within(
+    policy: &crate::egress::EgressPolicy,
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<&[u8]>,
+    timeout_ms: u32,
+) -> Result<WireResponse, WireError> {
+    policy.check(url)?;
     let timeout = if timeout_ms == 0 {
         DEFAULT_TIMEOUT_MS
     } else {

@@ -23,11 +23,19 @@
 //! canonicalise every encoding is a parser that eventually disagrees with the
 //! resolver.
 //!
-//! **What this does not stop:** a public hostname that *resolves* to a private
-//! address (DNS rebinding). Catching that needs the resolved IP, which means
-//! resolving host-side and pinning the connection to that address — neither is
-//! expressible through `host-http`'s URL-in/bytes-out contract today. The guard
-//! is honest about being a literal-address guard, not a destination guard.
+//! **This guard is not the boundary, and never was.** It runs inside the
+//! sandbox. It stops a *confused* model from following a URL into the host's
+//! private space, which is worth doing and is why it stays. It cannot stop a
+//! *component*, because a component that wants to skip a check it performs on
+//! itself simply does not perform it — and this runtime's premise is that it does
+//! not trust what it runs.
+//!
+//! The boundary is host-side, in `core::egress`: `host-http` refuses loopback,
+//! private, link-local and unique-local destinations unless the operator named
+//! that origin, and it resolves hostnames before deciding, so it catches the
+//! public name pointing at `127.0.0.1` that this guard cannot. Until 2026-08-11
+//! there was no host-side check at all and this comment was the whole of the
+//! runtime's SSRF defence.
 //!
 //! ## Why it ships disabled
 //!

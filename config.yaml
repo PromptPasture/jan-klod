@@ -203,6 +203,22 @@ extensions:
 # does not by itself let the model run arbitrary commands — that takes
 # `tool.shell` as well; `tool.git` alone can only run the read-only git
 # subcommands its contract allows.
+# ---- Outbound network ----
+# A component granted `host-http` may reach public destinations, plus every
+# endpoint this file already names (a provider's `base-url`, an MCP server's
+# `endpoint`). Loopback, private, link-local and unique-local addresses are
+# refused otherwise — that is 127.0.0.1 (including this gateway's own port),
+# 169.254.169.254 (the cloud metadata service, which hands out IAM credentials),
+# and everything on your LAN.
+#
+# The rule is per-origin rather than a switch because self-hosting means local
+# models: allowing Ollama on 127.0.0.1:11434 must not also allow the database on
+# 5432. List anything config does not already name, one origin at a time.
+#
+# network:
+#   allow:
+#     - http://127.0.0.1:11434
+
 # ---- Persistence (host-side, not an extension) ----
 # The conversation transcript and every interceptor's granted `host-storage` live
 # in one SQLite file the core owns. It is deliberately not a component: the

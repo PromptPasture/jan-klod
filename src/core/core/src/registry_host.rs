@@ -130,6 +130,13 @@ struct McpHost {
     table: ResourceTable,
     component_id: String,
     config_json: String,
+    /// Destinations this registry may reach.
+    ///
+    /// `registry-mcp` received `host-http` unconditionally while a *tool* had to
+    /// be granted `network: true` for the same capability — and this is the
+    /// component that exists to talk to third-party servers. Its egress is now
+    /// bounded like everyone else's.
+    egress: crate::egress::EgressPolicy,
 }
 
 impl WasiView for McpHost {
@@ -174,7 +181,8 @@ impl mcp_http::Host for McpHost {
     fn fetch(&mut self, request: mcp_http::HttpRequest) -> Result<mcp_http::HttpResponse, mcp_http::HttpError> {
         let headers: Vec<(String, String)> =
             request.headers.into_iter().map(|h| (h.name, h.value)).collect();
-        let result = crate::http::fetch(
+        let result = crate::http::fetch_within(
+            &self.egress,
             &request.method,
             &request.url,
             &headers,
@@ -316,6 +324,7 @@ impl McpExtension {
         id: &str,
         component: &wasmtime::component::Component,
         config_json: String,
+        egress: crate::egress::EgressPolicy,
     ) -> Result<Self, CoreError> {
         let mut linker: Linker<McpHost> = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
@@ -329,6 +338,7 @@ impl McpExtension {
             table: ResourceTable::new(),
             component_id: id.to_string(),
             config_json,
+            egress,
         };
         let mut store = Store::new(engine, host);
         let world = mcp_bind::McpRegistryWorld::instantiate(&mut store, component, &linker)

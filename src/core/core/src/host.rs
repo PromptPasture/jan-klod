@@ -65,17 +65,32 @@ pub struct HostState {
     component_id: String,
     /// This instance's config section.
     section: ConfigSection,
+    /// Destinations this instance may reach through `host-http`.
+    ///
+    /// Carried per state rather than read from a global so the boundary is
+    /// visible at the point the capability is served: a guest's outbound call
+    /// consults the policy the host built for it, and there is no path that
+    /// skips it.
+    egress: crate::egress::EgressPolicy,
 }
 
 impl HostState {
-    /// Build the host state for one instance.
+    /// Build the host state for one instance, reaching only public destinations.
     pub fn new(component_id: impl Into<String>, section: ConfigSection) -> Self {
         Self {
             wasi: WasiCtxBuilder::new().inherit_stdio().build(),
             table: ResourceTable::new(),
             component_id: component_id.into(),
             section,
+            egress: crate::egress::EgressPolicy::public_only(),
         }
+    }
+
+    /// Grant this instance the operator's configured destinations too.
+    #[must_use]
+    pub fn with_egress(mut self, egress: crate::egress::EgressPolicy) -> Self {
+        self.egress = egress;
+        self
     }
 }
 
@@ -140,7 +155,8 @@ impl host_http::Host for HostState {
             .into_iter()
             .map(|h| (h.name, h.value))
             .collect();
-        let result = crate::http::fetch(
+        let result = crate::http::fetch_within(
+            &self.egress,
             &request.method,
             &request.url,
             &headers,
