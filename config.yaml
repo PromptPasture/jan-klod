@@ -194,7 +194,17 @@ extensions:
 
 # The directory the file and execution substrates are jailed to. Every path a
 # tool touches is resolved against this root and anything escaping it is denied.
-# Omit the key to default to $PWD — the repo you launched `jan-klod serve` in.
+#
+# Omit the key and the working directory is adopted — the repo you launched
+# `jan-klod serve` in, which is almost always what you meant. Note that this is a
+# grant with a default, NOT default-deny like `execution:` below: file tools work
+# out of the box. Two roots are never adopted silently, because a jail that wide
+# protects nothing — your home directory (where a shell starts) and a filesystem
+# root. In those, file tools are denied and the reason is printed; name a root
+# here if you truly mean one of them.
+#
+# The adopted root is printed at boot, so what the agent can reach is never
+# something you have to infer.
 # workspace: /path/to/your/repo
 
 # The execution substrate (host-process), used by tool.git and tool.shell.

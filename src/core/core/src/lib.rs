@@ -42,6 +42,36 @@ use jan_klod_config::{Config, ExtensionInstance};
 
 pub use host::{ConfigSection, HostState};
 
+/// The user's home directory, if the environment names one.
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+}
+
+/// Whether `cwd` may be adopted as the workspace with nobody having said so.
+///
+/// `host-fs` is documented as jailed to `workspace:`, "or `$PWD` when it is
+/// absent" — and that default is what makes jan-klod usable without
+/// configuration: the repository you are standing in is the one you mean. But the
+/// jail is only worth something if the root is narrower than the machine, and
+/// nothing checked that. Launched from `/`, the "jail" is the filesystem.
+/// Launched from `$HOME` — which is where a shell starts — it is every document,
+/// key and dotfile the user owns.
+///
+/// So auto-adoption declines those two cases and says why. It is not a security
+/// boundary against a determined operator, who can still name any root
+/// explicitly; it is a guard against the accident of `cd`, which is how this
+/// would actually go wrong.
+fn adoptable_workspace(cwd: &Path, home: Option<&Path>) -> bool {
+    // A filesystem root has no parent.
+    if cwd.parent().is_none() {
+        return false;
+    }
+    if home.is_some_and(|home| home == cwd) {
+        return false;
+    }
+    true
+}
+
 /// Deterministic boot tier for a category. Dependencies boot before dependents:
 /// registries first, then providers, then the managers that consume them, then
 /// leaf surfaces (tools, agents, api, chat).
@@ -485,20 +515,34 @@ impl Runtime {
     /// `None` (default-deny).
     fn open_workspace(&self) -> Option<host_fs::Workspace> {
         let root_owned;
-        let root: &str = if let Some(r) = self.agent.get("workspace").and_then(serde_json::Value::as_str) {
-            r
-        } else {
-            root_owned = std::env::current_dir()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if root_owned.is_empty() {
-                return None;
-            }
-            &root_owned
-        };
+        let root: &str =
+            if let Some(r) = self.agent.get("workspace").and_then(serde_json::Value::as_str) {
+                // Explicit means explicit: an operator who names a root gets it,
+                // including one this would not adopt on its own.
+                r
+            } else {
+                let cwd = std::env::current_dir().ok()?;
+                if !adoptable_workspace(&cwd, dirs_home().as_deref()) {
+                    eprintln!(
+                        "WARN [core] not adopting `{}` as the workspace: it is your home \
+                         directory or a filesystem root, where a path jail protects nothing. \
+                         Start jan-klod in a project directory, or set `workspace:` \
+                         explicitly. Until then file tools are denied.",
+                        cwd.display()
+                    );
+                    return None;
+                }
+                root_owned = cwd.to_string_lossy().into_owned();
+                // Say what the agent can reach. The grant is implicit; the notice
+                // should not be.
+                eprintln!("INFO [core] workspace: {root_owned} (file tools are jailed here)");
+                &root_owned
+            };
         host_fs::Workspace::open(root).map_or_else(
             |_| {
-                eprintln!("WARN [core] workspace `{root}` could not be opened; host-fs is default-deny");
+                eprintln!(
+                    "WARN [core] workspace `{root}` could not be opened; host-fs is denied"
+                );
                 None
             },
             Some,
@@ -1220,6 +1264,27 @@ mod tests {
         assert_eq!(reorder(vec!["a", "b", "c"], &[2, 0, 1]), vec!["c", "a", "b"]);
         // Out-of-range indices cannot panic or duplicate an item.
         assert_eq!(reorder(vec!["a", "b"], &[1, 9, 0]), vec!["b", "a"]);
+    }
+
+    /// The accident this guards against is `cd`, not malice.
+    #[test]
+    fn a_workspace_is_not_adopted_from_home_or_a_root() {
+        let home = PathBuf::from("/Users/someone");
+        // A project directory is adopted: this is what makes the runtime usable
+        // with no configuration at all.
+        assert!(adoptable_workspace(&home.join("code/project"), Some(&home)));
+        assert!(adoptable_workspace(&PathBuf::from("/srv/app"), Some(&home)));
+
+        // The home directory is every document, key and dotfile the user owns,
+        // and it is where a shell starts.
+        assert!(!adoptable_workspace(&home, Some(&home)));
+        // A filesystem root makes the "jail" the machine.
+        assert!(!adoptable_workspace(&PathBuf::from("/"), Some(&home)));
+
+        // With no HOME in the environment, only the root check applies — refusing
+        // everything would break every container that does not set it.
+        assert!(adoptable_workspace(&PathBuf::from("/work"), None));
+        assert!(!adoptable_workspace(&PathBuf::from("/"), None));
     }
 
     #[test]

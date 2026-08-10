@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-14
+
+- **Fix**: **`host-fs` was never default-deny, including in a comment I wrote saying it was.** With `workspace:` absent, `open_workspace` adopts the current working directory. That default is *right* — the repository you are standing in is the one you mean, and it is what makes the runtime usable with no configuration — but it is a grant with a default, not the opt-in `host-process` shape it has been described as. The claim is corrected where it was wrong (`config.yaml` already said `$PWD`; a code comment from 2026-08-10 did not).
+- **Guard**: nothing checked that the adopted root was narrower than the machine. Launched from `/`, the "jail" is the filesystem; launched from `$HOME` — which is where a shell starts — it is every document, key and dotfile the user owns. Those two are no longer adopted silently: file tools are denied and the reason is printed, and an operator who genuinely means one can still name it in `workspace:`. This is a guard against the accident of `cd`, which is how it would actually go wrong, not a boundary against a determined operator.
+- The adopted root is printed at boot. The grant is implicit; the notice should not be.
+
 ## 2026-08-13
 
 - **Fix**: **the confirmation did not say what it was confirming.** The prompt read `Allow tool `edit`? Reason: `edit` is not a known read-only call` — a request to approve a file modification that names neither the file nor the change. Consent without the material facts is not consent, and the only reason to stop and ask is that a person can weigh *this* action. It now reads `Allow `edit` to replace in `main.rs`: "// edited"?`, with `run `cargo test --workspace``, `write 5 B to `a.txt``, and `fetch https://…` for the other shapes.
