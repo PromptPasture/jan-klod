@@ -176,12 +176,20 @@ extensions:
                                # egress unless their entry says so, so a file tool
                                # cannot start making requests.
       # allow-private: false
-    web-search:
-      enabled: false           # no component implements this yet — the entry is a
-                               # placeholder, and `jan-klod verify` will report it
-                               # missing if you enable it.
-      base-url: http://localhost:8080/search
-      api-key: ${SEARCH_API_KEY}
+    # No web-search component exists. The entry used to sit here disabled, with a
+    # note saying so — but a declared instance is a promise the runtime will keep,
+    # and `every_declared_instance_resolves_to_a_component` now enforces that every
+    # one of them resolves. A block that cannot load is not a placeholder, it is a
+    # trap for whoever flips `enabled: true`; the same reasoning retired
+    # `store.postgres` and the `agent`/`api`/`chat` categories. To add one, write
+    # `tool-web-search` against `tool-callable`, grant it `network: true`, and
+    # uncomment:
+    #
+    # web-search:
+    #   enabled: true
+    #   network: true
+    #   base-url: https://api.search.example/v1
+    #   api-key: ${SEARCH_API_KEY}
 
   # ---- AI agent delegation via ACP ----
   # NOTE: inert. `Runtime::build_agent` never instantiates the `agent` category,

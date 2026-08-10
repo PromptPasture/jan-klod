@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-21
+
+- **Correct**: yesterday's new check was **half a check**. It scanned the YAML by hand and matched only explicit `type:` lines — but `type` defaults to the instance name, so thirteen of the fifteen declared blocks relied on the default and went unexamined. Among them: `tool.web-search`, with no component (`tool-web-search.wasm`), sitting disabled behind a comment admitting as much. I found the phantom I was looking for and left the larger hole open.
+- It now asks `jan_klod_config::Config` — the parser the runtime itself uses — so every declared instance is checked against the same `<category>-<kind>` derivation the loader resolves. Shorter, and incapable of drifting from the thing under test. Verified red for both shapes: a wrong explicit `type`, and an implied component with no `type` at all.
+- **Retire**: `tool.web-search` is commented out, with what it would take to add one. A declared block is a promise the runtime will keep; a block that cannot load is not a placeholder but a trap for whoever flips `enabled: true`. The same reasoning retired `store.postgres` and the inert `agent`/`api`/`chat` categories, and the disabled entry with an apologetic note was the pattern all three shared.
+
 ## 2026-08-20
 
 - **Fix**: **the most common self-hosted setup named a component that has never existed.** `provider.ollama` shipped with `type: ollama`, which resolves to `provider-ollama.wasm`, and the comment beside it asserted that file as though it were there. Enabling it produced a missing component and no provider at all. Ollama serves an OpenAI-compatible API at `/v1`, so `type: openai` is both correct and already working; no `api-key` is needed either, because `provider-openai` sends `Authorization` only when one is set.

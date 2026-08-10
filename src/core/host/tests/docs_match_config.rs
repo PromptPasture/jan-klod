@@ -403,61 +403,51 @@ fn the_security_model_cites_tests_that_exist() {
     );
 }
 
-/// Every `type:` in the shipped config resolves to a component that exists.
+/// Every instance the shipped config declares resolves to a component that exists.
 ///
-/// `provider.ollama` said `type: ollama`, which resolves to
-/// `provider-ollama.wasm`. There is no such component and never was. Enabling the
-/// single most common self-hosted setup therefore produced a missing component and
-/// no provider at all, and the comment beside it named the file as though it
-/// shipped.
+/// `provider.ollama` said `type: ollama` → `provider-ollama.wasm`, which has never
+/// existed, so enabling the most common self-hosted setup produced a missing
+/// component and no provider. `tool.web-search` had no `type:` at all, which
+/// defaults to the instance name → `tool-web-search.wasm`, equally absent.
 ///
-/// This is the same failure as `extensions.store` advertising `store-postgres`:
-/// a config block is a promise, and an unenabled block's promise is never tested
-/// by anything — which is exactly why it needs a mechanical check rather than a
-/// reader's attention. `every_config_key_is_one_the_runtime_reads` checks the
-/// *keys*; this checks the values that name code.
+/// A config block is a promise, and an *unenabled* block's promise is tested by
+/// nothing — which is exactly why it needs a mechanical check rather than a
+/// reader's attention. The same failure retired `extensions.store`'s
+/// `store-postgres` and the inert `agent`/`api`/`chat` categories.
+///
+/// This asks the **real parser**, not a hand-rolled scan of the YAML. The first
+/// version read indentation itself and matched only explicit `type:` lines, so it
+/// missed every block relying on the default — thirteen of the fifteen, including
+/// the one that was broken. `jan_klod_config` owns the `<category>-<kind>`
+/// derivation the runtime resolves, so asking it is both shorter and incapable of
+/// drifting from the thing under test.
 #[test]
-fn every_configured_type_names_a_component_that_exists() {
+fn every_declared_instance_resolves_to_a_component() {
     let root = common::repo_root();
-    let config = std::fs::read_to_string(root.join("config.yaml")).expect("config is readable");
+    // Enabled instances get their `${VAR}` expanded, so the parse needs the key
+    // the shipped config asks for. Its value is irrelevant here.
+    std::env::set_var("OPENAI_API_KEY", "placeholder-for-parsing");
+    let config = jan_klod_config::Config::from_path(root.join("config.yaml"))
+        .expect("the shipped config parses");
     let ext = root.join("ext");
 
-    // `<category>:` at two-space indent, then `type: <name>` deeper in.
-    let mut category = String::new();
-    let mut checked = Vec::new();
-    for line in config.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('#') {
-            continue;
-        }
-        let indent = line.len() - line.trim_start().len();
-        if indent == 2 {
-            if let Some(name) = trimmed.strip_suffix(':') {
-                category = name.to_string();
-            }
-        }
-        let Some((key, value)) = trimmed.split_once(": ") else { continue };
-        if key != "type" {
-            continue;
-        }
-        // Strip a trailing comment.
-        let kind = value.split('#').next().unwrap_or(value).trim();
-        if kind.is_empty() || category.is_empty() {
-            continue;
-        }
-        let file = format!("{category}-{kind}.wasm");
-        assert!(
-            ext.join(&file).exists(),
-            "config.yaml names `type: {kind}` under `{category}`, which resolves to \
-             {file} — and no such component exists. Enabling that block yields a \
-             missing component and no {category} at all."
-        );
-        checked.push(file);
-    }
+    let missing: Vec<String> = config
+        .instances
+        .iter()
+        .filter(|instance| !ext.join(instance.component_file()).exists())
+        .map(|instance| format!("{} -> {}", instance.id, instance.component_file()))
+        .collect();
 
     assert!(
-        checked.len() >= 4,
-        "only {} types parsed, so this check went quiet — the config format changed",
-        checked.len()
+        missing.is_empty(),
+        "these config blocks name components that do not exist: {missing:?}. A block \
+         that cannot load is not a placeholder, it is a trap for whoever flips \
+         `enabled: true` — build the component, or comment the block out with a note \
+         saying what it would take."
+    );
+    assert!(
+        config.instances.len() >= 10,
+        "only {} instances parsed, so this check went quiet",
+        config.instances.len()
     );
 }
