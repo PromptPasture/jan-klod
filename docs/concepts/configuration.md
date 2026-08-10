@@ -137,17 +137,35 @@ make config
 
 ## Per-project configuration
 
-In addition to `config.yaml`, Jan-Klod reads from `AGENTS.md` and `.agents/` at the project
-root (or the nearest ancestor directory). This keeps project-specific instructions and skills checked into version control.
+In addition to `config.yaml`, jan-klod reads two things from the **workspace root**:
 
 ```
-AGENTS.md
-.agents/skills/          — project-specific skills loaded at session-start
+AGENTS.md                — project instructions, appended to the system prompt
+.agents/skills/          — project-specific skills, loaded by registry-skills
 ```
 
-The directory is read at the **`session-start` interceptor phase** and does not
-require restarting core. A `.gitignore` entry is recommended for secrets; the
-directory itself should be committed for shared team context.
+`AGENTS.md` is where the conventions you would otherwise repeat every session
+live: which test command to run, what not to touch, how this codebase spells
+things. It is read host-side and handed to `interceptor-system` as config — not by
+granting interceptors filesystem access, because the guest needs one file's
+contents rather than the ability to open files.
+
+It is appended to the standing prompt and **labelled as the project's own**, with
+its authority stated: instructions from a repository can shape how the agent works,
+and cannot grant permissions the sandbox refuses. The two need telling apart —
+otherwise "you may write anywhere" in a checked-in file reads to the model as a
+fact about the runtime. Setting `prompt: ""` switches both off; honouring half of
+an explicit "no system message" would be worse than either answer.
+
+Sent on every turn, so it is capped at 16 kB and truncated with a note rather than
+silently halved.
+
+**The workspace root only** — not the nearest ancestor. An earlier version of this
+page promised ancestor search; climbing above the root is exactly what the path
+jail exists to prevent, and a repository checked out inside another project would
+silently inherit its instructions. This page also described a `session-start`
+interceptor phase, which no longer exists: both files are read when the agent is
+built.
 
 See [Architecture](architecture.md) for the extension taxonomy and
 [Contracts](contracts.md) for the `host-config` interface the sections are

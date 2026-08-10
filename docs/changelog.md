@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-30
+
+- **Feature**: **`AGENTS.md` is read.** `configuration.md` has claimed for months that jan-klod "reads from `AGENTS.md` and `.agents/` at the project root". The `.agents/skills/` half was true; nothing read `AGENTS.md`. It is the file where a user writes the conventions they would otherwise repeat every session — which test command to run, what not to touch — so the claim was worth making true rather than deleting.
+- Read **host-side** and handed to `interceptor-system` as config, not by granting interceptors `host-fs`. The guest needs one file's contents, not the ability to open files; widening the interceptor world would hand that to every decision component, which is a boundary traded for a convenience.
+- Appended and **labelled**, with its authority stated: instructions from a repository can shape how the agent works and cannot grant permissions the sandbox refuses. The two need telling apart — a model that cannot would read "you may write anywhere" in a checked-in file as a fact about the runtime. Capped at 16 kB, since a system prompt is paid for on every turn.
+- **Corrected two claims** on the same page: there is no ancestor search, because climbing above the workspace root is what the path jail exists to prevent (a repo checked out inside another project would silently inherit its instructions); and the `session-start` interceptor phase it cited was retired weeks ago.
+- **Correct**: my first version used `?` on the project argument, so a repository *without* an `AGENTS.md` — the common case — got **no system prompt at all**. An existing integration test caught it by asserting the first message is a `system` one. The guest's own unit tests had covered `resolve` and not the new function; they cover all three combinations now, which is where a five-second check belonged.
+
 ## 2026-08-29
 
 - **Fix**: **a client disconnecting mid-turn wrote a half-finished answer into the durable transcript.** A cancel breaks the loop and returns whatever text is in hand as `Answered`; `run_and_persist` then stores it, and `replay` feeds it to the model next session — so "I will now edit `main.rs`…" is remembered as something the assistant said and finished. Yesterday's cycle-cap fix was the same shape, and this exit shares the harm plus one the cap does not: the transcript outlives the reason the turn stopped.

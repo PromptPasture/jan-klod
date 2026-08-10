@@ -343,6 +343,7 @@ impl Runtime {
 
         // Shared, default-deny substrates for tools (opt-in via config).
         let workspace = self.open_workspace();
+        let project_instructions = self.project_instructions(workspace.as_ref());
         let process = self.open_process_runner(workspace.as_ref());
 
         // Pass 1: providers + tools + registries. (Before interceptors so tool-selector
@@ -432,6 +433,12 @@ impl Runtime {
             let mut config = self.interceptor_config(&ext.instance);
             if let serde_json::Value::Object(map) = &mut config {
                 map.entry("tools").or_insert_with(|| tools_advert.clone());
+                // Same shape as `tools`: the host does the reading it is allowed to
+                // do, and the guest receives data rather than a capability.
+                if let Some(project) = &project_instructions {
+                    map.entry("project-instructions")
+                        .or_insert_with(|| serde_json::Value::String(project.clone()));
+                }
             }
             // Durability is opt-in per instance, and off by default.
             //
@@ -477,6 +484,40 @@ impl Runtime {
             tools,
         })
 
+    }
+
+    /// The project's own instructions, if the workspace has an `AGENTS.md`.
+    ///
+    /// Read **host-side**, and handed to `interceptor-system` as config rather than
+    /// by granting interceptors `host-fs`. The guest needs the *contents* of one
+    /// file, not the ability to open files: widening the interceptor world so a
+    /// decision component could read the disk would trade the boundary for a
+    /// convenience, and every other interceptor would inherit it.
+    ///
+    /// Only the workspace root. `configuration.md` promised "or the nearest
+    /// ancestor directory", and that is a promise not to keep: climbing above the
+    /// root is precisely what the path jail exists to prevent, and a repository
+    /// checked out inside another project would silently inherit its instructions.
+    ///
+    /// Bounded, because a system prompt is paid for on every single turn. A file
+    /// larger than the cap is truncated with a note saying so, rather than
+    /// silently halved or silently dropped.
+    fn project_instructions(&self, workspace: Option<&host_fs::Workspace>) -> Option<String> {
+        /// Generous for conventions, small next to a context window.
+        const MAX_BYTES: usize = 16 * 1024;
+        let text = workspace?.read("AGENTS.md").ok()?;
+        if text.len() <= MAX_BYTES {
+            return Some(text);
+        }
+        let mut cut = MAX_BYTES;
+        while cut > 0 && !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        Some(format!(
+            "{}\n\n[AGENTS.md truncated at {MAX_BYTES} bytes — it is sent with every \
+             turn, so keep it short]",
+            &text[..cut]
+        ))
     }
 
     /// Bounds a turn runs under, from the top-level `limits:` block.

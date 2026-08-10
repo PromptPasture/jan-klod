@@ -438,3 +438,97 @@ fn a_truncated_answer_is_flagged_to_the_client() {
         "the partial answer still comes back: {out:?}"
     );
 }
+
+/// `AGENTS.md` in the workspace reaches the model, labelled as the project's.
+///
+/// `configuration.md` has claimed for months that jan-klod "reads from `AGENTS.md`
+/// and `.agents/` at the project root". `.agents/skills/` was true;
+/// `AGENTS.md` was not read by anything. It is the file where a user writes the
+/// conventions they would otherwise repeat every session — which test command to
+/// run, what not to touch — so the claim was worth making true rather than
+/// deleting.
+///
+/// Read host-side and passed to `interceptor-system` as config, not by granting
+/// interceptors `host-fs`: the guest needs one file's contents, not the ability to
+/// open files, and widening the interceptor world would hand that to every decision
+/// component.
+#[test]
+fn project_instructions_from_agents_md_reach_the_model() {
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-system.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-agentsmd-{}", std::process::id()));
+    let work = dir.join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    std::fs::write(
+        work.join("AGENTS.md"),
+        "Run `cargo nextest run`, never `cargo test`.\nNever touch `vendor/`.\n",
+    )
+    .unwrap();
+
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "
+workspace: {}
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    system:
+      enabled: true
+",
+            work.display()
+        ),
+    )
+    .unwrap();
+
+    let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = std::sync::Arc::clone(&bodies);
+    let factory = move || -> jan_klod_core::route::HttpFn {
+        let seen = std::sync::Arc::clone(&seen);
+        Box::new(move |_m, _u, _h, body, _t| {
+            if let Some(bytes) = body {
+                seen.lock().unwrap().push(String::from_utf8_lossy(bytes).into_owned());
+            }
+            Ok(jan_klod_core::http::WireResponse {
+                status: 200,
+                headers: vec![],
+                body: serde_json::to_vec(&serde_json::json!({
+                    "choices": [{ "message": { "role": "assistant", "content": "ok" },
+                                  "finish_reason": "stop" }]
+                }))
+                .unwrap(),
+            })
+        })
+    };
+
+    let runtime =
+        jan_klod_core::Runtime::boot(&config, common::repo_root().join("ext")).expect("boots");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let _ = agent.run("s", "hello");
+
+    let requests = bodies.lock().unwrap().join("\n");
+    assert!(
+        requests.contains("cargo nextest run"),
+        "the project's own instructions reach the model: {requests}"
+    );
+    // Labelled, because the two have different authority: the standing prompt
+    // describes what the runtime enforces, and a checked-in file is a request from
+    // the repository. A model that cannot tell them apart would read "you may write
+    // anywhere" in AGENTS.md as a fact about the sandbox.
+    assert!(
+        requests.contains("from AGENTS.md"),
+        "and are marked as the project's rather than the runtime's: {requests}"
+    );
+    assert!(
+        requests.contains("cannot grant permissions the sandbox refuses"),
+        "with their authority stated: {requests}"
+    );
+}
