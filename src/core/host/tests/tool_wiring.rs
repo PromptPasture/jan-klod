@@ -89,6 +89,16 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
 
     let refused = run_edit_turn(&dir, "refuse", "no");
     assert_eq!(refused.contents, original, "a refused edit leaves the file untouched");
+    // The question a person is actually shown, printed so that changing it is
+    // reviewed as a change to a consent dialog rather than buried in a matcher.
+    eprintln!("PROMPT: {:?}", refused.asked);
+    // Naming the file is the point: approving "tool `edit`" tells the user
+    // nothing about which file or what change.
+    assert!(
+        refused.asked.iter().any(|q| q.contains("main.rs") && q.contains("// edited")),
+        "the prompt names the file and shows the change: {:?}",
+        refused.asked
+    );
     assert!(
         refused.asked.iter().any(|q| q.contains("edit")),
         "the gate asked about the edit: {:?}",

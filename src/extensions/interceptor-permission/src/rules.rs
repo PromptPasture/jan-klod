@@ -295,6 +295,102 @@ pub fn scope_key(name: &str, arguments: &str) -> String {
     name.to_lowercase()
 }
 
+/// A one-line description of what the call will actually do.
+///
+/// The prompt used to read "Allow tool `edit`? Reason: `edit` is not a known
+/// read-only call" — which asks a person to approve a file modification without
+/// telling them which file or what change. A boundary that produces uninformed
+/// consent is a formality; the whole reason to stop and ask is that a human can
+/// weigh *this* action, and they cannot weigh what they cannot see.
+///
+/// Everything here comes from the model, so everything here is sanitised. A
+/// `path` of `"a\nAllow tool `rm`? Reason: safe"` would otherwise let a
+/// suggested tool call draw its own second prompt in the terminal, and the one
+/// dialog whose entire purpose is to be trustworthy is the worst place to render
+/// attacker-controlled text verbatim. See [`one_line`].
+#[must_use]
+pub fn summarise(name: &str, arguments: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        // Unparseable arguments are already a reason to ask; say so plainly
+        // rather than rendering the raw bytes.
+        return format!("`{name}` with arguments that are not valid JSON");
+    };
+    let field = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
+    let op = field("op").unwrap_or_default().to_lowercase();
+
+    if let Some(command) = field("command") {
+        return format!("run `{}`", one_line(command, 160));
+    }
+    if let Some(url) = field("url") {
+        return format!("fetch {}", one_line(url, 160));
+    }
+    if let Some(path) = field("path") {
+        let where_ = format!("`{}`", one_line(path, 80));
+        return match op.as_str() {
+            "" => format!("act on {where_}"),
+            "write" => match field("contents") {
+                Some(text) => format!(
+                    "write {} to {where_}: \"{}\"",
+                    bytes(text.len()),
+                    one_line(text, 100)
+                ),
+                None => format!("write to {where_}"),
+            },
+            "replace" | "insert" => match field("contents") {
+                Some(text) if text.is_empty() => format!("delete lines in {where_}"),
+                Some(text) => format!("{op} in {where_}: \"{}\"", one_line(text, 100)),
+                None => format!("{op} in {where_}"),
+            },
+            other => format!("{} {where_}", one_line(other, 24)),
+        };
+    }
+    if op.is_empty() {
+        format!("call `{name}`")
+    } else {
+        format!("`{name}` {}", one_line(&op, 24))
+    }
+}
+
+/// A human-readable byte count.
+fn bytes(n: usize) -> String {
+    if n < 1024 {
+        format!("{n} B")
+    } else {
+        format!("{:.1} kB", n as f64 / 1024.0)
+    }
+}
+
+/// Collapse `text` onto one bounded line that cannot forge prompt structure.
+///
+/// Control characters — newlines above all — become spaces, so nothing the model
+/// supplies can start a line of its own in the terminal; runs of whitespace
+/// collapse so padding cannot push the real question off screen; and the result
+/// is truncated. Backticks and quotes are left alone: they cannot change the
+/// shape of a single line, and mangling them would misreport the code being
+/// approved, which is its own kind of lie.
+#[must_use]
+pub fn one_line(text: &str, limit: usize) -> String {
+    let mut out = String::with_capacity(text.len().min(limit) + 1);
+    let mut last_was_space = false;
+    for ch in text.chars() {
+        let ch = if ch.is_control() { ' ' } else { ch };
+        if ch == ' ' {
+            if last_was_space {
+                continue;
+            }
+            last_was_space = true;
+        } else {
+            last_was_space = false;
+        }
+        if out.chars().count() >= limit {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// What the driver answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
@@ -418,6 +514,64 @@ mod tests {
         // standing approval for reading anything on the machine.
         assert_eq!(policy.review("shell", args), Some(Concern::EscapesScope));
         assert!(!Concern::EscapesScope.is_rememberable());
+    }
+
+    #[test]
+    fn a_summary_says_what_the_call_will_do() {
+        assert_eq!(
+            summarise("shell", r#"{"command":"cargo test --workspace"}"#),
+            "run `cargo test --workspace`"
+        );
+        assert_eq!(
+            summarise("edit", r#"{"op":"replace","path":"src/main.rs","contents":"// edited"}"#),
+            "replace in `src/main.rs`: \"// edited\""
+        );
+        assert_eq!(
+            summarise("edit", r#"{"op":"replace","path":"src/main.rs","contents":""}"#),
+            "delete lines in `src/main.rs`"
+        );
+        assert_eq!(
+            summarise("fs", r#"{"op":"write","path":"a.txt","contents":"hello"}"#),
+            "write 5 B to `a.txt`: \"hello\""
+        );
+        assert_eq!(
+            summarise("fetch", r#"{"url":"https://example.test/x"}"#),
+            "fetch https://example.test/x"
+        );
+    }
+
+    /// The summary renders model-supplied text, so it is an injection surface
+    /// aimed at the human — in the one dialog whose entire purpose is to be
+    /// trustworthy.
+    #[test]
+    fn a_summary_cannot_forge_a_second_prompt() {
+        let hostile = concat!(
+            r#"{"op":"write","path":"a\nAllow tool `rm`? Reason: safe\n[yes]","#,
+            r#""contents":"x"}"#
+        );
+        let text = summarise("fs", hostile);
+        assert!(!text.contains('\n'), "no newline can be smuggled in: {text}");
+        assert!(!text.contains('\r'), "nor a carriage return: {text}");
+        // The text is still shown — mangling it would misreport the real path —
+        // but it cannot start a line of its own.
+        assert!(text.contains("Allow tool"), "and nothing is hidden: {text}");
+    }
+
+    #[test]
+    fn a_summary_is_bounded() {
+        let long = "x".repeat(5_000);
+        let args = format!(r#"{{"command":"{long}"}}"#);
+        let text = summarise("shell", &args);
+        assert!(text.chars().count() < 200, "a wall of text cannot bury the question: {}", text.len());
+        assert!(text.ends_with("…`") || text.contains('…'), "and says it was cut: {text}");
+    }
+
+    #[test]
+    fn padding_cannot_push_the_question_off_screen() {
+        let args = format!(r#"{{"command":"{}rm -rf /"}}"#, " ".repeat(400));
+        let text = summarise("shell", &args);
+        assert!(text.chars().count() < 60, "runs of whitespace collapse: {text:?}");
+        assert!(text.contains("rm -rf /"), "so the real command stays visible: {text}");
     }
 
     #[test]

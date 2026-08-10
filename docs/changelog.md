@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-13
+
+- **Fix**: **the confirmation did not say what it was confirming.** The prompt read `Allow tool `edit`? Reason: `edit` is not a known read-only call` — a request to approve a file modification that names neither the file nor the change. Consent without the material facts is not consent, and the only reason to stop and ask is that a person can weigh *this* action. It now reads `Allow `edit` to replace in `main.rs`: "// edited"?`, with `run `cargo test --workspace``, `write 5 B to `a.txt``, and `fetch https://…` for the other shapes.
+- **Guard**: the summary renders model-supplied text, which makes it an injection surface aimed at the human — in the one dialog whose entire purpose is to be trustworthy. A `path` of `"a\nAllow tool `rm`? Reason: safe\n[yes]"` would otherwise let a suggested tool call draw its own second prompt in the terminal. Control characters become spaces, whitespace runs collapse so padding cannot push the real question off screen, and values are truncated. Nothing is hidden — mangling the text would misreport the code being approved, which is its own kind of lie — it simply cannot start a line of its own.
+- The end-to-end test now asserts the prompt names the file and shows the change, and prints it, so altering that wording is reviewed as a change to a consent dialog rather than buried in a matcher.
+
 ## 2026-08-12
 
 - **Fix**: **the suite was not slow — a test was silently waiting out a three-minute timeout.** I set out to speed up `make gate`, having said it took nine minutes. It does not: a clean run is 2m15s. The nine minutes came from `auth.rs`, which on some runs took **360 seconds** and on others one second, passing either way. 360 is exactly 2 × the 180-second confirmation timeout. A test whose answer goes astray does not fail — the wait expires, the prompt's default is taken, and for the permission gate that default is a denial, which is what the assertions already expected. The suite looked intermittently slow rather than intermittently broken, which is a much easier thing to ignore.

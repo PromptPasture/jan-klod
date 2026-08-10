@@ -114,18 +114,24 @@ mod component {
 
     /// The confirmation to put to the driver. `always`/`never` are only offered
     /// when there is a scope to file them against.
-    fn prompt(tool: &str, reason: &str, scope: Option<&str>) -> UserPrompt {
+    fn prompt(tool: &str, arguments: &str, reason: &str, scope: Option<&str>) -> UserPrompt {
         let mut options = vec!["yes".to_string(), "no".to_string()];
+        // Lead with what the call *does*. "Allow tool `edit`? Reason: `edit` is
+        // not a known read-only call" asks someone to approve a file
+        // modification without naming the file or the change, and consent given
+        // without the material facts is not consent — the only reason to stop
+        // and ask is that a person can weigh this particular action.
+        let what = crate::rules::summarise(tool, arguments);
         let question = match scope {
             Some(key) => {
                 options.push("always".to_string());
                 options.push("never".to_string());
                 format!(
-                    "Allow tool `{tool}`? Reason: {reason}. \
-                     (`always`/`never` apply to `{key}` for the rest of this run.)"
+                    "Allow `{tool}` to {what}? ({reason}. \
+                     `always`/`never` apply to `{key}` for the rest of this run.)"
                 )
             }
-            None => format!("Allow tool `{tool}`? Reason: {reason}"),
+            None => format!("Allow `{tool}` to {what}? ({reason})"),
         };
         UserPrompt { question, options, default_answer: "no".to_string() }
     }
@@ -192,7 +198,7 @@ mod component {
                             None => {}
                         }
                     }
-                    Ok(Decision::Ask(prompt(&call.name, &reason, scope.as_deref())))
+                    Ok(Decision::Ask(prompt(&call.name, &call.arguments, &reason, scope.as_deref())))
                 }
                 // Resumed with the driver's answer. `always`/`never` also record a
                 // standing decision for this run before acting on it.

@@ -191,10 +191,16 @@ workspace: {}
     let sent = sent.into_inner();
     let question = sent
         .iter()
-        .find(|m| m.contains("Allow tool"))
+        .find(|m| m.contains("Allow `fs`"))
         .unwrap_or_else(|| panic!("the user was asked before the write: {sent:?}"));
     assert!(question.contains("\"chat_id\":555"), "asked in the right chat: {question}");
     assert!(question.contains("always"), "the standing options are offered: {question}");
+    // Over a chat surface the user has no terminal and no other context, so the
+    // question has to carry the whole decision: which file, and what goes in it.
+    assert!(
+        question.contains("note.txt") && question.contains("hi"),
+        "the question names the file and shows the content: {question}"
+    );
 
     assert!(
         sent.iter().any(|m| m.contains("wrote note.txt")),
