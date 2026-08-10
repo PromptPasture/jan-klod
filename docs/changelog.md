@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-22
+
+- **Correct**: **I documented a subcommand that did not exist, and then believed it.** `jan-klod-gateway ask` appears in `architecture.md` and in a changelog entry — sentences I wrote on 2026-08-12 to justify withholding stdin from guests. The fix was right (the gateway inherits its shell's stdio under `serve` too); the example was invented. Two days later I went looking for `ask` in `main.rs`, did not find it, and concluded I had misremembered — the docs were where I had seen it, because I put it there. A reader has no way to run that check: they type the command and get a boot plan.
+- **Feature**: so `ask` exists now, because it should. `jan-klod-gateway ask "what does this repo do?"` — no server, no client, nothing left running, which is the surface a self-hosted agent was most obviously missing. The answer goes to stdout and nothing else does, so it pipes; the question and any confirmation go to stderr. Confirmations are asked on the terminal, since there is one — running headless and letting prompts default would deny every write and command, correct and useless in the surface most likely to be scripted. With stdin closed, EOF takes the default, which is a refusal: a CI step reads and searches but does not write.
+- **Test**: `every_documented_command_exists` checks that every `jan-klod-gateway <sub>` a doc tells a reader to run is a handled arm. Verified red by removing the `ask` arm. The changelog is excluded on purpose: it records what happened rather than instructing anyone, and necessarily names commands that were later renamed — rewriting history to satisfy a linter would be the wrong repair.
+- `ask_answers_on_stdout_from_an_installed_layout` drives the real binary from a directory that is not a checkout, with stdin closed, against a local model on a socket — so the documented command is verified by running it rather than by grepping for its name.
+
 ## 2026-08-21
 
 - **Correct**: yesterday's new check was **half a check**. It scanned the YAML by hand and matched only explicit `type:` lines — but `type` defaults to the instance name, so thirteen of the fifteen declared blocks relied on the default and went unexamined. Among them: `tool.web-search`, with no component (`tool-web-search.wasm`), sitting disabled behind a comment admitting as much. I found the phantom I was looking for and left the larger hole open.

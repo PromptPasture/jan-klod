@@ -205,3 +205,82 @@ fn a_gateway_with_no_data_directory_beside_it_fails_and_says_why() {
         "the failure names what it could not find: {stderr}"
     );
 }
+
+/// `ask` answers on stdout, from an installed layout, in a directory that is not
+/// a checkout.
+///
+/// Documented in two places before it existed — sentences I wrote to justify
+/// withholding stdin from guests, describing a subcommand that fell through to the
+/// boot plan. This drives the real binary the way the docs say to, with stdin
+/// closed so a confirmation cannot be answered: EOF must take the prompt's default,
+/// which is a denial, rather than reading as approval.
+#[test]
+fn ask_answers_on_stdout_from_an_installed_layout() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let prefix = std::env::temp_dir().join(format!("jk-ask-{}", std::process::id()));
+    let _guard = common::TempDir(prefix.clone());
+    let gateway = install_into(&prefix);
+    let work = elsewhere(&prefix);
+
+    // A local endpoint the installed config does not name, so the run needs no
+    // network and no key: point the provider at it via an override config beside
+    // the binary's data directory.
+    let data = prefix.join("share/jan-klod");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("binds");
+    let port = listener.local_addr().expect("addr").port();
+    let answer = "the installed gateway answered";
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut socket) = stream else { break };
+            let mut buf = [0_u8; 4096];
+            let _ = socket.read(&mut buf);
+            let body = serde_json::json!({
+                "choices": [{ "message": { "role": "assistant", "content": answer },
+                              "finish_reason": "stop" }]
+            })
+            .to_string();
+            let _ = socket.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    std::fs::write(
+        data.join("config.yaml"),
+        format!(
+            "
+extensions:
+  provider:
+    local:
+      enabled: true
+      type: openai
+      base-url: http://127.0.0.1:{port}/v1
+      model: local
+"
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(&gateway)
+        .args(["ask", "what", "does", "this", "repo", "do?"])
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .output()
+        .expect("ask runs");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "ask succeeded: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains(answer), "the answer is on stdout: {stdout:?}");
+    // stdout is the answer and nothing else, so a script can pipe it.
+    assert!(!stdout.contains('?'), "no prompt text leaked into stdout: {stdout:?}");
+}

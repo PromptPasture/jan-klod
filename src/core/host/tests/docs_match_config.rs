@@ -451,3 +451,78 @@ fn every_declared_instance_resolves_to_a_component() {
         config.instances.len()
     );
 }
+
+/// Every command the docs tell a user to run exists.
+///
+/// `jan-klod-gateway ask` was documented in two places before it existed. I wrote
+/// those sentences myself, to justify withholding stdin from guests — the fix was
+/// right, the example was invented — and then half-believed the subcommand two
+/// days later and had to go and check. A reader has no way to check; they type it
+/// and get a boot plan.
+///
+/// The changelog is excluded on purpose. It is a record of what happened, not
+/// instructions, and it necessarily contains commands that were later renamed or
+/// removed. Rewriting history to satisfy a linter would be the wrong repair.
+#[test]
+fn every_documented_command_exists() {
+    let root = common::repo_root();
+    let main_rs = std::fs::read_to_string(root.join("src/core/host/src/main.rs"))
+        .expect("the gateway's main is readable");
+    let makefile = std::fs::read_to_string(root.join("Makefile")).expect("Makefile is readable");
+
+    let mut pages = Vec::new();
+    for dir in ["docs", "docs/concepts", "docs/guides"] {
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md")
+                && path.file_name().is_some_and(|n| n != "changelog.md")
+            {
+                pages.push(path);
+            }
+        }
+    }
+    pages.push(root.join("README.md"));
+
+    let mut checked = 0;
+    for page in &pages {
+        let Ok(text) = std::fs::read_to_string(page) else { continue };
+        let name = page.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        for (line_no, line) in text.lines().enumerate() {
+            for (prefix, verify) in [("jan-klod-gateway ", true), ("make ", false)] {
+                let mut rest = line;
+                while let Some(at) = rest.find(prefix) {
+                    rest = &rest[at + prefix.len()..];
+                    let word: String =
+                        rest.chars().take_while(|c| c.is_ascii_lowercase() || *c == '-').collect();
+                    if word.is_empty() {
+                        continue;
+                    }
+                    // `make` appears in prose ("make sure", "make it"); only treat
+                    // a word as a target if the Makefile could plausibly define it.
+                    let present = if verify {
+                        main_rs.contains(&format!("Some(\"{word}\")"))
+                    } else {
+                        makefile.contains(&format!("\n{word}:"))
+                            || makefile.contains(&format!("\n{word} "))
+                            || makefile.contains(&format!("GUESTS := "))
+                                && makefile.contains(&word)
+                    };
+                    if verify {
+                        assert!(
+                            present,
+                            "{name}:{} tells the reader to run `jan-klod-gateway {word}`, \
+                             which the gateway does not handle — they get the boot plan",
+                            line_no + 1
+                        );
+                        checked += 1;
+                    } else if present {
+                        checked += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(checked >= 5, "only {checked} commands parsed — this check went quiet");
+}

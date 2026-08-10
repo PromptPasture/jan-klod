@@ -52,7 +52,85 @@ fn main() -> ExitCode {
         Some("serve") => serve(&args[1..]),
         Some("telegram") => telegram(&args[1..]),
         Some("verify") => verify(&args[1..]),
+        Some("ask") => ask(&args[1..]),
         _ => boot_plan(&args),
+    }
+}
+
+/// One question, one answer, on stdout.
+///
+/// The surface a self-hosted agent is most obviously missing: no server, no
+/// client, nothing to leave running — `jan-klod-gateway ask "what does this repo
+/// do?"` in a shell or a CI step. Two documents described this subcommand before
+/// it existed, in text written to justify withholding stdin from guests; the
+/// claim was invented and then half-believed two days later, which is a good
+/// argument for `every_documented_command_exists` below it.
+///
+/// Confirmations are asked on the terminal, because there is one. Running headless
+/// and letting the prompt default would deny every write and command — correct,
+/// and useless: the whole fleet past `fs:read` would be unavailable in the surface
+/// most likely to be scripted.
+fn ask(args: &[String]) -> ExitCode {
+    let question = args.join(" ");
+    if question.trim().is_empty() {
+        eprintln!("usage: jan-klod-gateway ask <question>");
+        return ExitCode::FAILURE;
+    }
+    let config_path = resolve_default("config.yaml");
+    let ext_dir = resolve_default("ext");
+    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("jan-klod: boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let policy = runtime.egress_policy();
+    let factory = move || -> HttpFn {
+        let policy = policy.clone();
+        Box::new(move |method, url, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+        })
+    };
+    let mut agent = match runtime.build_agent(&factory) {
+        Ok(agent) => agent,
+        Err(err) => {
+            eprintln!("jan-klod: agent boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut driver = TerminalDriver;
+    match agent.run_with_driver(&mut driver, "ask", &question) {
+        jan_klod_core::conductor::RunResult::Answered { text, .. } => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
+        other => {
+            eprintln!("jan-klod: {other:?}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Asks the person at the keyboard, which is the only reason `ask` can use tools
+/// that write.
+struct TerminalDriver;
+
+impl jan_klod_core::intercept::Driver for TerminalDriver {
+    fn ask(&mut self, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
+        // The question goes to stderr so `ask`'s stdout stays the answer and
+        // nothing else — a script can pipe it without stripping prompts out.
+        eprintln!("\n  ? {}", prompt.question);
+        eprint!("  [{}] (Enter = {}): ", prompt.options.join("/"), prompt.default_answer);
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let mut typed = String::new();
+        match std::io::stdin().read_line(&mut typed) {
+            // EOF (a pipe, a CI step) is not an approval.
+            Ok(0) | Err(_) => prompt.default_answer.clone(),
+            Ok(_) if typed.trim().is_empty() => prompt.default_answer.clone(),
+            Ok(_) => typed.trim().to_string(),
+        }
     }
 }
 

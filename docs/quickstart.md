@@ -61,6 +61,22 @@ checkout: without them the gateway uses the current directory when it holds them
 and the installed copies otherwise, which is what makes `cd my-repo && jan-klod`
 work.
 
+## One question, no server
+
+For a single answer — in a shell, or a CI step — there is nothing to leave
+running:
+
+```shell
+cd my-repo
+jan-klod-gateway ask "what does this repo do?"
+```
+
+The answer goes to stdout and nothing else does, so it pipes. Confirmations are
+asked on the terminal, since there is one; with stdin closed (a pipe, a CI job)
+each takes the prompt's default, which is a refusal — so a scripted `ask` reads
+and searches but will not write or run commands unless someone is there to say
+yes.
+
 Type a message and press **Enter** to send it. The model's response streams in token by token. Press **Esc** to quit.
 
 ## 4. Ask it to do something
