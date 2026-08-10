@@ -219,6 +219,10 @@ fn boot_plan(args: &[String]) -> ExitCode {
 /// Boot the agent and serve turns over the host-side REST surface until killed.
 fn serve(args: &[String]) -> ExitCode {
     let (positional, flagged_bind) = split_serve_args(args);
+    if let Some(message) = misplaced_address(&positional) {
+        eprintln!("{message}");
+        return ExitCode::FAILURE;
+    }
     let config_path = arg_or(&positional, 0, "config.yaml");
     let ext_dir = arg_or(&positional, 1, "ext");
     let bind = flagged_bind.unwrap_or_else(|| arg(&positional, 2, "127.0.0.1:8787"));
@@ -414,6 +418,43 @@ fn split_serve_args(args: &[String]) -> (Vec<String>, Option<String>) {
     (positional, bind)
 }
 
+/// Refuse a positional that is plainly an address in a *path* slot.
+///
+/// The positional form is `serve [config] [ext] [addr]`, so slot 2 is legitimately
+/// an address; only the first two are paths. Returns the message to print, or
+/// `None` when the arguments are fine.
+fn misplaced_address(positional: &[String]) -> Option<String> {
+    let offender = positional.iter().take(2).find(|arg| looks_like_an_address(arg))?;
+    Some(format!(
+        "jan-klod: `{offender}` looks like an address, not a path. Use \
+         `--bind {offender}` — a positional argument names a config file, and the \
+         positional form only works inside a checkout anyway."
+    ))
+}
+
+/// Whether a positional argument looks like a bind address rather than a path.
+///
+/// `serve 127.0.0.1:8787` is the obvious thing to type, and it was read as a
+/// config path — so the error was `config file not found: 127.0.0.1:8787`, which
+/// tells the reader nothing about the flag they omitted. The README recommended
+/// the positional form, so it actively invited the mistake.
+///
+/// Deliberately narrow: `host:port` with a numeric port, or a bare `:port`. A real
+/// path can contain a colon, so this must not claim one is an address unless the
+/// tail is digits.
+fn looks_like_an_address(arg: &str) -> bool {
+    let Some((host, port)) = arg.rsplit_once(':') else { return false };
+    if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    // `[::1]:8787`, `localhost:8787`, `:8787` — but not `notes:2024` in a path,
+    // which has no dot and is not a known host spelling.
+    host.is_empty()
+        || host == "localhost"
+        || host.ends_with(']')
+        || host.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
 /// Like [`arg`], but a missing config/ext argument falls back to the installed
 /// copy next to the binary rather than to a bare relative name.
 fn arg_or(args: &[String], index: usize, default: &str) -> String {
@@ -465,6 +506,26 @@ mod tests {
         let (positional, bind) = split_serve_args(&args(["--bind", "127.0.0.1:9000"].as_ref()));
         assert!(positional.is_empty(), "no positionals claimed: {positional:?}");
         assert_eq!(bind.as_deref(), Some("127.0.0.1:9000"));
+    }
+
+    #[test]
+    fn an_address_in_a_path_slot_names_the_flag() {
+        use super::misplaced_address;
+        // The obvious thing to type, previously reported as a missing config file.
+        for typo in ["127.0.0.1:8787", "localhost:8787", "[::1]:8787", ":8787"] {
+            let message = misplaced_address(&args([typo].as_ref()))
+                .unwrap_or_else(|| panic!("{typo} should be recognised as an address"));
+            assert!(message.contains("--bind"), "the message names the flag: {message}");
+        }
+        // Slot 2 *is* the address in the positional form, so it must not trip.
+        assert!(misplaced_address(&args(["c.yaml", "ext", "1.2.3.4:1"].as_ref())).is_none());
+        // And a real path is left alone, colon or not.
+        for path in ["config.yaml", "ext", "/srv/jan-klod/config.yaml", "notes:2024/config.yaml"] {
+            assert!(
+                misplaced_address(&args([path].as_ref())).is_none(),
+                "{path} is a path"
+            );
+        }
     }
 
     #[test]

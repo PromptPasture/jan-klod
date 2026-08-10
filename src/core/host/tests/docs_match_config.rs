@@ -526,3 +526,57 @@ fn every_documented_command_exists() {
 
     assert!(checked >= 5, "only {checked} commands parsed — this check went quiet");
 }
+
+/// No shell block tells a reader to run `serve` with positional paths.
+///
+/// The README recommended `jan-klod-gateway serve config.yaml ext`, which works in
+/// a checkout and fails for everyone who installed the binary — the resolution
+/// that finds `config.yaml` beside the executable is *overridden* by naming it, so
+/// the recommended command was the one that breaks in the common case. It also
+/// invited `serve 127.0.0.1:8787`, read as a config path.
+///
+/// Only fenced shell blocks are checked. Prose explaining that the positional form
+/// exists is useful and stays; a command a reader will copy is different.
+#[test]
+fn no_shell_block_recommends_positional_serve_paths() {
+    let root = common::repo_root();
+    let mut pages = vec![root.join("README.md")];
+    for dir in ["docs", "docs/concepts", "docs/guides"] {
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md")
+                && path.file_name().is_some_and(|n| n != "changelog.md")
+            {
+                pages.push(path);
+            }
+        }
+    }
+
+    for page in &pages {
+        let Ok(text) = std::fs::read_to_string(page) else { continue };
+        let name = page.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let mut in_shell = false;
+        for (line_no, line) in text.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                in_shell = trimmed.contains("sh") || trimmed.contains("bash");
+                continue;
+            }
+            if !in_shell {
+                continue;
+            }
+            let Some(rest) = trimmed.split_once("jan-klod-gateway serve") else { continue };
+            let tail = rest.1.trim();
+            let first = tail.split_whitespace().next().unwrap_or("");
+            assert!(
+                first.is_empty() || first.starts_with("--"),
+                "{name}:{} shows `jan-klod-gateway serve {first}` — a positional path \
+                 overrides the resolution that finds config.yaml beside the installed \
+                 binary, so this command works in a checkout and fails for everyone \
+                 who installed it",
+                line_no + 1
+            );
+        }
+    }
+}

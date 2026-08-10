@@ -32,13 +32,31 @@ to set. For native Claude, export `ANTHROPIC_API_KEY` instead and flip
 `extensions.provider.anthropic.enabled: true` (and `openai` to `false`) — the
 provider is a component swap, not a code change.
 
-`jan-klod` starts the gateway automatically. To run the gateway manually:
+`jan-klod` starts the gateway automatically. To run it yourself:
 
 ```sh
-jan-klod-gateway serve config.yaml ext
+jan-klod-gateway serve --bind 127.0.0.1:8787
 ```
 
-See the [quickstart guide](docs/quickstart.md) for a full walkthrough.
+No paths: the gateway finds `config.yaml` and `ext/` in the current directory, or
+in its own installed data directory otherwise. That is what lets you `cd` into any
+repository and run it there. (Naming them positionally still works, but only
+inside a checkout, where they happen to be beside you.)
+
+For a single answer, with no server to leave running:
+
+```sh
+cd my-repo
+jan-klod-gateway ask "what does this repo do?"
+```
+
+stdout is the answer and nothing else, so it pipes. Confirmations are asked on the
+terminal; with stdin closed they take the default, which is a refusal — so a
+scripted `ask` reads and searches but will not write.
+
+See the [quickstart guide](docs/quickstart.md) for a full walkthrough, and the
+[security model](docs/concepts/security-model.md) for what each capability is
+granted and which test proves it.
 
 ## Architecture
 

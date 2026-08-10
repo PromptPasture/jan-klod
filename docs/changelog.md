@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-23
+
+- **Fix**: **the README's manual command was the one that breaks once installed.** It showed `jan-klod-gateway serve config.yaml ext` — and naming those paths *overrides* the resolution that finds them beside the installed binary, which is the whole mechanism that lets you `cd` into any repository and run it there. The quickstart says as much three sections later ("only right inside a checkout"); the front page recommended it anyway. Now `serve --bind 127.0.0.1:8787`, with the positional form mentioned in prose as the checkout-only thing it is.
+- **Fix**: and the mistake that recommendation invited. `serve 127.0.0.1:8787` — the obvious thing to type — was read as a config path, so the error was `config file not found: 127.0.0.1:8787`, which says nothing about the omitted flag. It now names `--bind`. Narrow on purpose: only the first two positionals are path slots (the third legitimately *is* an address), and a colon in a path is not enough to claim one is an address unless the tail is digits.
+- **Test**: `no_shell_block_recommends_positional_serve_paths` checks fenced shell blocks only — prose explaining that the positional form exists is useful and stays, but a command a reader will copy is different. Verified red by putting the old line back.
+- The README now also shows `ask`, and links the security model. Two claims I checked while I was in there and found accurate: skills really do come from `.agents/skills/`, and `registry-mcp` really does speak SSE/streamable-HTTP JSON-RPC.
+
 ## 2026-08-22
 
 - **Correct**: **I documented a subcommand that did not exist, and then believed it.** `jan-klod-gateway ask` appears in `architecture.md` and in a changelog entry — sentences I wrote on 2026-08-12 to justify withholding stdin from guests. The fix was right (the gateway inherits its shell's stdio under `serve` too); the example was invented. Two days later I went looking for `ask` in `main.rs`, did not find it, and concluded I had misremembered — the docs were where I had seen it, because I put it there. A reader has no way to run that check: they type the command and get a boot plan.
