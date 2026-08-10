@@ -144,6 +144,50 @@ fn a_guest_cannot_read_the_hosts_filesystem() {
     }
 }
 
+/// The credentials are in the environment, so the guest must not have one.
+///
+/// The sibling of the subprocess leak fixed on 2026-08-15: a command run through
+/// `host-process` inherited `OPENAI_API_KEY` and `JAN_KLOD_TOKEN` because nothing
+/// cleared the environment. A guest reading them *directly* would be the shorter
+/// path, and it is closed only because `WasiCtxBuilder::inherit_env` is not called
+/// — a default in a crate we upgrade, exactly like the deny-all socket check. If it
+/// flips, every component reads the operator's provider key with one line of `std`,
+/// and nothing else in the suite would notice.
+///
+/// The secrets are set in *this* process before the guest runs, so the check is not
+/// measuring an empty environment: they are demonstrably there to be inherited.
+#[test]
+fn a_guest_cannot_read_the_hosts_environment() {
+    // Set *before* the guest is instantiated. `inherit_env` snapshots the
+    // environment when the `WasiCtx` is built, so setting these afterwards left the
+    // credential assertion passing even with inheritance switched on — the check
+    // that matters was the one measuring nothing.
+    std::env::set_var("OPENAI_API_KEY", "sk-guest-env-must-not-leak");
+    std::env::set_var("JAN_KLOD_TOKEN", "bearer-guest-env-must-not-leak");
+    let engine = Engine::default();
+    let Some(mut tool) = probe(&engine) else { return };
+
+    let report = tool.invoke(r#"{"op":"env"}"#).unwrap_or_else(|err| err);
+    assert!(
+        !report.contains("must-not-leak"),
+        "a guest read the host's credentials straight out of the environment: {report}"
+    );
+    assert!(
+        report.starts_with("refused"),
+        "and gets no environment at all: {report}"
+    );
+
+    // The host's command line names its config and its bind address. A guest sees
+    // its own argv[0] and nothing of ours.
+    let args = tool.invoke(r#"{"op":"args"}"#).unwrap_or_else(|err| err);
+    for ours in ["--bind", "config.yaml", "serve", "--live"] {
+        assert!(
+            !args.contains(ours),
+            "the host's arguments reached a guest: {args}"
+        );
+    }
+}
+
 /// stdin is the one the host was actually giving away.
 ///
 /// The gateway inherited the parent's stdio and handed it to every guest, so a

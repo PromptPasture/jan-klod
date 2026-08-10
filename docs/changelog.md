@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-27
+
+- **Test**: **a guest cannot read the host's environment** — probed, not assumed. This is the sibling of the subprocess leak fixed on 2026-08-15: a command run through `host-process` inherited `OPENAI_API_KEY` and `JAN_KLOD_TOKEN` because nothing cleared the environment, and a guest reading them *directly* is the shorter path. It is closed only because `WasiCtxBuilder::inherit_env` is never called — a default in a crate we upgrade, exactly like the deny-all socket check. If it flips, every component reads the operator's provider key with one line of `std`, and nothing else in the suite would notice. `tool-escape-probe` now tries it, and tries the host's argv too.
+- **Correct**: the first version set the secrets *after* instantiating the probe, and `inherit_env` snapshots the environment when the `WasiCtx` is built — so with inheritance deliberately switched on, the credential assertion still passed and only the weaker "environment is empty" one failed. The assertion I cared about was measuring nothing. Reordered, it now fails naming both secrets. That is three times in this project that a security test has had to be re-checked because the thing it asserted was true for an unrelated reason; the tell each time was that the negative run failed on a *different* line than expected.
+
 ## 2026-08-26
 
 - **Correct**: the egress guard's coverage was a literal, and it was wrong. `every_guest_facing_backend_goes_through_the_policy` listed **three** files implementing a guest's `host-http`; there are **four**. The one missing was `route.rs` — the provider path, the busiest egress route in the runtime. It now asks the source which files implement the capability, so a backend added after the check is covered by it.

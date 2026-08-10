@@ -92,6 +92,36 @@ mod component {
         }
     }
 
+    /// Try to read the host's environment, where the credentials are.
+    ///
+    /// The sibling of the subprocess leak fixed on 2026-08-15: a command run
+    /// through `host-process` inherited `OPENAI_API_KEY` and `JAN_KLOD_TOKEN`
+    /// because nothing cleared the environment. A guest reading them *directly*
+    /// would be the shorter path, and it is closed only because
+    /// `WasiCtxBuilder::inherit_env` is not called — a default in a crate we
+    /// upgrade, exactly like the socket check. If it ever flips, every component
+    /// reads the operator's provider key with one line of `std`.
+    fn try_env() -> String {
+        let named: Vec<String> = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "JAN_KLOD_TOKEN", "HOME"]
+            .iter()
+            .filter_map(|key| std::env::var(key).ok().map(|value| format!("{key}={value}")))
+            .collect();
+        let total = std::env::vars().count();
+        if named.is_empty() && total == 0 {
+            "refused: the environment is empty".to_string()
+        } else {
+            format!("READ {total} vars: {}", named.join(" "))
+        }
+    }
+
+    /// Try to read the host's command line, which names its config and bind address.
+    fn try_args() -> String {
+        let args: Vec<String> = std::env::args().collect();
+        // A guest always sees *something* here — wasi gives argv[0] — so an empty
+        // list is not the test; the host's real arguments appearing is.
+        format!("ARGS {:?}", args)
+    }
+
     /// Try to open a path with ambient `std::fs`, ignoring the path-jailed `host-fs`.
     fn try_fs(path: &str) -> String {
         match std::fs::read_to_string(path) {
@@ -108,7 +138,7 @@ mod component {
                 arguments_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "op": { "type": "string", "enum": ["socket", "stdin", "fs"] },
+                        "op": { "type": "string", "enum": ["socket", "stdin", "fs", "env", "args"] },
                         "target": { "type": "string" }
                     },
                     "required": ["op"]
@@ -129,6 +159,8 @@ mod component {
                 "socket" => try_socket(target),
                 "stdin" => try_stdin(),
                 "fs" => try_fs(target),
+                "env" => try_env(),
+                "args" => try_args(),
                 other => format!("unknown op {other}"),
             })
         }
