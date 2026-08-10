@@ -43,6 +43,13 @@ tidiness. `network.allow` could have been `allow-local: true`, and then permitti
 a local Ollama would have permitted the local Postgres beside it; `env-passthrough`
 could have been `inherit-env: true`, which is the bug it replaced.
 
+**A check whose coverage is a literal will miss the thing added after it.** The
+egress guard listed the three files implementing `host-http` and there were four —
+`route.rs`, the provider path, and the busiest egress route here. Three checks on
+this page have now been written around the instance that prompted them and missed
+their own class: the store category, the `type:` scan, and this. Where a check
+enumerates, it should ask the source rather than carry a list.
+
 **A check inside the sandbox is advice, not a boundary.** `tool-fetch` carries an
 SSRF guard, and for weeks that guard *was* the runtime's SSRF defence. It runs in
 the guest. It protects a confused model from a URL the model chose and says

@@ -221,15 +221,43 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
 /// insists the unbounded `http::fetch` appears in none of them.
 #[test]
 fn every_guest_facing_backend_goes_through_the_policy() {
-    // The three host-side implementations of a guest's `host-http` import.
-    const GUEST_FACING: [&str; 3] =
-        ["core/src/host.rs", "core/src/registry_host.rs", "core/src/tool_host.rs"];
+    // Derived, not named. The first version listed three files — and there were
+    // four: `route.rs`, the provider path, was missing, which is the busiest
+    // egress route in the runtime. A check whose coverage is a literal cannot
+    // notice a backend added after it was written, and this is the third time that
+    // shape has bitten; the fix is to ask the source which files implement the
+    // capability.
+    let core = common::repo_root().join("src/core/core/src");
+    let mut backends = Vec::new();
+    for entry in std::fs::read_dir(&core).expect("core sources are readable").flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("a core source is readable");
+        // Any host-side implementation of a guest's `host-http` import, whatever
+        // the binding module happens to be called.
+        if text.contains("_http::Host for") {
+            backends.push((path, text));
+        }
+    }
+    assert!(
+        backends.len() >= 4,
+        "only {} host-http backends found — the scan is broken, and a broken scan \
+         here reports success while the boundary is unguarded",
+        backends.len()
+    );
 
-    let core = common::repo_root().join("src/core");
-    for file in GUEST_FACING {
-        let text = std::fs::read_to_string(core.join(file))
-            .unwrap_or_else(|err| panic!("{file} is readable: {err}"));
+    for (path, text) in &backends {
+        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         for (number, line) in text.lines().enumerate() {
+            // Code only. A doc comment explaining what must *not* be called would
+            // otherwise trip this, and a checker that fires on prose is one
+            // somebody silences — which costs more than the check is worth.
+            let code = line.trim_start();
+            if code.starts_with("//") {
+                continue;
+            }
             // `contains`, not `starts_with`: the call sites read
             // `let result = crate::http::fetch(`, so anchoring to the line start
             // matched nothing and this check passed against a backend I had
@@ -238,9 +266,32 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             assert!(
                 !line.contains("crate::http::fetch(")
                     && !line.contains("jan_klod_core::http::fetch("),
-                "{file}:{} calls the unbounded client. A guest's egress must go \
+                "{name}:{} calls the unbounded client. A guest's egress must go \
                  through `fetch_within`, or it can reach this gateway's own port, \
                  the cloud metadata service, and the LAN.",
+                number + 1
+            );
+        }
+    }
+
+    // The other way in: a caller that *hands* a guest the unbounded client. Providers
+    // and tools receive an `HttpFn` from whoever builds them, so `route.rs` needs no
+    // policy of its own — and that is exactly why a binary passing
+    // `Box::new(http::fetch)` would reopen the hole without touching any file above.
+    // `main.rs` did precisely that until 2026-08-11.
+    for binary in ["host/src/main.rs", "ui/src/main.rs"] {
+        let path = common::repo_root().join("src/core").join(binary);
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        for (number, line) in text.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") {
+                continue;
+            }
+            assert!(
+                !line.contains("Box::new(jan_klod_core::http::fetch)")
+                    && !line.contains("Box::new(crate::http::fetch)"),
+                "{binary}:{} hands a guest the unbounded client as its `host-http`. \
+                 Wrap it in the runtime's egress policy with `fetch_within`.",
                 number + 1
             );
         }

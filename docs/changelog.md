@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-26
+
+- **Correct**: the egress guard's coverage was a literal, and it was wrong. `every_guest_facing_backend_goes_through_the_policy` listed **three** files implementing a guest's `host-http`; there are **four**. The one missing was `route.rs` — the provider path, the busiest egress route in the runtime. It now asks the source which files implement the capability, so a backend added after the check is covered by it.
+- **Guard**: and the other way in, which no file-scan could have caught. Providers and tools receive an `HttpFn` from whoever builds them, so `route.rs` needs no policy of its own — which is exactly why a binary passing `Box::new(http::fetch)` would reopen the whole hole without touching any of the four files. `main.rs` did precisely that until 2026-08-11. The check now reads the binaries too, and fails on that line.
+- Both verified red against real code, not comments — the backend scan skips comment lines now, because a doc comment explaining what must *not* be called would otherwise trip it, and a checker that fires on prose is one somebody silences.
+- This is the fourth check written around the instance that prompted it and blind to its own class. The pattern is concrete enough to state: **a string literal in an assertion where an enumeration belongs.** Recorded in the [security model](concepts/security-model.md) beside the rule about guest-side checks, because it is the same kind of mistake — trusting a description of the system instead of the system.
+
 ## 2026-08-25
 
 - **Feature**: `verify --live` asks the model one question. Everything `verify` did before was offline — components resolve, instantiate, start — and *all of it passes* with a wrong API key, a local server that is not running, a model name that does not exist, and a `base-url` egress will refuse. That is the entire list of things that go wrong on a first run, so "verified: 6 extension(s) start cleanly" was a claim about the parts nobody has trouble with. Opt-in, because spending a request is a thing someone should choose; headless, because a diagnostic that could be talked into running a tool would be a strange diagnostic.
