@@ -451,6 +451,39 @@ pub fn one_line(text: &str, limit: usize) -> String {
     out
 }
 
+/// How many refusals of the same kind of call before it is refused outright.
+///
+/// A denial tells the model "no" and the loop continues, so a model that does not
+/// take the hint asks again — and each ask is a prompt in front of the user. Three
+/// is generous for a misunderstanding and short of harassment. Nobody should be
+/// worn down into clicking yes; prompt fatigue is how a gate stops meaning
+/// anything, and a model that has asked three times is either broken or pushing.
+pub const REFUSALS_BEFORE_STANDING_DENY: u32 = 3;
+
+/// What the model is told when a call is refused, and what to do about it.
+///
+/// The message used to be `tool `edit` denied by user`: true, and useless. A model
+/// given no alternative retries the same call, which re-prompts the user, which is
+/// the loop that makes people switch the gate off. So the denial says what
+/// happened *and* what to do instead — and says something different once the
+/// refusal is standing, because "do not ask again" is only actionable if the model
+/// is told the difference.
+#[must_use]
+pub fn denial_message(what: &str, standing: bool) -> String {
+    if standing {
+        format!(
+            "Refused: {what}. This kind of call is refused for the rest of the session — \
+             do not attempt it again. If the task cannot be completed without it, say so \
+             and stop."
+        )
+    } else {
+        format!(
+            "Refused by the user: {what}. Do not repeat the same call. Either continue \
+             without it, or explain what you need and let the user decide."
+        )
+    }
+}
+
 /// What the driver answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
@@ -753,6 +786,21 @@ mod tests {
         // An empty list confirms everything — the strictest setting, and reachable.
         let strict = Policy::from_config(&json!({ "safe-calls": [] }));
         assert_eq!(strict.review("find", "{}"), Some(Concern::NotKnownSafe));
+    }
+
+    /// A denial the model can act on, and a distinct one once it is standing.
+    #[test]
+    fn a_denial_tells_the_model_what_to_do_instead() {
+        let once = denial_message("write to `a.txt`", false);
+        assert!(once.contains("Do not repeat"), "{once}");
+        assert!(once.contains("let the user decide"), "{once}");
+
+        let standing = denial_message("write to `a.txt`", true);
+        assert!(standing.contains("rest of the session"), "{standing}");
+        assert!(standing.contains("do not attempt it again"), "{standing}");
+        // The two must not read alike: "ask the user" and "stop asking" are
+        // opposite instructions, and a model cannot follow both.
+        assert_ne!(once, standing);
     }
 
     #[test]

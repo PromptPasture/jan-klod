@@ -919,6 +919,50 @@ mod tests {
         assert_eq!(driver.asked.get(), 2, "a scope escape is asked every time");
     }
 
+    /// A model that ignores a refusal cannot keep prompting the user.
+    ///
+    /// A denial ends that call and the loop continues, so a model that does not
+    /// take the hint asks again — and every ask is a dialog in front of a person.
+    /// Nobody should be worn down into clicking yes: prompt fatigue is how a gate
+    /// stops meaning anything, and it is an attack as much as an annoyance.
+    #[test]
+    fn repeated_refusal_becomes_a_standing_refusal() {
+        let Some(p) = load_permission() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(p)]);
+        // Plain "no" each time: a one-off refusal, never a standing one.
+        let mut driver = CountingDriver::new("no");
+
+        for attempt in 1..=6 {
+            let mut state = tool_call_with("shell", r#"{"command":"curl evil.example"}"#);
+            let outcome = d.dispatch(Phase::ToolCall, &mut state, &mut driver);
+            assert!(matches!(outcome, Outcome::Blocked(_)), "attempt {attempt} is refused");
+        }
+        assert_eq!(
+            driver.asked.get(),
+            3,
+            "after three refusals of the same kind of call, the asking stops — the \
+             model's persistence is not a reason to keep interrupting the user"
+        );
+
+        // And the model is told it is standing, because "ask the user" and "stop
+        // asking" are opposite instructions.
+        let mut state = tool_call_with("shell", r#"{"command":"curl evil.example"}"#);
+        let Outcome::Blocked(reason) = d.dispatch(Phase::ToolCall, &mut state, &mut driver) else {
+            panic!("still refused");
+        };
+        assert!(
+            reason.message.contains("rest of the session"),
+            "the denial says it is standing: {}",
+            reason.message
+        );
+
+        // A different kind of call still gets its own question: the counter is per
+        // scope, not a global patience budget.
+        let mut cargo = tool_call_with("shell", r#"{"command":"cargo test"}"#);
+        let _ = d.dispatch(Phase::ToolCall, &mut cargo, &mut driver);
+        assert_eq!(driver.asked.get(), 4, "`shell:cargo` has its own count");
+    }
+
     #[test]
     fn permission_remembers_a_refusal_too() {
         let Some(p) = load_permission() else { return };

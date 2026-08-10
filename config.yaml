@@ -96,6 +96,13 @@ extensions:
                                # one call. Those decisions last for the run only —
                                # a restart asks again — and never cover an argument
                                # pointing outside the workspace.
+      # Three refusals of the same kind of call make it standing: the asking
+      # stops and the model is told to stop trying. A denial ends one call and the
+      # loop continues, so a model that ignores the hint asks again, and every ask
+      # is a dialog in front of a person. Nobody should be worn down into clicking
+      # yes — prompt fatigue is how a gate stops meaning anything, and it is an
+      # attack as much as an annoyance. The count is per kind of call and per run.
+      #
       # The gate is an ALLOWLIST: anything not named here is confirmed. It was a
       # denylist of high-risk verbs (`shell`, `write`, `exec`, …), which cannot
       # name the verbs nobody thought of — `tool-edit` ships the ops `replace`

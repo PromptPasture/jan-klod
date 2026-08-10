@@ -89,6 +89,22 @@ mod component {
         POLICY.with(|p| *p.borrow_mut() = Policy::from_config(&section));
     }
 
+    /// Count a refusal of `key` and report the running total.
+    ///
+    /// Kept in the same run-scoped storage as the standing decisions, under a
+    /// distinct prefix so a counter can never be mistaken for a verdict — an
+    /// unreadable or absent value reads as zero, which errs toward asking.
+    fn count_refusal(key: &str) -> u32 {
+        let counter = format!("refusals:{key}");
+        let previous = host_storage::get(NAMESPACE, &counter)
+            .ok()
+            .and_then(|entry| entry.value.parse::<u32>().ok())
+            .unwrap_or(0);
+        let next = previous.saturating_add(1);
+        let _ = host_storage::set(NAMESPACE, &counter, &next.to_string());
+        next
+    }
+
     /// Look up a standing decision for `key`.
     ///
     /// A storage failure, a missing entry, or a value that is not a verdict all
@@ -192,7 +208,10 @@ mod component {
                             Some(Verdict::Deny) => {
                                 log(LogLevel::Info, &format!("`{key}` denied by a standing decision"));
                                 return Ok(Decision::Block(BlockReason {
-                                    message: format!("`{key}` was denied for this run"),
+                                    message: crate::rules::denial_message(
+                                        &crate::rules::summarise(&call.name, &call.arguments),
+                                        true,
+                                    ),
                                 }));
                             }
                             None => {}
@@ -211,9 +230,36 @@ mod component {
                         log(LogLevel::Info, &format!("tool `{}` approved", call.name));
                         Ok(Decision::Proceed)
                     } else {
+                        // A refusal the model ignores becomes another prompt in
+                        // front of the user. Past a few, treat the asking itself
+                        // as the answer: nobody should be worn down into clicking
+                        // yes, and a model on its fourth attempt is either broken
+                        // or pushing.
+                        let standing = match &scope {
+                            Some(key) => {
+                                let count = count_refusal(key);
+                                if count >= crate::rules::REFUSALS_BEFORE_STANDING_DENY {
+                                    log(
+                                        LogLevel::Warn,
+                                        &format!(
+                                            "`{key}` refused {count} times; refusing it \
+                                             for the rest of this run without asking again"
+                                        ),
+                                    );
+                                    remember(key, Verdict::Deny);
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            None => false,
+                        };
                         log(LogLevel::Info, &format!("tool `{}` denied", call.name));
                         Ok(Decision::Block(BlockReason {
-                            message: format!("tool `{}` denied by user", call.name),
+                            message: crate::rules::denial_message(
+                                &crate::rules::summarise(&call.name, &call.arguments),
+                                standing,
+                            ),
                         }))
                     }
                 }

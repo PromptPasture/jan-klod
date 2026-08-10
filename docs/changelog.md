@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-19
+
+- **Fix**: **a refusal told the model nothing to do instead**, so it retried the same call — and every retry is another dialog in front of a person. The message was `tool `edit` denied by user`: true and useless. A denial now says what happened *and* what to do — "Do not repeat the same call. Either continue without it, or explain what you need and let the user decide" — and says something materially different once the refusal is standing, because "ask the user" and "stop asking" are opposite instructions and a model cannot follow both.
+- **Guard**: **three refusals of the same kind of call make it standing.** The asking stops, without a standing "never" ever being chosen by the user. A model that has been told no three times is either broken or pushing, and nobody should be worn down into clicking yes: prompt fatigue is how a gate stops meaning anything, and it is an attack as much as an annoyance. The count is per scope key and per run, so refusing `shell:curl` three times does not cost `shell:cargo` its question. Verified red — six prompts without the guard, three with it.
+- The counter lives in the same run-scoped storage as the standing decisions, under a distinct `refusals:` prefix so a count can never be read as a verdict; an unreadable or absent value reads as zero, which errs toward asking.
+
 ## 2026-08-18
 
 - **Fix**: **a client that vanished mid-prompt held the agent for the full confirmation timeout** — three minutes by default, during which it served nobody and answered `409` to everyone else. `ask` already handled the case where writing the prompt frame *fails*: the client was gone before it was asked. But a client that disappears a moment later leaves a write that succeeds — the bytes go into the socket buffer and the FIN has not been processed — and nothing noticed afterwards. This module's own comment claimed the timeout prevented exactly that; three minutes of serving nobody is the pin, not the cure.
