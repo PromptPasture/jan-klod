@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-29
+
+- **Fix**: **a client disconnecting mid-turn wrote a half-finished answer into the durable transcript.** A cancel breaks the loop and returns whatever text is in hand as `Answered`; `run_and_persist` then stores it, and `replay` feeds it to the model next session — so "I will now edit `main.rs`…" is remembered as something the assistant said and finished. Yesterday's cycle-cap fix was the same shape, and this exit shares the harm plus one the cap does not: the transcript outlives the reason the turn stopped.
+- **Fix**: and the two reasons a tool pass ends the loop were one `bool`. A `tool-result` terminate is a **decision** — an interceptor saying the turn is over, and the answer in hand is the intended one. A sink cancel is an **interruption**. Collapsing them meant either annotating deliberate endings or hiding real ones, so they are now a `ToolPass` enum, and both halves are pinned by tests: a cancelled turn carries the note, a terminated one is asserted equal to its exact text with no note at all.
+- The first version of the fix patched only the cancel exit *after* the text delta and missed the one inside `run_tool_calls` — which is the path the existing cancellation test actually takes. The test failed with an answer of `""`, which is what caught it. Two exits, one of which I had not read closely enough.
+
 ## 2026-08-28
 
 - **Fix**: **a turn that hit its cycle cap said nothing about it.** The `ReAct` loop is capped at 8 iterations so a model emitting endless tool calls cannot spin — or, on a metered endpoint, spend — without end. Hitting it `break`s, and the loop then returned whatever the last completion happened to contain: a fragment, or when the model was mid-tool-call, **an empty string**, presented as the finished answer. The truncation warning exists for exactly this reason and this path did not have one. A turn cut short now says so in its text and on the event stream — in the text because a headless caller (`ask`, a CI step) sees nothing else.

@@ -275,6 +275,15 @@ pub fn run_turn(
         final_text = text;
 
         if flow == Flow::Stop {
+            // A cancel is a client that disconnected or a person who pressed stop.
+            // Either way the model was mid-thought, and the transcript outlives the
+            // reason — so the turn is recorded as unfinished rather than as an
+            // answer that happens to end early.
+            final_text = note_incomplete(
+                final_text,
+                "stopped before the turn finished — the client disconnected or cancelled",
+                sink,
+            );
             break;
         }
         if completion.tool_calls.is_empty() {
@@ -305,9 +314,20 @@ pub fn run_turn(
             break;
         }
 
-        // Returns true to stop the loop: a tool-result `terminate`, or a sink cancel.
-        if run_tool_calls(dispatcher, tools, driver, sink, &completion.tool_calls, &mut request) {
-            break;
+        match run_tool_calls(dispatcher, tools, driver, sink, &completion.tool_calls, &mut request) {
+            ToolPass::Continue => {}
+            // A decision: the answer in hand is the intended one.
+            ToolPass::Terminated => break,
+            // An interruption: the model was mid-thought and the transcript
+            // outlives the reason.
+            ToolPass::Cancelled => {
+                final_text = note_incomplete(
+                    final_text,
+                    "stopped before the turn finished — the client disconnected or cancelled",
+                    sink,
+                );
+                break;
+            }
         }
     }
 
@@ -325,16 +345,51 @@ pub fn run_turn(
 /// finished is a wrong the reader acts on. The note goes in the text as well as on
 /// the event stream, because a headless caller (`ask`, a CI step) sees only text.
 fn cut_short(text: String, cap: u32, sink: &mut dyn EventSink) -> String {
-    let note = format!(
-        "stopped after {cap} tool cycles — the task was not finished. Raise \
-         `limits.max-iterations` if it needs more room."
-    );
-    sink.emit(&Event::Warning(note.clone()));
+    note_incomplete(
+        text,
+        &format!(
+            "stopped after {cap} tool cycles — the task was not finished. Raise \
+             `limits.max-iterations` if it needs more room."
+        ),
+        sink,
+    )
+}
+
+/// Mark a turn that ended before the model was done, and say why.
+///
+/// Shared by every early exit, because the harm is the same in each and it is not
+/// only what the reader sees. `run_and_persist` writes the answer to the durable
+/// transcript, and `replay` feeds that back to the model next session — so a turn
+/// that stopped halfway, recorded as if it were finished, teaches the model that
+/// the assistant said something it never got to say. For a coding agent, "I will
+/// now edit `main.rs`…" stored as a completed answer is worse than no memory at
+/// all.
+fn note_incomplete(text: String, note: &str, sink: &mut dyn EventSink) -> String {
+    sink.emit(&Event::Warning(note.to_string()));
     if text.trim().is_empty() {
         format!("[{note}]")
     } else {
         format!("{text}\n\n[{note}]")
     }
+}
+
+/// Why a pass over the tool calls ended the loop.
+///
+/// The two used to collapse into one `bool`, and they are opposite things. A
+/// `tool-result` terminate is a **decision** — an interceptor saying this turn is
+/// over — and the answer in hand is the intended one. A sink cancel is an
+/// **interruption**: the client went away or someone pressed stop, and the model
+/// was mid-thought. Recording both as a finished answer meant a disconnect was
+/// stored in the durable transcript and replayed to the model next session as
+/// something the assistant had said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolPass {
+    /// Keep looping.
+    Continue,
+    /// An interceptor terminated the turn at `tool-result`.
+    Terminated,
+    /// The sink cancelled: no one is listening, or someone stopped it.
+    Cancelled,
 }
 
 /// Run each tool call: gate at `tool-call`, dispatch the tool, run `tool-result`,
@@ -347,8 +402,8 @@ fn run_tool_calls(
     sink: &mut dyn EventSink,
     calls: &[ToolCall],
     request: &mut PendingRequest,
-) -> bool {
-    let mut stop = false;
+) -> ToolPass {
+    let mut stop = ToolPass::Continue;
     for call in calls {
         // tool-call gate (e.g. permission). A block denies just this call; the
         // model is told, and the loop continues.
@@ -364,7 +419,7 @@ fn run_tool_calls(
                     _ => call.clone(),
                 };
                 if sink.emit(&Event::ToolInvoked(effective.clone())) == Flow::Stop {
-                    stop = true;
+                    stop = ToolPass::Cancelled;
                 }
                 tools
                     .invoke(&effective)
@@ -381,14 +436,15 @@ fn run_tool_calls(
             dispatcher.dispatch(Phase::ToolResult, &mut result_state, driver),
             Outcome::Blocked(_)
         ) {
-            stop = true; // tool-result `terminate`
+            // A decision, not an interruption: the answer in hand is intended.
+            stop = ToolPass::Terminated;
         }
         let outcome = match result_state {
             HookState::ToolResult(outcome) => outcome,
             _ => ToolOutcome { tool_call_id: call.id.clone(), content: String::new() },
         };
         if sink.emit(&Event::ToolResult(outcome.clone())) == Flow::Stop {
-            stop = true; // sink cancel
+            stop = ToolPass::Cancelled;
         }
         request.messages.push(Message {
             role: Role::Tool,
@@ -810,6 +866,10 @@ mod tests {
         })];
         let mut tools = NoTools;
         let out = run_turn(&mut d, &mut providers, &mut tools, &mut NoDriver, &mut NoSink, "s", "go", vec![], Limits::default());
+        // Exactly the text, with no "stopped before the turn finished" note: a
+        // `tool-result` terminate is a *decision*, and the answer in hand is the
+        // intended one. A cancel is an interruption and is marked. Collapsing the
+        // two would either annotate deliberate endings or hide real ones.
         assert_eq!(out, RunResult::Answered { text: "partial".into(), agentic: true });
     }
 
@@ -995,6 +1055,15 @@ mod tests {
             matches!(sink.events.last(), Some(Event::Done { .. })),
             "the loop stopped and emitted a terminal Done: {:?}",
             sink.events
+        );
+        // …and it is recorded as unfinished. `run_and_persist` writes this text to
+        // the durable transcript and `replay` feeds it back to the model next
+        // session, so a half-finished turn stored as an answer teaches the model
+        // that the assistant said something it never got to say.
+        let RunResult::Answered { text, .. } = out else { unreachable!() };
+        assert!(
+            text.contains("stopped before the turn finished"),
+            "the cancelled turn is marked, not passed off as an answer: {text:?}"
         );
     }
 
