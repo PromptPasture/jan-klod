@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-28
+
+- **Fix**: **a turn that hit its cycle cap said nothing about it.** The `ReAct` loop is capped at 8 iterations so a model emitting endless tool calls cannot spin — or, on a metered endpoint, spend — without end. Hitting it `break`s, and the loop then returned whatever the last completion happened to contain: a fragment, or when the model was mid-tool-call, **an empty string**, presented as the finished answer. The truncation warning exists for exactly this reason and this path did not have one. A turn cut short now says so in its text and on the event stream — in the text because a headless caller (`ask`, a CI step) sees nothing else.
+- **Config**: the cap is raisable (`limits.max-iterations`). Eight is a real constraint for coding work — view, edit, run the tests, read the failure, fix, run again is already six — so whoever is paying for the requests should be able to set it. The knob is named in the message, because a limit you cannot find is indistinguishable from a bug.
+- Threaded as a `Limits` struct rather than a ninth positional parameter: the next bound to arrive (`max-retries`, a wall-clock budget) belongs beside it instead of widening every signature between the conductor and `build_agent` again.
+
 ## 2026-08-27
 
 - **Test**: **a guest cannot read the host's environment** — probed, not assumed. This is the sibling of the subprocess leak fixed on 2026-08-15: a command run through `host-process` inherited `OPENAI_API_KEY` and `JAN_KLOD_TOKEN` because nothing cleared the environment, and a guest reading them *directly* is the shorter path. It is closed only because `WasiCtxBuilder::inherit_env` is never called — a default in a crate we upgrade, exactly like the deny-all socket check. If it flips, every component reads the operator's provider key with one line of `std`, and nothing else in the suite would notice. `tool-escape-probe` now tries it, and tries the host's argv too.

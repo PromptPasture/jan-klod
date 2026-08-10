@@ -473,9 +473,28 @@ impl Runtime {
             dispatcher: intercept::Dispatcher::new(interceptors),
             providers,
             store,
+            limits: self.limits(),
             tools,
         })
 
+    }
+
+    /// Bounds a turn runs under, from the top-level `limits:` block.
+    ///
+    /// The cycle cap exists so a model that keeps emitting tool calls cannot spin —
+    /// or, on a metered endpoint, spend — forever. Eight is a real constraint for
+    /// coding work, so it has to be raisable by whoever is paying.
+    fn limits(&self) -> conductor::Limits {
+        let configured = self
+            .agent
+            .get("limits")
+            .and_then(|limits| limits.get("max-iterations"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n > 0);
+        conductor::Limits {
+            max_iterations: configured.unwrap_or(conductor::DEFAULT_MAX_ITERATIONS),
+        }
     }
 
     /// The destinations guests may reach, derived from what the operator already
@@ -735,6 +754,8 @@ pub struct AgentSession {
     dispatcher: intercept::Dispatcher,
     providers: Vec<Box<dyn conductor::Completer>>,
     store: Arc<Mutex<store::Store>>,
+    /// Bounds this session's turns run under, from top-level `limits:`.
+    limits: conductor::Limits,
     /// The enabled tool + registry extensions, dispatched by the loop as a `ToolInvoker`.
     tools: CombinedFleet,
 }
@@ -747,6 +768,7 @@ impl AgentSession {
             &mut self.dispatcher,
             &mut self.providers,
             &self.store,
+            self.limits,
             &mut self.tools,
             &mut HeadlessDriver,
             &mut conductor::NoSink,
@@ -769,6 +791,7 @@ impl AgentSession {
             &mut self.dispatcher,
             &mut self.providers,
             &self.store,
+            self.limits,
             tools,
             driver,
             &mut conductor::NoSink,
@@ -789,6 +812,7 @@ impl AgentSession {
             &mut self.dispatcher,
             &mut self.providers,
             &self.store,
+            self.limits,
             &mut self.tools,
             driver,
             &mut conductor::NoSink,
@@ -811,6 +835,7 @@ impl AgentSession {
             &mut self.dispatcher,
             &mut self.providers,
             &self.store,
+            self.limits,
             tools,
             driver,
             sink,
@@ -832,6 +857,7 @@ impl AgentSession {
             &mut self.dispatcher,
             &mut self.providers,
             &self.store,
+            self.limits,
             &mut self.tools,
             driver,
             &mut conductor::NoSink,
@@ -857,6 +883,7 @@ impl AgentSession {
             &mut self.dispatcher,
             &mut self.providers,
             &self.store,
+            self.limits,
             &mut self.tools,
             driver,
             sink,
@@ -878,6 +905,7 @@ impl AgentSession {
             &mut self.dispatcher,
             &mut self.providers,
             &self.store,
+            self.limits,
             &mut self.tools,
             &mut HeadlessDriver,
             sink,
@@ -942,6 +970,7 @@ fn run_and_persist(
     dispatcher: &mut intercept::Dispatcher,
     providers: &mut [Box<dyn conductor::Completer>],
     store: &Mutex<store::Store>,
+    limits: conductor::Limits,
     tools: &mut dyn conductor::ToolInvoker,
     driver: &mut dyn intercept::Driver,
     sink: &mut dyn conductor::EventSink,
@@ -953,7 +982,9 @@ fn run_and_persist(
     // would deadlock the first guest that remembered anything.
     let history = store.lock().map(|store| replay(&store, session)).unwrap_or_default();
     let result =
-        conductor::run_turn(dispatcher, providers, tools, driver, sink, session, message, history);
+        conductor::run_turn(
+            dispatcher, providers, tools, driver, sink, session, message, history, limits,
+        );
     if let conductor::RunResult::Answered { text, .. } = &result {
         // Best-effort transcript append: a store failure never fails the answered turn.
         let Ok(store) = store.lock() else { return result };

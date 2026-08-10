@@ -204,10 +204,11 @@ fn every_config_key_is_one_the_runtime_reads() {
     //   execution  — Runtime::open_process_runner
     //   classifier — Runtime::open_classifier
     //   storage    — Runtime::open_store
+    //   limits     — Runtime::limits
     //   providers  — order_chain, applied in build_agent
     //   routing    — interceptor-task-router, via host-config
-    const CONSUMED_TOP_LEVEL: [&str; 7] =
-        ["extensions", "workspace", "execution", "classifier", "providers", "routing", "storage"];
+    const CONSUMED_TOP_LEVEL: [&str; 8] =
+        ["extensions", "workspace", "execution", "classifier", "providers", "routing", "storage", "limits"];
 
     let config = std::fs::read_to_string(common::repo_root().join("config.yaml"))
         .expect("the shipped config.yaml is readable");

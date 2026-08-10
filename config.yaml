@@ -252,6 +252,16 @@ extensions:
 # does not by itself let the model run arbitrary commands — that takes
 # `tool.shell` as well; `tool.git` alone can only run the read-only git
 # subcommands its contract allows.
+# ---- Turn bounds ----
+# The cycle cap stops a model that keeps emitting tool calls from spinning — and,
+# on a metered endpoint, from spending — without end. Eight is a real constraint
+# for coding work: view, edit, run the tests, read the failure, fix, run again is
+# already six. A turn that hits the cap now says so in its answer instead of
+# returning whatever the last completion happened to contain.
+#
+# limits:
+#   max-iterations: 8
+
 # ---- Outbound network ----
 # A component granted `host-http` may reach public destinations, plus every
 # endpoint this file already names (a provider's `base-url`, an MCP server's
