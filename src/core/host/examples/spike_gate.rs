@@ -2,7 +2,10 @@
 //! component, call its exported `complete` across the Component Model boundary,
 //! print the echo. The gate verdict is recorded in
 //! `docs/decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md`; this
-//! example keeps it runnable (`make gate`) after the binary became the real core.
+//! example keeps it runnable by hand, with a prompt of your choosing.
+//!
+//! The *automated* check is `tests/polyglot.rs`, which is what `make gate` runs.
+//! This header used to claim the gate ran this example. It did not.
 //!
 //! Synchronous Wasmtime on purpose — see the async-model decision in that
 //! decision folder.

@@ -126,48 +126,19 @@ supply-chain: deny audit sbom
 harness: extensions
 	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence --test api_rest --test telegram --test host_fs --test host_process --test tool_fleet --test tool_wiring
 
-# Exit gate: the full offline integration surface. Boots the real core against staged
-# guests and drives every v1 guarantee end to end, all offline (canned host-http, no
-# api key) and skipping any guest not staged, so it stages the guests first:
-#   gate            — the thin loop: intent -> shaping -> completion with provider
-#                     fallback -> grounded answer, through all v1 interceptors; plus a
-#                     model tool call through the loop (permission gate -> fleet ->
-#                     real tool-fs -> host-fs).
-#   persistence     — durable state survives a Runtime restart.
-#   api_rest        — an external HTTP client drives the loop over the REST surface.
-#   telegram        — an inbound Telegram message drives a turn and a reply.
-#   host_fs/host_process — the file-workspace substrate (path-jailed read/write,
-#                     bounded exec) driven across the CM boundary by probe guests.
-#   tool_fleet/tool_wiring — fleet dispatch by name + build_agent wiring from config.
-#   jan-klod-core   — streaming (event stream + SSE), cancel, steering, and the
-#                     host-fs/host-process host-side units.
-#   api_prompt      — a mid-turn confirmation asked over SSE and answered on a
-#                     second connection (the permission gate's user-facing half).
-#   shipped_defaults— the repo's real config.yaml, driven through the real UI
-#                     client: what a user gets, not what a test constructs.
-#   provider_chain  — the `providers:` list actually orders the fallback chain.
-#   docs_match_config— the README/landing page name the API key the shipped
-#                     config actually reads (the first five minutes work).
-#   installed_layout— a real bin/+share/ install, started the way the UI starts
-#                     it, from a directory that is not a checkout.
-#   jan-klod        — a UI client drives core over REST.
-# The Go supervisor's flip/health/rollback cycle is covered by `make test`.
+# Exit gate: the full offline integration surface, with nothing allowed to skip.
 #
-# JK_REQUIRE_GUESTS turns "guest not staged, skip" into a hard failure. These
-# tests skip so a bare `cargo test` works before `make ext`, but a skipped test
-# reports as passing — which once kept a `shipped_defaults` assertion that could
-# never hold green for a day. The gate stages the guests first, so here a skip
-# can only mean something is wrong.
+# This used to name the test files to run — seventeen of them, each with a note
+# saying what it covered. The list is the problem. `JK_REQUIRE_GUESTS` exists
+# because a skipped test reports as passing, and the enforcement applied only to
+# files someone remembered to add: `storage_scope` and `test_layout` were written,
+# committed, and were not in it. So the gate now runs the whole suite under the
+# flag. Everything staged, nothing skipped, no list to forget.
+#
+# Everything is offline: canned host-http, no api key, no network.
 gate: export JK_REQUIRE_GUESTS = 1
 gate: extensions
-	cd $(CORE) && cargo test -p jan-klod-host \
-		--test gate --test persistence --test api_rest --test api_prompt --test telegram \
-		--test shipped_defaults --test provider_chain --test tool_fetch \
-		--test classifier --test session_memory --test docs_match_config \
-		--test installed_layout --test auth \
-		--test host_fs --test host_process --test tool_fleet --test tool_wiring
-	cd $(CORE) && cargo test -p jan-klod-core -- stream cancel follow_up host_fs host_process
-	cd $(CORE) && cargo test -p jan-klod
+	cd $(CORE) && cargo test --workspace
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.

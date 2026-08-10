@@ -54,6 +54,39 @@ pub fn guests_staged(guests: &[&str]) -> bool {
     false
 }
 
+/// Whether `program` answers a version query.
+///
+/// Both spellings, because `--version` is not universal: TinyGo answers
+/// `tinygo version` and prints "Unknown command: --version" — with exit status 0,
+/// so probing only the flag reported a compiler that is installed as absent.
+fn runnable(program: &str) -> bool {
+    ["--version", "version"].iter().any(|flag| {
+        std::process::Command::new(program)
+            .arg(flag)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
+/// Whether an optional developer toolchain is present, with **no** requirement
+/// that it be.
+///
+/// Distinct from [`tool_available`] on purpose. That one exists for prerequisites
+/// a full run must have, so `JK_REQUIRE_GUESTS` turns its absence into a failure.
+/// This one is for a check that is genuinely conditional — rebuilding the TinyGo
+/// canary needs `tinygo` and `wkg`, which CI does not carry and which most
+/// contributors will not install. Making that a hard failure would only teach
+/// people to unset the flag. The skip is announced rather than silent.
+pub fn optional_tool(program: &str) -> bool {
+    if runnable(program) {
+        return true;
+    }
+    eprintln!("skipping: optional toolchain `{program}` is not installed");
+    false
+}
+
 /// Whether an external program a test needs is on `PATH`.
 ///
 /// Same policy as [`guests_staged`], for the same reason: a test that quietly
@@ -62,13 +95,7 @@ pub fn guests_staged(guests: &[&str]) -> bool {
 /// expressible, that a refused call leaves the repository untouched — are worth
 /// nothing if they silently do not run.
 pub fn tool_available(program: &str) -> bool {
-    let found = std::process::Command::new(program)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if found {
+    if runnable(program) {
         return true;
     }
     assert!(

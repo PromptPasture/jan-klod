@@ -109,7 +109,11 @@ guest — targets land in Slice 1b).
 
 First-party guests **default to Rust** (see the
 [extension-technology decision](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md));
-TinyGo is the case-by-case exception and the standing polyglot gate canary.
+TinyGo is the case-by-case exception and the polyglot canary: `make gate` loads
+the committed Go-built `spike.wasm` and calls across the boundary, and rebuilds
+it from source if you have `tinygo` and `wkg` installed (announced as a skip if
+you do not). So a WIT change that a non-Rust toolchain cannot express fails on
+the machine of anyone carrying that toolchain, rather than nowhere.
 
 ### Rust (default)
 
