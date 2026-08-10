@@ -14,6 +14,7 @@ members = [
     "interceptor-task-router",
     "interceptor-system",
     "tool-proc-probe",
+    "tool-escape-probe",
     "tool-fs",
     "tool-shell",
     "tool-edit",

@@ -78,7 +78,7 @@ impl HostState {
     /// Build the host state for one instance, reaching only public destinations.
     pub fn new(component_id: impl Into<String>, section: ConfigSection) -> Self {
         Self {
-            wasi: WasiCtxBuilder::new().inherit_stdio().build(),
+            wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: component_id.into(),
             section,

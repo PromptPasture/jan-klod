@@ -213,7 +213,20 @@ impl ToolExtension {
         g_proc::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = ToolHost {
-            wasi: WasiCtxBuilder::new().inherit_stdio().build(),
+            // `inherit_stderr`, not `inherit_stdio`.
+            //
+            // Inheriting all three handed every guest the host's **standard
+            // input**, and `tool-escape-probe` reads 26 bytes of it straight off
+            // the terminal. `jan-klod-gateway ask` runs in the user's shell, so a
+            // component could read what is being typed — including the answer to
+            // a permission prompt, which is the one input whose whole purpose is
+            // to be a human's decision.
+            //
+            // stderr stays: a guest's panic message is the only thing that makes
+            // a broken component diagnosable, and unlike stdin it grants no
+            // authority. A guest can write misleading lines there, which is
+            // cosmetic — host log lines are tagged by the host, not the guest.
+            wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: id.to_string(),
             workspace,

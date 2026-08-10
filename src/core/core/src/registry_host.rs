@@ -251,7 +251,7 @@ impl SkillsExtension {
         sk_fs::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = SkillsHost {
-            wasi: WasiCtxBuilder::new().inherit_stdio().build(),
+            wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: id.to_string(),
             config_json,
@@ -334,7 +334,7 @@ impl McpExtension {
         mcp_event::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = McpHost {
-            wasi: WasiCtxBuilder::new().inherit_stdio().build(),
+            wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: id.to_string(),
             config_json,

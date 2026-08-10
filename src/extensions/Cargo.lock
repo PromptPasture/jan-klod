@@ -312,6 +312,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tool-escape-probe"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "tool-fetch"
 version = "0.1.0"
 dependencies = [

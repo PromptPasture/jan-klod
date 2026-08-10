@@ -455,7 +455,7 @@ impl WasmInterceptor {
         g_llm::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = InterceptorHost {
-            wasi: WasiCtxBuilder::new().inherit_stdio().build(),
+            wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: id.to_string(),
             section,

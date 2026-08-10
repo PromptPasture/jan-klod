@@ -24,9 +24,14 @@ mkdir -p "$DIR/ext"
 cp "$GATEWAY_BIN" "$DIR/jan-klod-gateway"
 cp "$UI_BIN" "$DIR/jan-klod"
 cp "$CONFIG" "$DIR/config.yaml"
-# Copy staged guests.
+# Copy staged guests, minus the test instruments. `tool-escape-probe` exists to
+# attempt a sandbox escape so the suite can watch it fail; it is inert unless
+# someone enables it, but a release that ships a component named "escape probe"
+# invites exactly one question and deserves not to.
 if [ -d "$EXT_DIR" ]; then
-	find "$EXT_DIR" -maxdepth 1 -name '*.wasm' -exec cp {} "$DIR/ext/" \;
+	find "$EXT_DIR" -maxdepth 1 -name '*.wasm' \
+		! -name 'tool-escape-probe.wasm' \
+		-exec cp {} "$DIR/ext/" \;
 fi
 
 # Verify the assembled bundle before tarring it. A missing guest is otherwise a

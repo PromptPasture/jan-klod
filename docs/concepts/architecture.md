@@ -71,8 +71,14 @@ Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are
 
 ### What extensions cannot do
 
+Asserted by `host/tests/sandbox_boundary.rs`, which drives `tool-escape-probe` —
+a component written to attempt each of these with plain `std`, rather than to ask
+politely through a typed import:
+
 - Direct filesystem access
-- Open arbitrary network connections
+- Open arbitrary network connections (`wasi:sockets` is wired into the linker;
+  every address is refused)
+- Read the host's standard input — the terminal `jan-klod-gateway ask` runs in
 - Talk to other extensions directly (routed through core)
 - Access host OS or process
 

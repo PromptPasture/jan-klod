@@ -61,7 +61,7 @@ struct CapHost {
 impl CapHost {
     fn new(component_id: impl Into<String>, section: &serde_json::Value, http: HttpFn) -> Self {
         Self {
-            wasi: WasiCtxBuilder::new().inherit_stdio().build(),
+            wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: component_id.into(),
             section: ConfigSection::new(section.clone()),
