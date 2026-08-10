@@ -58,3 +58,43 @@ fn host_process_is_default_deny_when_disabled() {
     let out = tool.invoke(r#"{"command":"echo","args":["x"]}"#);
     assert!(out.is_err(), "with execution disabled, host-process must deny: {out:?}");
 }
+
+/// A command run *through a guest* does not carry the host's credentials.
+///
+/// The unit test in `core::host_process` covers the runner directly. This one
+/// covers the path that actually exists in a deployment: the model asks a
+/// sandboxed tool to run something, and the something inherits an environment.
+/// That environment held `OPENAI_API_KEY` — `config.yaml` expands `${…}`, so it
+/// is necessarily present — and `JAN_KLOD_TOKEN`, the REST bearer token. One
+/// `env` put both into tool output, which becomes a message in the transcript,
+/// which is sent to the model provider on the next turn. The exfiltration path
+/// was the obvious command, not a clever one.
+#[test]
+fn a_guest_run_command_does_not_receive_the_hosts_credentials() {
+    let engine = Engine::default();
+    let Some(component) = probe_component(&engine) else { return };
+
+    std::env::set_var("OPENAI_API_KEY", "sk-guest-must-not-leak");
+    std::env::set_var("JAN_KLOD_TOKEN", "bearer-guest-must-not-leak");
+
+    let workspace_dir = std::env::temp_dir().join(format!("jk-hostproc-env-{}", std::process::id()));
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+    let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
+    let runner = ProcessRunner::new(workspace, Duration::from_secs(5), 64 * 1024);
+
+    let mut tool = ToolExtension::instantiate(&engine, "tool.proc-probe", &component, None, runner)
+        .expect("tool instantiates");
+
+    let out = tool
+        .invoke(r#"{"command":"/bin/sh","args":["-c","env"]}"#)
+        .unwrap_or_else(|err| err);
+    assert!(
+        !out.contains("must-not-leak"),
+        "a credential reached the model through tool output:\n{out}"
+    );
+    // And the environment is not simply empty — a command that gets no PATH
+    // cannot run anything, which would make this pass for the wrong reason.
+    assert!(out.contains("PATH="), "PATH is still provided: {out}");
+
+    std::fs::remove_dir_all(&workspace_dir).ok();
+}

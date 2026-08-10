@@ -17,6 +17,30 @@ use std::time::{Duration, Instant};
 
 use crate::host_fs::Workspace;
 
+/// The only environment variables a child process inherits by default.
+///
+/// A subprocess used to receive the gateway's entire environment. That
+/// environment holds `OPENAI_API_KEY` — `config.yaml` expands `${OPENAI_API_KEY}`,
+/// so it is necessarily there — and `JAN_KLOD_TOKEN`, the bearer token for the
+/// REST surface. One `env` through `tool-shell` put both in tool output, which
+/// goes into the transcript, which goes to the model provider on the next turn.
+/// No exotic step: the obvious command.
+///
+/// So the environment is cleared and rebuilt from this list. Each entry is here
+/// because a command a coding agent exists to run needs it, and none of them is a
+/// credential:
+///
+/// - `PATH` — without it `Command::new("cargo")` cannot resolve at all.
+/// - `HOME` — git reads `~/.gitconfig`, cargo reads `~/.cargo`.
+/// - `CARGO_HOME`, `RUSTUP_HOME` — for a toolchain installed somewhere else.
+/// - `TMPDIR` — a per-user temp directory on macOS; tools assume one exists.
+/// - `LANG`, `LC_ALL`, `LC_CTYPE` — text handling, so output is not mojibake.
+///
+/// `TERM` is **not** here on purpose: most tools drop colour without it, and ANSI
+/// escapes in tool output are context the model pays for and cannot use.
+pub const BASE_ENV: [&str; 8] =
+    ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"];
+
 /// Why an exec failed (mirrors `host-process.proc-error`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcError {
@@ -46,20 +70,58 @@ pub struct ProcessRunner {
     workspace: Option<Workspace>,
     timeout: Duration,
     output_cap: usize,
+    /// Extra environment names the operator granted (see [`BASE_ENV`]).
+    env_passthrough: Vec<String>,
 }
 
 impl ProcessRunner {
     /// A runner that denies every exec (no workspace configured).
     #[must_use]
     pub const fn disabled() -> Self {
-        Self { workspace: None, timeout: Duration::from_secs(0), output_cap: 0 }
+        Self {
+            workspace: None,
+            timeout: Duration::from_secs(0),
+            output_cap: 0,
+            env_passthrough: Vec::new(),
+        }
     }
 
     /// A runner rooted at `workspace`, with a per-command `timeout` and `output_cap`
     /// (bytes) applied to each captured stream.
     #[must_use]
     pub const fn new(workspace: Workspace, timeout: Duration, output_cap: usize) -> Self {
-        Self { workspace: Some(workspace), timeout, output_cap }
+        Self { workspace: Some(workspace), timeout, output_cap, env_passthrough: Vec::new() }
+    }
+
+    /// Additionally pass these environment variables through to child processes.
+    ///
+    /// A grant, one name at a time, like `network.allow`. For the command that
+    /// genuinely needs `GITHUB_TOKEN` — and nothing else.
+    #[must_use]
+    pub fn with_env_passthrough(mut self, names: Vec<String>) -> Self {
+        self.env_passthrough = names;
+        self
+    }
+
+    /// The environment a child process gets: [`BASE_ENV`] plus whatever the
+    /// operator granted, and nothing else.
+    fn environment(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = BASE_ENV
+            .iter()
+            .filter_map(|name| {
+                std::env::var(name).ok().map(|value| ((*name).to_string(), value))
+            })
+            .collect();
+        for name in &self.env_passthrough {
+            if let Ok(value) = std::env::var(name) {
+                out.push((name.clone(), value));
+            }
+        }
+        // Not inherited, deliberately set: without `TERM` most tools already drop
+        // colour, and this makes it explicit. ANSI escapes in tool output are
+        // context the model pays for and cannot use.
+        out.push(("NO_COLOR".to_string(), "1".to_string()));
+        out
     }
 
     /// Run `command` with `args`, an optional workspace-relative `cwd`, and optional
@@ -86,6 +148,8 @@ impl ProcessRunner {
         let mut child = Command::new(command)
             .args(args)
             .current_dir(&dir)
+            .env_clear()
+            .envs(self.environment())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -153,6 +217,38 @@ mod tests {
         let ws = Workspace::open(&dir).unwrap();
         let runner = ProcessRunner::new(ws.clone(), Duration::from_secs(5), 64 * 1024);
         (ws, runner)
+    }
+
+    /// The environment is a credential store, and this used to hand all of it to
+    /// every command the model asked for.
+    #[test]
+    fn a_command_does_not_inherit_the_hosts_secrets() {
+        std::env::set_var("OPENAI_API_KEY", "sk-test-must-not-leak");
+        std::env::set_var("JAN_KLOD_TOKEN", "bearer-must-not-leak");
+        let (_ws, runner) = runner();
+        let exit = runner
+            .exec("/bin/sh", &["-c".into(), "env".into()], None, None)
+            .expect("sh runs");
+        assert!(
+            !exit.stdout.contains("must-not-leak"),
+            "the provider key and the gateway token reached a subprocess, so `env` \
+             puts them in tool output, the transcript, and the next request to the \
+             model:\n{}",
+            exit.stdout
+        );
+    }
+
+    /// …but the commands a coding agent exists to run still have to work.
+    #[test]
+    fn a_command_keeps_what_it_needs_to_run() {
+        let (_ws, runner) = runner();
+        let exit = runner
+            .exec("/bin/sh", &["-c".into(), "echo $PATH; echo $HOME".into()], None, None)
+            .expect("sh runs");
+        assert!(!exit.stdout.trim().is_empty(), "PATH and HOME survive: {:?}", exit.stdout);
+        // A program found via PATH, which is the whole point of keeping it.
+        let git = runner.exec("git", &["--version".into()], None, None);
+        assert!(git.is_ok(), "a PATH lookup still resolves: {git:?}");
     }
 
     #[test]

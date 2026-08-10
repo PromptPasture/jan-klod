@@ -568,11 +568,25 @@ impl Runtime {
                     .and_then(|e| e.get("output-cap"))
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(64 * 1024);
+                // Named environment variables are a grant, one at a time, the
+                // same shape as `network.allow`. A child otherwise gets only
+                // `host_process::BASE_ENV`.
+                let passthrough: Vec<String> = exec
+                    .and_then(|e| e.get("env-passthrough"))
+                    .and_then(serde_json::Value::as_array)
+                    .map(|names| {
+                        names
+                            .iter()
+                            .filter_map(|n| n.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 host_process::ProcessRunner::new(
                     ws.clone(),
                     std::time::Duration::from_secs(timeout),
                     usize::try_from(cap).unwrap_or(64 * 1024),
                 )
+                .with_env_passthrough(passthrough)
             }
             _ => host_process::ProcessRunner::disabled(),
         }

@@ -207,6 +207,15 @@ extensions:
 # something you have to infer.
 # workspace: /path/to/your/repo
 
+# A subprocess gets a REBUILT environment, not the gateway's. It inherits only
+# PATH, HOME, CARGO_HOME, RUSTUP_HOME, TMPDIR and the LANG/LC_* locale vars —
+# because the gateway's own environment holds OPENAI_API_KEY (this file expands
+# it) and JAN_KLOD_TOKEN, and one `env` through tool.shell would put both into
+# tool output, the transcript, and the next request to the model provider.
+# Name anything else a command genuinely needs, one variable at a time:
+#
+#   env-passthrough: [GITHUB_TOKEN]
+#
 # The execution substrate (host-process), used by tool.git and tool.shell.
 # DEFAULT-DENY: with this block absent or `enabled: false`, every exec is denied
 # and those tools fail closed no matter what `extensions.tool` says. Enabling it

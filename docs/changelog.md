@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-15
+
+- **Fix (security)**: **a subprocess inherited the gateway's entire environment, credentials included.** `host-process` spawned with no `env_clear`, so every command a tool ran received `OPENAI_API_KEY` — `config.yaml` expands `${OPENAI_API_KEY}`, so it is necessarily in the environment — and `JAN_KLOD_TOKEN`, the bearer token for the REST surface. One `env` through `tool.shell` put both into tool output, which becomes a message in the transcript, which is sent to the model provider on the next turn. The exfiltration path was the obvious command, not a clever one: the permission gate would ask "Allow `shell` to run `env`?", which reads harmless.
+- The environment is now cleared and rebuilt from a named base — `PATH`, `HOME`, `CARGO_HOME`, `RUSTUP_HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE` — each present because a command a coding agent exists to run needs it, and none of them a credential. Anything else is a grant, one name at a time (`execution.env-passthrough: [GITHUB_TOKEN]`), the same shape as `network.allow`. `TERM` is deliberately absent: without it most tools drop colour, and ANSI escapes in tool output are context the model pays for and cannot use. `NO_COLOR=1` is set for the same reason.
+- **Test**: proven at both levels before and after — the runner directly, and a command run *through a sandboxed guest*, which is the path a deployment actually has. Both assert `PATH=` is still present too, since an empty environment would make them pass for the wrong reason (a command with no `PATH` cannot run anything). Verified red by restoring inheritance.
+
 ## 2026-08-14
 
 - **Fix**: **`host-fs` was never default-deny, including in a comment I wrote saying it was.** With `workspace:` absent, `open_workspace` adopts the current working directory. That default is *right* — the repository you are standing in is the one you mean, and it is what makes the runtime usable with no configuration — but it is a grant with a default, not the opt-in `host-process` shape it has been described as. The claim is corrected where it was wrong (`config.yaml` already said `$PWD`; a code comment from 2026-08-10 did not).
