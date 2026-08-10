@@ -67,7 +67,16 @@ extensions:
 
   # ---- Interceptors: sandboxed decision hooks the core loop dispatches by phase.
   #      enabled/disabled ONLY — ordering is structural (phase order + load order),
-  #      never configured here. See docs/concepts/configuration.md#interceptors. ----
+  #      never configured here. See docs/concepts/configuration.md#interceptors.
+  #
+  #      `persist: true` on an instance lets its `host-storage` writes reach the
+  #      session store instead of a private map that dies with the process. It is
+  #      off by default and deliberately so: the permission gate keeps standing
+  #      grants ("always allow fs:write") in host-storage, and a boundary should
+  #      not become permanently open because of a click last week. Grant it to an
+  #      interceptor that should remember across restarts, not to the one that
+  #      decides what you are allowed to do. Each instance is namespaced to
+  #      itself; it cannot read a peer's keys or a session transcript. ----
   interceptor:
     intent-router:
       enabled: true            # before-loop: simple vs agentic classification

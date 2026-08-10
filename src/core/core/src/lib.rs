@@ -30,6 +30,7 @@ pub mod tool_host;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
@@ -372,6 +373,10 @@ impl Runtime {
         // straightforward.
         let classifier = self.open_classifier(http_factory)?;
 
+        // Opened before the interceptors, because they share it: an interceptor's
+        // `host-storage` writes land here, namespaced to the component.
+        let store = self.open_store()?;
+
         // Pass 2: interceptors, each served the tool set at `select-tools`.
         let mut interceptors: Vec<Box<dyn intercept::Interceptor>> = Vec::new();
         for ext in &self.extensions {
@@ -385,13 +390,33 @@ impl Runtime {
             if let serde_json::Value::Object(map) = &mut config {
                 map.entry("tools").or_insert_with(|| tools_advert.clone());
             }
+            // Durability is opt-in per instance, and off by default.
+            //
+            // `interceptor-permission` records standing grants ("always allow
+            // `fs:write`") through `host-storage`, and documents them as
+            // run-scoped — "a permission boundary should not quietly become
+            // permanently open because of a click last week". That property was
+            // enforced by nothing: it held because this host happened to back
+            // `host-storage` with a private map. Handing every interceptor the
+            // session store would have repealed it silently, which is how a
+            // security property dies. So the store is granted only where the
+            // config asks for it, the same default-deny shape as `host-fs` and
+            // `host-process`, and `permission_grants_do_not_survive_a_restart`
+            // fails if that default ever flips.
+            let persist = ext
+                .instance
+                .config
+                .get("persist")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
             let provider_fn = classifier_fn(classifier.clone());
-            interceptors.push(Box::new(interceptor_host::WasmInterceptor::instantiate(
+            interceptors.push(Box::new(interceptor_host::WasmInterceptor::instantiate_with_storage(
                 &self.engine,
                 &ext.instance.id,
                 component,
                 ConfigSection::new(config),
                 provider_fn,
+                persist.then(|| Arc::clone(&store)),
             )?));
         }
 
@@ -404,7 +429,7 @@ impl Runtime {
         Ok(AgentSession {
             dispatcher: intercept::Dispatcher::new(interceptors),
             providers,
-            store: self.open_store()?,
+            store,
             tools,
         })
 
@@ -510,7 +535,7 @@ impl Runtime {
     /// instance's `path` gives a durable `SQLite` file; anything else (including
     /// `store.memory` or a missing `path`) is an ephemeral in-memory store.
     /// Persistence is host-side — the sandbox has no filesystem.
-    fn open_store(&self) -> Result<store::Store, CoreError> {
+    fn open_store(&self) -> Result<Arc<Mutex<store::Store>>, CoreError> {
         let sqlite_path = self.extensions.iter().find_map(|ext| {
             let inst = &ext.instance;
             (inst.category == "store" && inst.kind == "sqlite")
@@ -519,6 +544,7 @@ impl Runtime {
         });
         sqlite_path
             .map_or_else(store::Store::open_in_memory, store::Store::open)
+            .map(|store| Arc::new(Mutex::new(store)))
             .map_err(|source| CoreError::Store {
                 message: source.to_string(),
             })
@@ -590,7 +616,7 @@ impl CombinedFleet {
 pub struct AgentSession {
     dispatcher: intercept::Dispatcher,
     providers: Vec<Box<dyn conductor::Completer>>,
-    store: store::Store,
+    store: Arc<Mutex<store::Store>>,
     /// The enabled tool + registry extensions, dispatched by the loop as a `ToolInvoker`.
     tools: CombinedFleet,
 }
@@ -758,7 +784,11 @@ impl AgentSession {
     /// host-side store, so it survives a `Runtime` restart against the same DB.
     #[must_use]
     pub fn transcript(&self, session: &str) -> Vec<store::Entry> {
-        let mut entries = self.store.recent(session, u32::MAX).unwrap_or_default();
+        let mut entries = self
+            .store
+            .lock()
+            .map(|store| store.recent(session, u32::MAX).unwrap_or_default())
+            .unwrap_or_default();
         entries.reverse(); // `recent` is newest-first; a transcript reads oldest-first
         entries
     }
@@ -766,7 +796,23 @@ impl AgentSession {
     /// All known session ids, newest first.
     #[must_use]
     pub fn list_sessions(&self) -> Vec<String> {
-        self.store.list_namespaces().unwrap_or_default()
+        self.store
+            .lock()
+            .map(|store| {
+                // Not `unwrap_or_default()`: swallowing this is what let a broken
+                // query report "no sessions" for as long as nobody looked.
+                store.list_namespaces().unwrap_or_else(|err| {
+                    eprintln!("WARN [core] listing sessions failed: {err}");
+                    Vec::new()
+                })
+            })
+            .unwrap_or_default()
+            .into_iter()
+            // Interceptors share this database, under `ext/<component>/…`. Their
+            // namespaces are not conversations, and listing them here would put
+            // `ext/interceptor.permission/grants` in a session picker.
+            .filter(|namespace| !namespace.contains('/'))
+            .collect()
     }
 }
 
@@ -777,18 +823,22 @@ impl AgentSession {
 fn run_and_persist(
     dispatcher: &mut intercept::Dispatcher,
     providers: &mut [Box<dyn conductor::Completer>],
-    store: &store::Store,
+    store: &Mutex<store::Store>,
     tools: &mut dyn conductor::ToolInvoker,
     driver: &mut dyn intercept::Driver,
     sink: &mut dyn conductor::EventSink,
     session: &str,
     message: &str,
 ) -> conductor::RunResult {
-    let history = replay(store, session);
+    // Locked around each use, never across the turn: an interceptor writing its
+    // own `host-storage` mid-dispatch takes the same lock, and holding it here
+    // would deadlock the first guest that remembered anything.
+    let history = store.lock().map(|store| replay(&store, session)).unwrap_or_default();
     let result =
         conductor::run_turn(dispatcher, providers, tools, driver, sink, session, message, history);
     if let conductor::RunResult::Answered { text, .. } = &result {
         // Best-effort transcript append: a store failure never fails the answered turn.
+        let Ok(store) = store.lock() else { return result };
         let turn = store.list_keys(session).map_or(0, |keys| keys.len()) + 1;
         let value = serde_json::json!({ "user": message, "answer": text }).to_string();
         if let Err(err) = store.set(session, &format!("turn-{turn}"), &value) {

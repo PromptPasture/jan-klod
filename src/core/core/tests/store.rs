@@ -1,3 +1,17 @@
+//! The host-side persistent store.
+//!
+//! These files sat in `src/core/tests/` from the move that split the repo into
+//! `src/core` + `src/extensions`. That directory is beside a **virtual** workspace
+//! manifest (`[workspace]`, no `[package]`), so it belongs to no crate and cargo
+//! never built it: eighteen tests across three files, silently not running for as
+//! long as they lived there. `cargo test` reported success the whole time, because
+//! a test that is not compiled cannot fail.
+//!
+//! All eighteen passed once compiled — the loss was not a hidden failure here but
+//! eighteen assertions that were not defending anything. What *was* broken sat one
+//! function away: `list_namespaces` had no test at all, and had never once executed
+//! its own query successfully.
+
 use jan_klod_core::store::{Store, StoreError};
 
 #[test]
@@ -88,4 +102,20 @@ fn backend_error_carries_detail() {
         panic!("expected Err(Backend), got Ok or a different error variant");
     };
     assert!(!detail.is_empty(), "detail must describe the failure, got empty string");
+}
+
+/// `list_namespaces` was never called by a test, and its one caller swallowed
+/// errors — so a query that failed on every invocation looked like an empty
+/// database for as long as nobody looked.
+#[test]
+fn namespaces_list_most_recently_written_first() {
+    let store = Store::open_in_memory().unwrap();
+    store.set("alpha", "k", "1").unwrap();
+    store.set("beta", "k", "1").unwrap();
+    store.set("alpha", "k2", "2").unwrap();
+
+    let namespaces = store.list_namespaces().expect("the query is valid SQL");
+    assert_eq!(namespaces.len(), 2, "one row per namespace, not per entry: {namespaces:?}");
+    assert!(namespaces.contains(&"alpha".to_string()));
+    assert!(namespaces.contains(&"beta".to_string()));
 }

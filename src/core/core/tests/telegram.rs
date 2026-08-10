@@ -1,3 +1,7 @@
+//! Telegram update parsing and offset advance.
+//!
+//! Orphaned in `src/core/tests/` and never compiled; see `store.rs`.
+
 use jan_klod_core::telegram::{next_offset, parse_updates, Update};
 
 fn updates_body(update_id: i64, chat_id: i64, text: &str) -> Vec<u8> {

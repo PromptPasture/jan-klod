@@ -20,10 +20,12 @@
 //! and consulted before asking again. Three properties keep that from eroding the
 //! boundary:
 //!
-//! - **Run-scoped, never persisted.** Decisions live in `host-storage`, which for
-//!   an interceptor is memory owned by this instance. Restart the agent and it
-//!   asks again — a permission boundary should not quietly become permanently
-//!   open because of a click last week.
+//! - **Run-scoped, never persisted.** Decisions live in `host-storage`, which is
+//!   memory owned by this instance unless the operator grants `persist: true`.
+//!   Restart the agent and it asks again — a permission boundary should not
+//!   quietly become permanently open because of a click last week. This used to
+//!   be true only because the host had no other option; it is now the default
+//!   rather than the mechanism, and `storage_scope.rs` fails if it flips.
 //! - **A scope escape is never remembered** ([`rules::Concern::is_rememberable`]).
 //!   "Always allow writes" covers writing files, not writing `/etc/passwd`.
 //! - **Unreadable state means ask.** A storage error or an unrecognised stored
