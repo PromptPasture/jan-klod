@@ -1,47 +1,57 @@
 //! Permission rules — pure Rust, unit-tested natively.
 //!
-//! Three independent checks gate a tool call, all driven by a [`Policy`] that the
-//! component builds from its `config.yaml` section (falling back to the built-in
-//! defaults when a key is absent):
+//! Two checks gate a tool call, both driven by a [`Policy`] the component builds
+//! from its `config.yaml` section:
 //!
-//! 1. **Name check** ([`Policy::is_dangerous`]): the tool name contains a
-//!    high-risk verb (e.g. `shell`, `exec`, `write`). Name-based, no argument
-//!    parsing.
+//! 1. **Scope check** ([`Policy::args_escape_scope`]): any string argument
+//!    contains a path that would leave the workspace — an absolute path (`/…`) or
+//!    a component that traverses upward (`..`).
 //!
-//! 2. **Op check** ([`Policy::args_are_dangerous`]): a benign-named multi-op tool
-//!    (e.g. the unified `fs` tool) selects a mutating operation via
-//!    `{"op":"write"}`.
+//! 2. **Allowlist check** ([`Policy::is_known_safe`]): the call is one of the
+//!    read-only operations the operator has named. Anything else is confirmed.
 //!
-//! 3. **Scope check** ([`Policy::args_escape_scope`]): any string argument
-//!    contains a path that would leave the workspace — either an absolute path
-//!    (`/…`) or a component that traverses upward (`..`). This catches a
-//!    non-dangerous tool name (e.g. `fs-read`) being called with `../../etc/passwd`.
+//! ## Why an allowlist
 //!
-//! Each list-valued policy field, when present in config, **replaces** the
-//! built-in default; a missing key keeps the default. The two scope checks are
-//! toggled independently.
+//! This was a **denylist** of high-risk verbs: tool names containing `shell`,
+//! `write`, `exec`…, plus `op` values like `write` and `delete`. It reads as
+//! reasonable and it is the wrong shape, because the list can only name the verbs
+//! someone thought of. `tool-edit` shipped with the ops `view`, `replace` and
+//! `insert`. None of those words is `write`, and `edit` is not `shell` — so the
+//! tool whose entire purpose is modifying files in place went through the gate
+//! **without ever asking**, from the commit that added it. Nothing failed,
+//! because a denylist that misses something is indistinguishable from one that
+//! has nothing to catch.
+//!
+//! A fail-closed boundary cannot be spelled as "these things are dangerous". It
+//! has to be "these things are safe" — then a capability nobody has classified is
+//! gated by construction, which is what you want from the *unknown* ones
+//! specifically. The cost is real and worth naming: add a tool and it prompts
+//! until someone puts it on the list. That is the correct direction for the
+//! mistake to point.
 
-/// Built-in high-risk name substrings: a tool whose name contains any of these
-/// prompts a confirmation. Kept lowercase; matching lower-cases the tool name
-/// first. Used when config omits `dangerous-names`.
-const DEFAULT_DANGEROUS_NAMES: &[&str] = &[
-    "bash", "shell", "exec", "eval", "rm", "delete", "remove", "write", "kill", "sudo",
+/// Calls that run without confirmation: read-only operations of the shipped
+/// fleet, as `name` (every op) or `name:op`.
+///
+/// Deliberately short and deliberately boring. `git` is here as a bare name
+/// because the tool exposes a closed, read-only op set and cannot express a
+/// write; `fs` is not, because it can. `fetch` is absent on purpose — it is
+/// egress, and a coding agent reaching the network is worth one question.
+const DEFAULT_SAFE_CALLS: &[&str] = &[
+    "find",
+    "fs:read",
+    "fs:grep",
+    "git",
+    "edit:view",
+    "proc-probe",
 ];
-
-/// Built-in high-risk `op` values: a multi-op tool (e.g. `fs`) whose `op`
-/// argument is one of these is treated as dangerous even though its name is
-/// benign. Kept lowercase. Used when config omits `dangerous-ops`.
-const DEFAULT_DANGEROUS_OPS: &[&str] = &["write", "delete", "remove", "exec", "run"];
 
 /// A resolved permission policy: the three checks read from these fields rather
 /// than module constants, so the same rules serve both the built-in defaults and
 /// a config-driven override.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
-    /// Substrings that make a tool name high-risk (lowercase).
-    dangerous_names: Vec<String>,
-    /// `op` argument values that make a multi-op call high-risk (lowercase).
-    dangerous_ops: Vec<String>,
+    /// Calls that proceed unasked, as `name` or `name:op` (lowercase).
+    safe_calls: Vec<String>,
     /// When true, absolute-path arguments do not trip the scope check.
     allow_absolute_paths: bool,
     /// When true, `..` traversal in path arguments does not trip the scope check.
@@ -49,11 +59,10 @@ pub struct Policy {
 }
 
 impl Default for Policy {
-    /// The built-in policy: the historical hardcoded lists, both scope checks on.
+    /// The built-in policy: the read-only fleet allowed, both scope checks on.
     fn default() -> Self {
         Self {
-            dangerous_names: DEFAULT_DANGEROUS_NAMES.iter().map(|s| (*s).to_owned()).collect(),
-            dangerous_ops: DEFAULT_DANGEROUS_OPS.iter().map(|s| (*s).to_owned()).collect(),
+            safe_calls: DEFAULT_SAFE_CALLS.iter().map(|s| (*s).to_owned()).collect(),
             allow_absolute_paths: false,
             allow_parent_traversal: false,
         }
@@ -64,8 +73,8 @@ impl Policy {
     /// Build a policy from an extension config section (the JSON object served by
     /// `host-config::all`). Recognised keys, each optional:
     ///
-    /// - `dangerous-names`: array of strings — **replaces** the default name list.
-    /// - `dangerous-ops`: array of strings — **replaces** the default op list.
+    /// - `safe-calls`: array of `name` / `name:op` — **replaces** the default
+    ///   allowlist. An empty array confirms every call.
     /// - `allow-absolute-paths`: bool — default `false`.
     /// - `allow-parent-traversal`: bool — default `false`.
     ///
@@ -75,9 +84,7 @@ impl Policy {
     pub fn from_config(section: &serde_json::Value) -> Self {
         let default = Self::default();
         Self {
-            dangerous_names: string_list(section, "dangerous-names")
-                .unwrap_or(default.dangerous_names),
-            dangerous_ops: string_list(section, "dangerous-ops").unwrap_or(default.dangerous_ops),
+            safe_calls: string_list(section, "safe-calls").unwrap_or(default.safe_calls),
             allow_absolute_paths: section
                 .get("allow-absolute-paths")
                 .and_then(serde_json::Value::as_bool)
@@ -89,33 +96,26 @@ impl Policy {
         }
     }
 
-    /// Whether a tool call to `name` should be confirmed before running.
-    #[must_use]
-    pub fn is_dangerous(&self, name: &str) -> bool {
-        let name = name.to_lowercase();
-        self.dangerous_names.iter().any(|verb| name.contains(verb.as_str()))
-    }
-
-    /// Whether the JSON `arguments` select a high-risk operation via an `op` field
-    /// (e.g. the unified `fs` tool called with `{"op":"write",…}`). This gates a
-    /// benign-named multi-op tool whose mutating mode would otherwise slip past the
-    /// name check.
+    /// Whether this call is one the operator has declared read-only.
     ///
-    /// Non-JSON or non-object arguments (and a missing/benign `op`) are not flagged.
+    /// Matches the [`scope_key`] (`fs:read`, `edit:view`, `shell:cargo`) or the
+    /// bare tool name, so an entry can allow a whole tool or one of its ops. A
+    /// tool with a closed read-only op set — `git` — is allowed by name; one that
+    /// can also mutate — `fs` — is allowed only per op.
+    ///
+    /// Unparseable arguments cannot be classified, so they are not safe. That is
+    /// the fail-closed direction: the previous checks returned `false` ("not
+    /// dangerous") on malformed JSON.
     #[must_use]
-    pub fn args_are_dangerous(&self, arguments: &str) -> bool {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
-            return false;
-        };
-        value
-            .get("op")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|op| self.dangerous_ops.contains(&op.to_lowercase()))
+    pub fn is_known_safe(&self, name: &str, arguments: &str) -> bool {
+        let key = scope_key(name, arguments);
+        let name = name.to_lowercase();
+        self.safe_calls.iter().any(|entry| *entry == key || *entry == name)
     }
 
-    /// Whether any string value in the JSON `arguments` object contains a path that
-    /// escapes the workspace: an absolute path (starts with `/`) or a component that
-    /// traverses upward (`..`). Either check can be disabled via policy toggles.
+    /// Whether any **path-bearing** argument (see [`PATH_KEYS`]) escapes the
+    /// workspace: an absolute path (starts with `/`) or a component that traverses
+    /// upward (`..`). Either check can be disabled via policy toggles.
     ///
     /// Non-JSON or non-object arguments are treated as safe (the name check or the
     /// tool itself will reject them).
@@ -130,39 +130,46 @@ impl Policy {
         else {
             return false;
         };
-        string_values_recursive(&serde_json::Value::Object(map))
-            .iter()
-            .any(|s| self.path_escapes(s))
+        path_values(&serde_json::Value::Object(map)).iter().any(|s| self.path_escapes(s))
     }
 
-    /// Run all three checks and report the concern that governs the call.
+    /// Run both checks and report the concern that governs the call.
     ///
     /// **The scope check runs first, and that ordering is the security property.**
     /// A concern is what a standing "always allow" gets filed against, and only
     /// [`Concern::EscapesScope`] is un-rememberable — so if a path escape were
     /// reported second, `{"op":"write","path":"/etc/passwd"}` would surface as the
-    /// *rememberable* `DangerousOp` and a prior "always allow fs:write" would wave
-    /// it through. Escapes dominate; the narrower concern only shows when the
-    /// arguments stay inside the workspace.
+    /// *rememberable* `NotKnownSafe` and a prior "always allow fs:write" would
+    /// wave it through. Escapes dominate; the narrower concern only shows when
+    /// the arguments stay inside the workspace.
     #[must_use]
     pub fn review(&self, name: &str, arguments: &str) -> Option<Concern> {
         if self.args_escape_scope(arguments) {
             Some(Concern::EscapesScope)
-        } else if self.is_dangerous(name) {
-            Some(Concern::DangerousName)
-        } else if self.args_are_dangerous(arguments) {
-            Some(Concern::DangerousOp)
-        } else {
+        } else if self.is_known_safe(name, arguments) {
             None
+        } else {
+            Some(Concern::NotKnownSafe)
         }
     }
 
-    /// Whether a path string escapes the workspace root, honouring the toggles.
+    /// Whether a path-bearing argument escapes the workspace root.
+    ///
+    /// Checked per whitespace-separated token, not just on the whole string. A
+    /// `command` value is one string containing several: `cat /etc/passwd` does
+    /// not *start* with a slash, so testing the string as a whole missed it
+    /// entirely and the call surfaced as the rememberable `shell:cat` — one
+    /// "always" away from standing approval to read any file on the machine.
     fn path_escapes(&self, s: &str) -> bool {
-        if !self.allow_absolute_paths && s.starts_with('/') {
+        std::iter::once(s).chain(s.split_whitespace()).any(|token| self.token_escapes(token))
+    }
+
+    /// The escape test for a single path-like token, honouring the toggles.
+    fn token_escapes(&self, token: &str) -> bool {
+        if !self.allow_absolute_paths && token.starts_with('/') {
             return true;
         }
-        if !self.allow_parent_traversal && s.split('/').any(|component| component == "..") {
+        if !self.allow_parent_traversal && token.split('/').any(|component| component == "..") {
             return true;
         }
         false
@@ -180,26 +187,61 @@ fn string_list(section: &serde_json::Value, key: &str) -> Option<Vec<String>> {
     )
 }
 
-/// Recursively collect all string leaf values from a JSON value.
-fn string_values_recursive(value: &serde_json::Value) -> Vec<&str> {
-    match value {
-        serde_json::Value::String(s) => vec![s.as_str()],
-        serde_json::Value::Array(arr) => arr.iter().flat_map(string_values_recursive).collect(),
-        serde_json::Value::Object(map) => {
-            map.values().flat_map(string_values_recursive).collect()
+/// Argument keys whose values may name a location on disk.
+///
+/// The scope check used to scan **every** string in the arguments, which is
+/// wrong once a tool carries content as well as paths: `tool-edit`'s
+/// `{"contents": "// edited"}` starts with a slash, so replacing a line with a
+/// Rust, C, Go or JavaScript comment was reported as "references a path outside
+/// the workspace" — and scope escapes are deliberately un-rememberable, so the
+/// user could not even silence it. A gate that cries wolf about a code comment
+/// teaches people to click through it, which costs more than the narrow miss
+/// this trades for.
+///
+/// `command` is here because a command line embeds paths (`cat /etc/passwd`)
+/// and, without it, that call would surface as the *rememberable* `shell:cat`.
+///
+/// The narrowing is safe because this check is not the enforcement. `host-fs` is
+/// path-jailed host-side and refuses an escape whatever the interceptor decided
+/// (`host_fs::tests::escapes_are_denied`). This exists to put the escape in front
+/// of the user in the words they need, before the tool runs.
+const PATH_KEYS: &[&str] =
+    &["path", "paths", "file", "files", "dir", "directory", "cwd", "command", "args"];
+
+/// Collect string values that sit under a path-bearing key, at any depth.
+fn path_values(value: &serde_json::Value) -> Vec<&str> {
+    fn walk<'a>(value: &'a serde_json::Value, under_path_key: bool, out: &mut Vec<&'a str>) {
+        match value {
+            serde_json::Value::String(s) => {
+                if under_path_key {
+                    out.push(s.as_str());
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    walk(item, under_path_key, out);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (key, item) in map {
+                    let is_path = PATH_KEYS.contains(&key.to_lowercase().as_str());
+                    walk(item, under_path_key || is_path, out);
+                }
+            }
+            _ => {}
         }
-        _ => vec![],
     }
+    let mut out = Vec::new();
+    walk(value, false, &mut out);
+    out
 }
 
 /// Why a call needs confirming — and, crucially, whether that reason is one a
 /// standing decision may cover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Concern {
-    /// The tool's name contains a high-risk verb.
-    DangerousName,
-    /// The `op` argument selects a mutating operation.
-    DangerousOp,
+    /// The call is not on the read-only allowlist.
+    NotKnownSafe,
     /// An argument names a path outside the workspace.
     EscapesScope,
 }
@@ -209,8 +251,9 @@ impl Concern {
     #[must_use]
     pub fn describe(self, tool: &str) -> String {
         match self {
-            Self::DangerousName => format!("tool `{tool}` has a high-risk name"),
-            Self::DangerousOp => format!("tool `{tool}` selects a high-risk operation"),
+            Self::NotKnownSafe => {
+                format!("`{tool}` is not a known read-only call")
+            }
             Self::EscapesScope => {
                 format!("tool `{tool}` arguments reference a path outside the workspace")
             }
@@ -333,20 +376,137 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// The gap that motivated inverting the policy.
+    ///
+    /// Under the old denylist every one of these went through unasked: `edit`
+    /// contains no high-risk verb, and `replace`/`insert` are not `write`. The
+    /// tool whose entire purpose is modifying files in place was ungated from the
+    /// commit that added it.
+    /// Content is not a path.
+    ///
+    /// `{"contents":"// edited"}` starts with a slash. Scanning every string made
+    /// that a scope escape, so replacing a line with a comment in Rust, C, Go or
+    /// JavaScript raised "references a path outside the workspace" — and an escape
+    /// is un-rememberable by design, so it could not be silenced either.
     #[test]
-    fn dangerous_verbs_are_flagged() {
+    fn replacement_text_is_not_mistaken_for_a_path() {
         let policy = Policy::default();
-        for name in ["bash", "run_shell", "fs.delete", "exec_code", "rm-rf", "sudo_apt"] {
-            assert!(policy.is_dangerous(name), "{name:?} should require confirmation");
+        for contents in ["// edited", "/* block */", "//! module doc", "/usr/bin/env python"] {
+            let args = format!(
+                r#"{{"op":"replace","path":"src/main.rs","start":"a1","contents":"{contents}"}}"#
+            );
+            assert!(
+                !policy.args_escape_scope(&args),
+                "{contents:?} is file content, not a path"
+            );
+            // Still gated — just for the right reason, and rememberably.
+            assert_eq!(policy.review("edit", &args), Some(Concern::NotKnownSafe));
+        }
+        // A real escape in the path argument still trips, even beside such content.
+        assert!(policy.args_escape_scope(
+            r#"{"op":"replace","path":"/etc/passwd","contents":"// x"}"#
+        ));
+    }
+
+    /// A command line embeds paths, so it stays in scope.
+    #[test]
+    fn a_command_naming_an_outside_path_is_an_escape() {
+        let policy = Policy::default();
+        let args = r#"{"command":"cat /etc/passwd"}"#;
+        assert!(policy.args_escape_scope(args));
+        // And therefore un-rememberable: "always allow shell:cat" must not become
+        // standing approval for reading anything on the machine.
+        assert_eq!(policy.review("shell", args), Some(Concern::EscapesScope));
+        assert!(!Concern::EscapesScope.is_rememberable());
+    }
+
+    #[test]
+    fn the_edit_tool_is_gated() {
+        let policy = Policy::default();
+        for args in [
+            r#"{"op":"replace","path":"src/main.rs","start":"a1b2","contents":"x"}"#,
+            r#"{"op":"insert","path":"src/main.rs","after":"a1b2","contents":"x"}"#,
+        ] {
+            assert_eq!(
+                policy.review("edit", args),
+                Some(Concern::NotKnownSafe),
+                "{args:?} modifies a file and must be confirmed"
+            );
+        }
+        // Viewing is the read half, and is allowed so the model can anchor an edit
+        // without a prompt for every look.
+        assert_eq!(policy.review("edit", r#"{"op":"view","path":"src/main.rs"}"#), None);
+    }
+
+    /// The property the allowlist exists for: a capability nobody classified is
+    /// gated, rather than waved through because no denylist entry matched it.
+    #[test]
+    fn a_tool_nobody_has_classified_is_confirmed() {
+        let policy = Policy::default();
+        for (name, args) in [
+            ("deploy", "{}"),
+            ("send_email", r#"{"to":"ops@example.test"}"#),
+            ("fs", r#"{"op":"chmod","path":"x"}"#),
+            ("some-future-tool", r#"{"op":"harmless-sounding"}"#),
+        ] {
+            assert_eq!(
+                policy.review(name, args),
+                Some(Concern::NotKnownSafe),
+                "{name} {args} is unclassified and must be confirmed"
+            );
+        }
+    }
+
+    /// Egress is not read-only, even though it does not touch the workspace.
+    #[test]
+    fn fetching_a_url_is_confirmed() {
+        let policy = Policy::default();
+        assert_eq!(
+            policy.review("fetch", r#"{"url":"https://example.test/x"}"#),
+            Some(Concern::NotKnownSafe)
+        );
+    }
+
+    #[test]
+    fn the_read_only_fleet_runs_unasked() {
+        let policy = Policy::default();
+        for (name, args) in [
+            ("find", r#"{"pattern":"**/*.rs"}"#),
+            ("fs", r#"{"op":"read","path":"src/main.rs"}"#),
+            ("fs", r#"{"op":"grep","pattern":"fn main"}"#),
+            // `git` is allowed by bare name: its op set is closed and read-only,
+            // so there is no write for a new op to smuggle in.
+            ("git", r#"{"op":"status"}"#),
+            ("git", r#"{"op":"log"}"#),
+            ("proc-probe", "{}"),
+        ] {
+            assert_eq!(policy.review(name, args), None, "{name} {args} should not prompt");
         }
     }
 
     #[test]
-    fn ordinary_tools_are_not_flagged() {
+    fn arguments_that_cannot_be_classified_are_not_safe() {
         let policy = Policy::default();
-        for name in ["web_search", "read_file", "fetch", "list_dir", "calculator"] {
-            assert!(!policy.is_dangerous(name), "{name:?} should not require confirmation");
-        }
+        // The old checks answered "not dangerous" for malformed JSON. An
+        // allowlist cannot classify it either — but the fail-closed reading of
+        // "cannot classify" is to ask.
+        assert_eq!(policy.review("fs", "not json"), Some(Concern::NotKnownSafe));
+    }
+
+    #[test]
+    fn an_operator_can_widen_or_narrow_the_allowlist() {
+        let wide = Policy::from_config(&json!({ "safe-calls": ["fs", "shell:cargo"] }));
+        assert_eq!(wide.review("fs", r#"{"op":"write","path":"a"}"#), None);
+        assert_eq!(wide.review("shell", r#"{"command":"cargo test"}"#), None);
+        assert_eq!(
+            wide.review("shell", r#"{"command":"curl evil.test"}"#),
+            Some(Concern::NotKnownSafe),
+            "widening for cargo must not widen for curl"
+        );
+
+        // An empty list confirms everything — the strictest setting, and reachable.
+        let strict = Policy::from_config(&json!({ "safe-calls": [] }));
+        assert_eq!(strict.review("find", "{}"), Some(Concern::NotKnownSafe));
     }
 
     #[test]
@@ -387,8 +547,9 @@ mod tests {
     #[test]
     fn a_scope_escape_outranks_a_rememberable_concern() {
         let policy = Policy::default();
-        // Both a dangerous op AND a path escape. If the op were reported, a prior
-        // "always allow fs:write" would wave through a write to /etc/passwd.
+        // Both an unclassified call AND a path escape. If the former were
+        // reported, a prior "always allow fs:write" would wave through a write to
+        // /etc/passwd.
         let concern = policy.review("fs", r#"{"op":"write","path":"/etc/passwd"}"#);
         assert_eq!(concern, Some(Concern::EscapesScope));
         assert!(!concern.unwrap().is_rememberable(), "an escape is never remembered");
@@ -396,7 +557,7 @@ mod tests {
         // In-workspace, the narrower rememberable concern surfaces as usual.
         assert_eq!(
             policy.review("fs", r#"{"op":"write","path":"src/main.rs"}"#),
-            Some(Concern::DangerousOp)
+            Some(Concern::NotKnownSafe)
         );
     }
 
@@ -441,27 +602,14 @@ mod tests {
     }
 
     #[test]
-    fn dangerous_op_arg_is_flagged() {
+    fn a_mutating_op_on_an_allowed_tool_is_still_confirmed() {
         let policy = Policy::default();
+        // `fs:read` being safe must not make `fs` safe.
         for args in [
             r#"{"op": "write", "path": "out.txt", "contents": "x"}"#,
-            r#"{"op": "delete", "path": "out.txt"}"#,
-            r#"{"op": "EXEC", "path": "x"}"#,
+            r#"{"op": "WRITE", "path": "out.txt"}"#,
         ] {
-            assert!(policy.args_are_dangerous(args), "{args:?} should be flagged as a high-risk op");
-        }
-    }
-
-    #[test]
-    fn benign_op_arg_is_safe() {
-        let policy = Policy::default();
-        for args in [
-            r#"{"op": "read", "path": "src/main.rs"}"#,
-            r#"{"op": "grep", "path": "src/main.rs", "pattern": "fn"}"#,
-            r#"{"path": "src/main.rs"}"#,
-            "not json",
-        ] {
-            assert!(!policy.args_are_dangerous(args), "{args:?} should not be flagged");
+            assert!(!policy.is_known_safe("fs", args), "{args:?} must be confirmed");
         }
     }
 
@@ -517,28 +665,13 @@ mod tests {
     }
 
     #[test]
-    fn config_replaces_name_list() {
-        let policy = Policy::from_config(&json!({ "dangerous-names": ["danger", "NUKE"] }));
-        assert!(policy.is_dangerous("nuke_everything"));
-        assert!(policy.is_dangerous("some_danger_zone"));
-        // Old defaults no longer apply — the list is replaced, not extended.
-        assert!(!policy.is_dangerous("bash"));
-        assert!(!policy.is_dangerous("rm-rf"));
-    }
-
-    #[test]
-    fn config_replaces_op_list() {
-        let policy = Policy::from_config(&json!({ "dangerous-ops": ["purge"] }));
-        assert!(policy.args_are_dangerous(r#"{"op": "purge"}"#));
-        // Default ops are gone.
-        assert!(!policy.args_are_dangerous(r#"{"op": "write"}"#));
-    }
-
-    #[test]
-    fn empty_list_disables_a_check() {
-        let policy = Policy::from_config(&json!({ "dangerous-names": [] }));
-        assert!(!policy.is_dangerous("bash"));
-        assert!(!policy.is_dangerous("rm"));
+    fn config_replaces_the_allowlist_rather_than_extending_it() {
+        let policy = Policy::from_config(&json!({ "safe-calls": ["ping"] }));
+        assert!(policy.is_known_safe("ping", "{}"));
+        // The defaults are gone — replaced, not extended. Narrowing this way is
+        // safe in the direction that matters: it can only add prompts.
+        assert!(!policy.is_known_safe("find", r#"{"pattern":"*"}"#));
+        assert!(!policy.is_known_safe("fs", r#"{"op":"read","path":"a"}"#));
     }
 
     #[test]
@@ -563,7 +696,7 @@ mod tests {
     #[test]
     fn wrong_typed_keys_fall_back_to_defaults() {
         let policy = Policy::from_config(
-            &json!({ "dangerous-names": "not-an-array", "allow-absolute-paths": "yes" }),
+            &json!({ "safe-calls": "not-an-array", "allow-absolute-paths": "yes" }),
         );
         assert_eq!(policy, Policy::default());
     }

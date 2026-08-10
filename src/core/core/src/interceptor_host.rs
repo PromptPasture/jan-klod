@@ -958,16 +958,33 @@ mod tests {
         assert_eq!(driver.asked.get(), 3, "plain `yes` approves once, every time");
     }
 
+    /// An allowlisted read runs untouched.
     #[test]
-    fn permission_ignores_ordinary_tools() {
+    fn permission_ignores_a_known_read_only_call() {
         let Some(p) = load_permission() else { return };
         let mut d = Dispatcher::new(vec![Box::new(p)]);
-        let mut state = tool_call("web_search");
-        // NoDriver panics if asked — an ordinary tool must never trigger an ask.
+        let mut state = tool_call_with("fs", r#"{"op":"read","path":"src/main.rs"}"#);
+        // NoDriver panics if asked — a classified read must never trigger an ask.
         assert!(matches!(
             d.dispatch(Phase::ToolCall, &mut state, &mut NoDriver),
             Outcome::Proceeded
         ));
+    }
+
+    /// And a tool nobody classified does not.
+    ///
+    /// This test used to assert the opposite — that `web_search` proceeds
+    /// untouched — which is what a denylist does with every name it has not heard
+    /// of. That is the behaviour that let `tool-edit` write files unasked. Under
+    /// an allowlist the unclassified call is exactly the one to stop.
+    #[test]
+    fn permission_asks_about_a_tool_nobody_has_classified() {
+        let Some(p) = load_permission() else { return };
+        let mut d = Dispatcher::new(vec![Box::new(p)]);
+        let mut state = tool_call("web_search");
+        let driver = CountingDriver { answer: "no", asked: std::cell::Cell::new(0) };
+        let outcome = d.dispatch(Phase::ToolCall, &mut state, &mut { driver });
+        assert!(matches!(outcome, Outcome::Blocked { .. }), "refused: {outcome:?}");
     }
 
     fn load_tool_selector() -> Option<WasmInterceptor> {

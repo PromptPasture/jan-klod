@@ -88,7 +88,7 @@ extensions:
                                # On by default: without it the enabled tool.* below
                                # are never offered to the model.
     permission:
-      enabled: true            # tool-call: gate dangerous calls (Slice 2d).
+      enabled: true            # tool-call: confirm anything not known read-only.
                                # On by default: the file tools below can write, and
                                # a write must be confirmed before it happens.
                                # Answer `always`/`never` to decide for a whole kind
@@ -96,15 +96,21 @@ extensions:
                                # one call. Those decisions last for the run only —
                                # a restart asks again — and never cover an argument
                                # pointing outside the workspace.
-      # Optional policy overrides. Each list, when present, REPLACES the built-in
-      # default (it does not extend it); omit a key to keep the default.
-      #   dangerous-names       — tool-name substrings that force a confirmation
-      #   dangerous-ops         — `op` arg values that force a confirmation
+      # The gate is an ALLOWLIST: anything not named here is confirmed. It was a
+      # denylist of high-risk verbs (`shell`, `write`, `exec`, …), which cannot
+      # name the verbs nobody thought of — `tool-edit` ships the ops `replace`
+      # and `insert`, neither of which is `write`, so the tool that modifies
+      # files went through ungated from the day it was added. A list of what is
+      # safe gates the unknown by construction; the cost is that a new tool
+      # prompts until someone classifies it.
+      #
+      #   safe-calls            — `name` or `name:op` that run unasked. REPLACES
+      #                           the default (does not extend it); `[]` confirms
+      #                           everything.
       #   allow-absolute-paths  — when true, absolute-path args skip the scope gate
       #   allow-parent-traversal— when true, `..` traversal skips the scope gate
       # Defaults shown below; delete keys to accept them.
-      # dangerous-names: [bash, shell, exec, eval, rm, delete, remove, write, kill, sudo]
-      # dangerous-ops:   [write, delete, remove, exec, run]
+      # safe-calls: [find, fs:read, fs:grep, git, edit:view, proc-probe]
       # allow-absolute-paths: false
       # allow-parent-traversal: false
 

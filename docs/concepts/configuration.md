@@ -94,23 +94,34 @@ extensions:
   interceptor:
     intent-router:      # before-loop: simple vs agentic classification
       enabled: true
-    permission:         # tool-call: gate dangerous tool calls
+    permission:         # tool-call: confirm anything not known read-only
       enabled: false
 ```
 
 The `permission` interceptor is enabled/disabled like any other, but its policy
-is also tunable. Each list-valued key **replaces** the built-in default when
-present (it does not extend it); scope checks are toggled independently. Omit a
-key to keep its default:
+is also tunable. `safe-calls` **replaces** the built-in allowlist when present
+(it does not extend it); scope checks are toggled independently. Omit a key to
+keep its default:
 
 ```yaml
     permission:
       enabled: true
-      dangerous-names: [bash, shell, exec, eval, rm, delete, remove, write, kill, sudo]
-      dangerous-ops:   [write, delete, remove, exec, run]
+      safe-calls: [find, fs:read, fs:grep, git, edit:view, proc-probe]
       allow-absolute-paths: false     # true = absolute-path args skip the scope gate
       allow-parent-traversal: false   # true = `..` traversal skips the scope gate
 ```
+
+The gate is an **allowlist**: a call that is not named runs only after the user
+confirms it. This was a denylist of high-risk verbs, which can only name the
+verbs someone thought of — `tool-edit`'s ops are `view`, `replace` and `insert`,
+none of which is `write`, so the tool whose purpose is modifying files was
+ungated from the commit that added it. An allowlist gates the unclassified by
+construction. The cost is real: add a tool and it prompts until it is listed.
+
+Entries are `name` (every op) or `name:op`. `git` is listed bare because its op
+set is closed and read-only; `fs` is listed per op because it can also write.
+`fetch` is deliberately absent — it is network egress, which is worth a question
+even though it does not touch the workspace.
 
 ## Inspecting a config
 
