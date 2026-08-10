@@ -41,6 +41,16 @@ interface llm-provider {
         out-of-memory,
         /// Context window exceeded.
         context-overflow,
+        /// The endpoint could not be reached: connection refused, DNS failure,
+        /// timeout, or TLS negotiation failure.
+        ///
+        /// Distinct from transient because the two need opposite responses: a
+        /// transient error is worth retrying, while an unreachable endpoint means
+        /// the address is wrong, the server is not running, or egress is not
+        /// granted for it. None of those is fixed by retrying, and collapsing them
+        /// reported a refused connection to a local model as a transient failure,
+        /// which sends the reader looking for a flake instead of at base-url.
+        unreachable,
         /// Any other transient error.
         transient,
     }

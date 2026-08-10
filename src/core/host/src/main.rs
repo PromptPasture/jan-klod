@@ -106,8 +106,10 @@ fn ask(args: &[String]) -> ExitCode {
             println!("{text}");
             ExitCode::SUCCESS
         }
-        other => {
-            eprintln!("jan-klod: {other:?}");
+        // Not `{other:?}`: the Debug of a Rust enum is not a diagnosis. A turn
+        // that fails has a message written for a person; print that.
+        jan_klod_core::conductor::RunResult::Failed(message) => {
+            eprintln!("jan-klod: {message}");
             ExitCode::FAILURE
         }
     }

@@ -225,11 +225,15 @@ const fn map_http_error(err: HttpError) -> ProviderError {
         HttpError::ClientError(401 | 403) => ProviderError::AuthFailed,
         HttpError::ClientError(404) => ProviderError::ModelNotFound,
         HttpError::ClientError(429) => ProviderError::RateLimited,
+        // Unreachable, not transient: a refused connection, a DNS failure or a
+        // TLS error means the address is wrong, the server is not running, or
+        // egress is not granted for it. None of those is fixed by retrying, and
+        // calling them "transient" sends the reader looking for a flake.
+        HttpError::ConnectionFailed | HttpError::Timeout | HttpError::TlsError => {
+            ProviderError::Unreachable
+        }
         HttpError::ClientError(_)
         | HttpError::ServerError(_)
-        | HttpError::Timeout
-        | HttpError::ConnectionFailed
-        | HttpError::TlsError
         | HttpError::InvalidUrl
         | HttpError::Backend => ProviderError::Transient,
     }

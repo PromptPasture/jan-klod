@@ -164,3 +164,75 @@ extensions:
         "no Authorization header is sent when no api-key is configured"
     );
 }
+
+/// A failure names the endpoint and what to check.
+///
+/// The message used to be the Debug of a generated binding:
+/// `provider error: ProviderError { code: 5, name: "transient", message: "Any
+/// other transient error." }`. Three problems in one line — a wasm-binding
+/// internal reached the user, "transient" invited retrying something that could
+/// never succeed, and nothing named the endpoint the reader had to go and look at.
+///
+/// The endpoint here is a port with nothing listening, which is the most common
+/// first-run failure for a local model: the server is not started, or the address
+/// has a typo.
+#[test]
+fn an_unreachable_provider_says_so_and_names_the_endpoint() {
+    if !common::guests_staged(&["provider-openai.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-unreach-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+
+    // Bind and immediately drop, so the port is real and closed.
+    let port = {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("binds");
+        listener.local_addr().expect("addr").port()
+    };
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "
+extensions:
+  provider:
+    local:
+      enabled: true
+      type: openai
+      base-url: http://127.0.0.1:{port}/v1
+      model: local
+"
+        ),
+    )
+    .unwrap();
+
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("boots");
+    let policy = runtime.egress_policy();
+    let factory = move || -> jan_klod_core::route::HttpFn {
+        let policy = policy.clone();
+        Box::new(move |method, url, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+        })
+    };
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+
+    let RunResult::Failed(message) = agent.run("s", "hello") else {
+        panic!("an unreachable provider cannot answer");
+    };
+    assert!(
+        message.contains(&format!("127.0.0.1:{port}")),
+        "the failure names the endpoint to look at: {message}"
+    );
+    assert!(
+        message.contains("could not be reached"),
+        "and says it was unreachable rather than transient: {message}"
+    );
+    assert!(
+        !message.contains("ProviderError {"),
+        "no generated-binding Debug reaches the user: {message}"
+    );
+    // The egress hint matters: a typo'd base-url and a denied origin fail here
+    // identically, and the reader needs to know the second is possible.
+    assert!(message.contains("egress"), "the message mentions egress: {message}");
+}

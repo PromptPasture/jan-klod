@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-24
+
+- **Fix**: **the most likely first-run failure explained nothing.** A provider that could not be reached reported `provider error: ProviderError { code: 5, name: "transient", message: "Any other transient error." }` — three problems in one line. A wasm-binding internal reached the user; "transient" invited retrying something that could never succeed; and nothing named the endpoint the reader had to go and look at. I met this message myself two days ago while writing a negative test and read straight past it.
+- `unreachable` is now a distinct `provider-error` variant, because a refused connection and a transient failure need opposite responses: one is worth retrying, the other means the address is wrong, the server is not running, or egress does not allow that origin. The host renders each variant as a sentence naming the endpoint and what to check — including the egress possibility, since a typo'd `base-url` and a denied origin fail identically and the reader needs to know the second exists.
+- `ask` printed `Failed("…")`, the Debug of a Rust enum, around a message already written for a person. Now it prints the message.
+- **Note**: a `"` inside a WIT doc comment breaks the *generated Rust*, not the WIT parse — `wit-bindgen` emits the text into a Rust doc comment and the lexer then reports ``prefix `error` is unknown`` at the `generate!` site, several files from the line that caused it. Recorded in `wit/README.md`, where the next person will be standing when it happens.
+
 ## 2026-08-23
 
 - **Fix**: **the README's manual command was the one that breaks once installed.** It showed `jan-klod-gateway serve config.yaml ext` — and naming those paths *overrides* the resolution that finds them beside the installed binary, which is the whole mechanism that lets you `cd` into any repository and run it there. The quickstart says as much three sections later ("only right inside a checkout"); the front page recommended it anyway. Now `serve --bind 127.0.0.1:8787`, with the positional form mentioned in prose as the checkout-only thing it is.

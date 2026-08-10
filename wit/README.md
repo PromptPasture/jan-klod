@@ -34,3 +34,10 @@ cargo install wasm-tools
 # Parse + type-check the whole package
 wasm-tools component wit wit/
 ```
+
+## Editing note: no double quotes in doc comments
+
+A `"` inside a `///` comment here breaks the *generated Rust*, not the WIT parse —
+`wit-bindgen` emits the text into a Rust doc comment and the lexer then reports
+`prefix \`error\` is unknown` at the `generate!` site, several files away from the
+line that caused it. Quote with backticks instead.

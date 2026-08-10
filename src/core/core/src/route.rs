@@ -224,8 +224,56 @@ fn drive(
 /// trait: the provider becomes one link in the loop's fallback chain.
 pub struct ProviderCompleter {
     id: String,
+    /// The instance's configured endpoint, kept only to name it in a failure.
+    ///
+    /// A provider error without the address is most of a diagnosis withheld: the
+    /// three most likely causes are a wrong URL, a server that is not running, and
+    /// an origin egress does not allow, and all three are questions about *which*
+    /// endpoint.
+    endpoint: String,
     store: Store<CapHost>,
     world: provider_bind::ProviderWorld,
+}
+
+/// A provider failure in the words the person running this needs.
+///
+/// This used to be `format!("provider error: {err:?}")` — the Debug of a generated
+/// binding — so a refused connection to a local model read as
+/// `ProviderError { code: 5, name: "transient", message: "Any other transient
+/// error." }`. Three separate problems: a wasm-binding internal reached the user,
+/// the word "transient" invited retrying something that would never succeed, and
+/// nothing named the endpoint the reader needed to look at.
+fn describe(err: &p_llm::ProviderError, endpoint: &str) -> String {
+    use p_llm::ProviderError as E;
+    match err {
+        E::AuthFailed => format!(
+            "the API key was rejected by {endpoint}. Check the key this instance \
+             reads (the shipped config uses $OPENAI_API_KEY)."
+        ),
+        E::ModelNotFound => format!(
+            "{endpoint} does not offer the configured model. Check `model:` — for a \
+             local server, that it is pulled."
+        ),
+        E::RateLimited => "rate-limited or out of quota".to_string(),
+        E::OutOfMemory => {
+            "the model ran out of memory — usually a local model too large for this \
+             machine"
+                .to_string()
+        }
+        E::ContextOverflow => {
+            "the request exceeded the model's context window. `interceptor.context` \
+             trims history to a budget; lower its `context-tokens` if it is on."
+                .to_string()
+        }
+        E::Unreachable => format!(
+            "{endpoint} could not be reached. Is the server running, is the address \
+             right, and is that origin allowed egress? Loopback and private \
+             addresses are refused unless config names them — a provider's \
+             `base-url` counts, so a typo in it fails here rather than being \
+             quietly allowed."
+        ),
+        E::Transient => "a transient provider failure; worth retrying".to_string(),
+    }
 }
 
 impl ProviderCompleter {
@@ -244,6 +292,12 @@ impl ProviderCompleter {
         let (store, world) = instantiate_provider(engine, inst, component, http)?;
         Ok(Self {
             id: inst.id.clone(),
+            endpoint: inst
+                .config
+                .get("base-url")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("the configured endpoint")
+                .to_string(),
             store,
             world,
         })
@@ -263,7 +317,7 @@ impl crate::conductor::Completer for ProviderCompleter {
         let iface = self.world.jan_klod_interfaces_llm_provider();
         let handle = match iface.call_complete(&mut self.store, &preq) {
             Ok(Ok(handle)) => handle,
-            Ok(Err(err)) => return Err(format!("provider error: {err:?}")),
+            Ok(Err(err)) => return Err(describe(&err, &self.endpoint)),
             Err(_) => return Err("provider trapped".to_string()),
         };
 
