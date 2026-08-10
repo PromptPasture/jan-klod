@@ -19,6 +19,19 @@ mod common;
 
 const TOKEN: &str = "s3cret-token";
 
+/// Keep a lost answer loud.
+///
+/// The confirmation wait defaults to three minutes, which is right for a person
+/// and disastrous for a test: an answer that goes astray does not fail the test,
+/// it stalls it and then passes, because the timeout takes the prompt's default
+/// and the default is a denial. This suite spent 360 seconds — two full timeouts
+/// — on some runs and one second on others, reporting success either way.
+fn short_answer_timeout() {
+    // Set before any server thread starts, and every test in this binary wants
+    // the same value.
+    std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "5");
+}
+
 fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -67,6 +80,7 @@ fn request(port: u16, target: &str, auth: Option<&str>) -> String {
 
 #[test]
 fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
+    short_answer_timeout();
     if !common::guests_staged(&["provider-openai.wasm"]) {
         return;
     }
@@ -111,6 +125,7 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
 
 #[test]
 fn with_no_token_configured_the_surface_behaves_as_before() {
+    short_answer_timeout();
     if !common::guests_staged(&["provider-openai.wasm"]) {
         return;
     }
@@ -146,6 +161,7 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
 /// caller could answer "yes" to a permission prompt.
 #[test]
 fn an_unauthenticated_caller_cannot_answer_a_permission_prompt() {
+    short_answer_timeout();
     if !common::guests_staged(&[
         "provider-openai.wasm",
         "interceptor-tool-selector.wasm",
@@ -219,6 +235,7 @@ extensions:
         stream.write_all(raw.as_bytes()).unwrap();
 
         let mut refused = String::new();
+        let mut accepted = String::new();
         let mut collected = String::new();
         let reader = BufReader::new(stream);
         for line in reader.lines() {
@@ -228,15 +245,20 @@ extensions:
             if line.starts_with("event: prompt") && refused.is_empty() {
                 // An outsider tries to approve the tool call first…
                 refused = request(port, "/session/p/answer", None);
-                // …then the legitimate client answers.
-                let _ = request(port, "/session/p/answer", Some(TOKEN));
+                // …then the legitimate client answers. Keep the reply: this is
+                // the request the rest of the test depends on, and discarding it
+                // is what let a lost answer pass as success. The turn would still
+                // reach `event: done` — via the timeout, whose default is a
+                // denial — so every assertion below held while the suite spent
+                // three minutes per lost answer.
+                accepted = request(port, "/session/p/answer", Some(TOKEN));
             }
         }
-        (refused, collected)
+        (refused, accepted, collected)
     });
 
     serve_once_authed(&server, &mut agent, Some(TOKEN)).expect("serves the turn");
-    let (refused, stream_text) = client.join().expect("client thread");
+    let (refused, accepted, stream_text) = client.join().expect("client thread");
 
     assert!(
         refused.contains("401"),
@@ -250,5 +272,12 @@ extensions:
     assert!(
         stream_text.contains("event: done"),
         "the legitimate answer still landed: {stream_text}"
+    );
+    // And it completed *because it was answered*, not because the wait expired.
+    // Without this the test passes either way, since a timeout takes the prompt's
+    // default and the default is the denial these assertions already expect.
+    assert!(
+        accepted.contains("200 OK") && accepted.contains("accepted"),
+        "the authenticated answer was accepted rather than lost to the timeout: {accepted}"
     );
 }

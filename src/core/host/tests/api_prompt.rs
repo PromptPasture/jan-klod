@@ -28,6 +28,12 @@ use tiny_http::Server;
 
 mod common;
 
+/// A lost answer must fail fast rather than stall for the three-minute default
+/// and then pass on the prompt's own denial. See `auth.rs` for the run this cost.
+fn short_answer_timeout() {
+    std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "5");
+}
+
 const GUESTS: [&str; 4] = [
     "provider-openai.wasm",
     "interceptor-intent-router.wasm",
@@ -108,6 +114,7 @@ fn post_answer(port: u16, session: &str, answer: &str) -> String {
 
 #[test]
 fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
+    short_answer_timeout();
     let ext_dir = common::repo_root().join("ext");
     if !common::guests_staged(&GUESTS) {
         return;
@@ -180,6 +187,7 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
 
 #[test]
 fn an_answer_with_nothing_pending_is_refused() {
+    short_answer_timeout();
     let ext_dir = common::repo_root().join("ext");
     if !common::guests_staged(&["provider-openai.wasm"]) {
         return;

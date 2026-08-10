@@ -24,7 +24,7 @@
 //! `POST /session/:id/answer` arrives, replying `409` to anything else that comes
 //! in meanwhile. The concurrency stays exactly where it was — one request at a
 //! time — and the sync-Wasmtime, no-`tokio` posture of the rest of the core holds.
-//! An unanswered prompt times out at [`ANSWER_TIMEOUT`] and takes the prompt's own
+//! An unanswered prompt times out at [`DEFAULT_ANSWER_TIMEOUT`] and takes the prompt's own
 //! default, which for the permission gate is a denial.
 
 use std::cell::RefCell;
@@ -42,7 +42,29 @@ use crate::AgentSession;
 /// prompt's default answer. Long enough for a person to read and decide; short
 /// enough that a client that vanished mid-prompt cannot pin the server open.
 #[allow(clippy::duration_suboptimal_units)] // no stable `Duration::from_mins`
-const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
+const DEFAULT_ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Overrides [`DEFAULT_ANSWER_TIMEOUT`], in seconds.
+///
+/// Three minutes is right for a person and wrong for a test. A test whose answer
+/// goes astray does not fail — it waits out the whole timeout and then *passes*,
+/// because the default answer is a denial and the assertions still hold. That is
+/// how `auth.rs` came to spend 360 seconds (two timeouts) on some runs and 1
+/// second on others, while reporting success either way; the suite looked
+/// intermittently slow rather than intermittently broken, and I spent this
+/// iteration measuring make targets before noticing that 360 is exactly 2 × 180.
+///
+/// With the wait short, a lost answer is a fast failure instead of a silent
+/// stall. Read per wait rather than cached so a test can set it per process.
+const TIMEOUT_ENV: &str = "JK_ANSWER_TIMEOUT_SECS";
+
+/// The configured confirmation timeout.
+fn answer_timeout() -> Duration {
+    std::env::var(TIMEOUT_ENV)
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .map_or(DEFAULT_ANSWER_TIMEOUT, Duration::from_secs)
+}
 
 /// The response socket, shared between the event sink and the prompt driver —
 /// both write frames to the same stream while the turn runs.
@@ -297,7 +319,7 @@ impl PromptDriver<'_> {
     /// the agent is mid-turn and single-threaded, and a client that is told
     /// "busy" can retry, while one left hanging cannot.
     fn wait_for_answer(&self) -> Option<String> {
-        let deadline = Instant::now() + ANSWER_TIMEOUT;
+        let deadline = Instant::now() + answer_timeout();
         let route = format!("/session/{}/answer", self.session);
         loop {
             let remaining = deadline.checked_duration_since(Instant::now())?;
