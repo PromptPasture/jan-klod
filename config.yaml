@@ -124,6 +124,16 @@ extensions:
   # ---- Discrete callable tools ----
   # File tools are jailed to the workspace (the `workspace:` key below, or $PWD
   # when it is absent) and their writes are gated by interceptor.permission.
+  #
+  # Credential files (.env, *.pem, id_rsa, .netrc, .npmrc, …) are skipped by
+  # `find` and by tree-wide `grep`, and an explicit read of one is confirmed and
+  # never covered by an "always". Reads and greps are otherwise unprompted — a
+  # gate that interrupts every search is a gate people switch off — and everything
+  # a tool returns becomes a message sent to the model provider on the next turn,
+  # so a silent grep across a repo holding a .env would be the workspace's secrets
+  # leaving the machine because somebody searched for a word. A pattern that names
+  # such a file explicitly (`**/.env`) still lists it: a name discloses nothing,
+  # and hiding it outright would teach the model the file does not exist.
   tool:
     fs:
       enabled: true            # read / write / grep a workspace file

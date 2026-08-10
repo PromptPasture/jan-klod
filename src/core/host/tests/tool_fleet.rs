@@ -151,3 +151,60 @@ fn shell_tool_runs_a_command_through_the_fleet() {
     assert_eq!(json["code"], 0);
     assert!(json["stdout"].as_str().unwrap().contains("from the shell tool"), "stdout: {out}");
 }
+
+/// A tree-wide grep does not sweep credentials into the transcript.
+///
+/// `fs:grep` is on the permission gate's read-only allowlist, so it runs without
+/// asking — which is right, because a gate that interrupts every search is a gate
+/// people switch off. But everything a tool returns becomes a message in the
+/// transcript, and the transcript is sent to the model provider on the next turn.
+/// A grep for `password` across a repository that contains a `.env` would
+/// therefore hand the workspace's secrets to a third party because somebody
+/// searched for a word, with nobody asked and nothing logged.
+///
+/// The gate cannot help here: it sees the *pattern*, not the files a pattern will
+/// match. So the shared walk in `guest-fs` skips credential files, and this test
+/// stands one in a workspace and greps for a string that only it contains.
+#[test]
+fn a_tree_grep_skips_credential_files() {
+    let engine = Engine::default();
+    let workspace_dir = std::env::temp_dir().join(format!("jk-fsecret-{}", std::process::id()));
+    let _guard = common::TempDir(workspace_dir.clone());
+    std::fs::create_dir_all(workspace_dir.join("src")).unwrap();
+    let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
+
+    // A secret in the two conventional shapes, plus a source file that mentions
+    // the same word so the search is not trivially empty.
+    std::fs::write(workspace_dir.join(".env"), "API_TOKEN=hunter2-must-not-leak\n").unwrap();
+    std::fs::write(workspace_dir.join("deploy.pem"), "-----BEGIN KEY-----\nmust-not-leak\n").unwrap();
+    std::fs::write(
+        workspace_dir.join("src/config.rs"),
+        "// reads API_TOKEN from the environment\n",
+    )
+    .unwrap();
+
+    let Some(fs) = load_tool(&engine, "tool-fs", workspace) else {
+        return;
+    };
+    let mut fleet = ToolFleet::new(vec![fs]);
+
+    let hits = fleet
+        .invoke(&call("fs", r#"{"op":"grep","pattern":"API_TOKEN"}"#))
+        .unwrap_or_default();
+    assert!(
+        !hits.contains("must-not-leak"),
+        "a credential reached the model through a search:\n{hits}"
+    );
+    // Not vacuous: the same grep still finds the ordinary file, so the walk is
+    // working rather than returning nothing.
+    assert!(
+        hits.contains("src/config.rs"),
+        "and the search still works on source: {hits}"
+    );
+
+    let listed = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"BEGIN KEY"}"#));
+    assert!(
+        !listed.unwrap_or_default().contains("deploy.pem"),
+        "a private key is not surfaced by content either"
+    );
+}

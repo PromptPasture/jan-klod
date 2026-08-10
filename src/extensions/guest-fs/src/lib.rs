@@ -132,6 +132,63 @@ fn should_descend(name: &str, pattern: &str) -> bool {
     !PRUNED_DIRS.contains(&name) || pattern.split('/').any(|segment| segment == name)
 }
 
+/// Whether this file should be withheld from a walk's results.
+///
+/// Credential files are withheld — unless the pattern *names* one, the same rule
+/// [`should_descend`] applies to pruned directories: asking for something by name
+/// opts back into it. A pattern of `**/*` or `src/**/*.rs` does not name `.env`,
+/// so a broad glob and every tree-wide grep still skip it. `**/.env` does.
+///
+/// The distinction matters because hiding a file unconditionally would teach the
+/// model that it does not exist, and an agent that has been told there is no
+/// `.env` will confidently tell the user the same. Listing a *name* discloses
+/// nothing; the contents are what needed protecting, and reading them is gated.
+fn hidden_credential(name: &str, pattern: &str) -> bool {
+    is_credential_file(name) && !pattern.split('/').any(|segment| segment == name)
+}
+
+/// Whether a file's name marks it as holding credentials.
+///
+/// Reads and greps are on the permission gate's read-only allowlist, so they run
+/// **without asking** — which is right for source code and wrong for `.env`. A
+/// grep for `password` across a repository would otherwise return the contents of
+/// the credential file that happens to be in it, and everything a tool returns
+/// becomes a message in the transcript, which is sent to the model provider on
+/// the next turn. The workspace's secrets would leave the machine because
+/// somebody searched for a word.
+///
+/// So the shared walk skips these, which covers `find` and `grep` together — the
+/// gate cannot help there, because it sees the *pattern*, not the files a pattern
+/// will match. An explicit read by path still works and is still gated, so
+/// nothing becomes impossible; it just stops being silent.
+///
+/// Matched on the file name only. This is a heuristic and named as one: it will
+/// miss `config/production.yaml` holding a database URL. It covers the
+/// conventional names, which is where the accident lives.
+#[must_use]
+pub fn is_credential_file(name: &str) -> bool {
+    /// Exact names.
+    const NAMES: [&str; 8] = [
+        ".env",
+        ".envrc",
+        ".netrc",
+        ".npmrc",
+        ".pgpass",
+        ".git-credentials",
+        "credentials",
+        "id_rsa",
+    ];
+    /// Suffixes, including the `.env.production` family.
+    const SUFFIXES: [&str; 7] = [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".ppk"];
+
+    let lower = name.to_lowercase();
+    NAMES.contains(&lower.as_str())
+        || SUFFIXES.iter().any(|suffix| lower.ends_with(suffix))
+        || lower.starts_with(".env.")
+        || lower.starts_with("id_ed25519")
+        || lower.starts_with("id_ecdsa")
+}
+
 /// Walk `root` through `list`, collecting files matching `pattern`.
 ///
 /// `list` is the `host-fs` `list-dir` seam (returning `None` when a directory
@@ -163,7 +220,7 @@ pub fn walk(root: &str, pattern: &str, list: &dyn Fn(&str) -> Option<Vec<Entry>>
                 if depth + 1 < MAX_DEPTH && should_descend(&entry.name, &pattern) {
                     queue.push((rel, depth + 1));
                 }
-            } else if matches(&pattern, &rel) {
+            } else if matches(&pattern, &rel) && !hidden_credential(&entry.name, &pattern) {
                 if paths.len() == MAX_RESULTS {
                     bounded_by = Some("result cap");
                     queue.clear();
@@ -191,6 +248,53 @@ pub fn join(base: &str, rest: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Naming a credential file opts back into it, exactly as for a pruned
+    /// directory — and a broad pattern still does not.
+    #[test]
+    fn a_pattern_that_names_a_credential_file_gets_it() {
+        assert!(super::hidden_credential(".env", "**/*"));
+        assert!(super::hidden_credential(".env", "src/**/*.rs"));
+        assert!(!super::hidden_credential(".env", "**/.env"));
+        assert!(!super::hidden_credential(".env", ".env"));
+        // A key is still a key when the pattern is about keys generally.
+        assert!(super::hidden_credential("server.pem", "**/*.pem"));
+    }
+
+    /// The credential-file rule, which `find` and `grep` both ride on.
+    #[test]
+    fn credential_files_are_recognised() {
+        for name in [
+            ".env",
+            ".ENV",
+            ".env.production",
+            ".envrc",
+            ".netrc",
+            ".npmrc",
+            ".git-credentials",
+            "credentials",
+            "id_rsa",
+            "id_ed25519",
+            "server.pem",
+            "tls.KEY",
+            "bundle.p12",
+        ] {
+            assert!(super::is_credential_file(name), "{name} holds credentials");
+        }
+        // Ordinary files a coding agent works on every turn must not be swept up:
+        // a rule that catches source code would make the tools useless.
+        for name in [
+            "main.rs",
+            "environment.rs",
+            "env.rs",
+            "keyboard.ts",
+            "Cargo.toml",
+            "README.md",
+            "monkey.py",
+        ] {
+            assert!(!super::is_credential_file(name), "{name} is ordinary");
+        }
+    }
+
     use super::{join, matches, normalize, truncate, walk, Entry, MAX_OUTPUT_BYTES, MAX_RESULTS};
     use crate::PRUNED_DIRS;
 

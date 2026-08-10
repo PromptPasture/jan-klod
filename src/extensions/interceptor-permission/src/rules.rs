@@ -146,6 +146,8 @@ impl Policy {
     pub fn review(&self, name: &str, arguments: &str) -> Option<Concern> {
         if self.args_escape_scope(arguments) {
             Some(Concern::EscapesScope)
+        } else if names_a_credential_file(arguments) {
+            Some(Concern::TouchesCredentials)
         } else if self.is_known_safe(name, arguments) {
             None
         } else {
@@ -185,6 +187,54 @@ fn string_list(section: &serde_json::Value, key: &str) -> Option<Vec<String>> {
             .filter_map(|v| v.as_str().map(str::to_lowercase))
             .collect(),
     )
+}
+
+/// Whether a path argument names a file that conventionally holds credentials.
+///
+/// `fs:read` is on the read-only allowlist, so it runs without asking — correct
+/// for source code, wrong for `.env`. Everything a tool returns becomes a message
+/// in the transcript, and the transcript is sent to the model provider on the
+/// next turn, so a silent read of a credential file is the workspace's secrets
+/// leaving the machine with nobody consulted.
+///
+/// The walk in `guest-fs` skips these files, which covers `find` and `grep`
+/// together — this gate cannot, because it sees the pattern rather than the files
+/// a pattern will match. What this covers is the explicit read: still possible,
+/// no longer silent.
+fn names_a_credential_file(arguments: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return false;
+    };
+    path_values(&value).iter().any(|path| {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        credential_name(name)
+    })
+}
+
+/// The name test, kept in step with `guest_fs::is_credential_file`.
+///
+/// Deliberately duplicated rather than shared: this crate is a decision component
+/// with no dependency on a file-tool library, and a permission rule that could be
+/// changed by editing a tool's helper would be a permission rule the tool
+/// controls.
+fn credential_name(name: &str) -> bool {
+    const NAMES: [&str; 8] = [
+        ".env",
+        ".envrc",
+        ".netrc",
+        ".npmrc",
+        ".pgpass",
+        ".git-credentials",
+        "credentials",
+        "id_rsa",
+    ];
+    const SUFFIXES: [&str; 7] = [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".ppk"];
+    let lower = name.to_lowercase();
+    NAMES.contains(&lower.as_str())
+        || SUFFIXES.iter().any(|suffix| lower.ends_with(suffix))
+        || lower.starts_with(".env.")
+        || lower.starts_with("id_ed25519")
+        || lower.starts_with("id_ecdsa")
 }
 
 /// Argument keys whose values may name a location on disk.
@@ -244,6 +294,8 @@ pub enum Concern {
     NotKnownSafe,
     /// An argument names a path outside the workspace.
     EscapesScope,
+    /// An argument names a file that conventionally holds credentials.
+    TouchesCredentials,
 }
 
 impl Concern {
@@ -254,6 +306,10 @@ impl Concern {
             Self::NotKnownSafe => {
                 format!("`{tool}` is not a known read-only call")
             }
+            Self::TouchesCredentials => format!(
+                "`{tool}` names a credentials file, and anything it returns is sent \
+                 to the model provider"
+            ),
             Self::EscapesScope => {
                 format!("tool `{tool}` arguments reference a path outside the workspace")
             }
@@ -269,7 +325,11 @@ impl Concern {
     /// become approval for a write to `/etc/passwd`.
     #[must_use]
     pub const fn is_rememberable(self) -> bool {
-        !matches!(self, Self::EscapesScope)
+        // Neither an escape nor a credential read may be covered by a standing
+        // decision. "Always allow `fs:read`" would otherwise be one click away
+        // from standing approval to read every secret in the workspace, which is
+        // the same failure as approving a write to `src/` covering `/etc/passwd`.
+        !matches!(self, Self::EscapesScope | Self::TouchesCredentials)
     }
 }
 
@@ -619,6 +679,38 @@ mod tests {
             policy.review("fetch", r#"{"url":"https://example.test/x"}"#),
             Some(Concern::NotKnownSafe)
         );
+    }
+
+    /// Reading source is silent; reading a credential file is not.
+    #[test]
+    fn a_credential_read_is_confirmed_and_never_remembered() {
+        let policy = Policy::default();
+        for path in [".env", "config/.env.production", "deploy/server.pem", "keys/id_rsa"] {
+            let args = format!(r#"{{"op":"read","path":"{path}"}}"#);
+            assert_eq!(
+                policy.review("fs", &args),
+                Some(Concern::TouchesCredentials),
+                "{path} holds secrets and everything a tool returns goes to the provider"
+            );
+        }
+        // Un-rememberable, for the same reason a scope escape is: "always allow
+        // `fs:read`" must not become standing approval to read every secret.
+        assert!(!Concern::TouchesCredentials.is_rememberable());
+
+        // And ordinary source stays frictionless — a gate that asks about
+        // `main.rs` is a gate people switch off.
+        assert_eq!(policy.review("fs", r#"{"op":"read","path":"src/main.rs"}"#), None);
+        assert_eq!(policy.review("fs", r#"{"op":"read","path":"src/env.rs"}"#), None);
+    }
+
+    /// A write to a credential file is gated too, and by the stronger concern:
+    /// otherwise `always allow fs:write` would cover overwriting `.env`.
+    #[test]
+    fn a_credential_write_outranks_the_rememberable_concern() {
+        let policy = Policy::default();
+        let concern = policy.review("fs", r#"{"op":"write","path":".env","contents":"x"}"#);
+        assert_eq!(concern, Some(Concern::TouchesCredentials));
+        assert!(!concern.unwrap().is_rememberable());
     }
 
     #[test]
