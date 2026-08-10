@@ -58,6 +58,22 @@ const DEFAULT_ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 /// stall. Read per wait rather than cached so a test can set it per process.
 const TIMEOUT_ENV: &str = "JK_ANSWER_TIMEOUT_SECS";
 
+/// How often the wait pokes the event stream while parked.
+///
+/// A failed *first* write means the client is already gone, and `ask` handles
+/// that. But a client that disappears a moment later leaves a write that
+/// succeeds — the bytes go into the socket buffer, and the FIN has not been
+/// processed yet — after which nothing notices for three minutes. That is the
+/// pin this module's own comment says the timeout prevents; three minutes of an
+/// agent serving nobody and answering `409` to everyone else is a pin.
+///
+/// So the wait ticks. Each tick writes an SSE comment, which does two things: a
+/// dead peer surfaces as a write error within one interval, and a live stream
+/// keeps sending bytes, which is what stops a reverse proxy from closing an idle
+/// event stream. Comments are the protocol's own no-op — a `:`-prefixed line that
+/// a conformant client ignores — so this needs nothing from the client side.
+const HEARTBEAT: Duration = Duration::from_secs(5);
+
 /// The configured confirmation timeout.
 fn answer_timeout() -> Duration {
     std::env::var(TIMEOUT_ENV)
@@ -323,7 +339,20 @@ impl PromptDriver<'_> {
         let route = format!("/session/{}/answer", self.session);
         loop {
             let remaining = deadline.checked_duration_since(Instant::now())?;
-            let mut request = self.server.recv_timeout(remaining).ok().flatten()?;
+            // Wake at least every HEARTBEAT so a vanished client is noticed in
+            // seconds rather than at the far end of the timeout.
+            let slice = remaining.min(HEARTBEAT);
+            let Some(mut request) = self.server.recv_timeout(slice).ok().flatten() else {
+                if remaining <= slice {
+                    // The real deadline, not a tick.
+                    return None;
+                }
+                if write_comment(&mut *self.writer.borrow_mut()).is_err() {
+                    // Nobody is listening, so nobody can answer.
+                    return None;
+                }
+                continue;
+            };
             let path = request.url().split('?').next().unwrap_or("").to_string();
             if !authorised(&request, self.token, &path) {
                 // Drain before replying: the body is still in the socket, and
@@ -451,6 +480,16 @@ impl EventSink for SseSink {
 /// Write one SSE frame: `event: <kind>\ndata: <json>\n\n`, flushed.
 fn write_frame(writer: &mut dyn Write, kind: &str, data: &str) -> std::io::Result<()> {
     write!(writer, "event: {kind}\ndata: {data}\n\n")?;
+    writer.flush()
+}
+
+/// Write an SSE comment: a `:`-prefixed line a conformant client ignores.
+///
+/// Not an empty `event:` frame — the UI client's parser reports an unknown event
+/// kind, so a keepalive would surface to the user as an error. The protocol has a
+/// no-op for exactly this and it costs three bytes.
+fn write_comment(writer: &mut dyn Write) -> std::io::Result<()> {
+    write!(writer, ": waiting for an answer\n\n")?;
     writer.flush()
 }
 

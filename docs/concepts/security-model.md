@@ -32,6 +32,7 @@ exist.
 | Persistence (`host-storage`) | A private map that dies with the process, which is what keeps the permission gate's standing grants run-scoped | `persist: true` per instance | `core::interceptor_host::Storage` — namespaces prefixed with the component id | `host/tests/storage_scope.rs::a_standing_grant_does_not_survive_a_restart`, `::a_namespace_a_guest_can_name_never_reaches_another_components_data` |
 | Tool calls | Confirmed, unless the call is on the read-only allowlist (`find`, `fs:read`, `fs:grep`, `git`, `edit:view`, `proc-probe`) | `safe-calls` replaces the allowlist | `interceptor-permission` at `Phase::ToolCall` | `interceptor-permission/src/rules.rs::a_tool_nobody_has_classified_is_confirmed`, `host/tests/tool_wiring.rs::an_edit_is_confirmed_before_it_touches_the_file` |
 | Credential files | Skipped by `find` and tree-wide `grep`; an explicit read is confirmed and never covered by an "always" | A pattern naming the file (`**/.env`) lists it; nothing widens the read | `guest_fs::hidden_credential`, `interceptor-permission`'s `TouchesCredentials` | `guest-fs/src/lib.rs::credential_files_are_recognised`, `host/tests/tool_fleet.rs::a_tree_grep_skips_credential_files` |
+| A parked turn | Ends within one heartbeat of the client disappearing, and at the confirmation timeout otherwise; the default answer is a denial | `JK_ANSWER_TIMEOUT_SECS` | `core::serve::PromptDriver::wait_for_answer` | `host/tests/prompt_disconnect.rs::a_disconnected_client_does_not_hold_the_turn_open` |
 | The REST surface | Open when no token is set — loopback-only by default, and a non-loopback bind without a token is warned about at boot | `JAN_KLOD_TOKEN` | `core::serve::authorised` | `host/tests/auth.rs::without_a_token_a_turn_is_refused_and_never_reaches_the_agent`, `::an_unauthenticated_caller_cannot_answer_a_permission_prompt` |
 
 ## Two rules that shape all of it
@@ -70,9 +71,13 @@ Stated because a security page that lists only its wins is marketing.
 - **stderr is shared.** Guests can write misleading lines to it. Host log lines
   are tagged by the host, so this is cosmetic, but it is not nothing.
 - **A confirmation answer can be lost.** One run of `auth.rs` waited out two full
-  answer timeouts, and the cause has not been reproduced or found. A lost answer
-  now fails loudly rather than silently taking the default, which is a diagnostic
-  improvement and not a fix.
+  answer timeouts. Twenty-one further attempts — six isolated, fifteen under CPU
+  load — have not reproduced it, and three structural explanations were checked
+  and ruled out: `tiny_http` grows its worker pool rather than starving on a
+  held-open stream, SSE frames are flushed as they are written, and a first failed
+  write already short-circuits. A lost answer now fails loudly instead of silently
+  taking the default, so the next occurrence arrives with a diagnostic. That is
+  not a fix, and it is not claimed as one.
 
 ## What this does not claim
 
