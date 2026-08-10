@@ -289,6 +289,14 @@ fn every_test_that_skips_does_so_through_the_shared_policy() {
         }
         let source = std::fs::read_to_string(&path).expect("a test file is readable");
         for (line_no, line) in source.lines().enumerate() {
+            // Code only. This matched prose as well, and tripped on a comment
+            // explaining *why* something must not be skipped — a checker that
+            // fires on the word rather than the act is one somebody eventually
+            // silences, which costs more than the check is worth.
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with("///") || code.starts_with("//!") {
+                continue;
+            }
             // The policy helpers own the word; anywhere else it is a bare skip.
             if line.contains("skipping") && !line.contains("common::") {
                 let file = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -323,5 +331,74 @@ fn only_enabled_providers_count_as_required() {
     assert!(
         !required.contains("SEARCH_API_KEY"),
         "only the provider block is read, not every api-key in the file: {required:?}"
+    );
+}
+
+/// Every test the security model cites exists, and has that name.
+///
+/// `docs/concepts/security-model.md` is a table of capability → default → grant →
+/// enforcement point → **the test that proves it**. That last column is the
+/// reason the page is worth having: nine of its rows were written after a defect
+/// in that row, and most of those defects sat in a green suite because nothing
+/// asked "what proves this?".
+///
+/// A citation that no longer resolves is worse than no citation. It reads as
+/// assurance and delivers none — the exact failure the page exists to prevent, so
+/// it would be a poor joke to let the page commit it. Renaming a test now breaks
+/// this until the page is updated.
+#[test]
+fn the_security_model_cites_tests_that_exist() {
+    let root = common::repo_root();
+    let page = root.join("docs/concepts/security-model.md");
+    let text = std::fs::read_to_string(&page).expect("the security model page is readable");
+
+    // Citations are written `<path>::<test name>` inside backticks, and a second
+    // test on the same file as a bare `::<name>`. Those continuations have to
+    // inherit the previous path: skipping them would leave several citations
+    // unverified while this check reported success, which is the shape of thing
+    // it exists to catch.
+    let mut checked = 0;
+    let mut last_path: Option<String> = None;
+    for token in text.split('`') {
+        let Some((prefix, name)) = token.split_once("::") else { continue };
+        let path = if prefix.ends_with(".rs") {
+            last_path = Some(prefix.to_string());
+            prefix.to_string()
+        } else if prefix.is_empty() {
+            match &last_path {
+                Some(previous) => previous.clone(),
+                None => continue,
+            }
+        } else {
+            continue;
+        };
+        let path = path.as_str();
+        // Paths are relative to the two workspaces; try both roots.
+        let candidates = [
+            root.join("src/core").join(path),
+            root.join("src/extensions").join(path),
+        ];
+        let found = candidates.iter().find(|p| p.exists()).unwrap_or_else(|| {
+            panic!(
+                "the security model cites `{path}`, which does not exist under \
+                 src/core or src/extensions"
+            )
+        });
+        let source = std::fs::read_to_string(found).expect("the cited file is readable");
+        // `::a_name` for a second citation on one path also parses; take the
+        // leading identifier.
+        let name = name.split(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or(name);
+        assert!(
+            source.contains(&format!("fn {name}(")),
+            "the security model cites `{path}::{name}`, which is not a test in that file"
+        );
+        checked += 1;
+    }
+
+    eprintln!("security model: {checked} citations verified");
+    assert!(
+        checked >= 20,
+        "only {checked} citations parsed — the format changed and this check went \
+         quiet, which is the failure mode it exists to prevent"
     );
 }
