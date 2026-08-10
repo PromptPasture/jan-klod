@@ -36,7 +36,6 @@ Extensions implement these and the host routes calls between them.
 |---|---|---|---|
 | `llm-provider.wit` | `llm-provider` | Streaming completions, constrained decoding | `provider-*` |
 | `interceptor.wit` | `interceptor` | Agent-loop decision hook — one generic `intercept` over a `phase` enum; the core loop calls it per phase and acts on its `proceed` / `replace` / `block` / `ask` return | `interceptor-*` |
-| `memory-store.wit` | `memory-store` | Persistent key-value storage | `store-*` |
 | `skill-registry.wit` | `skill-registry` | Skill catalog and dispatch | `registry-skills` |
 | `mcp-registry.wit` | `mcp-registry` | MCP server management + tool catalog | `registry-mcp` |
 | `agent-delegate.wit` | `agent-delegate` | ACP agent delegation (streaming) | `agent-*` |
@@ -77,7 +76,7 @@ Core grants these capabilities to every extension.
 | `host-log.wit` | `host-log` | Structured logging forwarded to core pipeline |
 | `host-config.wit` | `host-config` | Read own section of `config.yaml` |
 | `host-event.wit` | `host-event` | Event bus publish/subscribe — **observation-only** (fire-and-forget); cannot shape the loop |
-| `host-storage.wit` | `host-storage` | Proxy to active `memory-store` (subset: no purge/search) |
+| `host-storage.wit` | `host-storage` | Namespaced view of the core's own store. **Granted** (`persist: true`), never ambient; namespaces are prefixed with the calling component's id |
 
 Interceptor dispatch is **not** in this table: it is a core-native call of the
 extension-exported `interceptor` interface (above), not a capability extensions
@@ -203,8 +202,15 @@ stream), not a WIT extension boundary and not a Rust trait baked into core.
 UI client can attach to a bare core with no `api-*` enabled. Current lean: a UI
 deployment includes `api-rest`.)*
 
-## MemoryStore implementations
+## Storage is not a contract extensions implement
 
-Three planned `memory-store` implementations — see [Architecture](architecture.md#storage) for the comparison table.
+There was a `memory-store.wit` here, and a `store-*` component family in the
+architecture notes. One component was ever written against it (`store-memory`),
+and the core never called it once: persistence has always been host-side, for the
+reason [Architecture](architecture.md#storage) records — the sandbox has no
+filesystem, so a store guest would need one granted back, and the transcript is
+the most sensitive thing the runtime holds. The contract and the family are gone;
+`host-storage` is how a guest reaches storage, and the top-level `storage:` block
+is how an operator configures it.
 
 See [decisions/2026-06-29-component-model-rust/Handoff.md](../decisions/2026-06-29-component-model-rust/Handoff.md) for the current foundation decision (Rust + Wasmtime + Component Model), which supersedes the host language and runtime of the earlier [2026-06-28 Go + Wazero stack](../decisions/2026-06-28-go-wasm-stack/Handoff.md). The WIT contracts on this page are unchanged by that pivot.

@@ -66,7 +66,7 @@ Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are
 - Outbound HTTP requests (to call LLM APIs, web search, etc.) — `host-http`
 - **Inbound network listeners** (so `api-*` can serve REST/gRPC) — `host-serve` *(planned)*
 - **Long-lived sockets** (so `chat-*` can hold a Telegram/Slack connection) — `host-socket` *(planned)*
-- Storage read/write via the `memory-store` contract
+- Storage read/write via `host-storage` — **granted, not ambient** (`persist: true`), and namespaced to the calling component
 - Logging, config read (own section only), event bus publish/subscribe
 
 ### What extensions cannot do
@@ -82,7 +82,6 @@ Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are
 |---|---|---|---|
 | `provider-*` | LLM API clients | WASM | `provider-openai`, `provider-ollama`, `provider-anthropic` |
 | `interceptor-*` | Agent-loop decision hooks | WASM (exports `interceptor`) | `interceptor-intent-router`, `interceptor-task-router`, `interceptor-tool-selector`, `interceptor-context`, `interceptor-permission` |
-| `store-*` | Persistence backends | WASM | `store-sqlite`, `store-postgres`, `store-supabase` |
 | `registry-*` | Capability catalogues | WASM | `registry-skills`, `registry-mcp` |
 | `tool-*` | Discrete callable tools | WASM | `tool-web-search` |
 | `agent-*` | AI agent delegation via ACP | WASM | `agent-claude-code`, `agent-opencode`, `agent-codex` |
@@ -140,9 +139,8 @@ interceptor-permission      exports interceptor; phase @ tool-call        (allow
 
 # provider fallback is NOT an interceptor — it is core loop mechanism (re-issues the failed request)
 
-store-sqlite          implements memory-store WIT interface (default)
-store-postgres        implements memory-store WIT interface
-store-supabase        implements memory-store WIT interface
+# there is no store-* family: persistence is host-side, configured by the
+# top-level `storage:` block. See "Storage" below.
 
 registry-skills       implements skill-registry WIT interface
 registry-mcp          implements mcp-registry WIT interface
@@ -278,16 +276,23 @@ surface. Curl-debuggable, browser-compatible, no stub generation. Endpoints:
 
 ## Storage
 
-| Extension | Backend | Notes |
+| Backend | Status | Notes |
 |---|---|---|
-| `store-sqlite` | SQLite | Default — zero-ops; `rusqlite` bundled (host-side, not SQLite-in-wasm) |
-| `store-postgres` | PostgreSQL | Self-hosted, multi-user *(planned)* |
-| `store-supabase` | Supabase | Hosted Postgres + realtime + auth *(planned)* |
+| SQLite | **Shipping** | Zero-ops; `rusqlite` bundled, host-side (not SQLite-in-wasm) |
+| PostgreSQL | Not built | Would be a second host backend behind the same `Store` type |
 
 The persistent store is a **host-side capability** the core exposes through the
-`memory-store` / `host-storage` contract — it is *not* SQLite-in-wasm (which the
-Go MVP confirmed does not work). Only one `memory-store` is active at a time;
-selected via `config.yaml`.
+`host-storage` contract — it is *not* SQLite-in-wasm (which the Go MVP confirmed
+does not work). It is configured by the top-level `storage:` block: `path` for a
+durable file, absent for in-memory.
+
+It is deliberately **not an extension**, and the `store-*` component family this
+page used to list never existed. The sandbox has no filesystem, so a store guest
+would need one granted back; and the conversation transcript is the most
+sensitive thing the runtime holds, so the fewer parties that hold it the better.
+A component that wanted swappable backends would be trading the one guarantee
+this design exists to make for a plugin point nobody asked for. Postgres or
+Supabase, if they arrive, arrive as host backends behind the same `Store` type.
 
 ## Stack
 
@@ -452,7 +457,7 @@ Extensions can pick up `config.yaml` changes without restart. Core watches the c
 | Desktop (macOS, Windows, Linux) | Primary target; all UI modes available |
 | ARM home server / NAS | Low memory footprint (Rust + WASM); **headless core, no UI client** — e.g. `chat-telegram` for access, optionally `api-rest` |
 | Docker | Single container; config via environment variables or mounted `config.yaml` |
-| Kubernetes | Enterprise; horizontal scaling of stateless API layer; shared `store-postgres` or `store-supabase` |
+| Kubernetes | Enterprise; horizontal scaling of a stateless API layer would need a shared Postgres backend, which is not built |
 
 ## Deployment modes
 

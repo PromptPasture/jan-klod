@@ -51,11 +51,9 @@ fn config_with(dir: &std::path::Path, db: &std::path::Path, persist: bool) -> st
         &path,
         format!(
             "
+storage:
+  path: {db}
 extensions:
-  store:
-    sqlite:
-      enabled: true
-      path: {db}
   provider:
     openai:
       enabled: true

@@ -13,7 +13,6 @@ go in `deps.toml`.
 | `extension-lifecycle.wit` | shared | `extension-lifecycle` (exported by every extension) |
 | `llm-provider.wit` | extension-exported | `llm-provider` |
 | `interceptor.wit` | extension-exported | `interceptor` (thin-loop decision hook; host-dispatched) |
-| `memory-store.wit` | extension-exported | `memory-store` |
 | `skill-registry.wit` | extension-exported | `skill-registry` |
 | `mcp-registry.wit` | extension-exported | `mcp-registry` |
 | `agent-delegate.wit` | extension-exported | `agent-delegate` |

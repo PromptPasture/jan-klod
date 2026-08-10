@@ -25,9 +25,6 @@ fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
         &config,
         "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true
@@ -165,9 +162,6 @@ fn an_unauthenticated_caller_cannot_answer_a_permission_prompt() {
         &config,
         "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true

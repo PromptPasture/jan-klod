@@ -116,9 +116,9 @@ TinyGo is the case-by-case exception and the standing polyglot gate canary.
 No `cargo-component` needed: since Rust 1.82 the `wasm32-wasip2` target emits a
 **component** directly, and the `wit-bindgen` crate generates the guest bindings
 from our `wit/`. A guest is a `cdylib` that implements the exported world's
-`Guest` traits — see `src/extensions/store-memory/` (storage) and
-`src/extensions/provider-openai/` (network: an OpenAI-compatible `llm-provider`
-over `host-http`):
+`Guest` traits — see `src/extensions/tool-find/` (a leaf tool, no host capability
+beyond `host-fs`) and `src/extensions/provider-openai/` (network: an
+OpenAI-compatible `llm-provider` over `host-http`):
 
 ```shell
 rustup target add wasm32-wasip2          # one-time
@@ -126,7 +126,7 @@ cargo build --release --target wasm32-wasip2
 # -> target/wasm32-wasip2/release/<name>.wasm  (a component)
 ```
 
-`make store-memory` / `make provider-openai` wrap this and stage the result in
+`make tool-find` / `make provider-openai` wrap this and stage the result in
 `ext/`. To drive a provider's full `complete` path against a live endpoint,
 `make probe` (needs the provider's api-key env + network).
 

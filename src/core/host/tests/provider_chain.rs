@@ -42,9 +42,6 @@ fn config_with_chain(dir: &std::path::Path, chain: &str) -> std::path::PathBuf {
         format!(
             "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     alpha:
       enabled: true

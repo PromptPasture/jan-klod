@@ -156,9 +156,6 @@ fn phase2_exit_gate() {
         &config,
         "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     primary:
       enabled: true
@@ -243,9 +240,6 @@ fn phase2_gate_react_tool_call_with_permission() {
         &config,
         "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true
@@ -308,9 +302,6 @@ fn phase8_exit_gate_tool_runs_through_the_loop() {
         format!(
             "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true

@@ -2,6 +2,7 @@
 
 Session handoffs and architecture decision records, newest first.
 
+- [2026-08-10 — Storage is not an extension](2026-08-10-storage-is-not-an-extension/Handoff.md) — retires `memory-store.wit` and the `store-*` family (three names with no implementation, one inert guest); persistence stays host-side behind `host-storage`, which is granted and namespaced per component
 - [2026-07-02 — Phase 8: Tool Fleet](2026-07-02-phase8-tool-fleet/PLAN.md) — execution plan + TBD leans for wiring the loop to tools (`ToolFleet` over `ToolExtension`s as a `ToolInvoker`) and a first real set (`tool-fs` — one host-fs tool with read/write/grep ops; `tool-shell` over host-process); tools stay behind the default-deny substrates
 - [2026-07-02 — Phase 7: File-workspace Substrate](2026-07-02-phase7-file-workspace-substrate/PLAN.md) — execution plan + safety model for `host-fs` (path-jailed workspace read/write) and `host-process` (bounded run-to-completion exec); both default-deny, opt-in, workspace-jailed — the mediated capabilities file/exec tools need
 - [2026-07-02 — Phase 6: Streaming & Steering](2026-07-02-phase6-streaming-steering/PLAN.md) — execution plan + TBD leans for the run-handle event stream (push-based `EventSink` fitting the sync loop), SSE on the REST surface, and cancel/steering; streaming stays push, no async runtime

@@ -39,7 +39,7 @@ interface llm-types {
     }
 }
 
-/// Storage types, shared by memory-store and host-storage.
+/// Storage types for host-storage.
 interface store-types {
     enum store-error {
         not-found,

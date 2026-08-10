@@ -1,9 +1,22 @@
 package jan-klod:interfaces@0.1.0;
 
-/// Storage proxy — routes to the active memory-store extension.
+/// A namespaced view of the core's own store.
 /// Used by extensions that need persistence but are not the store themselves
 /// (e.g. manager-context, registry-skills).
-/// The interface is a strict subset of memory-store — no purge, no search.
+/// Storage is host-side and is not an extension: the sandbox has no filesystem,
+/// so a store component would need one granted back, and the conversation
+/// transcript is the most sensitive thing the runtime holds. There was a
+/// `memory-store` contract and a `store-*` component family here; nothing ever
+/// called it.
+///
+/// Two properties make this safe to hand to a guest. **It is granted, not
+/// ambient** — an instance gets it only with `persist: true`, and otherwise
+/// writes to a private map that dies with the process, which is what keeps the
+/// permission gate's standing grants run-scoped. **Namespaces are prefixed with
+/// the calling component's id**, so a guest cannot name a peer's namespace or a
+/// session transcript.
+///
+/// Deliberately narrow: no purge, no search, no way to enumerate namespaces.
 interface host-storage {
     use store-types.{entry, store-error};
 

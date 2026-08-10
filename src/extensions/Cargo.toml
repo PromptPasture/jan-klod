@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     # Shared pure-Rust library, not a component: compiled into the guests below.
     "guest-fs",
-    "store-memory",
     "provider-openai",
     "provider-anthropic",
     "registry-skills",

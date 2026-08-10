@@ -4,7 +4,7 @@
 //! This is the generalisation of the `provider_probe` example: where the probe
 //! drives one provider against a *live* endpoint, the harness drives both
 //! first-party guests **offline and deterministically**. It instantiates each
-//! category world (`store-world`, `provider-world`), backs the imports with a
+//! category world (`provider-world`, …), backs the imports with a
 //! reusable [`TestHost`] (config section, captured logs, a **canned** `host-http`
 //! so the provider needs no network), then runs lifecycle plus the guest's own
 //! interface.
@@ -27,14 +27,6 @@ use wasmtime::{Engine, Result, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 mod common;
-
-/// `store-world`: lifecycle + `memory-store`, imports `host-log` + `host-config`.
-mod store_bind {
-    wasmtime::component::bindgen!({
-        path: "../../../wit",
-        world: "store-world",
-    });
-}
 
 /// `provider-world`: lifecycle + `llm-provider`, also imports `host-http`.
 mod provider_bind {
@@ -87,18 +79,6 @@ impl WasiView for TestHost {
 
 // --- host-log: capture lines for assertions (one impl per generated world) ---
 
-impl store_bind::jan_klod::interfaces::host_log::Host for TestHost {
-    fn log(
-        &mut self,
-        _level: store_bind::jan_klod::interfaces::host_log::LogLevel,
-        component: String,
-        message: String,
-        _fields: Vec<store_bind::jan_klod::interfaces::host_log::LogField>,
-    ) {
-        self.logs.push(format!("{component}: {message}"));
-    }
-}
-
 impl provider_bind::jan_klod::interfaces::host_log::Host for TestHost {
     fn log(
         &mut self,
@@ -112,25 +92,6 @@ impl provider_bind::jan_klod::interfaces::host_log::Host for TestHost {
 }
 
 // --- host-config: serve the instance section (one impl per generated world) ---
-
-impl store_bind::jan_klod::interfaces::host_config::Host for TestHost {
-    fn get(
-        &mut self,
-        key: String,
-    ) -> std::result::Result<String, store_bind::jan_klod::interfaces::host_config::ConfigError> {
-        self.section
-            .get(&key)
-            .ok_or(store_bind::jan_klod::interfaces::host_config::ConfigError::KeyNotFound)
-    }
-    fn has(&mut self, key: String) -> bool {
-        self.section.has(&key)
-    }
-    fn all(
-        &mut self,
-    ) -> std::result::Result<String, store_bind::jan_klod::interfaces::host_config::ConfigError> {
-        Ok(self.section.all())
-    }
-}
 
 impl provider_bind::jan_klod::interfaces::host_config::Host for TestHost {
     fn get(
@@ -190,117 +151,6 @@ fn staged_component(engine: &Engine, file: &str) -> Option<Component> {
         return None;
     }
     Some(Component::from_file(engine, &path).expect("staged component should compile"))
-}
-
-#[test]
-fn store_memory_lifecycle_and_roundtrip() -> Result<()> {
-    use store_bind::exports::jan_klod::interfaces::extension_lifecycle::{
-        ExtensionContext, HealthStatus,
-    };
-    use store_bind::exports::jan_klod::interfaces::memory_store::StoreError;
-    use store_bind::jan_klod::interfaces::{host_config, host_log};
-    use store_bind::StoreWorld;
-
-    let engine = Engine::default();
-    let Some(component) = staged_component(&engine, "store-memory.wasm") else {
-        return Ok(());
-    };
-
-    let mut linker: Linker<TestHost> = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-    host_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
-    host_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
-
-    let host = TestHost::new(
-        json!({ "enabled": true }),
-        MockHttp { status: 200, body: vec![] },
-    );
-    let mut store = Store::new(&engine, host);
-    let world = StoreWorld::instantiate(&mut store, &component, &linker)?;
-    let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
-    let mem = world.jan_klod_interfaces_memory_store();
-
-    // Lifecycle: init -> start -> healthy.
-    let ctx = ExtensionContext {
-        id: "store.memory".to_string(),
-        version: "0.0.0".to_string(),
-    };
-    lifecycle
-        .call_init(&mut store, &ctx)?
-        .map_err(wasmtime::Error::msg)?;
-    lifecycle.call_start(&mut store)?.map_err(wasmtime::Error::msg)?;
-    assert!(matches!(
-        lifecycle.call_health(&mut store)?,
-        HealthStatus::Up
-    ));
-
-    let ns = "notes";
-
-    // set -> get round-trips the value and assigns a stable id.
-    let first = mem
-        .call_set(&mut store, ns, "k1", "\"hello\"")?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    let got = mem
-        .call_get(&mut store, ns, "k1")?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    assert_eq!(got.value, "\"hello\"");
-    assert_eq!(got.id, first.id);
-
-    // Re-set updates the value in place, keeping the same id.
-    let updated = mem
-        .call_set(&mut store, ns, "k1", "\"world\"")?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    assert_eq!(updated.id, first.id, "update keeps the row id");
-    assert_eq!(updated.value, "\"world\"");
-
-    // A second key, then list/recent/search across the namespace.
-    mem.call_set(&mut store, ns, "k2", "\"second\"")?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-
-    let keys = mem
-        .call_list_keys(&mut store, ns)?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    assert_eq!(keys.len(), 2);
-    assert!(keys.iter().all(|e| e.value.is_empty()), "list omits payloads");
-
-    let recent = mem
-        .call_recent(&mut store, ns, 10)?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    assert_eq!(recent.len(), 2);
-    assert!(recent.iter().any(|e| e.value == "\"world\""));
-
-    let limited = mem
-        .call_recent(&mut store, ns, 1)?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    assert_eq!(limited.len(), 1, "recent honours the limit");
-
-    let found = mem
-        .call_search(&mut store, ns, "second", 10)?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].key, "k2");
-
-    // delete -> get reports the key gone; purge clears the namespace.
-    mem.call_delete(&mut store, ns, "k1")?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    assert!(matches!(
-        mem.call_get(&mut store, ns, "k1")?,
-        Err(StoreError::NotFound)
-    ));
-
-    mem.call_purge_namespace(&mut store, ns)?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    let after = mem
-        .call_list_keys(&mut store, ns)?
-        .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
-    assert!(after.is_empty(), "purge clears the namespace");
-
-    lifecycle.call_stop(&mut store)?;
-    assert!(
-        store.data().logs.iter().any(|l| l.starts_with("store-memory:")),
-        "the guest logged through host-log"
-    );
-    Ok(())
 }
 
 #[test]

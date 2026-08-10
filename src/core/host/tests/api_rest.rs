@@ -32,9 +32,6 @@ fn external_client_drives_the_loop_over_http() {
         &config,
         "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true

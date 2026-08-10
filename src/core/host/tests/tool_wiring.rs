@@ -26,9 +26,6 @@ fn build_agent_wires_enabled_tools_into_the_fleet() {
         format!(
             "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true

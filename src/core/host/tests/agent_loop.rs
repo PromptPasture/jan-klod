@@ -29,9 +29,6 @@ fn thin_loop_runs_turns_from_config() {
         &config,
         "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true

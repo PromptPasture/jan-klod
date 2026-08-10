@@ -152,7 +152,7 @@ answer, driven end-to-end through the core-exposed loop entry.
 
 **Goal:** durable state and a way for the outside world to reach core.
 
-- `store-sqlite` → resolve the **host-side SQLite (TBD)** (`rusqlite` bundled vs pure).
+- Storage → resolved: **host-side SQLite** (`rusqlite`, bundled). Not a component; see [contracts](contracts.md).
 - Design the **`host-serve`** capability (inbound listener) and build `api-rest`
   (REST + SSE) → resolve the HTTP-framework and SQL **(TBD)**s.
 - Resolve **UI ↔ core transport** (current lean: a UI client always connects via `api-rest`).
@@ -349,7 +349,7 @@ The file-workspace tier (files, processes, and the `tool-*` fleet) is now scoped
 **Phases 7–8**. One item from that original scope stays **out** of the roadmap as a
 deliberate open question: **long-term / curated memory.**
 
-Beyond `store-sqlite` (durable KV/history persistence, delivered in Phase 3), a
+Beyond the host-side store (durable KV/history persistence, delivered in Phase 3), a
 coding agent benefits from *curated* memory — working vs episodic recall, semantic
 search, consolidation. It is **unresolved whether jan-klod should ship this at all**:
 it may belong in a third-party `store-*`/`tool-*` extension, an MCP server via

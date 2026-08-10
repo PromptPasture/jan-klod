@@ -28,9 +28,6 @@ fn telegram_message_drives_a_turn_and_replies() {
         &config,
         "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true
@@ -136,9 +133,6 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
         format!(
             "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true

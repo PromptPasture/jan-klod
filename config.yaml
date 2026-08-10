@@ -1,6 +1,6 @@
 # jan-klod configuration.
 #
-# Extensions are grouped by category (`provider`, `store`, `manager`, ...).
+# Extensions are grouped by category (`provider`, `interceptor`, `tool`, ...).
 # Each *named* entry under a category is one configured extension instance.
 #
 # The host reads only two keys from an entry:
@@ -17,21 +17,6 @@
 # expanded from the environment.
 
 extensions:
-
-  # ---- Persistence: exactly one store instance should be enabled ----
-  store:
-    memory:
-      enabled: true            # in-memory; default for dev, no persistence
-    sqlite:
-      enabled: false
-      # type: store-sqlite
-      path: ./jan-klod.db
-    postgres:
-      enabled: false           # no component implements this yet — a placeholder,
-                               # like tool.web-search. `verify` reports it missing
-                               # if you enable it.
-      # type: store-postgres
-      dsn: ${DATABASE_URL}
 
   # ---- LLM providers: each entry is one configured endpoint ----
   # `type` selects the implementing wasm; reuse provider-openai for any
@@ -212,6 +197,20 @@ extensions:
 # does not by itself let the model run arbitrary commands — that takes
 # `tool.shell` as well; `tool.git` alone can only run the read-only git
 # subcommands its contract allows.
+# ---- Persistence (host-side, not an extension) ----
+# The conversation transcript and every interceptor's granted `host-storage` live
+# in one SQLite file the core owns. It is deliberately not a component: the
+# sandbox has no filesystem, so a store guest would need one granted back — and
+# the transcript is the most sensitive thing here, so the fewer parties that hold
+# it the better. Guests reach it only through `host-storage`, namespaced to
+# themselves, and only when granted `persist: true`.
+#
+# Omit `path` (or the whole block) for an in-memory store: nothing survives a
+# restart, which is the right default for trying it out and the wrong one for
+# using it.
+storage:
+  path: ./jan-klod.db
+
 execution:
   enabled: false
   timeout-secs: 30            # a command that outruns this is killed

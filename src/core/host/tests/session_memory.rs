@@ -52,11 +52,9 @@ fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
         &config,
         format!(
             "
+storage:
+  path: {}
 extensions:
-  store:
-    sqlite:
-      enabled: true
-      path: {}
   provider:
     openai:
       enabled: true
@@ -199,11 +197,9 @@ fn write_config_with_system(dir: &std::path::Path, prompt: &str) -> std::path::P
         &config,
         format!(
             "
+storage:
+  path: {}
 extensions:
-  store:
-    sqlite:
-      enabled: true
-      path: {}
   provider:
     openai:
       enabled: true
@@ -284,11 +280,9 @@ fn write_config_with_tools(dir: &std::path::Path) -> std::path::PathBuf {
         &config,
         format!(
             "
+storage:
+  path: {db}
 extensions:
-  store:
-    sqlite:
-      enabled: true
-      path: {db}
   provider:
     openai:
       enabled: true

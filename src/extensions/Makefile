@@ -12,8 +12,8 @@ WIT_DIR := $(ROOT)/wit
 
 # Rust guests, by directory name (= staged ext/<name>.wasm). Add a guest here and
 # it gets `make <name>` + a slot in `all`/`clean` for free.
-# The cargo artifact swaps '-' for '_' (e.g. store-memory -> store_memory.wasm).
-GUESTS := store-memory provider-openai provider-anthropic registry-skills registry-mcp interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router interceptor-system tool-proc-probe tool-fs tool-shell tool-edit tool-find tool-git tool-fetch
+# The cargo artifact swaps '-' for '_' (e.g. tool-fs -> tool_fs.wasm).
+GUESTS := provider-openai provider-anthropic registry-skills registry-mcp interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router interceptor-system tool-proc-probe tool-fs tool-shell tool-edit tool-find tool-git tool-fetch
 
 # Shared cargo-deny policy (repo root) — the same file the host workspace uses.
 DENY_CONFIG := $(ROOT)/deny.toml
@@ -50,7 +50,7 @@ all:
 test:
 	@for g in $(LIBS) $(TESTABLE_GUESTS); do echo "== test $$g =="; cargo test -p $$g || exit 1; done
 
-# Build a single guest and stage it in ext/ (`make store-memory`, e.g., for
+# Build a single guest and stage it in ext/ (`make tool-fs`, e.g., for
 # targeted dev iteration — `all` above builds every guest at once). Rust guests
 # need no cargo-component — the wasm32-wasip2 target emits a component directly
 # and the `wit-bindgen` crate generates the bindings. Requires rustup (`rustup

@@ -27,11 +27,9 @@ fn transcript_survives_a_runtime_restart() {
         &config,
         format!(
             "
+storage:
+  path: {db}
 extensions:
-  store:
-    sqlite:
-      enabled: true
-      path: {db}
   provider:
     openai:
       enabled: true
@@ -76,4 +74,61 @@ extensions:
     }
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A relative `storage.path` follows the deployment, not the shell.
+///
+/// The shipped config now defaults to a durable store, which makes this a real
+/// hazard rather than a nicety: an installed jan-klod is launched from whatever
+/// repository the user happens to be in. Resolved against the working directory,
+/// the default would litter a `jan-klod.db` into every one of them and hand back
+/// a different conversation history per directory. Resolved against the config,
+/// there is one store per deployment.
+///
+/// The distinction is invisible in a checkout, where the two are the same place.
+#[test]
+fn a_relative_storage_path_resolves_against_the_config_not_the_cwd() {
+    if !common::guests_staged(&["provider-openai.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-relpath-{}", std::process::id()));
+    let elsewhere = dir.join("some-users-repo");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let _guard = common::TempDir(dir.clone());
+
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        "
+storage:
+  path: ./jan-klod.db
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+",
+    )
+    .unwrap();
+
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("boots");
+    let factory = || common::canned_http("hello");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let _ = agent.run("s1", "hi");
+
+    assert!(
+        dir.join("jan-klod.db").exists(),
+        "the store lands beside config.yaml, where the deployment is"
+    );
+    // The first assertion is the one that carries this test: `cargo test` runs
+    // with the crate directory as cwd, so before the fix the database landed
+    // there and `dir` stayed empty. Changing the process cwd to `elsewhere` would
+    // make the check more direct, but cwd is process-wide and these tests run in
+    // parallel. This second assertion is cheap insurance, not the proof.
+    assert!(
+        !elsewhere.join("jan-klod.db").exists(),
+        "and not in a sibling working directory"
+    );
 }

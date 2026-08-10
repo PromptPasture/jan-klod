@@ -42,11 +42,10 @@ use jan_klod_config::{Config, ExtensionInstance};
 pub use host::{ConfigSection, HostState};
 
 /// Deterministic boot tier for a category. Dependencies boot before dependents:
-/// stores and registries first, then providers, then the managers that consume
-/// them, then leaf surfaces (tools, agents, api, chat).
+/// registries first, then providers, then the managers that consume them, then
+/// leaf surfaces (tools, agents, api, chat).
 fn boot_rank(category: &str) -> u8 {
     match category {
-        "store" => 0,
         "registry" => 1,
         "provider" => 2,
         "manager" => 3,
@@ -84,6 +83,9 @@ pub struct Runtime {
     /// verbatim and served to interceptors that need it (e.g. task-router) via
     /// `host-config`. Always a JSON object.
     agent: serde_json::Value,
+    /// Directory holding `config.yaml`, so a relative `storage.path` resolves
+    /// against the deployment rather than the working directory.
+    config_dir: PathBuf,
 }
 
 impl Runtime {
@@ -96,6 +98,10 @@ impl Runtime {
     /// if a host capability cannot be wired, or [`CoreError::Load`] if a present
     /// component fails to compile.
     pub fn boot(config_path: impl AsRef<Path>, ext_dir: impl AsRef<Path>) -> Result<Self, CoreError> {
+        let config_dir = config_path
+            .as_ref()
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let config = Config::from_path(config_path)?;
         let agent = config.agent.clone();
         let engine = Engine::default();
@@ -136,6 +142,7 @@ impl Runtime {
             linker,
             extensions,
             agent,
+            config_dir,
         })
     }
 
@@ -531,17 +538,32 @@ impl Runtime {
         ))))
     }
 
-    /// Open the host-side persistent store from config: the enabled `store.sqlite`
-    /// instance's `path` gives a durable `SQLite` file; anything else (including
-    /// `store.memory` or a missing `path`) is an ephemeral in-memory store.
-    /// Persistence is host-side — the sandbox has no filesystem.
+    /// Open the host-side persistent store: top-level `storage.path` gives a
+    /// durable `SQLite` file, and its absence an ephemeral in-memory one.
+    ///
+    /// Storage is **not** an extension. It was configured as one — an
+    /// `extensions.store.sqlite` instance whose `path` this read — which
+    /// advertised a swappable component family (`store-sqlite`,
+    /// `store-postgres`, `store-supabase`) that never existed: the one component
+    /// that did, `store-memory`, exported a `memory-store` interface the core
+    /// never called once. The design was always host-side, for a reason the
+    /// architecture notes record: the sandbox has no filesystem, so a store guest
+    /// would need one granted back, and the transcript is the most sensitive
+    /// thing the runtime holds. Guests reach it through `host-storage` only,
+    /// namespaced to themselves.
+    ///
+    /// A relative `path` resolves against the directory holding `config.yaml`,
+    /// **not** the working directory. An installed jan-klod is launched from
+    /// whatever repository the user is in; resolving against the cwd would drop a
+    /// `jan-klod.db` into each one and give a different conversation history per
+    /// directory the agent happened to be started from.
     fn open_store(&self) -> Result<Arc<Mutex<store::Store>>, CoreError> {
-        let sqlite_path = self.extensions.iter().find_map(|ext| {
-            let inst = &ext.instance;
-            (inst.category == "store" && inst.kind == "sqlite")
-                .then(|| inst.config.get("path").and_then(serde_json::Value::as_str))
-                .flatten()
-        });
+        let sqlite_path = self
+            .agent
+            .get("storage")
+            .and_then(|storage| storage.get("path"))
+            .and_then(serde_json::Value::as_str)
+            .map(|path| self.config_dir.join(path));
         sqlite_path
             .map_or_else(store::Store::open_in_memory, store::Store::open)
             .map(|store| Arc::new(Mutex::new(store)))
@@ -1164,7 +1186,7 @@ mod tests {
 
     #[test]
     fn boot_rank_orders_dependencies_first() {
-        assert!(boot_rank("store") < boot_rank("provider"));
+        assert!(boot_rank("registry") < boot_rank("provider"));
         assert!(boot_rank("provider") < boot_rank("manager"));
         assert!(boot_rank("manager") < boot_rank("chat"));
         assert_eq!(boot_rank("unknown"), 8);
@@ -1179,8 +1201,8 @@ mod tests {
             &cfg,
             "
 extensions:
-  store:
-    memory:
+  tool:
+    fs:
       enabled: true
   provider:
     openai:
@@ -1189,11 +1211,11 @@ extensions:
         )
         .unwrap();
 
-        // ext/ dir is empty, so the enabled store resolves as missing.
+        // ext/ dir is empty, so the enabled tool resolves as missing.
         let runtime = Runtime::boot(&cfg, dir.join("ext")).unwrap();
         let exts = runtime.extensions();
         assert_eq!(exts.len(), 1, "only the enabled instance is resolved");
-        assert_eq!(exts[0].instance.id, "store.memory");
+        assert_eq!(exts[0].instance.id, "tool.fs");
         assert!(matches!(exts[0].state, LoadState::Missing(_)));
 
         // No components compiled, so starting is a clean no-op.

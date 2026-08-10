@@ -192,22 +192,22 @@ fn the_installer_asks_for_arch_names_the_release_actually_builds() {
 #[test]
 fn every_config_key_is_one_the_runtime_reads() {
     // `extensions.<category>` values the runtime instantiates.
-    //   store       — Runtime::open_store
     //   provider    — build_agent, pass 1
     //   interceptor — build_agent, pass 2
     //   registry    — build_agent, pass 1 (skills / mcp)
     //   tool        — build_agent, pass 1
-    const CONSUMED_CATEGORIES: [&str; 5] =
-        ["store", "provider", "interceptor", "registry", "tool"];
+    const CONSUMED_CATEGORIES: [&str; 4] =
+        ["provider", "interceptor", "registry", "tool"];
     // Top-level keys, and what reads each.
     //   extensions — Config::from_path
     //   workspace  — Runtime::open_workspace
     //   execution  — Runtime::open_process_runner
     //   classifier — Runtime::open_classifier
+    //   storage    — Runtime::open_store
     //   providers  — order_chain, applied in build_agent
     //   routing    — interceptor-task-router, via host-config
-    const CONSUMED_TOP_LEVEL: [&str; 6] =
-        ["extensions", "workspace", "execution", "classifier", "providers", "routing"];
+    const CONSUMED_TOP_LEVEL: [&str; 7] =
+        ["extensions", "workspace", "execution", "classifier", "providers", "routing", "storage"];
 
     let config = std::fs::read_to_string(common::repo_root().join("config.yaml"))
         .expect("the shipped config.yaml is readable");

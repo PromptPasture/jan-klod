@@ -71,9 +71,6 @@ fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
         &config,
         "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     openai:
       enabled: true

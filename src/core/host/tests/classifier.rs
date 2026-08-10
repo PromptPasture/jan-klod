@@ -54,9 +54,6 @@ fn write_config(dir: &std::path::Path, classifier: &str) -> std::path::PathBuf {
         format!(
             "
 extensions:
-  store:
-    memory:
-      enabled: true
   provider:
     main:
       enabled: true
