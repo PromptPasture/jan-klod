@@ -17,6 +17,23 @@ step() { printf "\n${BLD}${YLW}▶ %s${RST}\n" "$*"; }
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
+# Skip entirely unless the commit touches something Rust build output depends
+# on, so doc/workflow-only commits stay instant. wit/ is included because guest
+# crates read it at compile time via wit_bindgen::generate!.
+if ! git diff --cached --name-only --diff-filter=ACM \
+     | grep -qE '\.rs$|Cargo\.(toml|lock)$|^wit/'; then
+  exit 0
+fi
+
+step "rustfmt"
+cargo fmt --manifest-path src/core/Cargo.toml --all -- --check \
+  && pass "core formatted" \
+  || { fail "src/core unformatted — run: cargo fmt --manifest-path src/core/Cargo.toml --all"; exit 1; }
+
+cargo fmt --manifest-path src/extensions/Cargo.toml --all -- --check \
+  && pass "extensions formatted" \
+  || { fail "src/extensions unformatted — run: cargo fmt --manifest-path src/extensions/Cargo.toml --all"; exit 1; }
+
 step "Build + test"
 
 # Stage the guests fresh. This used to be `rm -rf ext/` alone, which defeated its
