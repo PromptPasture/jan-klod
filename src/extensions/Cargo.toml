@@ -47,6 +47,13 @@ all = "warn"
 pedantic = "warn"
 nursery = "warn"
 
+# `make test` compiles these crates' native (host-target) unit tests in the dev
+# profile. Same disk/compile-time tradeoff as the host workspace
+# (src/core/Cargo.toml): full debug info isn't needed for these, backtraces still
+# resolve to file:line.
+[profile.dev]
+debug = "line-tables-only"
+
 # Every guest is a wasm32-wasip2 component: shared size/LTO profile. Cargo only
 # reads [profile.*] from a workspace root, which is why this moved here from each
 # guest's own Cargo.toml when they merged into one workspace.
