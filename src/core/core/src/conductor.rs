@@ -203,40 +203,8 @@ pub fn run_turn(
     history: Vec<Message>,
     limits: Limits,
 ) -> RunResult {
-    // before-loop: may short-circuit a simple prompt.
-    let mut state = HookState::BeforeLoop(UserTurn {
-        session: session.to_string(),
-        user_message: user_message.to_string(),
-    });
-    let agentic = matches!(
-        dispatcher.dispatch(Phase::BeforeLoop, &mut state, driver),
-        Outcome::Proceeded
-    );
-    // An interceptor may have rewritten the user message via `replace`.
-    let effective_message = match &state {
-        HookState::BeforeLoop(turn) => turn.user_message.clone(),
-        _ => user_message.to_string(),
-    };
-
-    // Prior turns first, then this one. Without this the model saw a single
-    // message per turn and a session had no memory at all: "now add a test for
-    // that" reached a model that had never seen "that". Trimming the result to
-    // the model's window is `select-context`'s job, which is why it now has
-    // something to trim.
-    let mut messages = history;
-    messages.push(Message {
-        role: Role::User,
-        content: effective_message,
-        tool_call_id: None,
-    });
-    let mut request = PendingRequest {
-        model: None,
-        messages,
-        tools: vec![],
-        grammar: None,
-        max_tokens: None,
-        temperature: None,
-    };
+    let (agentic, mut request) =
+        build_initial_request(dispatcher, driver, session, user_message, history);
 
     // Agentic path shapes the request; the simple path answers inline as-is.
     if agentic {
@@ -282,61 +250,43 @@ pub fn run_turn(
             // reason — so the turn is recorded as unfinished rather than as an
             // answer that happens to end early.
             final_text = note_incomplete(
-                final_text,
+                &final_text,
                 "stopped before the turn finished — the client disconnected or cancelled",
                 sink,
             );
             break;
         }
-        if completion.tool_calls.is_empty() {
-            // The turn would end. A driver may steer it with a follow-up message;
-            // otherwise finish.
-            let Some(follow_up) = driver.follow_up() else {
-                break;
-            };
-            // prepare-next-turn: optional model/context swap before continuing.
-            let mut next_state = HookState::PrepareNextTurn(request.clone());
-            let _ = dispatcher.dispatch(Phase::PrepareNextTurn, &mut next_state, driver);
-            if let HookState::PrepareNextTurn(shaped) = next_state {
-                request = shaped;
-            }
-            request.messages.push(Message {
-                role: Role::User,
-                content: follow_up,
-                tool_call_id: None,
-            });
+
+        let step = if completion.tool_calls.is_empty() {
+            handle_no_tool_calls(
+                dispatcher,
+                driver,
+                sink,
+                &mut request,
+                &mut iterations,
+                limits,
+                final_text,
+            )
+        } else {
             iterations += 1;
             if iterations >= limits.max_iterations {
-                final_text = cut_short(final_text, limits.max_iterations, sink);
-                break;
-            }
-            continue;
-        }
-        iterations += 1;
-        if iterations >= limits.max_iterations {
-            final_text = cut_short(final_text, limits.max_iterations, sink);
-            break;
-        }
-
-        match run_tool_calls(
-            dispatcher,
-            tools,
-            driver,
-            sink,
-            &completion.tool_calls,
-            &mut request,
-        ) {
-            ToolPass::Continue => {}
-            // A decision: the answer in hand is the intended one.
-            ToolPass::Terminated => break,
-            // An interruption: the model was mid-thought and the transcript
-            // outlives the reason.
-            ToolPass::Cancelled => {
-                final_text = note_incomplete(
-                    final_text,
-                    "stopped before the turn finished — the client disconnected or cancelled",
+                LoopStep::Break(cut_short(&final_text, limits.max_iterations, sink))
+            } else {
+                let pass = run_tool_calls(
+                    dispatcher,
+                    tools,
+                    driver,
                     sink,
+                    &completion.tool_calls,
+                    &mut request,
                 );
+                after_tool_calls(pass, final_text, sink)
+            }
+        };
+        match step {
+            LoopStep::Continue => {}
+            LoopStep::Break(text) => {
+                final_text = text;
                 break;
             }
         }
@@ -350,6 +300,111 @@ pub fn run_turn(
     RunResult::Answered { text, agentic }
 }
 
+/// Assemble the first [`PendingRequest`] for a turn: run `before-loop` (which may
+/// short-circuit a simple prompt), then prior turns from `history` followed by
+/// this one. Returns whether the agentic (request-shaping) path should run.
+///
+/// Prior turns first, then this one. Without this the model saw a single message
+/// per turn and a session had no memory at all: "now add a test for that" reached
+/// a model that had never seen "that". Trimming the result to the model's window
+/// is `select-context`'s job, which is why it now has something to trim.
+fn build_initial_request(
+    dispatcher: &mut Dispatcher,
+    driver: &mut dyn Driver,
+    session: &str,
+    user_message: &str,
+    history: Vec<Message>,
+) -> (bool, PendingRequest) {
+    let mut state = HookState::BeforeLoop(UserTurn {
+        session: session.to_string(),
+        user_message: user_message.to_string(),
+    });
+    let agentic = matches!(
+        dispatcher.dispatch(Phase::BeforeLoop, &mut state, driver),
+        Outcome::Proceeded
+    );
+    // An interceptor may have rewritten the user message via `replace`.
+    let effective_message = match &state {
+        HookState::BeforeLoop(turn) => turn.user_message.clone(),
+        _ => user_message.to_string(),
+    };
+
+    let mut messages = history;
+    messages.push(Message {
+        role: Role::User,
+        content: effective_message,
+        tool_call_id: None,
+    });
+    let request = PendingRequest {
+        model: None,
+        messages,
+        tools: vec![],
+        grammar: None,
+        max_tokens: None,
+        temperature: None,
+    };
+    (agentic, request)
+}
+
+/// What the `ReAct` loop in [`run_turn`] does after one cycle: keep going, or stop
+/// with `final_text` set to the given text.
+enum LoopStep {
+    /// Keep looping.
+    Continue,
+    /// Stop the loop; this is the turn's `final_text`.
+    Break(String),
+}
+
+/// Handle a completion that made no tool calls: either the turn ends, or a driver
+/// steers it with a follow-up message that injects another cycle.
+fn handle_no_tool_calls(
+    dispatcher: &mut Dispatcher,
+    driver: &mut dyn Driver,
+    sink: &mut dyn EventSink,
+    request: &mut PendingRequest,
+    iterations: &mut u32,
+    limits: Limits,
+    final_text: String,
+) -> LoopStep {
+    // The turn would end. A driver may steer it with a follow-up message;
+    // otherwise finish.
+    let Some(follow_up) = driver.follow_up() else {
+        return LoopStep::Break(final_text);
+    };
+    // prepare-next-turn: optional model/context swap before continuing.
+    let mut next_state = HookState::PrepareNextTurn(request.clone());
+    let _ = dispatcher.dispatch(Phase::PrepareNextTurn, &mut next_state, driver);
+    if let HookState::PrepareNextTurn(shaped) = next_state {
+        *request = shaped;
+    }
+    request.messages.push(Message {
+        role: Role::User,
+        content: follow_up,
+        tool_call_id: None,
+    });
+    *iterations += 1;
+    if *iterations >= limits.max_iterations {
+        return LoopStep::Break(cut_short(&final_text, limits.max_iterations, sink));
+    }
+    LoopStep::Continue
+}
+
+/// Turn a [`ToolPass`] outcome into the loop's next step.
+fn after_tool_calls(pass: ToolPass, final_text: String, sink: &mut dyn EventSink) -> LoopStep {
+    match pass {
+        ToolPass::Continue => LoopStep::Continue,
+        // A decision: the answer in hand is the intended one.
+        ToolPass::Terminated => LoopStep::Break(final_text),
+        // An interruption: the model was mid-thought and the transcript outlives
+        // the reason.
+        ToolPass::Cancelled => LoopStep::Break(note_incomplete(
+            &final_text,
+            "stopped before the turn finished — the client disconnected or cancelled",
+            sink,
+        )),
+    }
+}
+
 /// Note that the turn stopped at its cycle cap rather than because it was done.
 ///
 /// The cap used to `break` silently, so a task needing more steps than the limit
@@ -358,7 +413,7 @@ pub fn run_turn(
 /// truncation warning exists for the same reason: a half-finished answer that looks
 /// finished is a wrong the reader acts on. The note goes in the text as well as on
 /// the event stream, because a headless caller (`ask`, a CI step) sees only text.
-fn cut_short(text: String, cap: u32, sink: &mut dyn EventSink) -> String {
+fn cut_short(text: &str, cap: u32, sink: &mut dyn EventSink) -> String {
     note_incomplete(
         text,
         &format!(
@@ -378,7 +433,7 @@ fn cut_short(text: String, cap: u32, sink: &mut dyn EventSink) -> String {
 /// the assistant said something it never got to say. For a coding agent, "I will
 /// now edit `main.rs`…" stored as a completed answer is worse than no memory at
 /// all.
-fn note_incomplete(text: String, note: &str, sink: &mut dyn EventSink) -> String {
+fn note_incomplete(text: &str, note: &str, sink: &mut dyn EventSink) -> String {
     sink.emit(&Event::Warning(note.to_string()));
     if text.trim().is_empty() {
         format!("[{note}]")

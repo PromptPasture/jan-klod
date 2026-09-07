@@ -61,7 +61,7 @@ pub fn guests_staged(guests: &[&str]) -> bool {
 
 /// Whether `program` answers a version query.
 ///
-/// Both spellings, because `--version` is not universal: TinyGo answers
+/// Both spellings, because `--version` is not universal: `TinyGo` answers
 /// `tinygo version` and prints "Unknown command: --version" — with exit status 0,
 /// so probing only the flag reported a compiler that is installed as absent.
 fn runnable(program: &str) -> bool {
@@ -80,7 +80,7 @@ fn runnable(program: &str) -> bool {
 ///
 /// Distinct from [`tool_available`] on purpose. That one exists for prerequisites
 /// a full run must have, so `JK_REQUIRE_GUESTS` turns its absence into a failure.
-/// This one is for a check that is genuinely conditional — rebuilding the TinyGo
+/// This one is for a check that is genuinely conditional — rebuilding the `TinyGo`
 /// canary needs `tinygo` and `wkg`, which CI does not carry and which most
 /// contributors will not install. Making that a hard failure would only teach
 /// people to unset the flag. The skip is announced rather than silent.

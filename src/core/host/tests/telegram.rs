@@ -140,32 +140,7 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
     let dir = std::env::temp_dir().join(format!("jk-tg-prompt-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
-    let config = dir.join("config.yaml");
-    std::fs::write(
-        &config,
-        format!(
-            "
-extensions:
-  provider:
-    openai:
-      enabled: true
-      base-url: http://mock/v1
-      model: mock-1
-      api-key: test
-  interceptor:
-    tool-selector:
-      enabled: true
-    permission:
-      enabled: true
-  tool:
-    fs:
-      enabled: true
-workspace: {}
-",
-            dir.display()
-        ),
-    )
-    .unwrap();
+    let config = write_confirmation_config(&dir);
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = write_then_answer_http;
@@ -205,6 +180,46 @@ workspace: {}
     let next = poll_once(&mut agent, &fetch, "TEST-TOKEN", 0).expect("poll succeeds");
 
     let sent = sent.into_inner();
+    assert_confirmation_flow(&sent, next, &dir);
+}
+
+/// The config for [`a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message`]:
+/// an `OpenAI` provider (mocked), `tool-selector` + `permission` interceptors, and
+/// `tool.fs` jailed to `dir`. Returns the written `config.yaml` path.
+fn write_confirmation_config(dir: &std::path::Path) -> std::path::PathBuf {
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    tool-selector:
+      enabled: true
+    permission:
+      enabled: true
+  tool:
+    fs:
+      enabled: true
+workspace: {}
+",
+            dir.display()
+        ),
+    )
+    .unwrap();
+    config
+}
+
+/// Assert the whole confirmation flow happened: the user was asked (in the right
+/// chat, with the standing options, naming the file and its contents), the write
+/// went through only after the reply, and the unrelated chat's message survived.
+fn assert_confirmation_flow(sent: &[String], next: i64, dir: &std::path::Path) {
     let question = sent
         .iter()
         .find(|m| m.contains("Allow `fs`"))

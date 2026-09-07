@@ -146,6 +146,17 @@ struct EditTurn {
 /// Drive one turn in which the model views `main.rs` and then replaces its first
 /// line, answering every confirmation with `answer`.
 fn run_edit_turn(root: &std::path::Path, tag: &str, answer: &'static str) -> EditTurn {
+    struct Answering {
+        answer: &'static str,
+        asked: Vec<String>,
+    }
+    impl jan_klod_core::intercept::Driver for Answering {
+        fn ask(&mut self, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
+            self.asked.push(prompt.question.clone());
+            self.answer.to_string()
+        }
+    }
+
     let work = root.join(tag);
     std::fs::create_dir_all(&work).unwrap();
     let target = work.join("main.rs");
@@ -216,16 +227,6 @@ extensions:
     let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    struct Answering {
-        answer: &'static str,
-        asked: Vec<String>,
-    }
-    impl jan_klod_core::intercept::Driver for Answering {
-        fn ask(&mut self, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
-            self.asked.push(prompt.question.clone());
-            self.answer.to_string()
-        }
-    }
     let mut driver = Answering {
         answer,
         asked: Vec::new(),

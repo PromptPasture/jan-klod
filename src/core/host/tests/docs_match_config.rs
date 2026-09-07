@@ -393,7 +393,10 @@ fn the_security_model_cites_tests_that_exist() {
         let Some((prefix, name)) = token.split_once("::") else {
             continue;
         };
-        let path = if prefix.ends_with(".rs") {
+        let path = if std::path::Path::new(prefix)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+        {
             last_path = Some(prefix.to_string());
             prefix.to_string()
         } else if prefix.is_empty() {
@@ -550,7 +553,7 @@ fn every_documented_command_exists() {
                     } else {
                         makefile.contains(&format!("\n{word}:"))
                             || makefile.contains(&format!("\n{word} "))
-                            || makefile.contains(&format!("GUESTS := ")) && makefile.contains(&word)
+                            || makefile.contains("GUESTS := ") && makefile.contains(&word)
                     };
                     if verify {
                         assert!(
@@ -630,7 +633,7 @@ fn no_shell_block_recommends_positional_serve_paths() {
                 let Some(rest) = trimmed.split_once(&format!("jan-klod-gateway {sub}")) else {
                     continue;
                 };
-                let first = rest.1.trim().split_whitespace().next().unwrap_or("");
+                let first = rest.1.split_whitespace().next().unwrap_or("");
                 assert!(
                     first.is_empty() || first.starts_with("--"),
                     "{name}:{} shows `jan-klod-gateway {sub} {first}` — a positional path \

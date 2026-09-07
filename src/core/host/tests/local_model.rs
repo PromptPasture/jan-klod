@@ -156,7 +156,7 @@ extensions:
                 "the answer came from the local endpoint: {text}"
             );
         }
-        other => panic!("a local model must complete a turn, got {other:?}"),
+        other @ RunResult::Failed(_) => panic!("a local model must complete a turn, got {other:?}"),
     }
 
     assert!(

@@ -121,6 +121,16 @@ pub struct Runtime {
     config_dir: PathBuf,
 }
 
+/// Pass 1 output of [`Runtime::build_agent`]: every instantiated provider, tool
+/// and registry instance, ready to fold into the fleet and fallback chain.
+struct ProvidersAndTools {
+    providers: Vec<Box<dyn conductor::Completer>>,
+    provider_ids: Vec<String>,
+    tool_extensions: Vec<tool_host::ToolExtension>,
+    skills_extensions: Vec<registry_host::SkillsExtension>,
+    mcp_extensions: Vec<registry_host::McpExtension>,
+}
+
 impl Runtime {
     /// Load `config.yaml`, wire host capabilities, and resolve every enabled
     /// instance against `ext_dir`. Compiles present components; missing ones are
@@ -211,109 +221,125 @@ impl Runtime {
             let LoadState::Compiled(component) = &ext.state else {
                 continue;
             };
-            let id = &ext.instance.id;
-
-            // Own-seam categories: instantiate + lifecycle happen inside the seam.
-            let config_json = ext.instance.config.to_string();
-            match (ext.instance.category.as_str(), ext.instance.kind.as_str()) {
-                ("tool", _) => {
-                    tool_host::ToolExtension::instantiate(
-                        &self.engine,
-                        id,
-                        component,
-                        workspace.clone(),
-                        process.clone(),
-                    )?;
-                    started.push(id.clone());
-                    continue;
-                }
-                ("registry", "skills") => {
-                    registry_host::SkillsExtension::instantiate(
-                        &self.engine,
-                        id,
-                        component,
-                        config_json,
-                        workspace.clone(),
-                    )?;
-                    started.push(id.clone());
-                    continue;
-                }
-                ("registry", "mcp") => {
-                    registry_host::McpExtension::instantiate(
-                        &self.engine,
-                        id,
-                        component,
-                        config_json,
-                        self.egress_policy(),
-                    )?;
-                    started.push(id.clone());
-                    continue;
-                }
-                ("interceptor", _) => {
-                    // A constant classifier: this path only proves the guest
-                    // instantiates and starts, and must not make a model call to
-                    // do it. `build_agent` supplies the real one.
-                    let provider_fn: interceptor_host::ProviderFn =
-                        Box::new(|_request| "agentic".to_string());
-                    interceptor_host::WasmInterceptor::instantiate(
-                        &self.engine,
-                        id,
-                        component,
-                        ConfigSection::new(self.interceptor_config(&ext.instance)),
-                        provider_fn,
-                    )?;
-                    started.push(id.clone());
-                    continue;
-                }
-                _ => {}
-            }
-
-            let section = ConfigSection::new(ext.instance.config.clone());
-            let mut store = Store::new(
-                &self.engine,
-                HostState::new(id.clone(), section).with_egress(self.egress_policy()),
-            );
-
-            let world = ExtensionWorld::instantiate(&mut store, component, &self.linker).map_err(
-                |source| CoreError::Instantiate {
-                    id: id.clone(),
-                    source: source.into(),
-                },
-            )?;
-            let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
-
-            let ctx =
-                bindings::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext {
-                    id: id.clone(),
-                    version: "0.0.0".to_string(),
-                };
-            lifecycle
-                .call_init(&mut store, &ctx)
-                .map_err(|source| CoreError::Lifecycle {
-                    id: id.clone(),
-                    phase: "init",
-                    source: source.into(),
-                })?
-                .map_err(|message| CoreError::LifecycleRejected {
-                    id: id.clone(),
-                    phase: "init",
-                    message,
-                })?;
-            lifecycle
-                .call_start(&mut store)
-                .map_err(|source| CoreError::Lifecycle {
-                    id: id.clone(),
-                    phase: "start",
-                    source: source.into(),
-                })?
-                .map_err(|message| CoreError::LifecycleRejected {
-                    id: id.clone(),
-                    phase: "start",
-                    message,
-                })?;
-            started.push(id.clone());
+            started.push(self.start_one(ext, component, workspace.as_ref(), &process)?);
         }
         Ok(started)
+    }
+
+    /// Instantiate and start one compiled extension. A `tool-*`, `registry-*` or
+    /// `interceptor-*` category is instantiated through its own seam (the same
+    /// one [`Self::build_agent`] uses), because its world imports more than the
+    /// neutral `extension-world` grants; everything else goes through the shared
+    /// linker. Returns the id once its lifecycle has started.
+    fn start_one(
+        &self,
+        ext: &LoadedExtension,
+        component: &Component,
+        workspace: Option<&host_fs::Workspace>,
+        process: &host_process::ProcessRunner,
+    ) -> Result<String, CoreError> {
+        let id = &ext.instance.id;
+        let config_json = ext.instance.config.to_string();
+        match (ext.instance.category.as_str(), ext.instance.kind.as_str()) {
+            ("tool", _) => {
+                tool_host::ToolExtension::instantiate(
+                    &self.engine,
+                    id,
+                    component,
+                    workspace.cloned(),
+                    process.clone(),
+                )?;
+            }
+            ("registry", "skills") => {
+                registry_host::SkillsExtension::instantiate(
+                    &self.engine,
+                    id,
+                    component,
+                    config_json,
+                    workspace.cloned(),
+                )?;
+            }
+            ("registry", "mcp") => {
+                registry_host::McpExtension::instantiate(
+                    &self.engine,
+                    id,
+                    component,
+                    config_json,
+                    self.egress_policy(),
+                )?;
+            }
+            ("interceptor", _) => {
+                // A constant classifier: this path only proves the guest
+                // instantiates and starts, and must not make a model call to do
+                // it. `build_agent` supplies the real one.
+                let provider_fn: interceptor_host::ProviderFn =
+                    Box::new(|_request| "agentic".to_string());
+                interceptor_host::WasmInterceptor::instantiate(
+                    &self.engine,
+                    id,
+                    component,
+                    ConfigSection::new(self.interceptor_config(&ext.instance)),
+                    provider_fn,
+                )?;
+            }
+            _ => return self.start_via_shared_linker(ext, component),
+        }
+        Ok(id.clone())
+    }
+
+    /// Instantiate through the shared, capability-neutral linker and run its
+    /// lifecycle (`init` → `start`). The path every category not listed in
+    /// [`Self::start_one`] takes.
+    fn start_via_shared_linker(
+        &self,
+        ext: &LoadedExtension,
+        component: &Component,
+    ) -> Result<String, CoreError> {
+        let id = &ext.instance.id;
+        let section = ConfigSection::new(ext.instance.config.clone());
+        let mut store = Store::new(
+            &self.engine,
+            HostState::new(id.clone(), section).with_egress(self.egress_policy()),
+        );
+
+        let world =
+            ExtensionWorld::instantiate(&mut store, component, &self.linker).map_err(|source| {
+                CoreError::Instantiate {
+                    id: id.clone(),
+                    source: source.into(),
+                }
+            })?;
+        let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
+
+        let ctx = bindings::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext {
+            id: id.clone(),
+            version: "0.0.0".to_string(),
+        };
+        lifecycle
+            .call_init(&mut store, &ctx)
+            .map_err(|source| CoreError::Lifecycle {
+                id: id.clone(),
+                phase: "init",
+                source: source.into(),
+            })?
+            .map_err(|message| CoreError::LifecycleRejected {
+                id: id.clone(),
+                phase: "init",
+                message,
+            })?;
+        lifecycle
+            .call_start(&mut store)
+            .map_err(|source| CoreError::Lifecycle {
+                id: id.clone(),
+                phase: "start",
+                source: source.into(),
+            })?
+            .map_err(|message| CoreError::LifecycleRejected {
+                id: id.clone(),
+                phase: "start",
+                message,
+            })?;
+        Ok(id.clone())
     }
 
     /// A human-readable boot plan (each instance → its component, loaded/missing).
@@ -339,6 +365,71 @@ impl Runtime {
         &self,
         http_factory: &dyn Fn() -> route::HttpFn,
     ) -> Result<AgentSession, CoreError> {
+        // Shared, default-deny substrates for tools (opt-in via config).
+        let workspace = self.open_workspace();
+        let project_instructions = Self::project_instructions(workspace.as_ref());
+        let process = self.open_process_runner(workspace.as_ref());
+
+        // Pass 1: providers + tools + registries. (Before interceptors so tool-selector
+        // can be handed the combined advertised metadata.)
+        let ProvidersAndTools {
+            providers,
+            provider_ids,
+            tool_extensions,
+            skills_extensions,
+            mcp_extensions,
+        } = self.instantiate_providers_and_tools(http_factory, workspace.as_ref(), &process)?;
+        let tool_fleet = tool_host::ToolFleet::new(tool_extensions);
+        let registry_fleet = registry_host::RegistryFleet::new(skills_extensions, mcp_extensions);
+        let mut tools = CombinedFleet {
+            tools: tool_fleet,
+            registry: registry_fleet,
+        };
+        let tools_advert = tools.all_metas_json();
+
+        // An interceptor that consults a model (the intent router classifies simple
+        // vs agentic) gets its **own** provider instance rather than a handle into
+        // the chain above: the conductor holds the chain mutably for the whole
+        // turn, so an interceptor reaching into it mid-dispatch would alias it. A
+        // second instance costs one more component + client and keeps the seam
+        // straightforward.
+        let classifier = self.open_classifier(http_factory)?;
+
+        // Opened before the interceptors, because they share it: an interceptor's
+        // `host-storage` writes land here, namespaced to the component.
+        let store = self.open_store()?;
+
+        // Pass 2: interceptors, each served the tool set at `select-tools`.
+        let interceptors = self.instantiate_interceptors(
+            &tools_advert,
+            project_instructions.as_deref(),
+            classifier.as_ref(),
+            &store,
+        )?;
+
+        // The fallback chain's *order* is what `providers:` configures; without
+        // this the chain was whatever boot order produced (alphabetical), so the
+        // documented "tried top-to-bottom" list had no effect at all.
+        let ordered = order_chain(self.agent.get("providers"), &provider_ids);
+        let providers = reorder(providers, &ordered);
+
+        Ok(AgentSession {
+            dispatcher: intercept::Dispatcher::new(interceptors),
+            providers,
+            store,
+            limits: self.limits(),
+            tools,
+        })
+    }
+
+    /// Pass 1 of [`Self::build_agent`]: instantiate every enabled provider, tool
+    /// and registry instance.
+    fn instantiate_providers_and_tools(
+        &self,
+        http_factory: &dyn Fn() -> route::HttpFn,
+        workspace: Option<&host_fs::Workspace>,
+        process: &host_process::ProcessRunner,
+    ) -> Result<ProvidersAndTools, CoreError> {
         let mut providers: Vec<Box<dyn conductor::Completer>> = Vec::new();
         // Instance ids, parallel to `providers`, so the configured chain can be
         // matched by name without downcasting a `dyn Completer`.
@@ -347,13 +438,6 @@ impl Runtime {
         let mut skills_extensions: Vec<registry_host::SkillsExtension> = Vec::new();
         let mut mcp_extensions: Vec<registry_host::McpExtension> = Vec::new();
 
-        // Shared, default-deny substrates for tools (opt-in via config).
-        let workspace = self.open_workspace();
-        let project_instructions = self.project_instructions(workspace.as_ref());
-        let process = self.open_process_runner(workspace.as_ref());
-
-        // Pass 1: providers + tools + registries. (Before interceptors so tool-selector
-        // can be handed the combined advertised metadata.)
         for ext in &self.extensions {
             let LoadState::Compiled(component) = &ext.state else {
                 continue;
@@ -384,7 +468,7 @@ impl Runtime {
                         &self.engine,
                         &ext.instance.id,
                         component,
-                        workspace.clone(),
+                        workspace.cloned(),
                         process.clone(),
                         network.then(|| http_factory()),
                     )?);
@@ -395,7 +479,7 @@ impl Runtime {
                         &ext.instance.id,
                         component,
                         config_json,
-                        workspace.clone(),
+                        workspace.cloned(),
                     )?);
                 }
                 "registry" if ext.instance.kind == "mcp" => {
@@ -410,27 +494,24 @@ impl Runtime {
                 _ => {}
             }
         }
-        let tool_fleet = tool_host::ToolFleet::new(tool_extensions);
-        let registry_fleet = registry_host::RegistryFleet::new(skills_extensions, mcp_extensions);
-        let mut tools = CombinedFleet {
-            tools: tool_fleet,
-            registry: registry_fleet,
-        };
-        let tools_advert = tools.all_metas_json();
+        Ok(ProvidersAndTools {
+            providers,
+            provider_ids,
+            tool_extensions,
+            skills_extensions,
+            mcp_extensions,
+        })
+    }
 
-        // An interceptor that consults a model (the intent router classifies simple
-        // vs agentic) gets its **own** provider instance rather than a handle into
-        // the chain above: the conductor holds the chain mutably for the whole
-        // turn, so an interceptor reaching into it mid-dispatch would alias it. A
-        // second instance costs one more component + client and keeps the seam
-        // straightforward.
-        let classifier = self.open_classifier(http_factory)?;
-
-        // Opened before the interceptors, because they share it: an interceptor's
-        // `host-storage` writes land here, namespaced to the component.
-        let store = self.open_store()?;
-
-        // Pass 2: interceptors, each served the tool set at `select-tools`.
+    /// Pass 2 of [`Self::build_agent`]: instantiate every enabled interceptor,
+    /// each served the tool set advertised by pass 1 at `select-tools`.
+    fn instantiate_interceptors(
+        &self,
+        tools_advert: &serde_json::Value,
+        project_instructions: Option<&str>,
+        classifier: Option<&std::sync::Arc<std::sync::Mutex<route::ProviderCompleter>>>,
+        store: &Arc<Mutex<store::Store>>,
+    ) -> Result<Vec<Box<dyn intercept::Interceptor>>, CoreError> {
         let mut interceptors: Vec<Box<dyn intercept::Interceptor>> = Vec::new();
         for ext in &self.extensions {
             let LoadState::Compiled(component) = &ext.state else {
@@ -444,9 +525,9 @@ impl Runtime {
                 map.entry("tools").or_insert_with(|| tools_advert.clone());
                 // Same shape as `tools`: the host does the reading it is allowed to
                 // do, and the guest receives data rather than a capability.
-                if let Some(project) = &project_instructions {
+                if let Some(project) = project_instructions {
                     map.entry("project-instructions")
-                        .or_insert_with(|| serde_json::Value::String(project.clone()));
+                        .or_insert_with(|| serde_json::Value::String(project.to_string()));
                 }
             }
             // Durability is opt-in per instance, and off by default.
@@ -468,7 +549,7 @@ impl Runtime {
                 .get("persist")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
-            let provider_fn = classifier_fn(classifier.clone());
+            let provider_fn = classifier_fn(classifier.cloned());
             interceptors.push(Box::new(
                 interceptor_host::WasmInterceptor::instantiate_with_storage(
                     &self.engine,
@@ -476,24 +557,11 @@ impl Runtime {
                     component,
                     ConfigSection::new(config),
                     provider_fn,
-                    persist.then(|| Arc::clone(&store)),
+                    persist.then(|| Arc::clone(store)),
                 )?,
             ));
         }
-
-        // The fallback chain's *order* is what `providers:` configures; without
-        // this the chain was whatever boot order produced (alphabetical), so the
-        // documented "tried top-to-bottom" list had no effect at all.
-        let ordered = order_chain(self.agent.get("providers"), &provider_ids);
-        let providers = reorder(providers, &ordered);
-
-        Ok(AgentSession {
-            dispatcher: intercept::Dispatcher::new(interceptors),
-            providers,
-            store,
-            limits: self.limits(),
-            tools,
-        })
+        Ok(interceptors)
     }
 
     /// The project's own instructions, if the workspace has an `AGENTS.md`.
@@ -512,7 +580,7 @@ impl Runtime {
     /// Bounded, because a system prompt is paid for on every single turn. A file
     /// larger than the cap is truncated with a note saying so, rather than
     /// silently halved or silently dropped.
-    fn project_instructions(&self, workspace: Option<&host_fs::Workspace>) -> Option<String> {
+    fn project_instructions(workspace: Option<&host_fs::Workspace>) -> Option<String> {
         /// Generous for conventions, small next to a context window.
         const MAX_BYTES: usize = 16 * 1024;
         let text = workspace?.read("AGENTS.md").ok()?;

@@ -276,8 +276,8 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             // Code only. A doc comment explaining what must *not* be called would
             // otherwise trip this, and a checker that fires on prose is one
             // somebody silences — which costs more than the check is worth.
-            let code = line.trim_start();
-            if code.starts_with("//") {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
                 continue;
             }
             // `contains`, not `starts_with`: the call sites read
@@ -307,8 +307,8 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             continue;
         };
         for (number, line) in text.lines().enumerate() {
-            let code = line.trim_start();
-            if code.starts_with("//") {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
                 continue;
             }
             assert!(

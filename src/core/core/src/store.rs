@@ -215,7 +215,7 @@ impl Store {
     /// List all distinct namespaces in the store, most recently written first.
     ///
     /// `DISTINCT` with a bare aggregate in `ORDER BY` is not valid `SQLite`
-    /// ("misuse of aggregate: MIN()"), so this returned `Backend` on every call —
+    /// ("misuse of aggregate: `MIN()`"), so this returned `Backend` on every call —
     /// and its one caller wrote `unwrap_or_default()`, which turned the error into
     /// an empty list. Every session picker had no sessions in it, and nothing said
     /// why. Grouping is the form that actually expresses "one row per namespace".

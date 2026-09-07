@@ -252,7 +252,7 @@ pub struct ProviderCompleter {
 /// error." }`. Three separate problems: a wasm-binding internal reached the user,
 /// the word "transient" invited retrying something that would never succeed, and
 /// nothing named the endpoint the reader needed to look at.
-fn describe(err: &p_llm::ProviderError, endpoint: &str) -> String {
+fn describe(err: p_llm::ProviderError, endpoint: &str) -> String {
     use p_llm::ProviderError as E;
     match err {
         E::AuthFailed => format!(
@@ -324,7 +324,7 @@ impl crate::conductor::Completer for ProviderCompleter {
         let iface = self.world.jan_klod_interfaces_llm_provider();
         let handle = match iface.call_complete(&mut self.store, &preq) {
             Ok(Ok(handle)) => handle,
-            Ok(Err(err)) => return Err(describe(&err, &self.endpoint)),
+            Ok(Err(err)) => return Err(describe(err, &self.endpoint)),
             Err(_) => return Err("provider trapped".to_string()),
         };
 

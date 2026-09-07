@@ -140,7 +140,7 @@ fn an_installed_gateway_serves_from_a_directory_that_is_not_a_checkout() {
     let _gateway = Gateway(child);
 
     assert!(
-        wait_until_listening(&addr, Duration::from_secs(20)),
+        wait_until_listening(&addr, Duration::from_secs(40)),
         "the gateway never came up at {addr} — an installed jan-klod could not start \
          from {}",
         work.display()

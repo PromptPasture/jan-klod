@@ -63,14 +63,12 @@ fn every_tests_directory_belongs_to_a_crate_cargo_builds() {
     let mut orphans = Vec::new();
     for dir in &dirs {
         let Some(parent) = dir.parent() else { continue };
-        match is_package(parent) {
-            // A `tests/` beside a package manifest: cargo builds it. Correct.
-            Some(true) => {}
+        // Else: a `tests/` beside a package manifest (cargo builds it), or no
+        // manifest at all — e.g. `wit/tests` or a fixture directory — which cargo
+        // was never going to build and nobody expects it to.
+        if is_package(parent) == Some(false) {
             // A `tests/` beside a virtual workspace manifest: cargo builds nothing.
-            Some(false) => orphans.push(dir.clone()),
-            // No manifest at all — e.g. `wit/tests` or a fixture directory. Cargo
-            // was never going to build it and nobody expects it to.
-            None => {}
+            orphans.push(dir.clone());
         }
     }
 
