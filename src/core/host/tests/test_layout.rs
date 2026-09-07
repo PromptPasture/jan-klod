@@ -23,7 +23,9 @@ const IGNORED: [&str; 4] = ["target", ".git", "node_modules", "ext"];
 
 /// Every `tests/` directory under `root`, with the nearest manifest above it.
 fn test_dirs(root: &Path, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else { return };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -53,7 +55,10 @@ fn every_tests_directory_belongs_to_a_crate_cargo_builds() {
     let root = common::repo_root();
     let mut dirs = Vec::new();
     test_dirs(&root, &mut dirs);
-    assert!(!dirs.is_empty(), "the walk found no test directories at all — it is broken");
+    assert!(
+        !dirs.is_empty(),
+        "the walk found no test directories at all — it is broken"
+    );
 
     let mut orphans = Vec::new();
     for dir in &dirs {

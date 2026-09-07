@@ -67,7 +67,11 @@ fn tool_then_answer_http() -> HttpFn {
                 }]
             })
         };
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
+        Ok(WireResponse {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&body).unwrap(),
+        })
     })
 }
 
@@ -157,7 +161,10 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
             if line.starts_with("event: prompt") && !answered {
                 answered = true;
                 let ack = post_answer(port, "p-1", "yes");
-                assert!(ack.contains("\"accepted\":true"), "answer acknowledged: {ack}");
+                assert!(
+                    ack.contains("\"accepted\":true"),
+                    "answer acknowledged: {ack}"
+                );
             }
         }
         (collected, answered)
@@ -169,7 +176,10 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
 
     let (stream_text, answered) = turn.join().expect("turn client thread");
     assert!(answered, "the turn asked for a confirmation: {stream_text}");
-    assert!(stream_text.contains("event: prompt"), "a prompt frame was sent: {stream_text}");
+    assert!(
+        stream_text.contains("event: prompt"),
+        "a prompt frame was sent: {stream_text}"
+    );
     assert!(
         stream_text.contains("\"question\""),
         "the prompt frame carries the question: {stream_text}"
@@ -182,7 +192,10 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
         stream_text.contains("event: done"),
         "the turn completed after being answered: {stream_text}"
     );
-    assert!(stream_text.contains("all done"), "the final answer streamed: {stream_text}");
+    assert!(
+        stream_text.contains("all done"),
+        "the final answer streamed: {stream_text}"
+    );
 }
 
 #[test]
@@ -212,5 +225,8 @@ fn an_answer_with_nothing_pending_is_refused() {
     // A route that exists but has nothing to answer says so, rather than 404-ing
     // as if the client had invented the endpoint.
     assert!(response.contains("409"), "conflict status: {response}");
-    assert!(response.contains("no confirmation is pending"), "explains itself: {response}");
+    assert!(
+        response.contains("no confirmation is pending"),
+        "explains itself: {response}"
+    );
 }

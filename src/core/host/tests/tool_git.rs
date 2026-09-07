@@ -39,7 +39,9 @@ fn git(dir: &std::path::Path, args: &[&str]) -> bool {
 #[test]
 fn read_only_ops_report_the_repository_and_mutations_are_refused() {
     let engine = Engine::default();
-    let Some(component) = git_component(&engine) else { return };
+    let Some(component) = git_component(&engine) else {
+        return;
+    };
 
     let workspace_dir = std::env::temp_dir().join(format!("jk-toolgit-{}", std::process::id()));
     std::fs::create_dir_all(&workspace_dir).unwrap();
@@ -48,14 +50,23 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
     if !common::tool_available("git") {
         return;
     }
-    assert!(git(&workspace_dir, &["init", "--quiet"]), "git init succeeds");
+    assert!(
+        git(&workspace_dir, &["init", "--quiet"]),
+        "git init succeeds"
+    );
     // A committer identity, set locally so the test never depends on (or touches)
     // the machine's global git config.
-    git(&workspace_dir, &["config", "user.email", "test@example.com"]);
+    git(
+        &workspace_dir,
+        &["config", "user.email", "test@example.com"],
+    );
     git(&workspace_dir, &["config", "user.name", "Test"]);
     std::fs::write(workspace_dir.join("main.rs"), "fn main() {}\n").unwrap();
     git(&workspace_dir, &["add", "main.rs"]);
-    assert!(git(&workspace_dir, &["commit", "--quiet", "-m", "add main"]), "commit succeeds");
+    assert!(
+        git(&workspace_dir, &["commit", "--quiet", "-m", "add main"]),
+        "commit succeeds"
+    );
     // An uncommitted edit, so `status` and `diff` have something to report.
     std::fs::write(workspace_dir.join("main.rs"), "fn main() { todo!() }\n").unwrap();
 
@@ -66,20 +77,35 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
             .expect("tool instantiates");
 
     let status = tool.invoke(r#"{"op":"status"}"#).expect("status succeeds");
-    assert!(status.contains("main.rs"), "the modified file is reported: {status}");
+    assert!(
+        status.contains("main.rs"),
+        "the modified file is reported: {status}"
+    );
 
-    let log = tool.invoke(r#"{"op":"log","count":5}"#).expect("log succeeds");
-    assert!(log.contains("add main"), "the commit subject is reported: {log}");
+    let log = tool
+        .invoke(r#"{"op":"log","count":5}"#)
+        .expect("log succeeds");
+    assert!(
+        log.contains("add main"),
+        "the commit subject is reported: {log}"
+    );
 
     let diff = tool.invoke(r#"{"op":"diff"}"#).expect("diff succeeds");
-    assert!(diff.contains("todo!()"), "the working-tree change is reported: {diff}");
+    assert!(
+        diff.contains("todo!()"),
+        "the working-tree change is reported: {diff}"
+    );
 
     // Nothing is staged, so the staged diff is empty — and says so rather than
     // returning a bare empty string the model would have to interpret.
-    let staged = tool.invoke(r#"{"op":"diff","staged":true}"#).expect("staged diff succeeds");
+    let staged = tool
+        .invoke(r#"{"op":"diff","staged":true}"#)
+        .expect("staged diff succeeds");
     assert_eq!(staged, "(no output)");
 
-    let show = tool.invoke(r#"{"op":"show","rev":"HEAD"}"#).expect("show succeeds");
+    let show = tool
+        .invoke(r#"{"op":"show","rev":"HEAD"}"#)
+        .expect("show succeeds");
     assert!(show.contains("add main"), "the commit is shown: {show}");
 
     // The write half of git is not expressible: refused by the guest, so no
@@ -90,8 +116,13 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         r#"{"op":"checkout","rev":"HEAD"}"#,
         r#"{"op":"reset"}"#,
     ] {
-        let out = tool.invoke(mutating).expect("a refusal is a result, not a trap");
-        assert!(out.starts_with("REFUSED:"), "{mutating} must be refused: {out}");
+        let out = tool
+            .invoke(mutating)
+            .expect("a refusal is a result, not a trap");
+        assert!(
+            out.starts_with("REFUSED:"),
+            "{mutating} must be refused: {out}"
+        );
         assert!(out.contains("reads a repository only"), "{out}");
     }
 
@@ -102,17 +133,22 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
     assert!(smuggled.starts_with("REFUSED:"), "{smuggled}");
 
     // The repository is exactly as it was: read-only means read-only.
-    let after = tool.invoke(r#"{"op":"log","count":5}"#).expect("log succeeds");
+    let after = tool
+        .invoke(r#"{"op":"log","count":5}"#)
+        .expect("log succeeds");
     assert_eq!(after.lines().count(), 1, "still one commit: {after}");
 }
 
 #[test]
 fn tool_git_is_default_deny_without_execution() {
     let engine = Engine::default();
-    let Some(component) = git_component(&engine) else { return };
+    let Some(component) = git_component(&engine) else {
+        return;
+    };
 
     // A workspace but no execution substrate: the tool loads and still cannot run.
-    let workspace_dir = std::env::temp_dir().join(format!("jk-toolgit-deny-{}", std::process::id()));
+    let workspace_dir =
+        std::env::temp_dir().join(format!("jk-toolgit-deny-{}", std::process::id()));
     std::fs::create_dir_all(&workspace_dir).unwrap();
     let _guard = common::TempDir(workspace_dir.clone());
     let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
@@ -127,5 +163,8 @@ fn tool_git_is_default_deny_without_execution() {
     .expect("tool instantiates");
 
     let out = tool.invoke(r#"{"op":"status"}"#);
-    assert!(out.is_err(), "with execution disabled, host-process must deny: {out:?}");
+    assert!(
+        out.is_err(),
+        "with execution disabled, host-process must deny: {out:?}"
+    );
 }

@@ -25,7 +25,11 @@ use std::time::{Duration, Instant};
 
 mod common;
 
-const GUESTS: [&str; 3] = ["provider-openai.wasm", "tool-fs.wasm", "interceptor-permission.wasm"];
+const GUESTS: [&str; 3] = [
+    "provider-openai.wasm",
+    "tool-fs.wasm",
+    "interceptor-permission.wasm",
+];
 
 /// Kills the gateway on drop, so a failing assertion cannot leave one running.
 struct Gateway(Child);
@@ -48,12 +52,18 @@ fn install_into(prefix: &Path) -> PathBuf {
     let installed = bin.join("jan-klod-gateway");
     std::fs::copy(&built, &installed).expect("the gateway binary is copied");
 
-    std::fs::copy(common::repo_root().join("config.yaml"), data.join("config.yaml"))
-        .expect("the shipped config is copied");
+    std::fs::copy(
+        common::repo_root().join("config.yaml"),
+        data.join("config.yaml"),
+    )
+    .expect("the shipped config is copied");
     let ext_src = common::repo_root().join("ext");
     let ext_dst = data.join("ext");
     std::fs::create_dir_all(&ext_dst).unwrap();
-    for entry in std::fs::read_dir(&ext_src).expect("ext/ is readable").flatten() {
+    for entry in std::fs::read_dir(&ext_src)
+        .expect("ext/ is readable")
+        .flatten()
+    {
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "wasm") {
             std::fs::copy(&path, ext_dst.join(entry.file_name())).expect("a guest is copied");
@@ -83,7 +93,9 @@ fn wait_until_listening(addr: &str, timeout: Duration) -> bool {
 /// nothing the product does not already ship.
 fn get_health(addr: &str) -> String {
     let mut stream = TcpStream::connect(addr).expect("connects to the gateway");
-    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     stream
         .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         .unwrap();
@@ -136,7 +148,10 @@ fn an_installed_gateway_serves_from_a_directory_that_is_not_a_checkout() {
 
     let health = get_health(&addr);
     assert!(health.contains("200 OK"), "health responds: {health}");
-    assert!(health.contains("\"status\":\"ok\""), "and reports ok: {health}");
+    assert!(
+        health.contains("\"status\":\"ok\""),
+        "and reports ok: {health}"
+    );
 }
 
 #[test]
@@ -166,7 +181,10 @@ fn an_installed_gateway_verifies_its_own_components_from_anywhere() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("start cleanly"), "every component starts: {stdout}");
+    assert!(
+        stdout.contains("start cleanly"),
+        "every component starts: {stdout}"
+    );
     // `0 missing`, not `!contains("missing")` — the report's summary line always
     // carries the word, so the negative form is vacuously false. That exact
     // mistake shipped once already in `shipped_defaults`, and I wrote it again
@@ -198,7 +216,10 @@ fn a_gateway_with_no_data_directory_beside_it_fails_and_says_why() {
         .output()
         .expect("verify runs");
 
-    assert!(!output.status.success(), "a gateway with no components must not report success");
+    assert!(
+        !output.status.success(),
+        "a gateway with no components must not report success"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("config.yaml"),
@@ -280,9 +301,15 @@ extensions:
         "ask succeeded: {stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains(answer), "the answer is on stdout: {stdout:?}");
+    assert!(
+        stdout.contains(answer),
+        "the answer is on stdout: {stdout:?}"
+    );
     // stdout is the answer and nothing else, so a script can pipe it.
-    assert!(!stdout.contains('?'), "no prompt text leaked into stdout: {stdout:?}");
+    assert!(
+        !stdout.contains('?'),
+        "no prompt text leaked into stdout: {stdout:?}"
+    );
 }
 
 /// `verify --live` catches what the offline checks cannot.
@@ -343,7 +370,10 @@ extensions:
         .output()
         .expect("verify --live runs");
     let stderr = String::from_utf8_lossy(&live.stderr);
-    assert!(!live.status.success(), "--live fails when the model does not answer");
+    assert!(
+        !live.status.success(),
+        "--live fails when the model does not answer"
+    );
     assert!(
         stderr.contains(&dead.to_string()) && stderr.contains("could not be reached"),
         "and names the endpoint and the cause: {stderr}"

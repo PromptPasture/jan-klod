@@ -10,7 +10,13 @@
 
 #[cfg(target_arch = "wasm32")]
 mod component {
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({
             world: "interceptor-world",
@@ -37,7 +43,8 @@ mod component {
         let Ok(raw) = host_config::get("tools") else {
             return Vec::new();
         };
-        let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(&raw)
+        else {
             return Vec::new();
         };
         items
@@ -64,7 +71,10 @@ mod component {
 
     impl Lifecycle for Component {
         fn init(ctx: ExtensionContext) -> Result<(), String> {
-            log(LogLevel::Info, &format!("init id={} version={}", ctx.id, ctx.version));
+            log(
+                LogLevel::Info,
+                &format!("init id={} version={}", ctx.id, ctx.version),
+            );
             Ok(())
         }
         fn start() -> Result<(), String> {
@@ -93,13 +103,22 @@ mod component {
             if tools.is_empty() {
                 return Ok(Decision::Proceed);
             }
-            log(LogLevel::Info, &format!("select-tools: advertising {} tool(s)", tools.len()));
+            log(
+                LogLevel::Info,
+                &format!("select-tools: advertising {} tool(s)", tools.len()),
+            );
             request.tools = tools;
             Ok(Decision::Replace(HookState::SelectTools(request)))
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

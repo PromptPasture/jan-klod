@@ -27,8 +27,11 @@ use jan_klod_core::Runtime;
 
 mod common;
 
-const GUESTS: [&str; 3] =
-    ["provider-openai.wasm", "interceptor-tool-selector.wasm", "interceptor-permission.wasm"];
+const GUESTS: [&str; 3] = [
+    "provider-openai.wasm",
+    "interceptor-tool-selector.wasm",
+    "interceptor-permission.wasm",
+];
 
 /// Answers every confirmation with `always`, so the gate records a standing grant.
 struct AlwaysDriver {
@@ -105,7 +108,9 @@ fn turns_asked(config: &std::path::Path, ext_dir: &std::path::Path, turns: u32) 
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
     let asked = std::rc::Rc::new(std::cell::RefCell::new(0));
     for _ in 0..turns {
-        let mut driver = AlwaysDriver { asked: std::rc::Rc::clone(&asked) };
+        let mut driver = AlwaysDriver {
+            asked: std::rc::Rc::clone(&asked),
+        };
         let _ = agent.run_with_driver(&mut driver, "s1", "use bash");
     }
     let count = *asked.borrow();
@@ -203,7 +208,9 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
          verbatim — otherwise two interceptors that both pick `state` share one: {namespaces:?}"
     );
     assert!(
-        namespaces.iter().any(|ns| ns.starts_with("ext/interceptor.permission/")),
+        namespaces
+            .iter()
+            .any(|ns| ns.starts_with("ext/interceptor.permission/")),
         "the grant landed under the component's own subtree: {namespaces:?}"
     );
     // And the session transcript is a namespace the guest could have *named*
@@ -215,7 +222,10 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
 
     // `list_sessions` must not offer interceptor storage as a conversation.
     let sessions = agent.list_sessions();
-    assert!(sessions.iter().any(|s| s == "s1"), "the real session lists: {sessions:?}");
+    assert!(
+        sessions.iter().any(|s| s == "s1"),
+        "the real session lists: {sessions:?}"
+    );
     assert!(
         !sessions.iter().any(|s| s.contains("ext/")),
         "interceptor namespaces are not sessions: {sessions:?}"

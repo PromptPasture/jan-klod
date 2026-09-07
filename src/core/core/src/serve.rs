@@ -124,10 +124,7 @@ pub fn serve_once_authed(
     // Auth first, before any route can act. `/health` stays open: it carries no
     // session data and the blue/green supervisor probes it without credentials.
     if !authorised(&request, token, path) {
-        return respond_json(
-            request,
-            error_reply(401, "missing or invalid bearer token"),
-        );
+        return respond_json(request, error_reply(401, "missing or invalid bearer token"));
     }
 
     // GET /health
@@ -191,7 +188,8 @@ pub fn serve_once_authed(
 pub fn health() -> Reply {
     Reply {
         status: 200,
-        body: serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }).to_string(),
+        body: serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") })
+            .to_string(),
     }
 }
 
@@ -207,19 +205,31 @@ fn handle_list_sessions(agent: &AgentSession) -> Reply {
                 .next()
                 .and_then(|e| {
                     let v: serde_json::Value = serde_json::from_str(&e.value).ok()?;
-                    Some(v.get("user")?.as_str()?.chars().take(80).collect::<String>())
+                    Some(
+                        v.get("user")?
+                            .as_str()?
+                            .chars()
+                            .take(80)
+                            .collect::<String>(),
+                    )
                 })
                 .unwrap_or_default();
             serde_json::json!({ "id": id, "preview": preview })
         })
         .collect();
-    Reply { status: 200, body: serde_json::json!({ "sessions": sessions }).to_string() }
+    Reply {
+        status: 200,
+        body: serde_json::json!({ "sessions": sessions }).to_string(),
+    }
 }
 
 /// `POST /sessions` — allocate a new session id.
 fn handle_create_session() -> Reply {
     let id = new_session_id();
-    Reply { status: 201, body: serde_json::json!({ "id": id }).to_string() }
+    Reply {
+        status: 201,
+        body: serde_json::json!({ "id": id }).to_string(),
+    }
 }
 
 /// `GET /session/:id` — return transcript + metadata.
@@ -277,7 +287,10 @@ fn serve_message_sse(
         }
     };
 
-    let mut sink = SseSink { writer: Rc::clone(&writer), live: true };
+    let mut sink = SseSink {
+        writer: Rc::clone(&writer),
+        live: true,
+    };
     let mut driver = PromptDriver {
         server,
         writer: Rc::clone(&writer),
@@ -320,11 +333,18 @@ impl Driver for PromptDriver<'_> {
             "default": prompt.default_answer,
             "session": self.session,
         });
-        if write_frame(&mut *self.writer.borrow_mut(), "prompt", &payload.to_string()).is_err() {
+        if write_frame(
+            &mut *self.writer.borrow_mut(),
+            "prompt",
+            &payload.to_string(),
+        )
+        .is_err()
+        {
             // The client is gone; nobody can answer, so take the safe default.
             return prompt.default_answer.clone();
         }
-        self.wait_for_answer().unwrap_or_else(|| prompt.default_answer.clone())
+        self.wait_for_answer()
+            .unwrap_or_else(|| prompt.default_answer.clone())
     }
 }
 
@@ -363,10 +383,7 @@ impl PromptDriver<'_> {
                 // Refuse and keep waiting: an unauthenticated caller must not be
                 // able to answer a permission prompt, nor to cancel one by
                 // consuming the wait.
-                let _ = respond_json(
-                    request,
-                    error_reply(401, "missing or invalid bearer token"),
-                );
+                let _ = respond_json(request, error_reply(401, "missing or invalid bearer token"));
                 continue;
             }
             if *request.method() == Method::Post && path == route {
@@ -379,7 +396,10 @@ impl PromptDriver<'_> {
                     Ok(answer) => {
                         let _ = respond_json(
                             request,
-                            Reply { status: 200, body: r#"{"accepted":true}"#.to_string() },
+                            Reply {
+                                status: 200,
+                                body: r#"{"accepted":true}"#.to_string(),
+                            },
                         );
                         return Some(answer);
                     }
@@ -419,10 +439,17 @@ fn authorised(request: &Request, token: Option<&str>, path: &str) -> bool {
     request
         .headers()
         .iter()
-        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("authorization"))
+        .find(|h| {
+            h.field
+                .as_str()
+                .as_str()
+                .eq_ignore_ascii_case("authorization")
+        })
         .and_then(|h| {
             let value = h.value.as_str();
-            value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
         })
         .is_some_and(|presented| presented.trim() == expected)
 }
@@ -457,17 +484,19 @@ impl EventSink for SseSink {
         }
         let (kind, data) = match event {
             Event::TextDelta(text) => ("delta", serde_json::json!({ "text": text })),
-            Event::ToolInvoked(call) => {
-                ("tool", serde_json::json!({ "id": call.id, "name": call.name }))
-            }
+            Event::ToolInvoked(call) => (
+                "tool",
+                serde_json::json!({ "id": call.id, "name": call.name }),
+            ),
             Event::ToolResult(outcome) => (
                 "tool-result",
                 serde_json::json!({ "id": outcome.tool_call_id, "content": outcome.content }),
             ),
             Event::Warning(message) => ("warning", serde_json::json!({ "message": message })),
-            Event::Done { text, agentic } => {
-                ("done", serde_json::json!({ "answer": text, "agentic": agentic }))
-            }
+            Event::Done { text, agentic } => (
+                "done",
+                serde_json::json!({ "answer": text, "agentic": agentic }),
+            ),
         };
         if write_frame(&mut *self.writer.borrow_mut(), kind, &data.to_string()).is_err() {
             self.live = false;
@@ -521,12 +550,16 @@ fn strip_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 }
 
 fn error_reply(status: u16, message: &str) -> Reply {
-    Reply { status, body: serde_json::json!({ "error": message }).to_string() }
+    Reply {
+        status,
+        body: serde_json::json!({ "error": message }).to_string(),
+    }
 }
 
 fn json_content_type() -> Header {
-    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-        .unwrap_or_else(|()| Header::from_bytes(&b"X-Content"[..], &b"json"[..]).expect("static header"))
+    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap_or_else(|()| {
+        Header::from_bytes(&b"X-Content"[..], &b"json"[..]).expect("static header")
+    })
 }
 
 /// Generate a random hex session id (16 hex chars, using stdlib only).
@@ -538,7 +571,11 @@ fn new_session_id() -> String {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::from(d.subsec_nanos()));
     let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{:08x}{:08x}", ts ^ (count << 17), count.wrapping_mul(0x9e37_79b9))
+    format!(
+        "{:08x}{:08x}",
+        ts ^ (count << 17),
+        count.wrapping_mul(0x9e37_79b9)
+    )
 }
 
 /// Serve requests forever (the accept loop). Blocks the calling thread.
@@ -572,6 +609,10 @@ mod tests {
         let reply = health();
         assert_eq!(reply.status, 200);
         assert!(reply.body.contains("\"status\":\"ok\""), "{}", reply.body);
-        assert!(reply.body.contains(env!("CARGO_PKG_VERSION")), "{}", reply.body);
+        assert!(
+            reply.body.contains(env!("CARGO_PKG_VERSION")),
+            "{}",
+            reply.body
+        );
     }
 }

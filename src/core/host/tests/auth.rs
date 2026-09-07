@@ -117,7 +117,10 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
         !none.contains("pong") && !wrong.contains("pong"),
         "a refused request never reached the agent"
     );
-    assert!(right.contains("200 OK"), "the right token is served: {right}");
+    assert!(
+        right.contains("200 OK"),
+        "the right token is served: {right}"
+    );
     assert!(right.contains("pong"), "and gets a real answer: {right}");
     // The supervisor probes this without credentials during a blue/green flip.
     assert!(health.contains("200 OK"), "/health stays open: {health}");
@@ -148,7 +151,10 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     // Requiring a secret to talk to your own loopback would be friction without a
     // threat, so the default stays open — and stays warned about when the bind is
     // not loopback.
-    assert!(response.contains("200 OK"), "no token configured means no gate: {response}");
+    assert!(
+        response.contains("200 OK"),
+        "no token configured means no gate: {response}"
+    );
     assert!(response.contains("pong"), "and the turn runs: {response}");
 }
 

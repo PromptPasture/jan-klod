@@ -105,7 +105,12 @@ impl App {
     pub fn ask(&mut self, prompt: Prompt) {
         self.record(
             Who::Status,
-            format!("{} [{}] (default: {})", prompt.question, prompt.options.join("/"), prompt.default),
+            format!(
+                "{} [{}] (default: {})",
+                prompt.question,
+                prompt.options.join("/"),
+                prompt.default
+            ),
         );
         self.pending_prompt = Some(prompt);
     }
@@ -119,7 +124,11 @@ impl App {
         let prompt = self.pending_prompt.take()?;
         let typed = self.input.trim().to_string();
         self.input.clear();
-        let answer = if typed.is_empty() { prompt.default } else { typed };
+        let answer = if typed.is_empty() {
+            prompt.default
+        } else {
+            typed
+        };
         self.record(Who::You, answer.clone());
         Some(answer)
     }
@@ -140,6 +149,9 @@ impl App {
     }
 
     fn record(&mut self, who: Who, text: impl Into<String>) {
-        self.transcript.push(Entry { who, text: text.into() });
+        self.transcript.push(Entry {
+            who,
+            text: text.into(),
+        });
     }
 }

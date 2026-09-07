@@ -42,7 +42,8 @@ pub trait AgentTransport {
     /// # Errors
     /// Returns a human-readable error if the remote agent is unreachable, rejects
     /// the task, times out, or speaks a bad protocol.
-    fn delegate(&self, endpoint: &str, task: &str, context: Option<&str>) -> Result<String, String>;
+    fn delegate(&self, endpoint: &str, task: &str, context: Option<&str>)
+        -> Result<String, String>;
 }
 
 /// A [`ToolInvoker`] that services `delegate` tool calls by forwarding to a remote
@@ -115,18 +116,32 @@ mod tests {
     }
 
     impl AgentTransport for StubTransport {
-        fn delegate(&self, endpoint: &str, task: &str, _context: Option<&str>) -> Result<String, String> {
-            self.seen.borrow_mut().push((endpoint.to_string(), task.to_string()));
+        fn delegate(
+            &self,
+            endpoint: &str,
+            task: &str,
+            _context: Option<&str>,
+        ) -> Result<String, String> {
+            self.seen
+                .borrow_mut()
+                .push((endpoint.to_string(), task.to_string()));
             self.reply.clone()
         }
     }
 
     fn agents() -> HashMap<String, String> {
-        HashMap::from([("claude-code".to_string(), "http://acp.local/claude".to_string())])
+        HashMap::from([(
+            "claude-code".to_string(),
+            "http://acp.local/claude".to_string(),
+        )])
     }
 
     fn call(name: &str, args: &str) -> ToolCall {
-        ToolCall { id: "1".into(), name: name.into(), arguments: args.into() }
+        ToolCall {
+            id: "1".into(),
+            name: name.into(),
+            arguments: args.into(),
+        }
     }
 
     #[test]
@@ -136,25 +151,36 @@ mod tests {
             reply: Ok("subtask done".into()),
         };
         let mut delegate = AgentDelegate::new(transport, agents());
-        let result =
-            delegate.invoke(&call("delegate", r#"{"agent":"claude-code","task":"write a test"}"#));
+        let result = delegate.invoke(&call(
+            "delegate",
+            r#"{"agent":"claude-code","task":"write a test"}"#,
+        ));
         assert_eq!(result.as_deref(), Some("subtask done"));
         assert_eq!(
             delegate.transport.seen.borrow().as_slice(),
-            &[("http://acp.local/claude".to_string(), "write a test".to_string())]
+            &[(
+                "http://acp.local/claude".to_string(),
+                "write a test".to_string()
+            )]
         );
     }
 
     #[test]
     fn ignores_non_delegate_tool_calls() {
-        let transport = StubTransport { seen: RefCell::new(vec![]), reply: Ok("x".into()) };
+        let transport = StubTransport {
+            seen: RefCell::new(vec![]),
+            reply: Ok("x".into()),
+        };
         let mut delegate = AgentDelegate::new(transport, agents());
         assert_eq!(delegate.invoke(&call("web_search", "{}")), None);
     }
 
     #[test]
     fn reports_an_unknown_agent() {
-        let transport = StubTransport { seen: RefCell::new(vec![]), reply: Ok("x".into()) };
+        let transport = StubTransport {
+            seen: RefCell::new(vec![]),
+            reply: Ok("x".into()),
+        };
         let mut delegate = AgentDelegate::new(transport, agents());
         let result = delegate.invoke(&call("delegate", r#"{"agent":"nope","task":"t"}"#));
         assert!(result.unwrap().contains("unknown agent `nope`"));

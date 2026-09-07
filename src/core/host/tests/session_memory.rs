@@ -41,7 +41,11 @@ fn recording_http(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> HttpFn {
                 "finish_reason": "stop"
             }]
         });
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&reply).unwrap() })
+        Ok(WireResponse {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&reply).unwrap(),
+        })
     })
 }
 
@@ -101,11 +105,21 @@ fn a_later_turn_carries_what_was_said_earlier() {
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
     // Turn 1: nothing to remember yet.
-    assert!(matches!(agent.run("s-1", "read src/main.rs"), RunResult::Answered { .. }));
-    assert_eq!(last_messages(&seen), vec!["read src/main.rs"], "a first turn stands alone");
+    assert!(matches!(
+        agent.run("s-1", "read src/main.rs"),
+        RunResult::Answered { .. }
+    ));
+    assert_eq!(
+        last_messages(&seen),
+        vec!["read src/main.rs"],
+        "a first turn stands alone"
+    );
 
     // Turn 2: the request must carry turn 1's question *and* its answer.
-    assert!(matches!(agent.run("s-1", "now add a test for that"), RunResult::Answered { .. }));
+    assert!(matches!(
+        agent.run("s-1", "now add a test for that"),
+        RunResult::Answered { .. }
+    ));
     assert_eq!(
         last_messages(&seen),
         vec!["read src/main.rs", "ok", "now add a test for that"],
@@ -113,8 +127,15 @@ fn a_later_turn_carries_what_was_said_earlier() {
     );
 
     // A different session is a different conversation.
-    assert!(matches!(agent.run("s-2", "unrelated question"), RunResult::Answered { .. }));
-    assert_eq!(last_messages(&seen), vec!["unrelated question"], "sessions do not bleed");
+    assert!(matches!(
+        agent.run("s-2", "unrelated question"),
+        RunResult::Answered { .. }
+    ));
+    assert_eq!(
+        last_messages(&seen),
+        vec!["unrelated question"],
+        "sessions do not bleed"
+    );
 }
 
 #[test]
@@ -148,10 +169,15 @@ fn resuming_a_session_after_a_restart_carries_its_history() {
 
     let messages = last_messages(&seen);
     assert!(
-        messages.first().is_some_and(|m| m.contains("widget refactor")),
+        messages
+            .first()
+            .is_some_and(|m| m.contains("widget refactor")),
         "the pre-restart turn is replayed: {messages:?}"
     );
-    assert_eq!(messages.last().map(String::as_str), Some("what was I doing?"));
+    assert_eq!(
+        messages.last().map(String::as_str),
+        Some("what was I doing?")
+    );
 }
 
 #[test]
@@ -178,7 +204,11 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
     let messages = last_messages(&seen);
     // 20 replayed turns × (question + answer) + the new message. The cap is what
     // stops turn 500 from loading five hundred turns out of SQLite every time.
-    assert!(messages.len() <= 41, "replay is capped: {} messages", messages.len());
+    assert!(
+        messages.len() <= 41,
+        "replay is capped: {} messages",
+        messages.len()
+    );
     assert!(
         !messages.iter().any(|m| m == "message 0"),
         "the oldest turns fall out of the window: {messages:?}"
@@ -259,7 +289,10 @@ fn the_model_is_told_what_it_is_before_anything_else() {
         "the instructions come first: {:?}",
         last_messages(&seen)
     );
-    assert_eq!(last_messages(&seen).first().map(String::as_str), Some("you are a test agent"));
+    assert_eq!(
+        last_messages(&seen).first().map(String::as_str),
+        Some("you are a test agent")
+    );
 
     // A second turn must not accumulate a second copy.
     agent.run("sys-1", "now also update the docs for it");
@@ -269,7 +302,11 @@ fn the_model_is_told_what_it_is_before_anything_else() {
         1,
         "exactly one system message per request: {roles:?}"
     );
-    assert_eq!(roles.first().map(String::as_str), Some("system"), "still first: {roles:?}");
+    assert_eq!(
+        roles.first().map(String::as_str),
+        Some("system"),
+        "still first: {roles:?}"
+    );
 }
 
 /// Config with the tool fleet and the interceptors that advertise it, so the
@@ -352,8 +389,14 @@ fn the_model_is_actually_told_which_tools_exist() {
         .iter()
         .filter_map(|t| t["function"]["name"].as_str())
         .collect();
-    assert!(names.contains(&"fs"), "the fs tool is advertised: {names:?}");
-    assert!(names.contains(&"find"), "the find tool is advertised: {names:?}");
+    assert!(
+        names.contains(&"fs"),
+        "the fs tool is advertised: {names:?}"
+    );
+    assert!(
+        names.contains(&"find"),
+        "the find tool is advertised: {names:?}"
+    );
 
     // A name alone is not usable — the model needs the argument schema to build a
     // call, and an empty `{}` here would look fine while making every call a guess.
@@ -362,7 +405,10 @@ fn the_model_is_actually_told_which_tools_exist() {
         .find(|t| t["function"]["name"] == "find")
         .expect("find is present");
     let params = &find["function"]["parameters"];
-    assert_eq!(params["type"], "object", "a real JSON Schema, not a placeholder: {params}");
+    assert_eq!(
+        params["type"], "object",
+        "a real JSON Schema, not a placeholder: {params}"
+    );
     assert!(
         params["properties"]["pattern"].is_object(),
         "the schema names `find`'s required argument: {params}"
@@ -374,10 +420,7 @@ fn the_model_is_actually_told_which_tools_exist() {
 struct WarningSink(Vec<String>);
 
 impl jan_klod_core::conductor::EventSink for WarningSink {
-    fn emit(
-        &mut self,
-        event: &jan_klod_core::conductor::Event,
-    ) -> jan_klod_core::conductor::Flow {
+    fn emit(&mut self, event: &jan_klod_core::conductor::Event) -> jan_klod_core::conductor::Flow {
         if let jan_klod_core::conductor::Event::Warning(message) = event {
             self.0.push(message.clone());
         }
@@ -495,7 +538,9 @@ extensions:
         let seen = std::sync::Arc::clone(&seen);
         Box::new(move |_m, _u, _h, body, _t| {
             if let Some(bytes) = body {
-                seen.lock().unwrap().push(String::from_utf8_lossy(bytes).into_owned());
+                seen.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(bytes).into_owned());
             }
             Ok(jan_klod_core::http::WireResponse {
                 status: 200,

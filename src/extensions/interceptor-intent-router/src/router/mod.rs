@@ -74,7 +74,10 @@ mod tests {
             Intent::Agentic
         });
         assert_eq!(intent, Intent::Simple);
-        assert!(!called.get(), "LLM tier must not run when heuristics settle it");
+        assert!(
+            !called.get(),
+            "LLM tier must not run when heuristics settle it"
+        );
     }
 
     #[test]
@@ -111,7 +114,10 @@ mod tests {
     #[test]
     fn parse_intent_defaults_ambiguous_to_agentic() {
         assert_eq!(parse_intent(""), Intent::Agentic);
-        assert_eq!(parse_intent("I'm not sure how to answer that"), Intent::Agentic);
+        assert_eq!(
+            parse_intent("I'm not sure how to answer that"),
+            Intent::Agentic
+        );
     }
 
     #[test]

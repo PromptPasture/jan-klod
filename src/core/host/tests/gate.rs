@@ -71,7 +71,11 @@ fn tool_then_answer_http() -> HttpFn {
                 }]
             })
         };
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
+        Ok(WireResponse {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&body).unwrap(),
+        })
     })
 }
 
@@ -128,7 +132,11 @@ fn tool_calling_http() -> HttpFn {
                 "choices": [{ "message": { "role": "assistant", "content": "wrote the file" }, "finish_reason": "stop" }]
             })
         };
-        Ok(WireResponse { status: 200, headers: vec![("Content-Type".into(), "application/json".into())], body: serde_json::to_vec(&body).unwrap() })
+        Ok(WireResponse {
+            status: 200,
+            headers: vec![("Content-Type".into(), "application/json".into())],
+            body: serde_json::to_vec(&body).unwrap(),
+        })
     })
 }
 
@@ -207,10 +215,16 @@ routing:
     // interceptors run (task-router resolves routing.chat -> primary-model, context
     // trims, tool-selector passes tools), then the completion falls back from the
     // failing primary to the answering secondary.
-    let out = agent.run("gate-session", "Refactor the module and run the whole test suite");
+    let out = agent.run(
+        "gate-session",
+        "Refactor the module and run the whole test suite",
+    );
     assert_eq!(
         out,
-        RunResult::Answered { text: "grounded answer".into(), agentic: true },
+        RunResult::Answered {
+            text: "grounded answer".into(),
+            agentic: true
+        },
         "the loop drives shaping + provider fallback to a grounded answer"
     );
 
@@ -219,7 +233,10 @@ routing:
     let greeting = agent.run("gate-session", "hello");
     assert_eq!(
         greeting,
-        RunResult::Answered { text: "grounded answer".into(), agentic: false },
+        RunResult::Answered {
+            text: "grounded answer".into(),
+            agentic: false
+        },
         "a greeting is classified simple and short-circuits shaping"
     );
 
@@ -272,15 +289,31 @@ routing:
     let mut driver = CountingApprovingDriver(Arc::clone(&asked));
     let mut tools = CountingTools(Arc::clone(&invoked));
 
-    let out = agent.run_with(&mut driver, &mut tools, "gate-tools", "use bash to clean up, then report");
+    let out = agent.run_with(
+        &mut driver,
+        &mut tools,
+        "gate-tools",
+        "use bash to clean up, then report",
+    );
 
     assert_eq!(
         out,
-        RunResult::Answered { text: "all done".into(), agentic: true },
+        RunResult::Answered {
+            text: "all done".into(),
+            agentic: true
+        },
         "the loop runs a ReAct cycle and returns the final answer"
     );
-    assert_eq!(asked.load(Ordering::Relaxed), 1, "permission asked once for the dangerous tool");
-    assert_eq!(invoked.load(Ordering::Relaxed), 1, "the approved tool ran once");
+    assert_eq!(
+        asked.load(Ordering::Relaxed),
+        1,
+        "permission asked once for the dangerous tool"
+    );
+    assert_eq!(
+        invoked.load(Ordering::Relaxed),
+        1,
+        "the approved tool ran once"
+    );
 }
 
 // ── Phase 8 tests ────────────────────────────────────────────────────────────
@@ -333,21 +366,31 @@ workspace: {ws}
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = tool_calling_http;
-    let mut agent = runtime.build_agent(&factory).expect("agent boots with tools");
+    let mut agent = runtime
+        .build_agent(&factory)
+        .expect("agent boots with tools");
 
     // The tool is advertised to the model.
-    assert!(agent.tool_names().contains(&"fs".to_string()), "fleet: {:?}", agent.tool_names());
+    assert!(
+        agent.tool_names().contains(&"fs".to_string()),
+        "fleet: {:?}",
+        agent.tool_names()
+    );
 
     // `fs` with `{"op":"write"}` trips the permission gate (dangerous op); the driver
     // approves, so the tool runs — exercising the ask→approve→tool path with a real tool.
     let out = agent.run_driven(&mut ApprovingDriver, "gate-8", "please write out.txt");
     assert_eq!(
         out,
-        RunResult::Answered { text: "wrote the file".into(), agentic: true },
+        RunResult::Answered {
+            text: "wrote the file".into(),
+            agentic: true
+        },
         "the loop returns a grounded answer after the tool ran"
     );
 
     // The real tool wrote the file through host-fs, into the workspace.
-    let written = std::fs::read_to_string(workspace.join("out.txt")).expect("the tool wrote the file");
+    let written =
+        std::fs::read_to_string(workspace.join("out.txt")).expect("the tool wrote the file");
     assert_eq!(written, "hello from the tool");
 }

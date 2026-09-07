@@ -200,7 +200,9 @@ fn provider_openai_complete_streams_text() -> Result<()> {
     lifecycle
         .call_init(&mut store, &ctx)?
         .map_err(wasmtime::Error::msg)?;
-    lifecycle.call_start(&mut store)?.map_err(wasmtime::Error::msg)?;
+    lifecycle
+        .call_start(&mut store)?
+        .map_err(wasmtime::Error::msg)?;
 
     let request = CompletionRequest {
         model: String::new(), // falls back to the configured model
@@ -259,7 +261,10 @@ fn provider_openai_maps_auth_error() -> Result<()> {
     // to auth-failed.
     let host = TestHost::new(
         json!({ "base-url": "http://mock/v1", "model": "mock-1", "api-key": "bad" }),
-        MockHttp { status: 401, body: vec![] },
+        MockHttp {
+            status: 401,
+            body: vec![],
+        },
     );
 
     let mut linker: Linker<TestHost> = Linker::new(&engine);
@@ -280,7 +285,9 @@ fn provider_openai_maps_auth_error() -> Result<()> {
     lifecycle
         .call_init(&mut store, &ctx)?
         .map_err(wasmtime::Error::msg)?;
-    lifecycle.call_start(&mut store)?.map_err(wasmtime::Error::msg)?;
+    lifecycle
+        .call_start(&mut store)?
+        .map_err(wasmtime::Error::msg)?;
 
     let request = CompletionRequest {
         model: String::new(),
@@ -340,7 +347,10 @@ fn provider_openai_keeps_text_that_accompanies_tool_calls() -> Result<()> {
     });
     let host = TestHost::new(
         json!({ "base-url": "http://mock/v1", "model": "mock-1", "api-key": "test" }),
-        MockHttp { status: 200, body: serde_json::to_vec(&body).unwrap() },
+        MockHttp {
+            status: 200,
+            body: serde_json::to_vec(&body).unwrap(),
+        },
     );
 
     let mut linker: Linker<TestHost> = Linker::new(&engine);
@@ -353,9 +363,16 @@ fn provider_openai_keeps_text_that_accompanies_tool_calls() -> Result<()> {
     let world = ProviderWorld::instantiate(&mut store, &component, &linker)?;
     let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
     let provider = world.jan_klod_interfaces_llm_provider();
-    let ctx = ExtensionContext { id: "provider.openai".to_string(), version: "0.0.0".to_string() };
-    lifecycle.call_init(&mut store, &ctx)?.map_err(wasmtime::Error::msg)?;
-    lifecycle.call_start(&mut store)?.map_err(wasmtime::Error::msg)?;
+    let ctx = ExtensionContext {
+        id: "provider.openai".to_string(),
+        version: "0.0.0".to_string(),
+    };
+    lifecycle
+        .call_init(&mut store, &ctx)?
+        .map_err(wasmtime::Error::msg)?;
+    lifecycle
+        .call_start(&mut store)?
+        .map_err(wasmtime::Error::msg)?;
 
     let request = CompletionRequest {
         model: String::new(),
@@ -388,7 +405,10 @@ fn provider_openai_keeps_text_that_accompanies_tool_calls() -> Result<()> {
     }
     provider.call_close_stream(&mut store, handle)?;
 
-    assert_eq!(text, "I'll read the file first.", "the preamble survives alongside the calls");
+    assert_eq!(
+        text, "I'll read the file first.",
+        "the preamble survives alongside the calls"
+    );
     assert_eq!(calls, vec!["fs".to_string()], "the tool call still arrives");
     assert_eq!(done_reason.as_deref(), Some("tool_calls"));
     Ok(())

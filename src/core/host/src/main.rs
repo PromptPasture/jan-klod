@@ -124,7 +124,11 @@ impl jan_klod_core::intercept::Driver for TerminalDriver {
         // The question goes to stderr so `ask`'s stdout stays the answer and
         // nothing else — a script can pipe it without stripping prompts out.
         eprintln!("\n  ? {}", prompt.question);
-        eprint!("  [{}] (Enter = {}): ", prompt.options.join("/"), prompt.default_answer);
+        eprint!(
+            "  [{}] (Enter = {}): ",
+            prompt.options.join("/"),
+            prompt.default_answer
+        );
         let _ = std::io::Write::flush(&mut std::io::stderr());
         let mut typed = String::new();
         match std::io::stdin().read_line(&mut typed) {
@@ -151,7 +155,11 @@ fn verify(args: &[String]) -> ExitCode {
     // and should stay runnable in a build step, while asking a paid endpoint to say
     // one word is a thing someone should choose to do.
     let live = args.iter().any(|arg| arg == "--live");
-    let paths: Vec<String> = args.iter().filter(|arg| !arg.starts_with("--")).cloned().collect();
+    let paths: Vec<String> = args
+        .iter()
+        .filter(|arg| !arg.starts_with("--"))
+        .cloned()
+        .collect();
     let config_path = arg_or(&paths, 0, "config.yaml");
     let ext_dir = arg_or(&paths, 1, "ext");
 
@@ -316,7 +324,9 @@ fn serve(args: &[String]) -> ExitCode {
         }
     };
     // A secret belongs in the environment, not in a file people paste into issues.
-    let token = std::env::var("JAN_KLOD_TOKEN").ok().filter(|t| !t.trim().is_empty());
+    let token = std::env::var("JAN_KLOD_TOKEN")
+        .ok()
+        .filter(|t| !t.trim().is_empty());
     if token.is_some() {
         println!("jan-klod: requiring a bearer token (JAN_KLOD_TOKEN); /health stays open");
     }
@@ -373,8 +383,10 @@ fn telegram(args: &[String]) -> ExitCode {
     // plain client — which now applies the public-only rule anyway. The read
     // timeout must exceed the server-side long-poll window.
     let fetch = |method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>| {
-        let owned: Vec<(String, String)> =
-            headers.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+        let owned: Vec<(String, String)> = headers
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
         match jan_klod_core::http::fetch(method, url, &owned, body, 40_000) {
             Ok(response) => Ok(response.body),
             Err(err) => Err(format!("{err:?}")),
@@ -408,7 +420,9 @@ fn telegram(args: &[String]) -> ExitCode {
 
 /// Positional arg `index` (0-based within the subcommand's args), or `default`.
 fn arg(args: &[String], index: usize, default: &str) -> String {
-    args.get(index).cloned().unwrap_or_else(|| default.to_string())
+    args.get(index)
+        .cloned()
+        .unwrap_or_else(|| default.to_string())
 }
 
 /// A warning when `bind` exposes the surface with nothing guarding it.
@@ -435,7 +449,9 @@ fn exposure_warning(bind: &str, has_token: bool) -> Option<String> {
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let loopback = host == "localhost"
         || host == "::1"
-        || host.strip_prefix("127.").is_some_and(|rest| rest.contains('.'));
+        || host
+            .strip_prefix("127.")
+            .is_some_and(|rest| rest.contains('.'));
     if loopback {
         return None;
     }
@@ -444,7 +460,8 @@ fn exposure_warning(bind: &str, has_token: bool) -> Option<String> {
             format!("jan-klod: WARNING — binding to {bind}, which is not loopback."),
             "jan-klod: nothing guards this surface. Anyone who can reach it can drive".to_string(),
             "jan-klod: the agent, which reads and writes your workspace.".to_string(),
-            "jan-klod: Set JAN_KLOD_TOKEN to require a bearer token, or bind 127.0.0.1.".to_string(),
+            "jan-klod: Set JAN_KLOD_TOKEN to require a bearer token, or bind 127.0.0.1."
+                .to_string(),
         ]
         .join("\n"),
     )
@@ -478,7 +495,10 @@ fn split_serve_args(args: &[String]) -> (Vec<String>, Option<String>) {
 /// an address; only the first two are paths. Returns the message to print, or
 /// `None` when the arguments are fine.
 fn misplaced_address(positional: &[String]) -> Option<String> {
-    let offender = positional.iter().take(2).find(|arg| looks_like_an_address(arg))?;
+    let offender = positional
+        .iter()
+        .take(2)
+        .find(|arg| looks_like_an_address(arg))?;
     Some(format!(
         "jan-klod: `{offender}` looks like an address, not a path. Use \
          `--bind {offender}` — a positional argument names a config file, and the \
@@ -497,7 +517,9 @@ fn misplaced_address(positional: &[String]) -> Option<String> {
 /// path can contain a colon, so this must not claim one is an address unless the
 /// tail is digits.
 fn looks_like_an_address(arg: &str) -> bool {
-    let Some((host, port)) = arg.rsplit_once(':') else { return false };
+    let Some((host, port)) = arg.rsplit_once(':') else {
+        return false;
+    };
     if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
         return false;
     }
@@ -512,7 +534,9 @@ fn looks_like_an_address(arg: &str) -> bool {
 /// Like [`arg`], but a missing config/ext argument falls back to the installed
 /// copy next to the binary rather than to a bare relative name.
 fn arg_or(args: &[String], index: usize, default: &str) -> String {
-    args.get(index).cloned().unwrap_or_else(|| resolve_default(default))
+    args.get(index)
+        .cloned()
+        .unwrap_or_else(|| resolve_default(default))
 }
 
 #[cfg(test)]
@@ -525,7 +549,12 @@ mod tests {
 
     #[test]
     fn loopback_binds_are_not_warned_about() {
-        for quiet in ["127.0.0.1:8787", "localhost:8787", "[::1]:8787", "127.1.2.3:9"] {
+        for quiet in [
+            "127.0.0.1:8787",
+            "localhost:8787",
+            "[::1]:8787",
+            "127.1.2.3:9",
+        ] {
             assert!(
                 super::exposure_warning(quiet, false).is_none(),
                 "{quiet} is loopback and needs no warning"
@@ -537,7 +566,12 @@ mod tests {
     fn a_reachable_bind_says_the_surface_is_unauthenticated() {
         // The one that matters: 0.0.0.0 is what someone types when they want to
         // reach it from another machine, which is exactly when they need telling.
-        for loud in ["0.0.0.0:8787", "192.168.1.10:8787", "[::]:8787", "10.0.0.5:80"] {
+        for loud in [
+            "0.0.0.0:8787",
+            "192.168.1.10:8787",
+            "[::]:8787",
+            "10.0.0.5:80",
+        ] {
             let warning = super::exposure_warning(loud, false)
                 .unwrap_or_else(|| panic!("{loud} is reachable and must warn"));
             assert!(warning.contains("nothing guards this surface"), "{warning}");
@@ -558,7 +592,10 @@ mod tests {
         // The whole point: config and ext stay unset, so they resolve against the
         // installed data directory rather than the user's working directory.
         let (positional, bind) = split_serve_args(&args(["--bind", "127.0.0.1:9000"].as_ref()));
-        assert!(positional.is_empty(), "no positionals claimed: {positional:?}");
+        assert!(
+            positional.is_empty(),
+            "no positionals claimed: {positional:?}"
+        );
         assert_eq!(bind.as_deref(), Some("127.0.0.1:9000"));
     }
 
@@ -569,12 +606,20 @@ mod tests {
         for typo in ["127.0.0.1:8787", "localhost:8787", "[::1]:8787", ":8787"] {
             let message = misplaced_address(&args([typo].as_ref()))
                 .unwrap_or_else(|| panic!("{typo} should be recognised as an address"));
-            assert!(message.contains("--bind"), "the message names the flag: {message}");
+            assert!(
+                message.contains("--bind"),
+                "the message names the flag: {message}"
+            );
         }
         // Slot 2 *is* the address in the positional form, so it must not trip.
         assert!(misplaced_address(&args(["c.yaml", "ext", "1.2.3.4:1"].as_ref())).is_none());
         // And a real path is left alone, colon or not.
-        for path in ["config.yaml", "ext", "/srv/jan-klod/config.yaml", "notes:2024/config.yaml"] {
+        for path in [
+            "config.yaml",
+            "ext",
+            "/srv/jan-klod/config.yaml",
+            "notes:2024/config.yaml",
+        ] {
             assert!(
                 misplaced_address(&args([path].as_ref())).is_none(),
                 "{path} is a path"
@@ -586,16 +631,22 @@ mod tests {
     fn the_positional_form_still_names_all_three() {
         let (positional, bind) = split_serve_args(&args(["c.yaml", "e", "1.2.3.4:1"].as_ref()));
         assert_eq!(positional, args(["c.yaml", "e", "1.2.3.4:1"].as_ref()));
-        assert_eq!(bind, None, "no flag, so the third positional is the address");
+        assert_eq!(
+            bind, None,
+            "no flag, so the third positional is the address"
+        );
     }
 
     #[test]
     fn a_bind_address_is_never_mistaken_for_a_path() {
         // Filtering by *value* would drop a positional that happened to equal the
         // address; consuming the token after the flag cannot.
-        let (positional, bind) =
-            split_serve_args(&args(["c.yaml", "--bind", "c.yaml"].as_ref()));
-        assert_eq!(positional, args(["c.yaml"].as_ref()), "the config path survives");
+        let (positional, bind) = split_serve_args(&args(["c.yaml", "--bind", "c.yaml"].as_ref()));
+        assert_eq!(
+            positional,
+            args(["c.yaml"].as_ref()),
+            "the config path survives"
+        );
         assert_eq!(bind.as_deref(), Some("c.yaml"));
     }
 
@@ -603,6 +654,9 @@ mod tests {
     fn a_dangling_flag_falls_back_to_the_default_address() {
         let (positional, bind) = split_serve_args(&args(["--bind"].as_ref()));
         assert!(positional.is_empty());
-        assert_eq!(bind, None, "nothing followed it, so the caller gets the default");
+        assert_eq!(
+            bind, None,
+            "nothing followed it, so the caller gets the default"
+        );
     }
 }

@@ -54,20 +54,30 @@ mod fs {
     /// `read` is the `host-fs` seam; a file that cannot be read (binary, gone,
     /// not UTF-8) is skipped rather than failing the whole search — one unreadable
     /// file in a tree must not cost the caller the other 200 results.
-    pub fn grep_tree(files: &[String], pattern: &str, read: &dyn Fn(&str) -> Option<String>) -> Hits {
+    pub fn grep_tree(
+        files: &[String],
+        pattern: &str,
+        read: &dyn Fn(&str) -> Option<String>,
+    ) -> Hits {
         let mut lines = Vec::new();
         for path in files {
             let Some(contents) = read(path) else { continue };
             for (i, line) in contents.lines().enumerate() {
                 if line.contains(pattern) {
                     if lines.len() == MAX_MATCHES {
-                        return Hits { lines, capped: true };
+                        return Hits {
+                            lines,
+                            capped: true,
+                        };
                     }
                     lines.push(format!("{path}:{}:{line}", i + 1));
                 }
             }
         }
-        Hits { lines, capped: false }
+        Hits {
+            lines,
+            capped: false,
+        }
     }
 
     /// Format a tree grep, stating every way the result was held back.
@@ -77,7 +87,9 @@ mod fs {
         }
         let mut parts = vec![hits.lines.join("\n")];
         if hits.capped {
-            parts.push(format!("…[partial: stopped at the match cap ({MAX_MATCHES})]"));
+            parts.push(format!(
+                "…[partial: stopped at the match cap ({MAX_MATCHES})]"
+            ));
         }
         if let Some(bound) = walk_bound {
             parts.push(format!("…[partial: the file walk stopped at the {bound}]"));
@@ -93,7 +105,10 @@ mod fs {
         /// A fake workspace: path → contents. Unknown paths are unreadable.
         fn files<'a>(entries: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
             move |path: &str| {
-                entries.iter().find(|(p, _)| *p == path).map(|(_, body)| (*body).to_string())
+                entries
+                    .iter()
+                    .find(|(p, _)| *p == path)
+                    .map(|(_, body)| (*body).to_string())
             }
         }
 
@@ -110,13 +125,15 @@ mod fs {
 
         #[test]
         fn tree_grep_prefixes_each_hit_with_its_path() {
-            let read = files(&[("a.rs", "fn one() {}\nfn two() {}"), ("b.rs", "fn three() {}")]);
-            let hits = grep_tree(
-                &["a.rs".to_string(), "b.rs".to_string()],
-                "fn t",
-                &read,
+            let read = files(&[
+                ("a.rs", "fn one() {}\nfn two() {}"),
+                ("b.rs", "fn three() {}"),
+            ]);
+            let hits = grep_tree(&["a.rs".to_string(), "b.rs".to_string()], "fn t", &read);
+            assert_eq!(
+                hits.lines,
+                vec!["a.rs:2:fn two() {}", "b.rs:1:fn three() {}"]
             );
-            assert_eq!(hits.lines, vec!["a.rs:2:fn two() {}", "b.rs:1:fn three() {}"]);
             assert!(!hits.capped);
         }
 
@@ -141,16 +158,28 @@ mod fs {
 
         #[test]
         fn no_match_renders_as_a_statement() {
-            let hits = Hits { lines: vec![], capped: false };
+            let hits = Hits {
+                lines: vec![],
+                capped: false,
+            };
             assert_eq!(render("zzz", &hits, None), "no matches for zzz");
         }
 
         #[test]
         fn a_bounded_walk_is_reported_alongside_the_hits() {
-            let hits = Hits { lines: vec!["a.rs:1:x".to_string()], capped: false };
+            let hits = Hits {
+                lines: vec!["a.rs:1:x".to_string()],
+                capped: false,
+            };
             let rendered = render("x", &hits, Some("visit budget"));
-            assert!(rendered.starts_with("a.rs:1:x\n"), "hits come first: {rendered}");
-            assert!(rendered.contains("file walk stopped at the visit budget"), "{rendered}");
+            assert!(
+                rendered.starts_with("a.rs:1:x\n"),
+                "hits come first: {rendered}"
+            );
+            assert!(
+                rendered.contains("file walk stopped at the visit budget"),
+                "{rendered}"
+            );
         }
     }
 }
@@ -159,7 +188,13 @@ mod fs {
 mod component {
     use crate::fs;
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({ world: "tool-world", path: "../../../wit" });
     }
@@ -239,13 +274,18 @@ mod component {
                         .get("pattern")
                         .and_then(serde_json::Value::as_str)
                         .ok_or(ToolError::InvalidArguments)?;
-                    let glob = value.get("glob").and_then(serde_json::Value::as_str).unwrap_or("**/*");
+                    let glob = value
+                        .get("glob")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("**/*");
                     grep(path.unwrap_or("."), pattern, glob)
                 }
                 "write" => {
                     let path = path.ok_or(ToolError::InvalidArguments)?;
-                    let contents =
-                        value.get("contents").and_then(serde_json::Value::as_str).unwrap_or("");
+                    let contents = value
+                        .get("contents")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
                     host_fs::write(path, contents).map_err(|_| ToolError::ExecutionFailed)?;
                     Ok(format!("wrote {path} ({} bytes)", contents.len()))
                 }
@@ -267,7 +307,10 @@ mod component {
             host_fs::list_dir(dir).ok().map(|entries| {
                 entries
                     .into_iter()
-                    .map(|e| guest_fs::Entry { name: e.name, is_dir: e.is_dir })
+                    .map(|e| guest_fs::Entry {
+                        name: e.name,
+                        is_dir: e.is_dir,
+                    })
                     .collect()
             })
         });
@@ -275,7 +318,13 @@ mod component {
         Ok(fs::render(pattern, &hits, found.bounded_by))
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

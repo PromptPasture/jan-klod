@@ -178,12 +178,21 @@ fn instantiate_provider(
 ) -> Result<(Store<CapHost>, provider_bind::ProviderWorld), CoreError> {
     let mut linker: Linker<CapHost> = Linker::new(engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
-    provider_bind::jan_klod::interfaces::host_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)
-        .map_err(CoreError::linker)?;
-    provider_bind::jan_klod::interfaces::host_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)
-        .map_err(CoreError::linker)?;
-    provider_bind::jan_klod::interfaces::host_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)
-        .map_err(CoreError::linker)?;
+    provider_bind::jan_klod::interfaces::host_log::add_to_linker::<_, HasSelf<_>>(
+        &mut linker,
+        |s| s,
+    )
+    .map_err(CoreError::linker)?;
+    provider_bind::jan_klod::interfaces::host_config::add_to_linker::<_, HasSelf<_>>(
+        &mut linker,
+        |s| s,
+    )
+    .map_err(CoreError::linker)?;
+    provider_bind::jan_klod::interfaces::host_http::add_to_linker::<_, HasSelf<_>>(
+        &mut linker,
+        |s| s,
+    )
+    .map_err(CoreError::linker)?;
     let mut store = Store::new(engine, CapHost::new(&inst.id, &inst.config, http));
     let world = provider_bind::ProviderWorld::instantiate(&mut store, component, &linker)
         .map_err(|source| CoreError::instantiate(&inst.id, source))?;
@@ -255,11 +264,9 @@ fn describe(err: &p_llm::ProviderError, endpoint: &str) -> String {
              local server, that it is pulled."
         ),
         E::RateLimited => "rate-limited or out of quota".to_string(),
-        E::OutOfMemory => {
-            "the model ran out of memory — usually a local model too large for this \
+        E::OutOfMemory => "the model ran out of memory — usually a local model too large for this \
              machine"
-                .to_string()
-        }
+            .to_string(),
         E::ContextOverflow => {
             "the request exceeded the model's context window. `interceptor.context` \
              trims history to a budget; lower its `context-tokens` if it is on."
@@ -343,7 +350,11 @@ impl crate::conductor::Completer for ProviderCompleter {
             }
         }
         let _ = iface.call_close_stream(&mut self.store, handle);
-        Ok(crate::conductor::Completion { text, tool_calls, finish_reason })
+        Ok(crate::conductor::Completion {
+            text,
+            tool_calls,
+            finish_reason,
+        })
     }
 }
 
@@ -390,7 +401,9 @@ mod tests {
     use std::path::PathBuf;
 
     fn repo_root() -> PathBuf {
-        [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
+        [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."]
+            .iter()
+            .collect()
     }
 
     fn canned_http(content: &'static str) -> HttpFn {
@@ -449,7 +462,9 @@ mod tests {
         let mut completer =
             ProviderCompleter::instantiate(&engine, &inst, &component, canned_http("pong"))
                 .expect("provider instantiates");
-        let completion = completer.complete(&user_request("ping")).expect("completes");
+        let completion = completer
+            .complete(&user_request("ping"))
+            .expect("completes");
         assert_eq!(completion.text, "pong");
         assert!(completion.tool_calls.is_empty());
     }

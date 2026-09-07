@@ -110,7 +110,9 @@ impl Policy {
     pub fn is_known_safe(&self, name: &str, arguments: &str) -> bool {
         let key = scope_key(name, arguments);
         let name = name.to_lowercase();
-        self.safe_calls.iter().any(|entry| *entry == key || *entry == name)
+        self.safe_calls
+            .iter()
+            .any(|entry| *entry == key || *entry == name)
     }
 
     /// Whether any **path-bearing** argument (see [`PATH_KEYS`]) escapes the
@@ -130,7 +132,9 @@ impl Policy {
         else {
             return false;
         };
-        path_values(&serde_json::Value::Object(map)).iter().any(|s| self.path_escapes(s))
+        path_values(&serde_json::Value::Object(map))
+            .iter()
+            .any(|s| self.path_escapes(s))
     }
 
     /// Run both checks and report the concern that governs the call.
@@ -163,7 +167,9 @@ impl Policy {
     /// entirely and the call surfaced as the rememberable `shell:cat` — one
     /// "always" away from standing approval to read any file on the machine.
     fn path_escapes(&self, s: &str) -> bool {
-        std::iter::once(s).chain(s.split_whitespace()).any(|token| self.token_escapes(token))
+        std::iter::once(s)
+            .chain(s.split_whitespace())
+            .any(|token| self.token_escapes(token))
     }
 
     /// The escape test for a single path-like token, honouring the toggles.
@@ -255,8 +261,17 @@ fn credential_name(name: &str) -> bool {
 /// path-jailed host-side and refuses an escape whatever the interceptor decided
 /// (`host_fs::tests::escapes_are_denied`). This exists to put the escape in front
 /// of the user in the words they need, before the tool runs.
-const PATH_KEYS: &[&str] =
-    &["path", "paths", "file", "files", "dir", "directory", "cwd", "command", "args"];
+const PATH_KEYS: &[&str] = &[
+    "path",
+    "paths",
+    "file",
+    "files",
+    "dir",
+    "directory",
+    "cwd",
+    "command",
+    "args",
+];
 
 /// Collect string values that sit under a path-bearing key, at any depth.
 fn path_values(value: &serde_json::Value) -> Vec<&str> {
@@ -580,7 +595,12 @@ mod tests {
     #[test]
     fn replacement_text_is_not_mistaken_for_a_path() {
         let policy = Policy::default();
-        for contents in ["// edited", "/* block */", "//! module doc", "/usr/bin/env python"] {
+        for contents in [
+            "// edited",
+            "/* block */",
+            "//! module doc",
+            "/usr/bin/env python",
+        ] {
             let args = format!(
                 r#"{{"op":"replace","path":"src/main.rs","start":"a1","contents":"{contents}"}}"#
             );
@@ -592,9 +612,9 @@ mod tests {
             assert_eq!(policy.review("edit", &args), Some(Concern::NotKnownSafe));
         }
         // A real escape in the path argument still trips, even beside such content.
-        assert!(policy.args_escape_scope(
-            r#"{"op":"replace","path":"/etc/passwd","contents":"// x"}"#
-        ));
+        assert!(
+            policy.args_escape_scope(r#"{"op":"replace","path":"/etc/passwd","contents":"// x"}"#)
+        );
     }
 
     /// A command line embeds paths, so it stays in scope.
@@ -616,11 +636,17 @@ mod tests {
             "run `cargo test --workspace`"
         );
         assert_eq!(
-            summarise("edit", r#"{"op":"replace","path":"src/main.rs","contents":"// edited"}"#),
+            summarise(
+                "edit",
+                r#"{"op":"replace","path":"src/main.rs","contents":"// edited"}"#
+            ),
             "replace in `src/main.rs`: \"// edited\""
         );
         assert_eq!(
-            summarise("edit", r#"{"op":"replace","path":"src/main.rs","contents":""}"#),
+            summarise(
+                "edit",
+                r#"{"op":"replace","path":"src/main.rs","contents":""}"#
+            ),
             "delete lines in `src/main.rs`"
         );
         assert_eq!(
@@ -643,7 +669,10 @@ mod tests {
             r#""contents":"x"}"#
         );
         let text = summarise("fs", hostile);
-        assert!(!text.contains('\n'), "no newline can be smuggled in: {text}");
+        assert!(
+            !text.contains('\n'),
+            "no newline can be smuggled in: {text}"
+        );
         assert!(!text.contains('\r'), "nor a carriage return: {text}");
         // The text is still shown — mangling it would misreport the real path —
         // but it cannot start a line of its own.
@@ -655,16 +684,29 @@ mod tests {
         let long = "x".repeat(5_000);
         let args = format!(r#"{{"command":"{long}"}}"#);
         let text = summarise("shell", &args);
-        assert!(text.chars().count() < 200, "a wall of text cannot bury the question: {}", text.len());
-        assert!(text.ends_with("…`") || text.contains('…'), "and says it was cut: {text}");
+        assert!(
+            text.chars().count() < 200,
+            "a wall of text cannot bury the question: {}",
+            text.len()
+        );
+        assert!(
+            text.ends_with("…`") || text.contains('…'),
+            "and says it was cut: {text}"
+        );
     }
 
     #[test]
     fn padding_cannot_push_the_question_off_screen() {
         let args = format!(r#"{{"command":"{}rm -rf /"}}"#, " ".repeat(400));
         let text = summarise("shell", &args);
-        assert!(text.chars().count() < 60, "runs of whitespace collapse: {text:?}");
-        assert!(text.contains("rm -rf /"), "so the real command stays visible: {text}");
+        assert!(
+            text.chars().count() < 60,
+            "runs of whitespace collapse: {text:?}"
+        );
+        assert!(
+            text.contains("rm -rf /"),
+            "so the real command stays visible: {text}"
+        );
     }
 
     #[test]
@@ -682,7 +724,10 @@ mod tests {
         }
         // Viewing is the read half, and is allowed so the model can anchor an edit
         // without a prompt for every look.
-        assert_eq!(policy.review("edit", r#"{"op":"view","path":"src/main.rs"}"#), None);
+        assert_eq!(
+            policy.review("edit", r#"{"op":"view","path":"src/main.rs"}"#),
+            None
+        );
     }
 
     /// The property the allowlist exists for: a capability nobody classified is
@@ -718,7 +763,12 @@ mod tests {
     #[test]
     fn a_credential_read_is_confirmed_and_never_remembered() {
         let policy = Policy::default();
-        for path in [".env", "config/.env.production", "deploy/server.pem", "keys/id_rsa"] {
+        for path in [
+            ".env",
+            "config/.env.production",
+            "deploy/server.pem",
+            "keys/id_rsa",
+        ] {
             let args = format!(r#"{{"op":"read","path":"{path}"}}"#);
             assert_eq!(
                 policy.review("fs", &args),
@@ -732,8 +782,14 @@ mod tests {
 
         // And ordinary source stays frictionless — a gate that asks about
         // `main.rs` is a gate people switch off.
-        assert_eq!(policy.review("fs", r#"{"op":"read","path":"src/main.rs"}"#), None);
-        assert_eq!(policy.review("fs", r#"{"op":"read","path":"src/env.rs"}"#), None);
+        assert_eq!(
+            policy.review("fs", r#"{"op":"read","path":"src/main.rs"}"#),
+            None
+        );
+        assert_eq!(
+            policy.review("fs", r#"{"op":"read","path":"src/env.rs"}"#),
+            None
+        );
     }
 
     /// A write to a credential file is gated too, and by the stronger concern:
@@ -759,7 +815,11 @@ mod tests {
             ("git", r#"{"op":"log"}"#),
             ("proc-probe", "{}"),
         ] {
-            assert_eq!(policy.review(name, args), None, "{name} {args} should not prompt");
+            assert_eq!(
+                policy.review(name, args),
+                None,
+                "{name} {args} should not prompt"
+            );
         }
     }
 
@@ -846,7 +906,10 @@ mod tests {
         // /etc/passwd.
         let concern = policy.review("fs", r#"{"op":"write","path":"/etc/passwd"}"#);
         assert_eq!(concern, Some(Concern::EscapesScope));
-        assert!(!concern.unwrap().is_rememberable(), "an escape is never remembered");
+        assert!(
+            !concern.unwrap().is_rememberable(),
+            "an escape is never remembered"
+        );
 
         // In-workspace, the narrower rememberable concern surfaces as usual.
         assert_eq!(
@@ -858,7 +921,10 @@ mod tests {
     #[test]
     fn review_passes_ordinary_calls() {
         let policy = Policy::default();
-        assert_eq!(policy.review("fs", r#"{"op":"read","path":"src/main.rs"}"#), None);
+        assert_eq!(
+            policy.review("fs", r#"{"op":"read","path":"src/main.rs"}"#),
+            None
+        );
         assert_eq!(policy.review("find", r#"{"pattern":"**/*.rs"}"#), None);
     }
 
@@ -880,8 +946,14 @@ mod tests {
 
     #[test]
     fn a_command_runner_keys_on_the_program_not_the_command_line() {
-        assert_eq!(scope_key("shell", r#"{"command":"cargo test --workspace"}"#), "shell:cargo");
-        assert_eq!(scope_key("shell", r#"{"command":"/usr/bin/cargo"}"#), "shell:cargo");
+        assert_eq!(
+            scope_key("shell", r#"{"command":"cargo test --workspace"}"#),
+            "shell:cargo"
+        );
+        assert_eq!(
+            scope_key("shell", r#"{"command":"/usr/bin/cargo"}"#),
+            "shell:cargo"
+        );
         // Approving `cargo` for the run must not also approve `curl`.
         assert_ne!(
             scope_key("shell", r#"{"command":"cargo"}"#),
@@ -903,7 +975,10 @@ mod tests {
             r#"{"op": "write", "path": "out.txt", "contents": "x"}"#,
             r#"{"op": "WRITE", "path": "out.txt"}"#,
         ] {
-            assert!(!policy.is_known_safe("fs", args), "{args:?} must be confirmed");
+            assert!(
+                !policy.is_known_safe("fs", args),
+                "{args:?} must be confirmed"
+            );
         }
     }
 
@@ -916,7 +991,10 @@ mod tests {
             r#"{"path": "a/b/../../secret"}"#,
             r#"{"file": "foo/../../../root"}"#,
         ] {
-            assert!(policy.args_escape_scope(args), "{args:?} should be flagged as scope escape");
+            assert!(
+                policy.args_escape_scope(args),
+                "{args:?} should be flagged as scope escape"
+            );
         }
     }
 
@@ -928,7 +1006,10 @@ mod tests {
             r#"{"path": "/home/user/.ssh/id_rsa"}"#,
             r#"{"args": ["/bin/sh", "-c", "whoami"]}"#,
         ] {
-            assert!(policy.args_escape_scope(args), "{args:?} should be flagged as absolute path");
+            assert!(
+                policy.args_escape_scope(args),
+                "{args:?} should be flagged as absolute path"
+            );
         }
     }
 
@@ -941,7 +1022,10 @@ mod tests {
             r#"{"path": "..hidden_file"}"#,
             r#"{"command": "echo", "args": ["hello"]}"#,
         ] {
-            assert!(!policy.args_escape_scope(args), "{args:?} should not be flagged");
+            assert!(
+                !policy.args_escape_scope(args),
+                "{args:?} should not be flagged"
+            );
         }
     }
 
@@ -949,7 +1033,10 @@ mod tests {
     fn non_json_and_non_object_args_are_safe() {
         let policy = Policy::default();
         for args in ["", "not json", r#""a string""#, "42", "null"] {
-            assert!(!policy.args_escape_scope(args), "{args:?} should not be flagged");
+            assert!(
+                !policy.args_escape_scope(args),
+                "{args:?} should not be flagged"
+            );
         }
     }
 

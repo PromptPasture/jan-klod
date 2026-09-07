@@ -16,7 +16,9 @@ impl Drop for TempDir {
 
 /// Resolves the repo root from the crate manifest directory.
 pub fn repo_root() -> PathBuf {
-    [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
+    [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."]
+        .iter()
+        .collect()
 }
 
 /// Set this to turn "guest not staged, skip the test" into a hard failure.
@@ -39,8 +41,11 @@ const REQUIRE: &str = "JK_REQUIRE_GUESTS";
 /// with what to run, instead of quietly reporting success.
 pub fn guests_staged(guests: &[&str]) -> bool {
     let ext_dir = repo_root().join("ext");
-    let absent: Vec<&str> =
-        guests.iter().copied().filter(|g| !ext_dir.join(g).exists()).collect();
+    let absent: Vec<&str> = guests
+        .iter()
+        .copied()
+        .filter(|g| !ext_dir.join(g).exists())
+        .collect();
     if absent.is_empty() {
         return true;
     }
@@ -116,6 +121,10 @@ pub fn canned_http(content: &'static str) -> HttpFn {
                 "finish_reason": "stop"
             }]
         });
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
+        Ok(WireResponse {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&body).unwrap(),
+        })
     })
 }

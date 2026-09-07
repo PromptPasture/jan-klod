@@ -5,7 +5,6 @@
 //! The two registry types share a `RegistryFleet` that implements `ToolInvoker`
 //! so the conductor dispatches skill and MCP tool calls through the same seam.
 
-
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -54,12 +53,21 @@ struct SkillsHost {
 
 impl WasiView for SkillsHost {
     fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 
 impl sk_log::Host for SkillsHost {
-    fn log(&mut self, level: sk_log::LogLevel, component: String, message: String, _fields: Vec<sk_log::LogField>) {
+    fn log(
+        &mut self,
+        level: sk_log::LogLevel,
+        component: String,
+        message: String,
+        _fields: Vec<sk_log::LogField>,
+    ) {
         let level = match level {
             sk_log::LogLevel::Debug => "DEBUG",
             sk_log::LogLevel::Info => "INFO",
@@ -76,7 +84,11 @@ impl sk_config::Host for SkillsHost {
             serde_json::from_str(&self.config_json).unwrap_or(serde_json::Value::Null);
         v.get(&key)
             .map(|val| {
-                if let serde_json::Value::String(s) = val { s.clone() } else { val.to_string() }
+                if let serde_json::Value::String(s) = val {
+                    s.clone()
+                } else {
+                    val.to_string()
+                }
             })
             .ok_or(sk_config::ConfigError::KeyNotFound)
     }
@@ -94,21 +106,33 @@ impl sk_fs::Host for SkillsHost {
     fn read(&mut self, path: String) -> Result<String, sk_fs::FsError> {
         self.workspace
             .as_ref()
-            .map_or(Err(sk_fs::FsError::Denied), |ws| ws.read(&path).map_err(to_sk_fs_err))
+            .map_or(Err(sk_fs::FsError::Denied), |ws| {
+                ws.read(&path).map_err(to_sk_fs_err)
+            })
     }
     fn write(&mut self, path: String, contents: String) -> Result<(), sk_fs::FsError> {
         self.workspace
             .as_ref()
-            .map_or(Err(sk_fs::FsError::Denied), |ws| ws.write(&path, &contents).map_err(to_sk_fs_err))
+            .map_or(Err(sk_fs::FsError::Denied), |ws| {
+                ws.write(&path, &contents).map_err(to_sk_fs_err)
+            })
     }
     fn list_dir(&mut self, path: String) -> Result<Vec<sk_fs::Entry>, sk_fs::FsError> {
-        self.workspace.as_ref().map_or(Err(sk_fs::FsError::Denied), |ws| {
-            ws.list_dir(&path)
-                .map(|entries| {
-                    entries.into_iter().map(|e| sk_fs::Entry { name: e.name, is_dir: e.is_dir }).collect()
-                })
-                .map_err(to_sk_fs_err)
-        })
+        self.workspace
+            .as_ref()
+            .map_or(Err(sk_fs::FsError::Denied), |ws| {
+                ws.list_dir(&path)
+                    .map(|entries| {
+                        entries
+                            .into_iter()
+                            .map(|e| sk_fs::Entry {
+                                name: e.name,
+                                is_dir: e.is_dir,
+                            })
+                            .collect()
+                    })
+                    .map_err(to_sk_fs_err)
+            })
     }
     fn exists(&mut self, path: String) -> bool {
         self.workspace.as_ref().is_some_and(|ws| ws.exists(&path))
@@ -141,12 +165,21 @@ struct McpHost {
 
 impl WasiView for McpHost {
     fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 
 impl mcp_log::Host for McpHost {
-    fn log(&mut self, level: mcp_log::LogLevel, component: String, message: String, _fields: Vec<mcp_log::LogField>) {
+    fn log(
+        &mut self,
+        level: mcp_log::LogLevel,
+        component: String,
+        message: String,
+        _fields: Vec<mcp_log::LogField>,
+    ) {
         let level = match level {
             mcp_log::LogLevel::Debug => "DEBUG",
             mcp_log::LogLevel::Info => "INFO",
@@ -163,7 +196,11 @@ impl mcp_config::Host for McpHost {
             serde_json::from_str(&self.config_json).unwrap_or(serde_json::Value::Null);
         v.get(&key)
             .map(|val| {
-                if let serde_json::Value::String(s) = val { s.clone() } else { val.to_string() }
+                if let serde_json::Value::String(s) = val {
+                    s.clone()
+                } else {
+                    val.to_string()
+                }
             })
             .ok_or(mcp_config::ConfigError::KeyNotFound)
     }
@@ -178,9 +215,15 @@ impl mcp_config::Host for McpHost {
 }
 
 impl mcp_http::Host for McpHost {
-    fn fetch(&mut self, request: mcp_http::HttpRequest) -> Result<mcp_http::HttpResponse, mcp_http::HttpError> {
-        let headers: Vec<(String, String)> =
-            request.headers.into_iter().map(|h| (h.name, h.value)).collect();
+    fn fetch(
+        &mut self,
+        request: mcp_http::HttpRequest,
+    ) -> Result<mcp_http::HttpResponse, mcp_http::HttpError> {
+        let headers: Vec<(String, String)> = request
+            .headers
+            .into_iter()
+            .map(|h| (h.name, h.value))
+            .collect();
         let result = crate::http::fetch_within(
             &self.egress,
             &request.method,
@@ -192,7 +235,11 @@ impl mcp_http::Host for McpHost {
         match result {
             Ok(r) => Ok(mcp_http::HttpResponse {
                 status: r.status,
-                headers: r.headers.into_iter().map(|(name, value)| mcp_http::HttpHeader { name, value }).collect(),
+                headers: r
+                    .headers
+                    .into_iter()
+                    .map(|(name, value)| mcp_http::HttpHeader { name, value })
+                    .collect(),
                 body: r.body,
             }),
             Err(err) => Err(to_mcp_http_err(&err)),
@@ -262,14 +309,19 @@ impl SkillsExtension {
             .map_err(|source| CoreError::instantiate(id, source))?;
 
         let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
-        let ctx = skills_bind::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext {
-            id: id.to_string(),
-            version: "0.1.0".to_string(),
-        };
+        let ctx =
+            skills_bind::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext {
+                id: id.to_string(),
+                version: "0.1.0".to_string(),
+            };
         registry_drive(id, lifecycle.call_init(&mut store, &ctx), "init")?;
         registry_drive(id, lifecycle.call_start(&mut store), "start")?;
 
-        Ok(Self { id: id.to_string(), store, world })
+        Ok(Self {
+            id: id.to_string(),
+            store,
+            world,
+        })
     }
 
     /// List all available skills.
@@ -329,7 +381,8 @@ impl McpExtension {
         let mut linker: Linker<McpHost> = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
         mcp_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
-        mcp_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
+        mcp_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)
+            .map_err(CoreError::linker)?;
         mcp_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
         mcp_event::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
@@ -352,7 +405,11 @@ impl McpExtension {
         registry_drive(id, lifecycle.call_init(&mut store, &ctx), "init")?;
         registry_drive(id, lifecycle.call_start(&mut store), "start")?;
 
-        Ok(Self { id: id.to_string(), store, world })
+        Ok(Self {
+            id: id.to_string(),
+            store,
+            world,
+        })
     }
 
     /// List all tools exposed by connected MCP servers.
@@ -525,7 +582,15 @@ fn registry_drive(
 ) -> Result<(), CoreError> {
     match result {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(message)) => Err(CoreError::LifecycleRejected { id: id.to_string(), phase, message }),
-        Err(source) => Err(CoreError::Lifecycle { id: id.to_string(), phase, source: source.into() }),
+        Ok(Err(message)) => Err(CoreError::LifecycleRejected {
+            id: id.to_string(),
+            phase,
+            message,
+        }),
+        Err(source) => Err(CoreError::Lifecycle {
+            id: id.to_string(),
+            phase,
+            source: source.into(),
+        }),
     }
 }

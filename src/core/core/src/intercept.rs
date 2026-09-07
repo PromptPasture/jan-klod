@@ -377,7 +377,10 @@ mod phase_tests {
     #[test]
     fn every_declared_phase_is_one_the_loop_dispatches() {
         for phase in ALL_PHASES {
-            assert!(is_dispatched(phase), "{phase:?} is declared but never dispatched");
+            assert!(
+                is_dispatched(phase),
+                "{phase:?} is declared but never dispatched"
+            );
         }
     }
 

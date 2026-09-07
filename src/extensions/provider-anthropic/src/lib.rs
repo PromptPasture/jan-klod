@@ -8,7 +8,13 @@
 //! - `401/403` → `AuthFailed`, `429` → `RateLimited`.
 //! - `api-key` is never logged.
 
-#[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+#[allow(
+    unsafe_code,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery
+)]
 mod bindings {
     wit_bindgen::generate!({
         world: "provider-world",
@@ -55,7 +61,11 @@ fn log(level: LogLevel, message: &str) {
 }
 
 fn config_str(section: &Value, key: &str) -> String {
-    section.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+    section
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn next_handle() -> StreamHandle {
@@ -69,7 +79,10 @@ fn next_handle() -> StreamHandle {
 
 /// Read `obj[key]` as an owned string, defaulting to empty.
 fn str_field(obj: &Value, key: &str) -> String {
-    obj.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+    obj.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// Convert one WIT message to Anthropic API JSON.
@@ -228,7 +241,9 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
 /// binding identifier is never the thing to show.
 const fn describe_http(err: &HttpError) -> &'static str {
     match err {
-        HttpError::ConnectionFailed => "the endpoint refused the connection or could not be resolved",
+        HttpError::ConnectionFailed => {
+            "the endpoint refused the connection or could not be resolved"
+        }
         HttpError::Timeout => "the endpoint did not answer in time",
         HttpError::TlsError => "TLS negotiation failed",
         HttpError::InvalidUrl => "the configured URL could not be parsed",
@@ -279,7 +294,11 @@ impl Lifecycle for Component {
                 "init id={} version={} model={}",
                 ctx.id,
                 ctx.version,
-                if config.model.is_empty() { "<none>" } else { &config.model },
+                if config.model.is_empty() {
+                    "<none>"
+                } else {
+                    &config.model
+                },
             ),
         );
         CONFIG.with(|c| *c.borrow_mut() = config);
@@ -304,7 +323,11 @@ impl Lifecycle for Component {
 impl LlmProvider for Component {
     fn complete(request: CompletionRequest) -> Result<StreamHandle, ProviderError> {
         let config = CONFIG.with(|c| c.borrow().clone());
-        let model = if request.model.is_empty() { config.model.clone() } else { request.model.clone() };
+        let model = if request.model.is_empty() {
+            config.model.clone()
+        } else {
+            request.model.clone()
+        };
         if model.is_empty() {
             log(LogLevel::Error, "complete: no model in request or config");
             return Err(ProviderError::ModelNotFound);
@@ -314,11 +337,20 @@ impl LlmProvider for Component {
         let body = serde_json::to_vec(&payload).map_err(|_| ProviderError::Transient)?;
 
         let mut headers = vec![
-            HttpHeader { name: "Content-Type".to_owned(), value: "application/json".to_owned() },
-            HttpHeader { name: "anthropic-version".to_owned(), value: ANTHROPIC_VERSION.to_owned() },
+            HttpHeader {
+                name: "Content-Type".to_owned(),
+                value: "application/json".to_owned(),
+            },
+            HttpHeader {
+                name: "anthropic-version".to_owned(),
+                value: ANTHROPIC_VERSION.to_owned(),
+            },
         ];
         if !config.api_key.is_empty() {
-            headers.push(HttpHeader { name: "x-api-key".to_owned(), value: config.api_key });
+            headers.push(HttpHeader {
+                name: "x-api-key".to_owned(),
+                value: config.api_key,
+            });
         }
 
         let http_request = HttpRequest {
@@ -330,7 +362,10 @@ impl LlmProvider for Component {
         };
 
         let response = host_http::fetch(&http_request).map_err(|err| {
-            log(LogLevel::Warn, &format!("request failed: {}", describe_http(&err)));
+            log(
+                LogLevel::Warn,
+                &format!("request failed: {}", describe_http(&err)),
+            );
             map_http_error(err)
         })?;
         let chunks = parse_response(&response.body)?;
@@ -341,7 +376,11 @@ impl LlmProvider for Component {
     }
 
     fn next_chunk(handle: StreamHandle) -> Option<CompletionChunk> {
-        STREAMS.with(|s| s.borrow_mut().get_mut(&handle).and_then(VecDeque::pop_front))
+        STREAMS.with(|s| {
+            s.borrow_mut()
+                .get_mut(&handle)
+                .and_then(VecDeque::pop_front)
+        })
     }
 
     fn close_stream(handle: StreamHandle) {
@@ -352,13 +391,25 @@ impl LlmProvider for Component {
 
     fn info() -> ProviderInfo {
         let config = CONFIG.with(|c| c.borrow().clone());
-        let supported_models =
-            if config.model.is_empty() { Vec::new() } else { vec![config.model] };
-        ProviderInfo { id: "anthropic".to_owned(), supported_models }
+        let supported_models = if config.model.is_empty() {
+            Vec::new()
+        } else {
+            vec![config.model]
+        };
+        ProviderInfo {
+            id: "anthropic".to_owned(),
+            supported_models,
+        }
     }
 }
 
-#[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+#[allow(
+    unsafe_code,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery
+)]
 mod glue {
     use crate::{bindings, Component};
     bindings::export!(Component with_types_in bindings);

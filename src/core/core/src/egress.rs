@@ -102,7 +102,11 @@ impl EgressPolicy {
         // An address literal needs no lookup — and must not get one, since a
         // resolver is exactly what an attacker would like us to consult.
         if let Ok(ip) = host.parse::<IpAddr>() {
-            return if is_public(ip) { Ok(()) } else { Err(WireError::ConnectionFailed) };
+            return if is_public(ip) {
+                Ok(())
+            } else {
+                Err(WireError::ConnectionFailed)
+            };
         }
 
         // A name: every address it answers with has to be public. One private
@@ -242,14 +246,20 @@ mod tests {
     #[test]
     fn an_ipv4_mapped_ipv6_loopback_is_still_loopback() {
         let policy = EgressPolicy::public_only();
-        assert_eq!(policy.check("http://[::ffff:127.0.0.1]/"), Err(WireError::ConnectionFailed));
+        assert_eq!(
+            policy.check("http://[::ffff:127.0.0.1]/"),
+            Err(WireError::ConnectionFailed)
+        );
     }
 
     #[test]
     fn a_configured_local_endpoint_is_reachable() {
         // The case this exists for: a self-hosted model on loopback.
         let policy = EgressPolicy::public_only().allowing("http://127.0.0.1:11434/v1");
-        assert_eq!(policy.check("http://127.0.0.1:11434/v1/chat/completions"), Ok(()));
+        assert_eq!(
+            policy.check("http://127.0.0.1:11434/v1/chat/completions"),
+            Ok(())
+        );
         // The grant is that origin, not the machine: another local port stays shut.
         assert_eq!(
             policy.check("http://127.0.0.1:5432/"),

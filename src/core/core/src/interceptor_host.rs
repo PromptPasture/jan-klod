@@ -23,11 +23,11 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::host::ConfigSection;
 // `Store` is wasmtime's here, so the core's persistent store needs a distinct name.
-use crate::store::Store as PersistentStore;
 use crate::intercept::{
     self, BlockReason, Decision, HookState, InterceptInput, Interceptor, InterceptorError, Phase,
     UserPrompt,
 };
+use crate::store::Store as PersistentStore;
 use crate::CoreError;
 
 // Generated Component-Model bindings for the interceptor world; lint exemptions
@@ -40,13 +40,13 @@ mod bind {
     });
 }
 
+use bind::exports::jan_klod::interfaces::interceptor as g_icept;
 use bind::jan_klod::interfaces::host_config as g_config;
 use bind::jan_klod::interfaces::host_event as g_event;
 use bind::jan_klod::interfaces::host_log as g_log;
 use bind::jan_klod::interfaces::host_storage as g_storage;
 use bind::jan_klod::interfaces::llm_provider as g_llm;
 use bind::jan_klod::interfaces::llm_types as g_types;
-use bind::exports::jan_klod::interfaces::interceptor as g_icept;
 
 /// The completion backend an interceptor's `llm-provider` import resolves to:
 /// given the request the guest assembled, return the assistant text.
@@ -59,8 +59,7 @@ use bind::exports::jan_klod::interfaces::interceptor as g_icept;
 ///
 /// Injected so the tier runs offline in tests; `Runtime::build_agent` backs it
 /// with a real provider instance.
-pub type ProviderFn =
-    Box<dyn Fn(&crate::intercept::PendingRequest) -> String + Send + Sync>;
+pub type ProviderFn = Box<dyn Fn(&crate::intercept::PendingRequest) -> String + Send + Sync>;
 
 /// Host state for one interceptor guest.
 struct InterceptorHost {
@@ -283,9 +282,10 @@ impl g_storage::Host for InterceptorHost {
     fn delete(&mut self, namespace: String, key: String) -> Result<(), g_storage::StoreError> {
         let scoped = self.storage.scope(&namespace);
         match &mut self.storage {
-            Storage::Ephemeral { entries, .. } => {
-                entries.remove(&(scoped, key)).map(|_| ()).ok_or(g_storage::StoreError::NotFound)
-            }
+            Storage::Ephemeral { entries, .. } => entries
+                .remove(&(scoped, key))
+                .map(|_| ())
+                .ok_or(g_storage::StoreError::NotFound),
             Storage::Durable { store, .. } => store
                 .lock()
                 .map_err(|_| g_storage::StoreError::Backend)?
@@ -336,7 +336,10 @@ impl InterceptorHost {
                     .map_err(|_| g_storage::StoreError::Backend)?
                     .recent(&scoped, u32::MAX)
                     .map_err(|err| as_store_error(&err))?;
-                Ok(rows.into_iter().map(|row| present(&self.storage, row)).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|row| present(&self.storage, row))
+                    .collect())
             }
         }
     }
@@ -373,10 +376,7 @@ fn to_pending_request(request: &g_llm::CompletionRequest) -> crate::intercept::P
 }
 
 impl g_llm::Host for InterceptorHost {
-    fn complete(
-        &mut self,
-        request: g_llm::CompletionRequest,
-    ) -> Result<u32, g_llm::ProviderError> {
+    fn complete(&mut self, request: g_llm::CompletionRequest) -> Result<u32, g_llm::ProviderError> {
         let text = (self.provider)(&to_pending_request(&request));
         let handle = self.next_handle;
         self.next_handle += 1;
@@ -463,8 +463,14 @@ impl WasmInterceptor {
             streams: HashMap::new(),
             next_handle: 1,
             storage: storage.map_or_else(
-                || Storage::Ephemeral { entries: HashMap::new(), clock: 0 },
-                |store| Storage::Durable { store, owner: id.to_string() },
+                || Storage::Ephemeral {
+                    entries: HashMap::new(),
+                    clock: 0,
+                },
+                |store| Storage::Durable {
+                    store,
+                    owner: id.to_string(),
+                },
             ),
         };
         let mut store = Store::new(engine, host);
@@ -715,7 +721,9 @@ fn from_gen_state(state: g_icept::HookState) -> HookState {
             tool_call_id: o.tool_call_id,
             content: o.content,
         }),
-        g_icept::HookState::Finalize(a) => HookState::Finalize(intercept::FinalAnswer { text: a.text }),
+        g_icept::HookState::Finalize(a) => {
+            HookState::Finalize(intercept::FinalAnswer { text: a.text })
+        }
         g_icept::HookState::PrepareNextTurn(r) => HookState::PrepareNextTurn(from_gen_request(r)),
     }
 }
@@ -754,7 +762,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn repo_root() -> PathBuf {
-        [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."].iter().collect()
+        [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."]
+            .iter()
+            .collect()
     }
 
     /// A driver that never expects to be asked (the intent router does not `ask`).
@@ -766,7 +776,9 @@ mod tests {
     }
 
     fn load_intent_router(provider: ProviderFn) -> Option<(Engine, WasmInterceptor)> {
-        let path = repo_root().join("ext").join("interceptor-intent-router.wasm");
+        let path = repo_root()
+            .join("ext")
+            .join("interceptor-intent-router.wasm");
         if !path.exists() {
             eprintln!("skipping: interceptor-intent-router.wasm not staged — run `make ext`");
             return None;
@@ -863,7 +875,10 @@ mod tests {
     }
     impl CountingDriver {
         fn new(answer: &'static str) -> Self {
-            Self { answer, asked: std::cell::Cell::new(0) }
+            Self {
+                answer,
+                asked: std::cell::Cell::new(0),
+            }
         }
     }
     impl Driver for CountingDriver {
@@ -888,18 +903,28 @@ mod tests {
         let mut driver = CountingDriver::new("always");
 
         let mut first = tool_call_with("fs", r#"{"op":"write","path":"src/a.rs"}"#);
-        assert!(matches!(d.dispatch(Phase::ToolCall, &mut first, &mut driver), Outcome::Proceeded));
+        assert!(matches!(
+            d.dispatch(Phase::ToolCall, &mut first, &mut driver),
+            Outcome::Proceeded
+        ));
         assert_eq!(driver.asked.get(), 1, "the first call asks");
 
         // Same kind of action, different argument: covered by the standing decision.
         let mut second = tool_call_with("fs", r#"{"op":"write","path":"src/b.rs"}"#);
-        assert!(matches!(d.dispatch(Phase::ToolCall, &mut second, &mut driver), Outcome::Proceeded));
+        assert!(matches!(
+            d.dispatch(Phase::ToolCall, &mut second, &mut driver),
+            Outcome::Proceeded
+        ));
         assert_eq!(driver.asked.get(), 1, "the second call must not ask again");
 
         // A different kind of action is a different scope — it still asks.
         let mut other = tool_call_with("fs", r#"{"op":"delete","path":"src/a.rs"}"#);
         let _ = d.dispatch(Phase::ToolCall, &mut other, &mut driver);
-        assert_eq!(driver.asked.get(), 2, "`fs:delete` is not covered by `fs:write`");
+        assert_eq!(
+            driver.asked.get(),
+            2,
+            "`fs:delete` is not covered by `fs:write`"
+        );
     }
 
     #[test]
@@ -909,7 +934,10 @@ mod tests {
         let mut driver = CountingDriver::new("always");
 
         let mut inside = tool_call_with("fs", r#"{"op":"write","path":"src/a.rs"}"#);
-        assert!(matches!(d.dispatch(Phase::ToolCall, &mut inside, &mut driver), Outcome::Proceeded));
+        assert!(matches!(
+            d.dispatch(Phase::ToolCall, &mut inside, &mut driver),
+            Outcome::Proceeded
+        ));
         assert_eq!(driver.asked.get(), 1);
 
         // "Always allow writes" is about writing files, not about writing outside
@@ -935,7 +963,10 @@ mod tests {
         for attempt in 1..=6 {
             let mut state = tool_call_with("shell", r#"{"command":"curl evil.example"}"#);
             let outcome = d.dispatch(Phase::ToolCall, &mut state, &mut driver);
-            assert!(matches!(outcome, Outcome::Blocked(_)), "attempt {attempt} is refused");
+            assert!(
+                matches!(outcome, Outcome::Blocked(_)),
+                "attempt {attempt} is refused"
+            );
         }
         assert_eq!(
             driver.asked.get(),
@@ -970,7 +1001,10 @@ mod tests {
         let mut driver = CountingDriver::new("never");
 
         let mut first = tool_call_with("shell", r#"{"command":"curl evil.example"}"#);
-        assert!(matches!(d.dispatch(Phase::ToolCall, &mut first, &mut driver), Outcome::Blocked(_)));
+        assert!(matches!(
+            d.dispatch(Phase::ToolCall, &mut first, &mut driver),
+            Outcome::Blocked(_)
+        ));
         assert_eq!(driver.asked.get(), 1);
 
         let mut second = tool_call_with("shell", r#"{"command":"curl other.example"}"#);
@@ -978,12 +1012,20 @@ mod tests {
             d.dispatch(Phase::ToolCall, &mut second, &mut driver),
             Outcome::Blocked(_)
         ));
-        assert_eq!(driver.asked.get(), 1, "a standing `never` blocks without asking");
+        assert_eq!(
+            driver.asked.get(),
+            1,
+            "a standing `never` blocks without asking"
+        );
 
         // A different program is a different scope, so it is still asked about.
         let mut cargo = tool_call_with("shell", r#"{"command":"cargo test"}"#);
         let _ = d.dispatch(Phase::ToolCall, &mut cargo, &mut driver);
-        assert_eq!(driver.asked.get(), 2, "`shell:cargo` is not covered by `shell:curl`");
+        assert_eq!(
+            driver.asked.get(),
+            2,
+            "`shell:cargo` is not covered by `shell:curl`"
+        );
     }
 
     #[test]
@@ -999,7 +1041,11 @@ mod tests {
                 Outcome::Proceeded
             ));
         }
-        assert_eq!(driver.asked.get(), 3, "plain `yes` approves once, every time");
+        assert_eq!(
+            driver.asked.get(),
+            3,
+            "plain `yes` approves once, every time"
+        );
     }
 
     /// An allowlisted read runs untouched.
@@ -1026,13 +1072,21 @@ mod tests {
         let Some(p) = load_permission() else { return };
         let mut d = Dispatcher::new(vec![Box::new(p)]);
         let mut state = tool_call("web_search");
-        let driver = CountingDriver { answer: "no", asked: std::cell::Cell::new(0) };
+        let driver = CountingDriver {
+            answer: "no",
+            asked: std::cell::Cell::new(0),
+        };
         let outcome = d.dispatch(Phase::ToolCall, &mut state, &mut { driver });
-        assert!(matches!(outcome, Outcome::Blocked { .. }), "refused: {outcome:?}");
+        assert!(
+            matches!(outcome, Outcome::Blocked { .. }),
+            "refused: {outcome:?}"
+        );
     }
 
     fn load_tool_selector() -> Option<WasmInterceptor> {
-        let path = repo_root().join("ext").join("interceptor-tool-selector.wasm");
+        let path = repo_root()
+            .join("ext")
+            .join("interceptor-tool-selector.wasm");
         if !path.exists() {
             eprintln!("skipping: interceptor-tool-selector.wasm not staged — run `make ext`");
             return None;
@@ -1064,13 +1118,17 @@ mod tests {
 
     #[test]
     fn tool_selector_subscribes_only_to_select_tools() {
-        let Some(t) = load_tool_selector() else { return };
+        let Some(t) = load_tool_selector() else {
+            return;
+        };
         assert_eq!(t.subscribed_phases(), vec![Phase::SelectTools]);
     }
 
     #[test]
     fn tool_selector_passes_through() {
-        let Some(t) = load_tool_selector() else { return };
+        let Some(t) = load_tool_selector() else {
+            return;
+        };
         let mut d = Dispatcher::new(vec![Box::new(t)]);
         let mut state = select_tools();
         assert!(matches!(
@@ -1080,7 +1138,9 @@ mod tests {
     }
 
     fn load_tool_selector_with(config: serde_json::Value) -> Option<WasmInterceptor> {
-        let path = repo_root().join("ext").join("interceptor-tool-selector.wasm");
+        let path = repo_root()
+            .join("ext")
+            .join("interceptor-tool-selector.wasm");
         if !path.exists() {
             return None;
         }
@@ -1105,12 +1165,20 @@ mod tests {
                 { "name": "fs-read", "description": "read a file", "parameters-schema": "{}" }
             ]
         });
-        let Some(t) = load_tool_selector_with(config) else { return };
+        let Some(t) = load_tool_selector_with(config) else {
+            return;
+        };
         let mut d = Dispatcher::new(vec![Box::new(t)]);
         let mut state = select_tools();
         d.dispatch(Phase::SelectTools, &mut state, &mut NoDriver);
-        let HookState::SelectTools(request) = state else { panic!("state case changed") };
-        assert_eq!(request.tools.len(), 1, "the advertised tool is placed on the request");
+        let HookState::SelectTools(request) = state else {
+            panic!("state case changed")
+        };
+        assert_eq!(
+            request.tools.len(),
+            1,
+            "the advertised tool is placed on the request"
+        );
         assert_eq!(request.tools[0].name, "fs-read");
     }
 
@@ -1162,14 +1230,18 @@ mod tests {
 
     #[test]
     fn context_subscribes_only_to_select_context() {
-        let Some(c) = load_context(json!({})) else { return };
+        let Some(c) = load_context(json!({})) else {
+            return;
+        };
         assert_eq!(c.subscribed_phases(), vec![Phase::SelectContext]);
     }
 
     #[test]
     fn context_trims_over_budget_history() {
         // A tiny configured budget forces trimming.
-        let Some(c) = load_context(json!({ "context-tokens": 5 })) else { return };
+        let Some(c) = load_context(json!({ "context-tokens": 5 })) else {
+            return;
+        };
         let mut d = Dispatcher::new(vec![Box::new(c)]);
         let long = "x".repeat(200); // ~50 tokens each
         let mut state = select_context(vec![
@@ -1181,12 +1253,17 @@ mod tests {
         d.dispatch(Phase::SelectContext, &mut state, &mut NoDriver);
         let kept = message_count(&state);
         assert!(kept < 4, "over-budget history is trimmed (kept {kept})");
-        assert!(kept >= 2, "system + current turn are always kept (kept {kept})");
+        assert!(
+            kept >= 2,
+            "system + current turn are always kept (kept {kept})"
+        );
     }
 
     #[test]
     fn context_leaves_small_history_untouched() {
-        let Some(c) = load_context(json!({ "context-tokens": 100_000 })) else { return };
+        let Some(c) = load_context(json!({ "context-tokens": 100_000 })) else {
+            return;
+        };
         let mut d = Dispatcher::new(vec![Box::new(c)]);
         let mut state = select_context(vec![msg(Role::System, "sys"), msg(Role::User, "hi")]);
         assert!(matches!(
@@ -1196,7 +1273,10 @@ mod tests {
         assert_eq!(message_count(&state), 2, "nothing dropped under budget");
     }
 
-    fn load_task_router(config: serde_json::Value, provider: ProviderFn) -> Option<WasmInterceptor> {
+    fn load_task_router(
+        config: serde_json::Value,
+        provider: ProviderFn,
+    ) -> Option<WasmInterceptor> {
         let path = repo_root().join("ext").join("interceptor-task-router.wasm");
         if !path.exists() {
             eprintln!("skipping: interceptor-task-router.wasm not staged — run `make ext`");
@@ -1236,7 +1316,9 @@ mod tests {
 
     #[test]
     fn task_router_subscribes_only_to_select_model() {
-        let Some(t) = load_task_router(json!({}), Box::new(|_| "chat".into())) else { return };
+        let Some(t) = load_task_router(json!({}), Box::new(|_| "chat".into())) else {
+            return;
+        };
         assert_eq!(t.subscribed_phases(), vec![Phase::SelectModel]);
     }
 
@@ -1256,7 +1338,9 @@ mod tests {
     #[test]
     fn task_router_proceeds_when_no_route_configured() {
         // A classified task with no routing entry leaves the model unset.
-        let Some(t) = load_task_router(json!({}), Box::new(|_| "chat".into())) else { return };
+        let Some(t) = load_task_router(json!({}), Box::new(|_| "chat".into())) else {
+            return;
+        };
         let mut d = Dispatcher::new(vec![Box::new(t)]);
         let mut state = select_model("hi");
         assert!(matches!(
@@ -1268,7 +1352,8 @@ mod tests {
 
     #[test]
     fn intent_router_subscribes_only_to_before_loop() {
-        let Some((_engine, interceptor)) = load_intent_router(Box::new(|_| "agentic".into())) else {
+        let Some((_engine, interceptor)) = load_intent_router(Box::new(|_| "agentic".into()))
+        else {
             return;
         };
         assert_eq!(interceptor.subscribed_phases(), vec![Phase::BeforeLoop]);
@@ -1323,8 +1408,7 @@ mod tests {
         // The router constrains its classifier to two labels. A seam that passed
         // only the last user message would drop that grammar, and the "classifier"
         // would become free-form generation the guest then has to parse.
-        let seen: Arc<Mutex<Option<crate::intercept::PendingRequest>>> =
-            Arc::new(Mutex::new(None));
+        let seen: Arc<Mutex<Option<crate::intercept::PendingRequest>>> = Arc::new(Mutex::new(None));
         let captured = Arc::clone(&seen);
         let Some((_engine, router)) = load_intent_router(Box::new(move |request| {
             *captured.lock().unwrap() = Some(request.clone());
@@ -1336,12 +1420,27 @@ mod tests {
         let mut state = before_loop("Tell me a fact and then do three unrelated things please");
         let _ = d.dispatch(Phase::BeforeLoop, &mut state, &mut NoDriver);
 
-        let request = seen.lock().unwrap().clone().expect("the provider was consulted");
-        let grammar = request.grammar.expect("the classifier's grammar survives the seam");
-        assert!(grammar.contains("simple"), "grammar admits `simple`: {grammar}");
-        assert!(grammar.contains("agentic"), "grammar admits `agentic`: {grammar}");
+        let request = seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the provider was consulted");
+        let grammar = request
+            .grammar
+            .expect("the classifier's grammar survives the seam");
         assert!(
-            request.messages.iter().any(|m| m.content.contains("three unrelated things")),
+            grammar.contains("simple"),
+            "grammar admits `simple`: {grammar}"
+        );
+        assert!(
+            grammar.contains("agentic"),
+            "grammar admits `agentic`: {grammar}"
+        );
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|m| m.content.contains("three unrelated things")),
             "the prompt reaches the provider: {:?}",
             request.messages
         );

@@ -17,7 +17,11 @@ use wasmtime::Engine;
 mod common;
 
 fn call(name: &str, arguments: &str) -> ToolCall {
-    ToolCall { id: "1".into(), name: name.into(), arguments: arguments.into() }
+    ToolCall {
+        id: "1".into(),
+        name: name.into(),
+        arguments: arguments.into(),
+    }
 }
 
 #[test]
@@ -34,9 +38,14 @@ fn fleet_dispatches_a_tool_call_by_name() {
     std::fs::create_dir_all(&workspace_dir).unwrap();
     let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
 
-    let mut fs =
-        ToolExtension::instantiate(&engine, "tool.fs", &component, Some(workspace), ProcessRunner::disabled())
-            .expect("tool instantiates");
+    let mut fs = ToolExtension::instantiate(
+        &engine,
+        "tool.fs",
+        &component,
+        Some(workspace),
+        ProcessRunner::disabled(),
+    )
+    .expect("tool instantiates");
     // The tool advertises itself as `fs`.
     assert_eq!(fs.meta().unwrap().name, "fs");
 
@@ -44,7 +53,10 @@ fn fleet_dispatches_a_tool_call_by_name() {
     assert_eq!(fleet.tool_names(), vec!["fs".to_string()]);
 
     // A tool call named `fs` reaches the extension and returns its result.
-    let result = fleet.invoke(&call("fs", r#"{"op":"write","path":"a.txt","contents":"hi"}"#));
+    let result = fleet.invoke(&call(
+        "fs",
+        r#"{"op":"write","path":"a.txt","contents":"hi"}"#,
+    ));
     assert!(result.expect("fs dispatched").contains("wrote a.txt"));
 
     // An unknown tool is skipped (None) — the loop tells the model "no tool".
@@ -58,8 +70,14 @@ fn load_tool(engine: &Engine, name: &str, workspace: Workspace) -> Option<ToolEx
     }
     let component = Component::from_file(engine, &path).expect("component compiles");
     Some(
-        ToolExtension::instantiate(engine, name, &component, Some(workspace), ProcessRunner::disabled())
-            .expect("tool instantiates"),
+        ToolExtension::instantiate(
+            engine,
+            name,
+            &component,
+            Some(workspace),
+            ProcessRunner::disabled(),
+        )
+        .expect("tool instantiates"),
     )
 }
 
@@ -85,16 +103,25 @@ fn fs_tool_writes_reads_and_greps_through_the_fleet() {
     assert!(written.unwrap().contains("wrote src/main.rs"));
     let read = fleet.invoke(&call("fs", r#"{"op":"read","path":"src/main.rs"}"#));
     assert_eq!(read.as_deref(), Some("fn main(){}\nlet x=1;"));
-    let grep_hits = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"fn","path":"src/main.rs"}"#));
+    let grep_hits = fleet.invoke(&call(
+        "fs",
+        r#"{"op":"grep","pattern":"fn","path":"src/main.rs"}"#,
+    ));
     assert_eq!(grep_hits.as_deref(), Some("1:fn main(){}"));
 
     // A directory path (or none at all) greps the whole tree: hits carry their
     // path, so "where is this symbol?" is one call rather than find-then-read.
     fleet
-        .invoke(&call("fs", r#"{"op":"write","path":"src/util/helper.rs","contents":"fn help(){}"}"#))
+        .invoke(&call(
+            "fs",
+            r#"{"op":"write","path":"src/util/helper.rs","contents":"fn help(){}"}"#,
+        ))
         .expect("write succeeds");
     fleet
-        .invoke(&call("fs", r#"{"op":"write","path":"notes.md","contents":"fn in prose"}"#))
+        .invoke(&call(
+            "fs",
+            r#"{"op":"write","path":"notes.md","contents":"fn in prose"}"#,
+        ))
         .expect("write succeeds");
 
     let tree_hits = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"fn "}"#));
@@ -104,7 +131,10 @@ fn fs_tool_writes_reads_and_greps_through_the_fleet() {
     );
 
     // `glob` narrows the tree search to the files worth reading.
-    let scoped = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"fn ","glob":"**/*.rs"}"#));
+    let scoped = fleet.invoke(&call(
+        "fs",
+        r#"{"op":"grep","pattern":"fn ","glob":"**/*.rs"}"#,
+    ));
     assert_eq!(
         scoped.as_deref(),
         Some("src/main.rs:1:fn main(){}\nsrc/util/helper.rs:1:fn help(){}")
@@ -145,11 +175,20 @@ fn shell_tool_runs_a_command_through_the_fleet() {
     assert_eq!(fleet.tool_names(), vec!["shell".to_string()]);
 
     let out = fleet
-        .invoke(&call("shell", r#"{"command":"echo","args":["from the shell tool"]}"#))
+        .invoke(&call(
+            "shell",
+            r#"{"command":"echo","args":["from the shell tool"]}"#,
+        ))
         .expect("shell dispatched");
     let json: serde_json::Value = serde_json::from_str(&out).expect("shell returns JSON");
     assert_eq!(json["code"], 0);
-    assert!(json["stdout"].as_str().unwrap().contains("from the shell tool"), "stdout: {out}");
+    assert!(
+        json["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("from the shell tool"),
+        "stdout: {out}"
+    );
 }
 
 /// A tree-wide grep does not sweep credentials into the transcript.
@@ -175,8 +214,16 @@ fn a_tree_grep_skips_credential_files() {
 
     // A secret in the two conventional shapes, plus a source file that mentions
     // the same word so the search is not trivially empty.
-    std::fs::write(workspace_dir.join(".env"), "API_TOKEN=hunter2-must-not-leak\n").unwrap();
-    std::fs::write(workspace_dir.join("deploy.pem"), "-----BEGIN KEY-----\nmust-not-leak\n").unwrap();
+    std::fs::write(
+        workspace_dir.join(".env"),
+        "API_TOKEN=hunter2-must-not-leak\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workspace_dir.join("deploy.pem"),
+        "-----BEGIN KEY-----\nmust-not-leak\n",
+    )
+    .unwrap();
     std::fs::write(
         workspace_dir.join("src/config.rs"),
         "// reads API_TOKEN from the environment\n",

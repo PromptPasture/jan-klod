@@ -19,7 +19,13 @@ mod context;
 mod component {
     use crate::context;
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({
             world: "interceptor-world",
@@ -56,11 +62,17 @@ mod component {
 
     impl Lifecycle for Component {
         fn init(ctx: ExtensionContext) -> Result<(), String> {
-            log(LogLevel::Info, &format!("init id={} version={}", ctx.id, ctx.version));
+            log(
+                LogLevel::Info,
+                &format!("init id={} version={}", ctx.id, ctx.version),
+            );
             Ok(())
         }
         fn start() -> Result<(), String> {
-            log(LogLevel::Info, "started; trimming context to the model budget");
+            log(
+                LogLevel::Info,
+                "started; trimming context to the model budget",
+            );
             Ok(())
         }
         fn stop() {
@@ -101,12 +113,21 @@ mod component {
             let dropped = request.messages.len() - keep.len();
             let trimmed: Vec<_> = keep.iter().map(|&i| request.messages[i].clone()).collect();
             request.messages = trimmed;
-            log(LogLevel::Info, &format!("trimmed {dropped} message(s) to fit the budget"));
+            log(
+                LogLevel::Info,
+                &format!("trimmed {dropped} message(s) to fit the budget"),
+            );
             Ok(Decision::Replace(HookState::SelectContext(request)))
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

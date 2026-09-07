@@ -95,9 +95,9 @@ mod fetch {
         }
         match classify_address(host) {
             Address::Public | Address::PublicName => Ok(()),
-            Address::NonPublic => {
-                Err(format!("`{host}` is not a public address; set `allow-private` to permit it"))
-            }
+            Address::NonPublic => Err(format!(
+                "`{host}` is not a public address; set `allow-private` to permit it"
+            )),
             Address::Unrecognised => Err(format!(
                 "`{host}` is not a plain hostname or dotted-quad address — refusing an \
                  address form this tool cannot check"
@@ -130,7 +130,10 @@ mod fetch {
         if host.chars().all(|c| c.is_ascii_digit() || c == '.') {
             return classify_v4(host);
         }
-        if host.chars().any(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '.')) {
+        if host
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '.'))
+        {
             return Address::Unrecognised;
         }
         // A hostname's last label cannot start with a digit (RFC 1123 leaves
@@ -138,7 +141,10 @@ mod fetch {
         // instead — which is how `0x7f.0.0.1` reaches loopback while looking like
         // a hostname. Anything ending that way is judged as an address, and the
         // dotted-quad rules then refuse every form but the plain one.
-        if host.rsplit('.').next().is_some_and(|last| last.starts_with(|c: char| c.is_ascii_digit()))
+        if host
+            .rsplit('.')
+            .next()
+            .is_some_and(|last| last.starts_with(|c: char| c.is_ascii_digit()))
         {
             return classify_v4(host);
         }
@@ -184,7 +190,7 @@ mod fetch {
 
     fn classify_v6(addr: &str) -> Address {
         let addr = addr.split('%').next().unwrap_or(addr); // drop a zone id
-        // IPv4-mapped (`::ffff:127.0.0.1`) is a v4 address wearing a v6 hat.
+                                                           // IPv4-mapped (`::ffff:127.0.0.1`) is a v4 address wearing a v6 hat.
         if let Some(tail) = addr.rsplit(':').next() {
             if tail.contains('.') {
                 return classify_v4(tail);
@@ -265,7 +271,9 @@ mod fetch {
             let close = format!("</{name}>");
             loop {
                 let lowered = out.to_lowercase();
-                let Some(start) = lowered.find(&open) else { break };
+                let Some(start) = lowered.find(&open) else {
+                    break;
+                };
                 let end = lowered[start..]
                     .find(&close)
                     .map_or(out.len(), |offset| start + offset + close.len());
@@ -288,14 +296,22 @@ mod fetch {
 
     /// Collapse whitespace runs, keeping paragraph breaks readable.
     fn collapse(text: &str) -> String {
-        text.split_whitespace().collect::<Vec<_>>().join(" ").trim().to_string()
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string()
     }
 
     /// Format a fetched page for the model.
     #[must_use]
     pub fn render(url: &str, status: u16, body: &str) -> String {
         let text = to_text(body);
-        let text = if text.is_empty() { "(the page had no readable text)" } else { &text };
+        let text = if text.is_empty() {
+            "(the page had no readable text)"
+        } else {
+            &text
+        };
         guest_fs::truncate(format!("{url} [{status}]\n\n{text}"))
     }
 
@@ -367,10 +383,10 @@ mod fetch {
         #[test]
         fn obfuscated_address_forms_are_refused_not_normalised() {
             for bad in [
-                "http://2130706433/",   // integer form of 127.0.0.1
-                "http://0177.0.0.1/",   // octal octet
-                "http://127.1/",        // short form
-                "http://0x7f.0.0.1/",   // hex octet
+                "http://2130706433/", // integer form of 127.0.0.1
+                "http://0177.0.0.1/", // octal octet
+                "http://127.1/",      // short form
+                "http://0x7f.0.0.1/", // hex octet
             ] {
                 let err = vet(bad, false).unwrap_err();
                 assert!(
@@ -450,7 +466,13 @@ mod component {
     use crate::{fetch, TIMEOUT_MS};
     use core::cell::Cell;
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({ world: "tool-world", path: "../../../wit" });
     }
@@ -478,7 +500,9 @@ mod component {
             let allow = serde_json::from_str::<serde_json::Value>(&raw)
                 .ok()
                 .and_then(|section| {
-                    section.get("allow-private").and_then(serde_json::Value::as_bool)
+                    section
+                        .get("allow-private")
+                        .and_then(serde_json::Value::as_bool)
                 })
                 .unwrap_or(false);
             ALLOW_PRIVATE.with(|flag| flag.set(allow));
@@ -548,7 +572,13 @@ mod component {
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

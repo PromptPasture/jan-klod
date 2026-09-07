@@ -87,7 +87,12 @@ impl FakeOllama {
                 }
             }
         });
-        Self { port, requests, saw_authorization, stop }
+        Self {
+            port,
+            requests,
+            saw_authorization,
+            stop,
+        }
     }
 }
 
@@ -139,7 +144,9 @@ extensions:
             jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
-    let mut agent = runtime.build_agent(&factory).expect("agent boots without an api-key");
+    let mut agent = runtime
+        .build_agent(&factory)
+        .expect("agent boots without an api-key");
 
     let result = agent.run("local", "hello");
     match result {
@@ -234,5 +241,8 @@ extensions:
     );
     // The egress hint matters: a typo'd base-url and a denied origin fail here
     // identically, and the reader needs to know the second is possible.
-    assert!(message.contains("egress"), "the message mentions egress: {message}");
+    assert!(
+        message.contains("egress"),
+        "the message mentions egress: {message}"
+    );
 }

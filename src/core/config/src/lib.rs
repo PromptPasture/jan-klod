@@ -280,4 +280,3 @@ pub enum ConfigError {
         id: String,
     },
 }
-

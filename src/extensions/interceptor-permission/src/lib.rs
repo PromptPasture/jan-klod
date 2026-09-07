@@ -51,7 +51,13 @@ mod component {
     /// `host-storage` namespace holding this run's standing decisions.
     const NAMESPACE: &str = "permission";
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({
             world: "interceptor-world",
@@ -84,8 +90,8 @@ mod component {
     /// defaults (see [`Policy::from_config`]).
     fn load_policy() {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
-        let section = serde_json::from_str::<serde_json::Value>(&raw)
-            .unwrap_or(serde_json::Value::Null);
+        let section =
+            serde_json::from_str::<serde_json::Value>(&raw).unwrap_or(serde_json::Value::Null);
         POLICY.with(|p| *p.borrow_mut() = Policy::from_config(&section));
     }
 
@@ -122,9 +128,15 @@ mod component {
     /// Failing to persist a convenience must never fail the security decision.
     fn remember(key: &str, verdict: Verdict) {
         if host_storage::set(NAMESPACE, key, verdict.as_str()).is_err() {
-            log(LogLevel::Warn, &format!("could not record the decision for `{key}`; will ask again"));
+            log(
+                LogLevel::Warn,
+                &format!("could not record the decision for `{key}`; will ask again"),
+            );
         } else {
-            log(LogLevel::Info, &format!("`{key}` set to {} for this run", verdict.as_str()));
+            log(
+                LogLevel::Info,
+                &format!("`{key}` set to {} for this run", verdict.as_str()),
+            );
         }
     }
 
@@ -149,14 +161,21 @@ mod component {
             }
             None => format!("Allow `{tool}` to {what}? ({reason})"),
         };
-        UserPrompt { question, options, default_answer: "no".to_string() }
+        UserPrompt {
+            question,
+            options,
+            default_answer: "no".to_string(),
+        }
     }
 
     struct Component;
 
     impl Lifecycle for Component {
         fn init(ctx: ExtensionContext) -> Result<(), String> {
-            log(LogLevel::Info, &format!("init id={} version={}", ctx.id, ctx.version));
+            log(
+                LogLevel::Info,
+                &format!("init id={} version={}", ctx.id, ctx.version),
+            );
             load_policy();
             Ok(())
         }
@@ -183,8 +202,7 @@ mod component {
                 return Err(InterceptorError::InvalidState);
             };
 
-            let Some(concern) =
-                POLICY.with(|p| p.borrow().review(&call.name, &call.arguments))
+            let Some(concern) = POLICY.with(|p| p.borrow().review(&call.name, &call.arguments))
             else {
                 return Ok(Decision::Proceed);
             };
@@ -202,11 +220,17 @@ mod component {
                     if let Some(key) = &scope {
                         match recall(key) {
                             Some(Verdict::Allow) => {
-                                log(LogLevel::Info, &format!("`{key}` allowed by a standing decision"));
+                                log(
+                                    LogLevel::Info,
+                                    &format!("`{key}` allowed by a standing decision"),
+                                );
                                 return Ok(Decision::Proceed);
                             }
                             Some(Verdict::Deny) => {
-                                log(LogLevel::Info, &format!("`{key}` denied by a standing decision"));
+                                log(
+                                    LogLevel::Info,
+                                    &format!("`{key}` denied by a standing decision"),
+                                );
                                 return Ok(Decision::Block(BlockReason {
                                     message: crate::rules::denial_message(
                                         &crate::rules::summarise(&call.name, &call.arguments),
@@ -217,7 +241,12 @@ mod component {
                             None => {}
                         }
                     }
-                    Ok(Decision::Ask(prompt(&call.name, &call.arguments, &reason, scope.as_deref())))
+                    Ok(Decision::Ask(prompt(
+                        &call.name,
+                        &call.arguments,
+                        &reason,
+                        scope.as_deref(),
+                    )))
                 }
                 // Resumed with the driver's answer. `always`/`never` also record a
                 // standing decision for this run before acting on it.
@@ -267,7 +296,13 @@ mod component {
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

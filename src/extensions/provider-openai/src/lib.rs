@@ -14,7 +14,13 @@
 
 // Generated Component-Model bindings; lint exemptions (incl. the `unsafe` ABI
 // shims) scoped to the macro output.
-#[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+#[allow(
+    unsafe_code,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery
+)]
 mod bindings {
     wit_bindgen::generate!({
         world: "provider-world",
@@ -98,7 +104,8 @@ fn message_to_json(msg: &Message) -> Value {
 /// guest's `parameters-schema` is already a JSON Schema string; pass it through,
 /// falling back to an empty object if it is not valid JSON.
 fn tool_to_json(tool: &ToolDefinition) -> Value {
-    let parameters: Value = serde_json::from_str(&tool.parameters_schema).unwrap_or_else(|_| json!({}));
+    let parameters: Value =
+        serde_json::from_str(&tool.parameters_schema).unwrap_or_else(|_| json!({}));
     json!({
         "type": "function",
         "function": {
@@ -117,7 +124,11 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     obj.insert("model".to_owned(), json!(model));
     obj.insert(
         "messages".to_owned(),
-        json!(request.messages.iter().map(message_to_json).collect::<Vec<_>>()),
+        json!(request
+            .messages
+            .iter()
+            .map(message_to_json)
+            .collect::<Vec<_>>()),
     );
     obj.insert("stream".to_owned(), json!(false));
     if !request.tools.is_empty() {
@@ -199,7 +210,9 @@ fn str_field(obj: &Value, key: &str) -> String {
 /// binding identifier is never the thing to show.
 const fn describe_http(err: &HttpError) -> &'static str {
     match err {
-        HttpError::ConnectionFailed => "the endpoint refused the connection or could not be resolved",
+        HttpError::ConnectionFailed => {
+            "the endpoint refused the connection or could not be resolved"
+        }
         HttpError::Timeout => "the endpoint did not answer in time",
         HttpError::TlsError => "TLS negotiation failed",
         HttpError::InvalidUrl => "the configured URL could not be parsed",
@@ -329,7 +342,10 @@ impl LlmProvider for Component {
         };
 
         let response = host_http::fetch(&http_request).map_err(|err| {
-            log(LogLevel::Warn, &format!("request failed: {}", describe_http(&err)));
+            log(
+                LogLevel::Warn,
+                &format!("request failed: {}", describe_http(&err)),
+            );
             map_http_error(err)
         })?;
         let chunks = parse_response(&response.body)?;
@@ -340,7 +356,11 @@ impl LlmProvider for Component {
     }
 
     fn next_chunk(handle: StreamHandle) -> Option<CompletionChunk> {
-        STREAMS.with(|s| s.borrow_mut().get_mut(&handle).and_then(VecDeque::pop_front))
+        STREAMS.with(|s| {
+            s.borrow_mut()
+                .get_mut(&handle)
+                .and_then(VecDeque::pop_front)
+        })
     }
 
     fn close_stream(handle: StreamHandle) {
@@ -365,7 +385,13 @@ impl LlmProvider for Component {
 
 // The `export!` macro emits the component's `unsafe extern "C"` ABI shims at its
 // call site, so scope the binding lints (incl. `unsafe_code`) to this glue too.
-#[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+#[allow(
+    unsafe_code,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery
+)]
 mod glue {
     use crate::{bindings, Component};
     bindings::export!(Component with_types_in bindings);

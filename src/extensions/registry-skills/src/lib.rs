@@ -6,7 +6,13 @@
 //! The rest of the file is the skill template; `invoke` returns it (with
 //! the raw JSON arguments appended as context).
 
-#[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+#[allow(
+    unsafe_code,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery
+)]
 mod bindings {
     wit_bindgen::generate!({
         world: "skill-registry-world",
@@ -48,11 +54,16 @@ fn log(level: LogLevel, message: &str) {
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     let rest = content.strip_prefix("---")?;
     // Allow `---\n` or `---\r\n`
-    let rest = rest.strip_prefix('\n').or_else(|| rest.strip_prefix("\r\n"))?;
+    let rest = rest
+        .strip_prefix('\n')
+        .or_else(|| rest.strip_prefix("\r\n"))?;
     let end = rest.find("\n---")?;
     let front = &rest[..end];
     let after_close = &rest[end + 4..]; // skip "\n---"
-    let body = after_close.strip_prefix('\n').or_else(|| after_close.strip_prefix("\r\n")).unwrap_or(after_close);
+    let body = after_close
+        .strip_prefix('\n')
+        .or_else(|| after_close.strip_prefix("\r\n"))
+        .unwrap_or(after_close);
     Some((front, body))
 }
 
@@ -83,14 +94,23 @@ fn load_skills() -> Vec<Skill> {
             continue;
         }
         let path = format!(".agents/skills/{}", entry.name);
-        let Ok(content) = host_fs::read(&path) else { continue };
-        let Some((front, body)) = split_frontmatter(&content) else { continue };
+        let Ok(content) = host_fs::read(&path) else {
+            continue;
+        };
+        let Some((front, body)) = split_frontmatter(&content) else {
+            continue;
+        };
         let name = match yaml_str(front, "name") {
             Some(n) if !n.is_empty() => n.to_owned(),
             _ => continue,
         };
         let description = yaml_str(front, "description").unwrap_or("").to_owned();
-        skills.push(Skill { name, description, path: path.clone(), body: body.to_owned() });
+        skills.push(Skill {
+            name,
+            description,
+            path: path.clone(),
+            body: body.to_owned(),
+        });
         log(LogLevel::Debug, &format!("loaded skill from {path}"));
     }
     skills
@@ -103,7 +123,10 @@ impl Lifecycle for Component {
         let skills = load_skills();
         let count = skills.len();
         SKILLS.with(|s| *s.borrow_mut() = skills);
-        log(LogLevel::Info, &format!("init id={} skills={count}", ctx.id));
+        log(
+            LogLevel::Info,
+            &format!("init id={} skills={count}", ctx.id),
+        );
         Ok(())
     }
 
@@ -152,16 +175,21 @@ impl SkillRegistry for Component {
     }
 
     fn invoke(name: String, arguments: String) -> Result<String, SkillError> {
-        SKILLS.with(|s| {
-            s.borrow().iter().find(|sk| sk.name == name).map(|sk| sk.body.clone())
-        }).map_or(Err(SkillError::NotFound), |b| {
-            let result = if arguments.is_empty() || arguments == "{}" {
-                b
-            } else {
-                format!("{b}\n\n<!-- arguments: {arguments} -->")
-            };
-            Ok(result)
-        })
+        SKILLS
+            .with(|s| {
+                s.borrow()
+                    .iter()
+                    .find(|sk| sk.name == name)
+                    .map(|sk| sk.body.clone())
+            })
+            .map_or(Err(SkillError::NotFound), |b| {
+                let result = if arguments.is_empty() || arguments == "{}" {
+                    b
+                } else {
+                    format!("{b}\n\n<!-- arguments: {arguments} -->")
+                };
+                Ok(result)
+            })
     }
 
     fn reload() -> Result<(), SkillError> {
@@ -171,7 +199,13 @@ impl SkillRegistry for Component {
     }
 }
 
-#[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+#[allow(
+    unsafe_code,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery
+)]
 mod glue {
     use crate::{bindings, Component};
     bindings::export!(Component with_types_in bindings);

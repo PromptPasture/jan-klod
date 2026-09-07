@@ -43,7 +43,12 @@ fn stub_env() {
     // Every test in this binary sets the same values before any `Runtime::boot`,
     // so the writes are idempotent even though the tests run concurrently.
     #[allow(unsafe_code)]
-    for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY", "SEARCH_API_KEY"] {
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GROQ_API_KEY",
+        "SEARCH_API_KEY",
+    ] {
         unsafe { std::env::set_var(key, "test-placeholder") };
     }
 }
@@ -95,8 +100,16 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
     // And every one of them must actually instantiate and start. This is the
     // assertion `start_all`'s neutral-linker bug failed for months.
     let started = runtime.start_all().expect("every enabled extension starts");
-    for expected in ["tool.fs", "tool.edit", "tool.find", "interceptor.permission"] {
-        assert!(started.iter().any(|id| id == expected), "{expected} started; got {started:?}");
+    for expected in [
+        "tool.fs",
+        "tool.edit",
+        "tool.find",
+        "interceptor.permission",
+    ] {
+        assert!(
+            started.iter().any(|id| id == expected),
+            "{expected} started; got {started:?}"
+        );
     }
 }
 
@@ -130,7 +143,11 @@ fn write_then_answer_http() -> HttpFn {
                 }]
             })
         };
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
+        Ok(WireResponse {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&body).unwrap(),
+        })
     })
 }
 
@@ -166,7 +183,9 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("the shipped config boots");
     let factory = write_then_answer_http;
-    let mut agent = runtime.build_agent(&factory).expect("the shipped config builds an agent");
+    let mut agent = runtime
+        .build_agent(&factory)
+        .expect("the shipped config builds an agent");
 
     // The default tool set must actually reach the model, or none of the rest of
     // this can happen (the "shipped config had no tools" defect).
@@ -186,14 +205,21 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
     let client = thread::spawn(move || {
         let mut asked = None;
         let mut answer = String::new();
-        let result = stream_turn(&addr, "shipped-1", "create hello.txt", &mut |event| match event {
-            StreamEvent::Prompt { question, options, .. } => {
-                asked = Some((question, options));
-                let _ = post_answer(port, "shipped-1", "yes");
-            }
-            StreamEvent::Done(text) => answer = text,
-            _ => {}
-        });
+        let result = stream_turn(
+            &addr,
+            "shipped-1",
+            "create hello.txt",
+            &mut |event| match event {
+                StreamEvent::Prompt {
+                    question, options, ..
+                } => {
+                    asked = Some((question, options));
+                    let _ = post_answer(port, "shipped-1", "yes");
+                }
+                StreamEvent::Done(text) => answer = text,
+                _ => {}
+            },
+        );
         (result, asked, answer)
     });
 
@@ -202,12 +228,18 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
 
     assert!(result.is_ok(), "the streamed turn completed: {result:?}");
     let (question, options) = asked.expect("the user was asked before the write happened");
-    assert!(question.contains("fs"), "the question names the tool: {question}");
+    assert!(
+        question.contains("fs"),
+        "the question names the tool: {question}"
+    );
     assert!(
         options.iter().any(|o| o == "always"),
         "the standing choices are offered: {options:?}"
     );
-    assert_eq!(answer, "wrote hello.txt", "the turn finished after approval");
+    assert_eq!(
+        answer, "wrote hello.txt",
+        "the turn finished after approval"
+    );
     assert_eq!(
         std::fs::read_to_string(dir.join("hello.txt")).expect("the approved write happened"),
         "hi"

@@ -128,7 +128,10 @@ fn a_live_local_service_is_not_reachable() {
     let sentinel = Sentinel::start();
     let config = config_at(&dir, "");
     let url = format!("http://127.0.0.1:{}/secrets", sentinel.port);
-    assert!(request_through_the_host(&config, &url).is_err(), "the request is refused");
+    assert!(
+        request_through_the_host(&config, &url).is_err(),
+        "the request is refused"
+    );
 
     // The assertion that distinguishes a boundary from a courtesy: the server
     // itself never saw anything.
@@ -152,11 +155,17 @@ fn an_endpoint_named_in_config_is_reachable() {
 
     let sentinel = Sentinel::start();
     // Written the way an operator names a local Ollama or MCP server.
-    let allow = format!("\nnetwork:\n  allow:\n    - http://127.0.0.1:{}\n", sentinel.port);
+    let allow = format!(
+        "\nnetwork:\n  allow:\n    - http://127.0.0.1:{}\n",
+        sentinel.port
+    );
     let config = config_at(&dir, &allow);
     let url = format!("http://127.0.0.1:{}/models", sentinel.port);
 
-    assert!(request_through_the_host(&config, &url).is_ok(), "the named origin answers");
+    assert!(
+        request_through_the_host(&config, &url).is_ok(),
+        "the named origin answers"
+    );
     assert_eq!(sentinel.hits(), 1, "and the request actually arrived");
 }
 
@@ -189,7 +198,10 @@ extensions:
     .unwrap();
 
     let url = format!("http://127.0.0.1:{}/v1/chat/completions", sentinel.port);
-    assert!(request_through_the_host(&path, &url).is_ok(), "the configured model answers");
+    assert!(
+        request_through_the_host(&path, &url).is_ok(),
+        "the configured model answers"
+    );
     assert_eq!(sentinel.hits(), 1);
 }
 
@@ -202,7 +214,10 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
 
     let allowed = Sentinel::start();
     let neighbour = Sentinel::start();
-    let allow = format!("\nnetwork:\n  allow:\n    - http://127.0.0.1:{}\n", allowed.port);
+    let allow = format!(
+        "\nnetwork:\n  allow:\n    - http://127.0.0.1:{}\n",
+        allowed.port
+    );
     let config = config_at(&dir, &allow);
 
     let _ = request_through_the_host(&config, &format!("http://127.0.0.1:{}/", neighbour.port));
@@ -229,7 +244,10 @@ fn every_guest_facing_backend_goes_through_the_policy() {
     // capability.
     let core = common::repo_root().join("src/core/core/src");
     let mut backends = Vec::new();
-    for entry in std::fs::read_dir(&core).expect("core sources are readable").flatten() {
+    for entry in std::fs::read_dir(&core)
+        .expect("core sources are readable")
+        .flatten()
+    {
         let path = entry.path();
         if path.extension().is_none_or(|e| e != "rs") {
             continue;
@@ -249,7 +267,11 @@ fn every_guest_facing_backend_goes_through_the_policy() {
     );
 
     for (path, text) in &backends {
-        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         for (number, line) in text.lines().enumerate() {
             // Code only. A doc comment explaining what must *not* be called would
             // otherwise trip this, and a checker that fires on prose is one
@@ -281,7 +303,9 @@ fn every_guest_facing_backend_goes_through_the_policy() {
     // `main.rs` did precisely that until 2026-08-11.
     for binary in ["host/src/main.rs", "ui/src/main.rs"] {
         let path = common::repo_root().join("src/core").join(binary);
-        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         for (number, line) in text.lines().enumerate() {
             let code = line.trim_start();
             if code.starts_with("//") {

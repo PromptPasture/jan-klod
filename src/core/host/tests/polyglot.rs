@@ -49,7 +49,10 @@ struct Host {
 
 impl WasiView for Host {
     fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView { ctx: &mut self.ctx, table: &mut self.table }
+        WasiCtxView {
+            ctx: &mut self.ctx,
+            table: &mut self.table,
+        }
     }
 }
 
@@ -74,11 +77,16 @@ fn a_component_built_from_go_completes_a_call_through_the_host() {
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker).expect("wasi is wired");
     let mut store = Store::new(
         &engine,
-        Host { ctx: WasiCtxBuilder::new().inherit_stdio().build(), table: ResourceTable::new() },
+        Host {
+            ctx: WasiCtxBuilder::new().inherit_stdio().build(),
+            table: ResourceTable::new(),
+        },
     );
 
     let spike = Spike::instantiate(&mut store, &component, &linker).expect("instantiates");
-    let echoed = spike.call_complete(&mut store, "hello, component model").expect("the call returns");
+    let echoed = spike
+        .call_complete(&mut store, "hello, component model")
+        .expect("the call returns");
 
     // The guest's own logic, run in our sandbox: `"echo: " + prompt`, written in Go.
     assert_eq!(

@@ -63,22 +63,39 @@ fn load(engine: &Engine, calls: &Arc<AtomicU32>) -> Option<ToolExtension> {
 fn a_public_url_is_fetched_and_reduced_to_text() {
     let engine = Engine::default();
     let calls = Arc::new(AtomicU32::new(0));
-    let Some(mut tool) = load(&engine, &calls) else { return };
+    let Some(mut tool) = load(&engine, &calls) else {
+        return;
+    };
 
     let out = tool
         .invoke(r#"{"url":"https://doc.rust-lang.org/std/"}"#)
         .expect("fetch succeeds");
-    assert!(out.contains("https://doc.rust-lang.org/std/ [200]"), "names its source: {out}");
-    assert!(out.contains("Docs Hello & welcome"), "markup stripped, entities decoded: {out}");
-    assert!(!out.contains("secret"), "script contents never reach the model: {out}");
-    assert_eq!(calls.load(Ordering::Relaxed), 1, "exactly one request was made");
+    assert!(
+        out.contains("https://doc.rust-lang.org/std/ [200]"),
+        "names its source: {out}"
+    );
+    assert!(
+        out.contains("Docs Hello & welcome"),
+        "markup stripped, entities decoded: {out}"
+    );
+    assert!(
+        !out.contains("secret"),
+        "script contents never reach the model: {out}"
+    );
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        1,
+        "exactly one request was made"
+    );
 }
 
 #[test]
 fn blocked_addresses_never_reach_the_network() {
     let engine = Engine::default();
     let calls = Arc::new(AtomicU32::new(0));
-    let Some(mut tool) = load(&engine, &calls) else { return };
+    let Some(mut tool) = load(&engine, &calls) else {
+        return;
+    };
 
     for blocked in [
         // The agent's own REST surface — the most reachable target on the box.
@@ -96,12 +113,21 @@ fn blocked_addresses_never_reach_the_network() {
         // Loopback wearing an alternate encoding.
         r#"{"url":"http://2130706433/"}"#,
     ] {
-        let out = tool.invoke(blocked).expect("a refusal is a result, not a trap");
-        assert!(out.starts_with("REFUSED:"), "{blocked} must be refused: {out}");
+        let out = tool
+            .invoke(blocked)
+            .expect("a refusal is a result, not a trap");
+        assert!(
+            out.starts_with("REFUSED:"),
+            "{blocked} must be refused: {out}"
+        );
     }
 
     // The point of the assertion: not one of those became a request.
-    assert_eq!(calls.load(Ordering::Relaxed), 0, "the guard runs before the client");
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "the guard runs before the client"
+    );
 }
 
 #[test]
@@ -126,6 +152,11 @@ fn a_tool_without_granted_egress_cannot_reach_the_network_at_all() {
     )
     .expect("tool instantiates");
 
-    let out = tool.invoke(r#"{"url":"https://example.com/"}"#).expect("a failure is a result");
-    assert!(out.starts_with("FAILED:"), "no egress without a grant: {out}");
+    let out = tool
+        .invoke(r#"{"url":"https://example.com/"}"#)
+        .expect("a failure is a result");
+    assert!(
+        out.starts_with("FAILED:"),
+        "no egress without a grant: {out}"
+    );
 }

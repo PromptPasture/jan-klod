@@ -90,10 +90,7 @@ files you read.";
     /// an explicit "no system message", and honouring half of it would be worse
     /// than either answer.
     #[must_use]
-    pub fn resolve_with_project(
-        configured: Option<&str>,
-        project: Option<&str>,
-    ) -> Option<String> {
+    pub fn resolve_with_project(configured: Option<&str>, project: Option<&str>) -> Option<String> {
         let base = resolve(configured)?;
         // `?` here would drop the *whole* system prompt when a project has no
         // AGENTS.md — which is the common case, and which is what the first version
@@ -124,7 +121,10 @@ files you read.";
 
             // No project file: exactly the standing prompt, nothing lost.
             assert_eq!(resolve_with_project(None, None).as_deref(), Some(DEFAULT));
-            assert_eq!(resolve_with_project(None, Some("   ")).as_deref(), Some(DEFAULT));
+            assert_eq!(
+                resolve_with_project(None, Some("   ")).as_deref(),
+                Some(DEFAULT)
+            );
 
             // With one: both, and the project's is labelled and bounded in
             // authority.
@@ -136,7 +136,10 @@ files you read.";
 
             // Switching the prompt off switches all of it off: honouring half of an
             // explicit "no system message" would be worse than either answer.
-            assert_eq!(resolve_with_project(Some(""), Some("Run cargo nextest")), None);
+            assert_eq!(
+                resolve_with_project(Some(""), Some("Run cargo nextest")),
+                None
+            );
         }
 
         #[test]
@@ -144,7 +147,10 @@ files you read.";
             // Each of these is a real behaviour of this runtime; a prompt that
             // promised something else would teach the model to be surprised.
             for expected in ["workspace-relative", "confirmed", "edit", "truncated"] {
-                assert!(DEFAULT.contains(expected), "the default mentions `{expected}`");
+                assert!(
+                    DEFAULT.contains(expected),
+                    "the default mentions `{expected}`"
+                );
             }
         }
 
@@ -173,7 +179,13 @@ mod component {
     use crate::prompt;
     use core::cell::RefCell;
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({
             world: "interceptor-world",
@@ -208,7 +220,10 @@ mod component {
             let configured = serde_json::from_str::<serde_json::Value>(&raw)
                 .ok()
                 .and_then(|section| {
-                    section.get("prompt").and_then(serde_json::Value::as_str).map(str::to_owned)
+                    section
+                        .get("prompt")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
                 });
             let project = serde_json::from_str::<serde_json::Value>(&raw)
                 .ok()
@@ -223,7 +238,10 @@ mod component {
             Ok(())
         }
         fn start() -> Result<(), String> {
-            log(LogLevel::Info, "started; setting the turn's standing instructions");
+            log(
+                LogLevel::Info,
+                "started; setting the turn's standing instructions",
+            );
             Ok(())
         }
         fn stop() {
@@ -248,20 +266,34 @@ mod component {
             let Some(text) = PROMPT.with(|slot| slot.borrow().clone()) else {
                 return Ok(Decision::Proceed);
             };
-            if request.messages.iter().any(|m| matches!(m.role, Role::System)) {
+            if request
+                .messages
+                .iter()
+                .any(|m| matches!(m.role, Role::System))
+            {
                 // Someone already set the instructions; adding a second copy each
                 // turn would be worse than adding none.
                 return Ok(Decision::Proceed);
             }
             request.messages.insert(
                 0,
-                Message { role: Role::System, content: text, tool_call_id: None },
+                Message {
+                    role: Role::System,
+                    content: text,
+                    tool_call_id: None,
+                },
             );
             Ok(Decision::Replace(HookState::SelectModel(request)))
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

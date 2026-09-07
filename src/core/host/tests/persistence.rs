@@ -52,7 +52,10 @@ extensions:
         let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
         let out = agent.run("chat-1", "hello there");
-        assert!(matches!(out, RunResult::Answered { .. }), "the turn completes");
+        assert!(
+            matches!(out, RunResult::Answered { .. }),
+            "the turn completes"
+        );
         assert_eq!(agent.transcript("chat-1").len(), 1, "one turn recorded");
     } // runtime + agent (and the SQLite connection) dropped here
 

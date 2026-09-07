@@ -82,7 +82,10 @@ impl Driver for CannedDriver {
 }
 
 fn no_driver() -> CannedDriver {
-    CannedDriver { answer: String::new(), asked: Rc::new(RefCell::new(0)) }
+    CannedDriver {
+        answer: String::new(),
+        asked: Rc::new(RefCell::new(0)),
+    }
 }
 
 fn stub(
@@ -91,7 +94,12 @@ fn stub(
     log: &Rc<RefCell<Vec<String>>>,
     behavior: Behavior,
 ) -> Box<dyn Interceptor> {
-    Box::new(Stub { id: id.into(), phases, log: Rc::clone(log), behavior })
+    Box::new(Stub {
+        id: id.into(),
+        phases,
+        log: Rc::clone(log),
+        behavior,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +120,10 @@ fn dispatch_order_is_across_and_within_phase() {
         session: "s".into(),
         user_message: "hi".into(),
     });
-    assert!(matches!(d.dispatch(Phase::BeforeLoop, &mut before, &mut driver), Outcome::Proceeded));
+    assert!(matches!(
+        d.dispatch(Phase::BeforeLoop, &mut before, &mut driver),
+        Outcome::Proceeded
+    ));
     assert_eq!(*log.borrow(), vec!["a", "b"]);
 
     let mut sm = HookState::SelectModel(PendingRequest {
@@ -123,7 +134,10 @@ fn dispatch_order_is_across_and_within_phase() {
         max_tokens: None,
         temperature: None,
     });
-    assert!(matches!(d.dispatch(Phase::SelectModel, &mut sm, &mut driver), Outcome::Proceeded));
+    assert!(matches!(
+        d.dispatch(Phase::SelectModel, &mut sm, &mut driver),
+        Outcome::Proceeded
+    ));
     assert_eq!(*log.borrow(), vec!["a", "b", "c"]);
 }
 
@@ -160,8 +174,15 @@ fn block_short_circuits_remaining_interceptors() {
         session: "s".into(),
         user_message: "hi".into(),
     });
-    assert!(matches!(d.dispatch(Phase::BeforeLoop, &mut state, &mut driver), Outcome::Blocked(_)));
-    assert_eq!(*log.borrow(), vec!["first"], "second must not run after a block");
+    assert!(matches!(
+        d.dispatch(Phase::BeforeLoop, &mut state, &mut driver),
+        Outcome::Blocked(_)
+    ));
+    assert_eq!(
+        *log.borrow(),
+        vec!["first"],
+        "second must not run after a block"
+    );
 }
 
 #[test]
@@ -180,7 +201,10 @@ fn tool_call_error_fails_closed() {
         arguments: "{}".into(),
     });
     assert!(
-        matches!(d.dispatch(Phase::ToolCall, &mut state, &mut driver), Outcome::Blocked(_)),
+        matches!(
+            d.dispatch(Phase::ToolCall, &mut state, &mut driver),
+            Outcome::Blocked(_)
+        ),
         "a failing tool-call interceptor must fail closed"
     );
 }
@@ -189,7 +213,12 @@ fn tool_call_error_fails_closed() {
 fn non_tool_call_error_fails_open() {
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut d = Dispatcher::new(vec![
-        stub("boom", vec![Phase::BeforeLoop], &log, Behavior::Err(InterceptorError::Internal)),
+        stub(
+            "boom",
+            vec![Phase::BeforeLoop],
+            &log,
+            Behavior::Err(InterceptorError::Internal),
+        ),
         stub("after", vec![Phase::BeforeLoop], &log, Behavior::Proceed),
     ]);
     let mut driver = no_driver();
@@ -197,7 +226,10 @@ fn non_tool_call_error_fails_open() {
         session: "s".into(),
         user_message: "hi".into(),
     });
-    assert!(matches!(d.dispatch(Phase::BeforeLoop, &mut state, &mut driver), Outcome::Proceeded));
+    assert!(matches!(
+        d.dispatch(Phase::BeforeLoop, &mut state, &mut driver),
+        Outcome::Proceeded
+    ));
     assert_eq!(*log.borrow(), vec!["boom", "after"]);
 }
 
@@ -211,13 +243,19 @@ fn ask_round_trips_through_the_driver() {
         &log,
         Behavior::AskThenProceed("yes".into()),
     )]);
-    let mut driver = CannedDriver { answer: "yes".into(), asked: Rc::clone(&asked) };
+    let mut driver = CannedDriver {
+        answer: "yes".into(),
+        asked: Rc::clone(&asked),
+    };
     let mut state = HookState::ToolCall(ToolCall {
         id: "1".into(),
         name: "rm".into(),
         arguments: "{}".into(),
     });
-    assert!(matches!(d.dispatch(Phase::ToolCall, &mut state, &mut driver), Outcome::Proceeded));
+    assert!(matches!(
+        d.dispatch(Phase::ToolCall, &mut state, &mut driver),
+        Outcome::Proceeded
+    ));
     assert_eq!(*asked.borrow(), 1, "driver asked exactly once");
     assert_eq!(*log.borrow(), vec!["asker", "asker"]);
 }

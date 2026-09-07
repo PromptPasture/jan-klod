@@ -33,7 +33,10 @@ fn upsert_preserves_created_at() {
     let first = store.set("ns", "k", "a").unwrap();
     let second = store.set("ns", "k", "b").unwrap();
     assert_eq!(second.value, "b");
-    assert_eq!(second.created_at, first.created_at, "created_at is stable across updates");
+    assert_eq!(
+        second.created_at, first.created_at,
+        "created_at is stable across updates"
+    );
     assert!(second.updated_at >= first.updated_at);
 }
 
@@ -53,7 +56,10 @@ fn list_keys_omits_value_and_recent_orders_newest_first() {
     store.set("ns", "b", "vb").unwrap();
     let keys = store.list_keys("ns").unwrap();
     assert_eq!(keys.len(), 2);
-    assert!(keys.iter().all(|e| e.value.is_empty()), "list-keys omits the payload");
+    assert!(
+        keys.iter().all(|e| e.value.is_empty()),
+        "list-keys omits the payload"
+    );
 
     let recent = store.recent("ns", 1).unwrap();
     assert_eq!(recent.len(), 1);
@@ -101,7 +107,10 @@ fn backend_error_carries_detail() {
     let Err(StoreError::Backend { detail }) = result else {
         panic!("expected Err(Backend), got Ok or a different error variant");
     };
-    assert!(!detail.is_empty(), "detail must describe the failure, got empty string");
+    assert!(
+        !detail.is_empty(),
+        "detail must describe the failure, got empty string"
+    );
 }
 
 /// `list_namespaces` was never called by a test, and its one caller swallowed
@@ -115,7 +124,11 @@ fn namespaces_list_most_recently_written_first() {
     store.set("alpha", "k2", "2").unwrap();
 
     let namespaces = store.list_namespaces().expect("the query is valid SQL");
-    assert_eq!(namespaces.len(), 2, "one row per namespace, not per entry: {namespaces:?}");
+    assert_eq!(
+        namespaces.len(),
+        2,
+        "one row per namespace, not per entry: {namespaces:?}"
+    );
     assert!(namespaces.contains(&"alpha".to_string()));
     assert!(namespaces.contains(&"beta".to_string()));
 }

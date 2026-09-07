@@ -13,7 +13,11 @@ mod common;
 #[test]
 fn build_agent_wires_enabled_tools_into_the_fleet() {
     let ext_dir = common::repo_root().join("ext");
-    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm", "tool-fs.wasm"]) {
+    if !common::guests_staged(&[
+        "provider-openai.wasm",
+        "interceptor-intent-router.wasm",
+        "tool-fs.wasm",
+    ]) {
         return;
     }
 
@@ -47,7 +51,9 @@ workspace: {ws}
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("ok");
-    let agent = runtime.build_agent(&factory).expect("agent boots with tools");
+    let agent = runtime
+        .build_agent(&factory)
+        .expect("agent boots with tools");
 
     assert!(
         agent.tool_names().contains(&"fs".to_string()),
@@ -88,14 +94,20 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
     let original = "fn main() {}\n";
 
     let refused = run_edit_turn(&dir, "refuse", "no");
-    assert_eq!(refused.contents, original, "a refused edit leaves the file untouched");
+    assert_eq!(
+        refused.contents, original,
+        "a refused edit leaves the file untouched"
+    );
     // The question a person is actually shown, printed so that changing it is
     // reviewed as a change to a consent dialog rather than buried in a matcher.
     eprintln!("PROMPT: {:?}", refused.asked);
     // Naming the file is the point: approving "tool `edit`" tells the user
     // nothing about which file or what change.
     assert!(
-        refused.asked.iter().any(|q| q.contains("main.rs") && q.contains("// edited")),
+        refused
+            .asked
+            .iter()
+            .any(|q| q.contains("main.rs") && q.contains("// edited")),
         "the prompt names the file and shows the change: {:?}",
         refused.asked
     );
@@ -116,7 +128,11 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
         "approved, the same edit goes through — otherwise the refusal above proved \
          nothing but a stale anchor"
     );
-    assert!(approved.contents.contains("// edited"), "and applies: {:?}", approved.contents);
+    assert!(
+        approved.contents.contains("// edited"),
+        "and applies: {:?}",
+        approved.contents
+    );
 }
 
 /// What one gated-edit turn did.
@@ -210,7 +226,10 @@ extensions:
             self.answer.to_string()
         }
     }
-    let mut driver = Answering { answer, asked: Vec::new() };
+    let mut driver = Answering {
+        answer,
+        asked: Vec::new(),
+    };
     let _ = agent.run_with_driver(&mut driver, "s1", "rewrite main.rs");
 
     EditTurn {
@@ -227,7 +246,9 @@ fn first_anchor(body: &[u8]) -> Option<String> {
     let bytes: Vec<char> = text.chars().collect();
     for (i, window) in bytes.windows(12).enumerate() {
         let candidate: String = window.iter().collect();
-        let Some((anchor, rest)) = candidate.split_once('|') else { continue };
+        let Some((anchor, rest)) = candidate.split_once('|') else {
+            continue;
+        };
         if anchor.len() >= 6
             && anchor.chars().all(|c| c.is_ascii_hexdigit())
             && rest.chars().next().is_some_and(|c| c.is_ascii_digit())

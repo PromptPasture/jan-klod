@@ -41,7 +41,9 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_iterations: DEFAULT_MAX_ITERATIONS }
+        Self {
+            max_iterations: DEFAULT_MAX_ITERATIONS,
+        }
     }
 }
 
@@ -189,7 +191,7 @@ pub enum RunResult {
 /// inspects the payloads it threads — all policy lives in the dispatched
 /// interceptors.
 #[allow(clippy::too_many_arguments)] // A turn genuinely needs all of these; a
-// bag-of-fields struct would only move the list somewhere less visible.
+                                     // bag-of-fields struct would only move the list somewhere less visible.
 pub fn run_turn(
     dispatcher: &mut Dispatcher,
     providers: &mut [Box<dyn Completer>],
@@ -289,7 +291,9 @@ pub fn run_turn(
         if completion.tool_calls.is_empty() {
             // The turn would end. A driver may steer it with a follow-up message;
             // otherwise finish.
-            let Some(follow_up) = driver.follow_up() else { break };
+            let Some(follow_up) = driver.follow_up() else {
+                break;
+            };
             // prepare-next-turn: optional model/context swap before continuing.
             let mut next_state = HookState::PrepareNextTurn(request.clone());
             let _ = dispatcher.dispatch(Phase::PrepareNextTurn, &mut next_state, driver);
@@ -314,7 +318,14 @@ pub fn run_turn(
             break;
         }
 
-        match run_tool_calls(dispatcher, tools, driver, sink, &completion.tool_calls, &mut request) {
+        match run_tool_calls(
+            dispatcher,
+            tools,
+            driver,
+            sink,
+            &completion.tool_calls,
+            &mut request,
+        ) {
             ToolPass::Continue => {}
             // A decision: the answer in hand is the intended one.
             ToolPass::Terminated => break,
@@ -332,7 +343,10 @@ pub fn run_turn(
     }
 
     let text = post_phase(dispatcher, driver, Phase::Finalize, final_text);
-    sink.emit(&Event::Done { text: text.clone(), agentic });
+    sink.emit(&Event::Done {
+        text: text.clone(),
+        agentic,
+    });
     RunResult::Answered { text, agentic }
 }
 
@@ -410,7 +424,10 @@ fn run_tool_calls(
         let mut call_state = HookState::ToolCall(call.clone());
         let content = match dispatcher.dispatch(Phase::ToolCall, &mut call_state, driver) {
             Outcome::Blocked(reason) => {
-                let _ = sink.emit(&Event::Warning(format!("tool `{}` denied: {}", call.name, reason.message)));
+                let _ = sink.emit(&Event::Warning(format!(
+                    "tool `{}` denied: {}",
+                    call.name, reason.message
+                )));
                 format!("tool call denied: {}", reason.message)
             }
             Outcome::Proceeded => {
@@ -441,7 +458,10 @@ fn run_tool_calls(
         }
         let outcome = match result_state {
             HookState::ToolResult(outcome) => outcome,
-            _ => ToolOutcome { tool_call_id: call.id.clone(), content: String::new() },
+            _ => ToolOutcome {
+                tool_call_id: call.id.clone(),
+                content: String::new(),
+            },
         };
         if sink.emit(&Event::ToolResult(outcome.clone())) == Flow::Stop {
             stop = ToolPass::Cancelled;
@@ -472,9 +492,9 @@ fn shape(
     match dispatcher.dispatch(phase, &mut state, driver) {
         Outcome::Blocked(reason) => Err(reason.message),
         Outcome::Proceeded => match state {
-            HookState::SelectModel(r)
-            | HookState::SelectContext(r)
-            | HookState::SelectTools(r) => Ok(r),
+            HookState::SelectModel(r) | HookState::SelectContext(r) | HookState::SelectTools(r) => {
+                Ok(r)
+            }
             _ => Err("interceptor replaced shaping state with the wrong case".to_string()),
         },
     }
@@ -553,10 +573,14 @@ fn complete_validated(
         match validate(&completion) {
             Ok(()) => return Ok(completion),
             Err(reason) if attempt == MAX_RETRIES => {
-                return Err(format!("malformed output after {MAX_RETRIES} retries: {reason}"));
+                return Err(format!(
+                    "malformed output after {MAX_RETRIES} retries: {reason}"
+                ));
             }
             Err(reason) => {
-                sink.emit(&Event::Warning(format!("malformed output; retrying: {reason}")));
+                sink.emit(&Event::Warning(format!(
+                    "malformed output; retrying: {reason}"
+                )));
                 attempt_request.messages.push(Message {
                     role: Role::Assistant,
                     content: completion.text,
@@ -623,7 +647,12 @@ mod tests {
         }
     }
 
-    fn stub(id: &str, phases: Vec<Phase>, log: &Rc<RefCell<Vec<String>>>, decision: Decision) -> Box<Stub> {
+    fn stub(
+        id: &str,
+        phases: Vec<Phase>,
+        log: &Rc<RefCell<Vec<String>>>,
+        decision: Decision,
+    ) -> Box<Stub> {
         Box::new(Stub {
             id: id.into(),
             phases,
@@ -677,7 +706,11 @@ mod tests {
     }
 
     fn with_tools(text: &str, calls: Vec<ToolCall>) -> Completion {
-        Completion { text: text.into(), tool_calls: calls, finish_reason: "stop".into() }
+        Completion {
+            text: text.into(),
+            tool_calls: calls,
+            finish_reason: "stop".into(),
+        }
     }
 
     fn bad_call(id: &str, name: &str) -> ToolCall {
@@ -712,13 +745,40 @@ mod tests {
     fn simple_prompt_short_circuits_shaping() {
         let log = Rc::new(RefCell::new(vec![]));
         let mut d = Dispatcher::new(vec![
-            stub("intent", vec![Phase::BeforeLoop], &log, Decision::Block(BlockReason { message: "simple".into() })),
+            stub(
+                "intent",
+                vec![Phase::BeforeLoop],
+                &log,
+                Decision::Block(BlockReason {
+                    message: "simple".into(),
+                }),
+            ),
             stub("model", vec![Phase::SelectModel], &log, Decision::Proceed),
         ]);
         let mut providers = vec![text_provider("p", Ok("hi there"))];
-        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut NoSink, "s", "hello", vec![], Limits::default());
-        assert_eq!(out, RunResult::Answered { text: "hi there".into(), agentic: false });
-        assert_eq!(*log.borrow(), vec!["intent"], "shaping must not run on the simple path");
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "hello",
+            vec![],
+            Limits::default(),
+        );
+        assert_eq!(
+            out,
+            RunResult::Answered {
+                text: "hi there".into(),
+                agentic: false
+            }
+        );
+        assert_eq!(
+            *log.borrow(),
+            vec!["intent"],
+            "shaping must not run on the simple path"
+        );
     }
 
     #[test]
@@ -750,8 +810,24 @@ mod tests {
             })])),
             seen: Rc::clone(&seen),
         })];
-        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut NoSink, "s", "do many things", vec![], Limits::default());
-        assert_eq!(out, RunResult::Answered { text: "done".into(), agentic: true });
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "do many things",
+            vec![],
+            Limits::default(),
+        );
+        assert_eq!(
+            out,
+            RunResult::Answered {
+                text: "done".into(),
+                agentic: true
+            }
+        );
         assert_eq!(*log.borrow(), vec!["intent", "model"]);
         assert_eq!(*seen.borrow(), vec![Some("gpt-x".to_string())]);
     }
@@ -768,7 +844,11 @@ mod tests {
         // A model that never stops asking for tools.
         let forever = Completion {
             text: String::new(),
-            tool_calls: vec![ToolCall { id: "1".into(), name: "fs".into(), arguments: "{}".into() }],
+            tool_calls: vec![ToolCall {
+                id: "1".into(),
+                name: "fs".into(),
+                arguments: "{}".into(),
+            }],
             finish_reason: "tool_calls".into(),
         };
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
@@ -776,7 +856,10 @@ mod tests {
             replies: RefCell::new(VecDeque::from(vec![Ok(forever)])),
             seen: Rc::new(RefCell::new(vec![])),
         })];
-        let mut tools = CountingTools { result: "ok".into(), count: Rc::new(RefCell::new(0)) };
+        let mut tools = CountingTools {
+            result: "ok".into(),
+            count: Rc::new(RefCell::new(0)),
+        };
         let mut sink = RecordingSink(vec![]);
         let out = run_turn(
             &mut d,
@@ -790,7 +873,9 @@ mod tests {
             Limits { max_iterations: 3 },
         );
 
-        let RunResult::Answered { text, .. } = out else { panic!("the turn still answers") };
+        let RunResult::Answered { text, .. } = out else {
+            panic!("the turn still answers")
+        };
         assert!(
             text.contains("stopped after 3 tool cycles"),
             "the answer says it was cut short: {text:?}"
@@ -799,9 +884,9 @@ mod tests {
             text.contains("limits.max-iterations"),
             "and names the knob that raises it: {text:?}"
         );
-        let warned = sink.0.iter().any(|event| {
-            matches!(event, Event::Warning(message) if message.contains("stopped after 3"))
-        });
+        let warned = sink.0.iter().any(
+            |event| matches!(event, Event::Warning(message) if message.contains("stopped after 3")),
+        );
         assert!(warned, "a streaming client hears it too: {:?}", sink.0);
     }
 
@@ -819,10 +904,33 @@ mod tests {
             ])),
             seen: Rc::new(RefCell::new(vec![])),
         })];
-        let mut tools = CountingTools { result: "ok".into(), count: Rc::clone(&count) };
-        let out = run_turn(&mut d, &mut providers, &mut tools, &mut NoDriver, &mut NoSink, "s", "multi-step", vec![], Limits::default());
-        assert_eq!(out, RunResult::Answered { text: "final answer".into(), agentic: true });
-        assert_eq!(*count.borrow(), 2, "two tool calls invoked across two ReAct cycles");
+        let mut tools = CountingTools {
+            result: "ok".into(),
+            count: Rc::clone(&count),
+        };
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut tools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "multi-step",
+            vec![],
+            Limits::default(),
+        );
+        assert_eq!(
+            out,
+            RunResult::Answered {
+                text: "final answer".into(),
+                agentic: true
+            }
+        );
+        assert_eq!(
+            *count.borrow(),
+            2,
+            "two tool calls invoked across two ReAct cycles"
+        );
     }
 
     #[test]
@@ -832,7 +940,9 @@ mod tests {
             "perm",
             vec![Phase::ToolCall],
             &log,
-            Decision::Block(BlockReason { message: "denied".into() }),
+            Decision::Block(BlockReason {
+                message: "denied".into(),
+            }),
         )]);
         let count = Rc::new(RefCell::new(0));
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
@@ -843,9 +953,28 @@ mod tests {
             ])),
             seen: Rc::new(RefCell::new(vec![])),
         })];
-        let mut tools = CountingTools { result: "ok".into(), count: Rc::clone(&count) };
-        let out = run_turn(&mut d, &mut providers, &mut tools, &mut NoDriver, &mut NoSink, "s", "please rm", vec![], Limits::default());
-        assert_eq!(out, RunResult::Answered { text: "done anyway".into(), agentic: true });
+        let mut tools = CountingTools {
+            result: "ok".into(),
+            count: Rc::clone(&count),
+        };
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut tools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "please rm",
+            vec![],
+            Limits::default(),
+        );
+        assert_eq!(
+            out,
+            RunResult::Answered {
+                text: "done anyway".into(),
+                agentic: true
+            }
+        );
         assert_eq!(*count.borrow(), 0, "a denied tool call is never invoked");
     }
 
@@ -856,21 +985,42 @@ mod tests {
             "term",
             vec![Phase::ToolResult],
             &log,
-            Decision::Block(BlockReason { message: "stop".into() }),
+            Decision::Block(BlockReason {
+                message: "stop".into(),
+            }),
         )]);
         // Provider would keep emitting tool calls forever; the terminate stops it.
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
             id: "p".into(),
-            replies: RefCell::new(VecDeque::from(vec![Ok(with_tools("partial", vec![call("1", "loop")]))])),
+            replies: RefCell::new(VecDeque::from(vec![Ok(with_tools(
+                "partial",
+                vec![call("1", "loop")],
+            ))])),
             seen: Rc::new(RefCell::new(vec![])),
         })];
         let mut tools = NoTools;
-        let out = run_turn(&mut d, &mut providers, &mut tools, &mut NoDriver, &mut NoSink, "s", "go", vec![], Limits::default());
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut tools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "go",
+            vec![],
+            Limits::default(),
+        );
         // Exactly the text, with no "stopped before the turn finished" note: a
         // `tool-result` terminate is a *decision*, and the answer in hand is the
         // intended one. A cancel is an interruption and is marked. Collapsing the
         // two would either annotate deliberate endings or hide real ones.
-        assert_eq!(out, RunResult::Answered { text: "partial".into(), agentic: true });
+        assert_eq!(
+            out,
+            RunResult::Answered {
+                text: "partial".into(),
+                agentic: true
+            }
+        );
     }
 
     #[test]
@@ -885,17 +1035,48 @@ mod tests {
                 Ok(with_tools("recovered", vec![])),
             ],
         )];
-        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut NoSink, "s", "go", vec![], Limits::default());
-        assert_eq!(out, RunResult::Answered { text: "recovered".into(), agentic: true });
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "go",
+            vec![],
+            Limits::default(),
+        );
+        assert_eq!(
+            out,
+            RunResult::Answered {
+                text: "recovered".into(),
+                agentic: true
+            }
+        );
     }
 
     #[test]
     fn persistently_malformed_output_fails_after_retries() {
         let mut d = Dispatcher::new(vec![]);
         // A single reply that repeats: always malformed -> give up after retries.
-        let mut providers = vec![scripted("p", vec![Ok(with_tools("", vec![bad_call("1", "x")]))])];
-        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut NoSink, "s", "go", vec![], Limits::default());
-        assert!(matches!(out, RunResult::Failed(msg) if msg.contains("malformed output after 3 retries")));
+        let mut providers = vec![scripted(
+            "p",
+            vec![Ok(with_tools("", vec![bad_call("1", "x")]))],
+        )];
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "go",
+            vec![],
+            Limits::default(),
+        );
+        assert!(
+            matches!(out, RunResult::Failed(msg) if msg.contains("malformed output after 3 retries"))
+        );
     }
 
     #[test]
@@ -905,8 +1086,24 @@ mod tests {
             text_provider("primary", Err("rate-limited")),
             text_provider("backup", Ok("recovered")),
         ];
-        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut NoSink, "s", "hi", vec![], Limits::default());
-        assert_eq!(out, RunResult::Answered { text: "recovered".into(), agentic: true });
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "hi",
+            vec![],
+            Limits::default(),
+        );
+        assert_eq!(
+            out,
+            RunResult::Answered {
+                text: "recovered".into(),
+                agentic: true
+            }
+        );
     }
 
     #[test]
@@ -916,7 +1113,17 @@ mod tests {
             text_provider("primary", Err("rate-limited")),
             text_provider("backup", Err("transient")),
         ];
-        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut NoSink, "s", "hi", vec![], Limits::default());
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "hi",
+            vec![],
+            Limits::default(),
+        );
         assert!(matches!(out, RunResult::Failed(msg) if msg.contains("all providers failed")));
     }
 
@@ -927,12 +1134,30 @@ mod tests {
             "final",
             vec![Phase::Finalize],
             &log,
-            Decision::Replace(HookState::Finalize(FinalAnswer { text: "redacted".into() })),
+            Decision::Replace(HookState::Finalize(FinalAnswer {
+                text: "redacted".into(),
+            })),
         )]);
         let mut providers = vec![text_provider("p", Ok("secret"))];
         // No before-loop interceptor -> default Proceeded -> agentic path.
-        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut NoSink, "s", "hello", vec![], Limits::default());
-        assert_eq!(out, RunResult::Answered { text: "redacted".into(), agentic: true });
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "hello",
+            vec![],
+            Limits::default(),
+        );
+        assert_eq!(
+            out,
+            RunResult::Answered {
+                text: "redacted".into(),
+                agentic: true
+            }
+        );
     }
 
     /// A sink that records every emitted event.
@@ -967,12 +1192,25 @@ mod tests {
         let mut d = Dispatcher::new(vec![]);
         let mut providers = vec![text_provider("p", Ok("hi there"))];
         let mut sink = RecordingSink::default();
-        run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut sink, "s", "hello", vec![], Limits::default());
+        run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut sink,
+            "s",
+            "hello",
+            vec![],
+            Limits::default(),
+        );
         assert_eq!(
             sink.0,
             vec![
                 Event::TextDelta("hi there".into()),
-                Event::Done { text: "hi there".into(), agentic: true },
+                Event::Done {
+                    text: "hi there".into(),
+                    agentic: true
+                },
             ]
         );
     }
@@ -988,17 +1226,36 @@ mod tests {
             ])),
             seen: Rc::new(RefCell::new(vec![])),
         })];
-        let mut tools = CountingTools { result: "hit".into(), count: Rc::new(RefCell::new(0)) };
+        let mut tools = CountingTools {
+            result: "hit".into(),
+            count: Rc::new(RefCell::new(0)),
+        };
         let mut sink = RecordingSink::default();
-        run_turn(&mut d, &mut providers, &mut tools, &mut NoDriver, &mut sink, "s", "go", vec![], Limits::default());
+        run_turn(
+            &mut d,
+            &mut providers,
+            &mut tools,
+            &mut NoDriver,
+            &mut sink,
+            "s",
+            "go",
+            vec![],
+            Limits::default(),
+        );
         // First completion had no text (only a tool call), so no leading delta.
         assert_eq!(
             sink.0,
             vec![
                 Event::ToolInvoked(call("1", "search")),
-                Event::ToolResult(ToolOutcome { tool_call_id: "1".into(), content: "hit".into() }),
+                Event::ToolResult(ToolOutcome {
+                    tool_call_id: "1".into(),
+                    content: "hit".into()
+                }),
                 Event::TextDelta("final answer".into()),
-                Event::Done { text: "final answer".into(), agentic: true },
+                Event::Done {
+                    text: "final answer".into(),
+                    agentic: true
+                },
             ]
         );
     }
@@ -1030,10 +1287,32 @@ mod tests {
             ])),
             seen: Rc::clone(&seen),
         })];
-        let mut driver = SteeringDriver { follow_ups: std::cell::RefCell::new(vec!["and now this"]) };
-        let out = run_turn(&mut d, &mut providers, &mut NoTools, &mut driver, &mut NoSink, "s", "go", vec![], Limits::default());
-        assert_eq!(out, RunResult::Answered { text: "second".into(), agentic: true });
-        assert_eq!(seen.borrow().len(), 2, "the follow-up drove a second completion");
+        let mut driver = SteeringDriver {
+            follow_ups: std::cell::RefCell::new(vec!["and now this"]),
+        };
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut driver,
+            &mut NoSink,
+            "s",
+            "go",
+            vec![],
+            Limits::default(),
+        );
+        assert_eq!(
+            out,
+            RunResult::Answered {
+                text: "second".into(),
+                agentic: true
+            }
+        );
+        assert_eq!(
+            seen.borrow().len(),
+            2,
+            "the follow-up drove a second completion"
+        );
     }
 
     #[test]
@@ -1043,14 +1322,36 @@ mod tests {
         let mut d = Dispatcher::new(vec![]);
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
             id: "p".into(),
-            replies: RefCell::new(VecDeque::from(vec![Ok(with_tools("", vec![call("1", "loop")]))])),
+            replies: RefCell::new(VecDeque::from(vec![Ok(with_tools(
+                "",
+                vec![call("1", "loop")],
+            ))])),
             seen: Rc::new(RefCell::new(vec![])),
         })];
-        let mut tools = CountingTools { result: "r".into(), count: Rc::new(RefCell::new(0)) };
+        let mut tools = CountingTools {
+            result: "r".into(),
+            count: Rc::new(RefCell::new(0)),
+        };
         // Events: ToolInvoked, ToolResult (stop here), then Done at finalize.
-        let mut sink = CancelAfter { events: vec![], after: 2 };
-        let out = run_turn(&mut d, &mut providers, &mut tools, &mut NoDriver, &mut sink, "s", "go", vec![], Limits::default());
-        assert!(matches!(out, RunResult::Answered { .. }), "a cancelled turn still finalizes");
+        let mut sink = CancelAfter {
+            events: vec![],
+            after: 2,
+        };
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut tools,
+            &mut NoDriver,
+            &mut sink,
+            "s",
+            "go",
+            vec![],
+            Limits::default(),
+        );
+        assert!(
+            matches!(out, RunResult::Answered { .. }),
+            "a cancelled turn still finalizes"
+        );
         assert!(
             matches!(sink.events.last(), Some(Event::Done { .. })),
             "the loop stopped and emitted a terminal Done: {:?}",
@@ -1060,7 +1361,9 @@ mod tests {
         // the durable transcript and `replay` feeds it back to the model next
         // session, so a half-finished turn stored as an answer teaches the model
         // that the assistant said something it never got to say.
-        let RunResult::Answered { text, .. } = out else { unreachable!() };
+        let RunResult::Answered { text, .. } = out else {
+            unreachable!()
+        };
         assert!(
             text.contains("stopped before the turn finished"),
             "the cancelled turn is marked, not passed off as an answer: {text:?}"
@@ -1075,7 +1378,17 @@ mod tests {
             text_provider("backup", Ok("recovered")),
         ];
         let mut sink = RecordingSink::default();
-        run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut sink, "s", "hi", vec![], Limits::default());
+        run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut sink,
+            "s",
+            "hi",
+            vec![],
+            Limits::default(),
+        );
         assert!(
             matches!(&sink.0[0], Event::Warning(w) if w.contains("primary") && w.contains("falling back")),
             "first event should be a fallback warning: {:?}",
@@ -1104,11 +1417,22 @@ mod tests {
         let mut d = Dispatcher::new(vec![]);
         let mut providers = vec![truncated_provider()];
         let mut sink = RecordingSink::default();
-        let out =
-            run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut sink, "s", "hi", vec![], Limits::default());
+        let out = run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut sink,
+            "s",
+            "hi",
+            vec![],
+            Limits::default(),
+        );
 
         assert!(
-            sink.0.iter().any(|e| matches!(e, Event::Warning(w) if w.contains("cut off"))),
+            sink.0
+                .iter()
+                .any(|e| matches!(e, Event::Warning(w) if w.contains("cut off"))),
             "the truncation is surfaced: {:?}",
             sink.0
         );
@@ -1124,7 +1448,17 @@ mod tests {
         let mut d = Dispatcher::new(vec![]);
         let mut providers = vec![text_provider("p", Ok("all of it"))];
         let mut sink = RecordingSink::default();
-        run_turn(&mut d, &mut providers, &mut NoTools, &mut NoDriver, &mut sink, "s", "hi", vec![], Limits::default());
+        run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut sink,
+            "s",
+            "hi",
+            vec![],
+            Limits::default(),
+        );
         assert!(
             !sink.0.iter().any(|e| matches!(e, Event::Warning(_))),
             "a finished answer is not flagged: {:?}",
@@ -1150,7 +1484,10 @@ mod tests {
                 tool_calls: vec![],
                 finish_reason: reason.to_string(),
             };
-            assert!(!completion.was_truncated(), "`{reason}` is not a truncation");
+            assert!(
+                !completion.was_truncated(),
+                "`{reason}` is not a truncation"
+            );
         }
     }
 }

@@ -35,7 +35,13 @@ mod component {
 
     // Generated Component-Model bindings; lint exemptions (incl. the `unsafe` ABI
     // shims) scoped to the macro output.
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({
             world: "interceptor-world",
@@ -90,7 +96,10 @@ mod component {
             temperature: Some(0.0),
         };
         let Ok(handle) = llm_provider::complete(&request) else {
-            log(LogLevel::Warn, "intent classifier call failed; defaulting to agentic");
+            log(
+                LogLevel::Warn,
+                "intent classifier call failed; defaulting to agentic",
+            );
             return Intent::Agentic;
         };
         let text = drain_text(handle);
@@ -158,7 +167,10 @@ mod component {
             // model call; otherwise the provider-backed classifier decides.
             match router::classify(&turn.user_message, llm_classify) {
                 Intent::Simple => {
-                    log(LogLevel::Info, "intent=simple; blocking agentic loop (answer inline)");
+                    log(
+                        LogLevel::Info,
+                        "intent=simple; blocking agentic loop (answer inline)",
+                    );
                     Ok(Decision::Block(BlockReason {
                         message: "intent=simple: answerable inline without the agentic loop"
                             .to_string(),
@@ -174,7 +186,13 @@ mod component {
 
     // The `export!` macro emits the component's `unsafe extern "C"` ABI shims at
     // its call site, so scope the binding lints (incl. `unsafe_code`) to this glue.
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

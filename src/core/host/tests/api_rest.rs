@@ -72,8 +72,14 @@ extensions:
     serve_once(&server, &mut agent).expect("serves one request");
 
     let response = client.join().expect("client thread");
-    assert!(response.contains("200 OK"), "status line present: {response}");
-    assert!(response.contains("\"answer\":\"pong\""), "answer in body: {response}");
+    assert!(
+        response.contains("200 OK"),
+        "status line present: {response}"
+    );
+    assert!(
+        response.contains("\"answer\":\"pong\""),
+        "answer in body: {response}"
+    );
 
     // A second round-trip: GET /health returns liveness (the supervisor's probe).
     let health_client = thread::spawn(move || {
@@ -88,7 +94,10 @@ extensions:
     serve_once(&server, &mut agent).expect("serves the health request");
     let health = health_client.join().expect("health client thread");
     assert!(health.contains("200 OK"), "health status line: {health}");
-    assert!(health.contains("\"status\":\"ok\""), "health body: {health}");
+    assert!(
+        health.contains("\"status\":\"ok\""),
+        "health body: {health}"
+    );
 
     // A third round-trip: an SSE client (Accept: text/event-stream) gets streamed
     // event frames ending in a `done` frame with the answer.
@@ -108,9 +117,15 @@ extensions:
     });
     serve_once(&server, &mut agent).expect("serves the SSE request");
     let sse = sse_client.join().expect("sse client thread");
-    assert!(sse.contains("Content-Type: text/event-stream"), "SSE content-type: {sse}");
+    assert!(
+        sse.contains("Content-Type: text/event-stream"),
+        "SSE content-type: {sse}"
+    );
     assert!(sse.contains("event: done"), "SSE has a done frame: {sse}");
-    assert!(sse.contains("\"answer\":\"pong\""), "SSE done carries the answer: {sse}");
+    assert!(
+        sse.contains("\"answer\":\"pong\""),
+        "SSE done carries the answer: {sse}"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -38,8 +38,16 @@ use crate::host_fs::Workspace;
 ///
 /// `TERM` is **not** here on purpose: most tools drop colour without it, and ANSI
 /// escapes in tool output are context the model pays for and cannot use.
-pub const BASE_ENV: [&str; 8] =
-    ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"];
+pub const BASE_ENV: [&str; 8] = [
+    "PATH",
+    "HOME",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+];
 
 /// Why an exec failed (mirrors `host-process.proc-error`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +98,12 @@ impl ProcessRunner {
     /// (bytes) applied to each captured stream.
     #[must_use]
     pub const fn new(workspace: Workspace, timeout: Duration, output_cap: usize) -> Self {
-        Self { workspace: Some(workspace), timeout, output_cap, env_passthrough: Vec::new() }
+        Self {
+            workspace: Some(workspace),
+            timeout,
+            output_cap,
+            env_passthrough: Vec::new(),
+        }
     }
 
     /// Additionally pass these environment variables through to child processes.
@@ -109,7 +122,9 @@ impl ProcessRunner {
         let mut out: Vec<(String, String)> = BASE_ENV
             .iter()
             .filter_map(|name| {
-                std::env::var(name).ok().map(|value| ((*name).to_string(), value))
+                std::env::var(name)
+                    .ok()
+                    .map(|value| ((*name).to_string(), value))
             })
             .collect();
         for name in &self.env_passthrough {
@@ -211,7 +226,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "jk-proc-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let ws = Workspace::open(&dir).unwrap();
@@ -243,9 +261,18 @@ mod tests {
     fn a_command_keeps_what_it_needs_to_run() {
         let (_ws, runner) = runner();
         let exit = runner
-            .exec("/bin/sh", &["-c".into(), "echo $PATH; echo $HOME".into()], None, None)
+            .exec(
+                "/bin/sh",
+                &["-c".into(), "echo $PATH; echo $HOME".into()],
+                None,
+                None,
+            )
             .expect("sh runs");
-        assert!(!exit.stdout.trim().is_empty(), "PATH and HOME survive: {:?}", exit.stdout);
+        assert!(
+            !exit.stdout.trim().is_empty(),
+            "PATH and HOME survive: {:?}",
+            exit.stdout
+        );
         // A program found via PATH, which is the whole point of keeping it.
         let git = runner.exec("git", &["--version".into()], None, None);
         assert!(git.is_ok(), "a PATH lookup still resolves: {git:?}");
@@ -254,7 +281,9 @@ mod tests {
     #[test]
     fn runs_a_command_and_captures_stdout() {
         let (_ws, runner) = runner();
-        let exit = runner.exec("echo", &["hello".to_string()], None, None).unwrap();
+        let exit = runner
+            .exec("echo", &["hello".to_string()], None, None)
+            .unwrap();
         assert_eq!(exit.code, 0);
         assert_eq!(exit.stdout.trim(), "hello");
     }
@@ -277,7 +306,10 @@ mod tests {
     #[test]
     fn disabled_runner_denies() {
         let runner = ProcessRunner::disabled();
-        assert_eq!(runner.exec("echo", &["x".to_string()], None, None), Err(ProcError::Denied));
+        assert_eq!(
+            runner.exec("echo", &["x".to_string()], None, None),
+            Err(ProcError::Denied)
+        );
     }
 
     #[test]
@@ -293,14 +325,19 @@ mod tests {
     fn a_slow_command_times_out() {
         let (ws, _) = runner();
         let runner = ProcessRunner::new(ws, Duration::from_millis(150), 1024);
-        assert_eq!(runner.exec("sleep", &["5".to_string()], None, None), Err(ProcError::Timeout));
+        assert_eq!(
+            runner.exec("sleep", &["5".to_string()], None, None),
+            Err(ProcError::Timeout)
+        );
     }
 
     #[test]
     fn output_is_capped() {
         let (ws, _) = runner();
         let runner = ProcessRunner::new(ws, Duration::from_secs(5), 4);
-        let exit = runner.exec("echo", &["abcdefghij".to_string()], None, None).unwrap();
+        let exit = runner
+            .exec("echo", &["abcdefghij".to_string()], None, None)
+            .unwrap();
         assert!(exit.stdout.starts_with("abcd"), "capped: {:?}", exit.stdout);
         assert!(exit.stdout.contains("truncated"));
     }

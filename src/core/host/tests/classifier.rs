@@ -43,7 +43,11 @@ fn split_http(classifications: &Arc<AtomicU32>, verdict: &'static str) -> HttpFn
                 "finish_reason": "stop"
             }]
         });
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
+        Ok(WireResponse {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&body).unwrap(),
+        })
     })
 }
 
@@ -102,9 +106,16 @@ fn the_classifier_is_consulted_and_its_verdict_is_acted_on() {
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
     // A prompt the heuristics cannot settle, so the model tier runs.
-    let out = agent.run("c-1", "Tell me a fact and then do three unrelated things please");
+    let out = agent.run(
+        "c-1",
+        "Tell me a fact and then do three unrelated things please",
+    );
 
-    assert_eq!(calls.load(Ordering::Relaxed), 1, "the classifier was actually consulted");
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        1,
+        "the classifier was actually consulted"
+    );
     // `simple` short-circuits the agentic path: the answer comes back marked
     // non-agentic, which is the whole point of classifying.
     match out {
@@ -130,7 +141,11 @@ fn a_classifier_failure_takes_the_conservative_path() {
     let http = || -> HttpFn {
         Box::new(move |_m, url: &str, _h, _b, _t| {
             if url.contains("judge") {
-                return Ok(WireResponse { status: 500, headers: vec![], body: b"nope".to_vec() });
+                return Ok(WireResponse {
+                    status: 500,
+                    headers: vec![],
+                    body: b"nope".to_vec(),
+                });
             }
             let body = serde_json::json!({
                 "choices": [{
@@ -148,11 +163,17 @@ fn a_classifier_failure_takes_the_conservative_path() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&http).expect("agent boots");
-    let out = agent.run("c-2", "Tell me a fact and then do three unrelated things please");
+    let out = agent.run(
+        "c-2",
+        "Tell me a fact and then do three unrelated things please",
+    );
 
     match out {
         RunResult::Answered { agentic, text } => {
-            assert!(agentic, "a failed classification falls back to the full loop");
+            assert!(
+                agentic,
+                "a failed classification falls back to the full loop"
+            );
             assert_eq!(text, "the full answer");
         }
         RunResult::Failed(reason) => {
@@ -180,8 +201,18 @@ fn an_unknown_classifier_name_does_not_break_the_agent() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
-    let out = agent.run("c-3", "Tell me a fact and then do three unrelated things please");
+    let out = agent.run(
+        "c-3",
+        "Tell me a fact and then do three unrelated things please",
+    );
 
-    assert_eq!(calls.load(Ordering::Relaxed), 0, "no classifier instance was opened");
-    assert!(matches!(out, RunResult::Answered { agentic: true, .. }), "conservative default");
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "no classifier instance was opened"
+    );
+    assert!(
+        matches!(out, RunResult::Answered { agentic: true, .. }),
+        "conservative default"
+    );
 }

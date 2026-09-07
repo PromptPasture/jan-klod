@@ -31,7 +31,9 @@ pub fn run(addr: &str, session: &str) -> std::io::Result<()> {
 
 fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std::io::Result<()> {
     let mut app = App::default();
-    app.record_status(format!("connected to {addr} (session `{session}`); Esc to quit"));
+    app.record_status(format!(
+        "connected to {addr} (session `{session}`); Esc to quit"
+    ));
 
     // Channel carrying stream events from a background turn thread.
     let mut rx: Option<mpsc::Receiver<Result<StreamEvent, String>>> = None;
@@ -53,8 +55,16 @@ fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std:
                     Ok(Ok(StreamEvent::Warning(msg))) => {
                         app.record_status(format!("⚠ {msg}"));
                     }
-                    Ok(Ok(StreamEvent::Prompt { question, options, default })) => {
-                        app.ask(Prompt { question, options, default });
+                    Ok(Ok(StreamEvent::Prompt {
+                        question,
+                        options,
+                        default,
+                    })) => {
+                        app.ask(Prompt {
+                            question,
+                            options,
+                            default,
+                        });
                     }
                     Ok(Ok(StreamEvent::Error(err)) | Err(err)) => {
                         app.record_error(err);
@@ -76,7 +86,9 @@ fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std:
         if !event::poll(Duration::from_millis(POLL_MS))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else { continue };
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
         if key.kind != KeyEventKind::Press {
             continue;
         }
@@ -99,19 +111,19 @@ fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std:
             }
             KeyCode::Enter if rx.is_none() => {
                 if let Some(message) = app.take_submission() {
-                        let addr = addr.to_string();
-                        let session = session.to_string();
-                        let (tx, new_rx) = mpsc::channel();
-                        thread::spawn(move || {
-                            let result = stream_turn(&addr, &session, &message, &mut |event| {
-                                let _ = tx.send(Ok(event));
-                            });
-                            if let Err(err) = result {
-                                let _ = tx.send(Err(err));
-                            }
+                    let addr = addr.to_string();
+                    let session = session.to_string();
+                    let (tx, new_rx) = mpsc::channel();
+                    thread::spawn(move || {
+                        let result = stream_turn(&addr, &session, &message, &mut |event| {
+                            let _ = tx.send(Ok(event));
                         });
-                        rx = Some(new_rx);
-                    }
+                        if let Err(err) = result {
+                            let _ = tx.send(Err(err));
+                        }
+                    });
+                    rx = Some(new_rx);
+                }
             }
             _ => {}
         }
@@ -144,7 +156,13 @@ fn render(frame: &mut Frame, app: &App) {
 
     let title = app.pending_prompt.as_ref().map_or_else(
         || "message — Enter to send, Esc to quit".to_string(),
-        |prompt| format!("answer [{}] — Enter for `{}`", prompt.options.join("/"), prompt.default),
+        |prompt| {
+            format!(
+                "answer [{}] — Enter for `{}`",
+                prompt.options.join("/"),
+                prompt.default
+            )
+        },
     );
     let input = Paragraph::new(app.input.as_str()).block(Block::bordered().title(title));
     frame.render_widget(input, input_area);

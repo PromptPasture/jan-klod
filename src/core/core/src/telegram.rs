@@ -139,14 +139,21 @@ pub fn poll_once(
 
 /// The `getUpdates` long-poll URL for `offset`.
 fn get_updates_url(token: &str, offset: i64) -> String {
-    format!("https://api.telegram.org/bot{token}/getUpdates?timeout={LONG_POLL_SECS}&offset={offset}")
+    format!(
+        "https://api.telegram.org/bot{token}/getUpdates?timeout={LONG_POLL_SECS}&offset={offset}"
+    )
 }
 
 /// Send `text` to `chat_id`.
 fn send_message(fetch: Fetch, token: &str, chat_id: i64, text: &str) -> Result<(), String> {
     let url = format!("https://api.telegram.org/bot{token}/sendMessage");
     let payload = serde_json::json!({ "chat_id": chat_id, "text": text }).to_string();
-    fetch("POST", &url, &[("Content-Type", "application/json")], Some(payload.as_bytes()))?;
+    fetch(
+        "POST",
+        &url,
+        &[("Content-Type", "application/json")],
+        Some(payload.as_bytes()),
+    )?;
     Ok(())
 }
 
@@ -168,13 +175,18 @@ impl Driver for ChatDriver<'_> {
         let question = if prompt.options.is_empty() {
             prompt.question.clone()
         } else {
-            format!("{}\n\nReply with: {}", prompt.question, prompt.options.join(" / "))
+            format!(
+                "{}\n\nReply with: {}",
+                prompt.question,
+                prompt.options.join(" / ")
+            )
         };
         if send_message(self.fetch, self.token, self.chat_id, &question).is_err() {
             // The question never reached anyone, so nobody can answer it.
             return prompt.default_answer.clone();
         }
-        self.wait_for_reply().unwrap_or_else(|| prompt.default_answer.clone())
+        self.wait_for_reply()
+            .unwrap_or_else(|| prompt.default_answer.clone())
     }
 }
 

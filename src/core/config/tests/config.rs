@@ -87,7 +87,10 @@ extensions:
     .unwrap();
     let openai = instance(&cfg, "provider.openai");
     assert_eq!(openai.config["api-key"], json!("sk-secret"));
-    assert_eq!(openai.config["base-url"], json!("http://sk-secret.example/v1"));
+    assert_eq!(
+        openai.config["base-url"],
+        json!("http://sk-secret.example/v1")
+    );
 }
 
 #[test]
@@ -197,7 +200,10 @@ extensions:
 ",
     )
     .unwrap_err();
-    assert!(matches!(err, ConfigError::UnterminatedExpansion { .. }), "{err}");
+    assert!(
+        matches!(err, ConfigError::UnterminatedExpansion { .. }),
+        "{err}"
+    );
 }
 
 #[test]

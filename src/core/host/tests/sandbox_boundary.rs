@@ -98,7 +98,9 @@ fn probe(engine: &Engine) -> Option<ToolExtension> {
 #[test]
 fn a_guest_cannot_open_its_own_socket() {
     let engine = Engine::default();
-    let Some(mut tool) = probe(&engine) else { return };
+    let Some(mut tool) = probe(&engine) else {
+        return;
+    };
     let sentinel = Sentinel::start();
 
     let args = serde_json::json!({
@@ -124,16 +126,23 @@ fn a_guest_cannot_open_its_own_socket() {
 #[test]
 fn a_guest_cannot_open_a_socket_to_a_public_address() {
     let engine = Engine::default();
-    let Some(mut tool) = probe(&engine) else { return };
+    let Some(mut tool) = probe(&engine) else {
+        return;
+    };
     let args = serde_json::json!({ "op": "socket", "target": "93.184.216.34:80" });
     let report = tool.invoke(&args.to_string()).unwrap_or_else(|err| err);
-    assert!(report.starts_with("refused"), "outbound sockets are denied wholesale: {report}");
+    assert!(
+        report.starts_with("refused"),
+        "outbound sockets are denied wholesale: {report}"
+    );
 }
 
 #[test]
 fn a_guest_cannot_read_the_hosts_filesystem() {
     let engine = Engine::default();
-    let Some(mut tool) = probe(&engine) else { return };
+    let Some(mut tool) = probe(&engine) else {
+        return;
+    };
     for target in ["/etc/passwd", "/etc/hosts", "config.yaml", "."] {
         let args = serde_json::json!({ "op": "fs", "target": target });
         let report = tool.invoke(&args.to_string()).unwrap_or_else(|err| err);
@@ -165,7 +174,9 @@ fn a_guest_cannot_read_the_hosts_environment() {
     std::env::set_var("OPENAI_API_KEY", "sk-guest-env-must-not-leak");
     std::env::set_var("JAN_KLOD_TOKEN", "bearer-guest-env-must-not-leak");
     let engine = Engine::default();
-    let Some(mut tool) = probe(&engine) else { return };
+    let Some(mut tool) = probe(&engine) else {
+        return;
+    };
 
     let report = tool.invoke(r#"{"op":"env"}"#).unwrap_or_else(|err| err);
     assert!(
@@ -210,7 +221,9 @@ fn a_guest_gets_no_standard_input() {
     if std::env::var(CHILD).is_ok() {
         // Child half: read stdin through the guest and report.
         let engine = Engine::default();
-        let Some(mut tool) = probe(&engine) else { return };
+        let Some(mut tool) = probe(&engine) else {
+            return;
+        };
         let report = tool.invoke(r#"{"op":"stdin"}"#).unwrap_or_else(|err| err);
         println!("PROBE-REPORT {report}");
         return;

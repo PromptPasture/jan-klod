@@ -61,7 +61,11 @@ fn required_key_vars() -> BTreeSet<String> {
             instance_enabled = trimmed.contains("true");
         }
         if let Some(rest) = trimmed.strip_prefix("api-key:") {
-            if let Some(var) = rest.trim().strip_prefix("${").and_then(|v| v.strip_suffix('}')) {
+            if let Some(var) = rest
+                .trim()
+                .strip_prefix("${")
+                .and_then(|v| v.strip_suffix('}'))
+            {
                 pending_var = Some(var.to_string());
             }
         }
@@ -70,7 +74,10 @@ fn required_key_vars() -> BTreeSet<String> {
         vars.extend(pending_var);
     }
 
-    assert!(!vars.is_empty(), "the shipped config enables a provider with an api-key");
+    assert!(
+        !vars.is_empty(),
+        "the shipped config enables a provider with an api-key"
+    );
     vars
 }
 
@@ -151,10 +158,9 @@ fn the_installer_names_the_key_the_shipped_config_needs() {
 /// who would try it. Compared as sets rather than by reading either file.
 #[test]
 fn the_installer_asks_for_arch_names_the_release_actually_builds() {
-    let workflow = std::fs::read_to_string(
-        common::repo_root().join(".github/workflows/release.yml"),
-    )
-    .expect("the release workflow is readable");
+    let workflow =
+        std::fs::read_to_string(common::repo_root().join(".github/workflows/release.yml"))
+            .expect("the release workflow is readable");
     let installer = std::fs::read_to_string(common::repo_root().join("scripts/install.sh"))
         .expect("install.sh is readable");
 
@@ -163,7 +169,10 @@ fn the_installer_asks_for_arch_names_the_release_actually_builds() {
         .filter_map(|l| l.trim().strip_prefix("arch:"))
         .map(|a| a.trim().to_string())
         .collect();
-    assert!(!published.is_empty(), "the workflow names the architectures it builds");
+    assert!(
+        !published.is_empty(),
+        "the workflow names the architectures it builds"
+    );
 
     for arch in &published {
         assert!(
@@ -196,8 +205,7 @@ fn every_config_key_is_one_the_runtime_reads() {
     //   interceptor — build_agent, pass 2
     //   registry    — build_agent, pass 1 (skills / mcp)
     //   tool        — build_agent, pass 1
-    const CONSUMED_CATEGORIES: [&str; 4] =
-        ["provider", "interceptor", "registry", "tool"];
+    const CONSUMED_CATEGORIES: [&str; 4] = ["provider", "interceptor", "registry", "tool"];
     // Top-level keys, and what reads each.
     //   extensions — Config::from_path
     //   workspace  — Runtime::open_workspace
@@ -207,8 +215,16 @@ fn every_config_key_is_one_the_runtime_reads() {
     //   limits     — Runtime::limits
     //   providers  — order_chain, applied in build_agent
     //   routing    — interceptor-task-router, via host-config
-    const CONSUMED_TOP_LEVEL: [&str; 8] =
-        ["extensions", "workspace", "execution", "classifier", "providers", "routing", "storage", "limits"];
+    const CONSUMED_TOP_LEVEL: [&str; 8] = [
+        "extensions",
+        "workspace",
+        "execution",
+        "classifier",
+        "providers",
+        "routing",
+        "storage",
+        "limits",
+    ];
 
     let config = std::fs::read_to_string(common::repo_root().join("config.yaml"))
         .expect("the shipped config.yaml is readable");
@@ -225,7 +241,9 @@ fn every_config_key_is_one_the_runtime_reads() {
         // scalar — `workspace: /path` would have sailed past the check meant to
         // catch it, which is the same near-miss as the extractor that only saw
         // `export` at the start of a line.
-        let Some((key, _)) = line.trim().split_once(':') else { continue };
+        let Some((key, _)) = line.trim().split_once(':') else {
+            continue;
+        };
         let key = key.trim();
         if key.is_empty() || key.contains(' ') {
             continue;
@@ -238,16 +256,20 @@ fn every_config_key_is_one_the_runtime_reads() {
         }
     }
 
-    let unknown_top: Vec<&String> =
-        top_level.iter().filter(|k| !CONSUMED_TOP_LEVEL.contains(&k.as_str())).collect();
+    let unknown_top: Vec<&String> = top_level
+        .iter()
+        .filter(|k| !CONSUMED_TOP_LEVEL.contains(&k.as_str()))
+        .collect();
     assert!(
         unknown_top.is_empty(),
         "top-level {unknown_top:?} in config.yaml — name the code that reads each, or \
          remove it. Known: {CONSUMED_TOP_LEVEL:?}"
     );
 
-    let unknown_category: Vec<&String> =
-        categories.iter().filter(|k| !CONSUMED_CATEGORIES.contains(&k.as_str())).collect();
+    let unknown_category: Vec<&String> = categories
+        .iter()
+        .filter(|k| !CONSUMED_CATEGORIES.contains(&k.as_str()))
+        .collect();
     assert!(
         unknown_category.is_empty(),
         "extensions.{unknown_category:?} is not instantiated by anything — `build_agent` \
@@ -283,7 +305,10 @@ fn every_test_that_skips_does_so_through_the_shared_policy() {
     let tests = common::repo_root().join("src/core/host/tests");
     let mut offenders = Vec::new();
 
-    for entry in std::fs::read_dir(&tests).expect("the test directory is readable").flatten() {
+    for entry in std::fs::read_dir(&tests)
+        .expect("the test directory is readable")
+        .flatten()
+    {
         let path = entry.path();
         if path.extension().is_none_or(|e| e != "rs") {
             continue;
@@ -300,7 +325,11 @@ fn every_test_that_skips_does_so_through_the_shared_policy() {
             }
             // The policy helpers own the word; anywhere else it is a bare skip.
             if line.contains("skipping") && !line.contains("common::") {
-                let file = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let file = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
                 offenders.push(format!("{file}:{}: {}", line_no + 1, line.trim()));
             }
         }
@@ -361,7 +390,9 @@ fn the_security_model_cites_tests_that_exist() {
     let mut checked = 0;
     let mut last_path: Option<String> = None;
     for token in text.split('`') {
-        let Some((prefix, name)) = token.split_once("::") else { continue };
+        let Some((prefix, name)) = token.split_once("::") else {
+            continue;
+        };
         let path = if prefix.ends_with(".rs") {
             last_path = Some(prefix.to_string());
             prefix.to_string()
@@ -388,7 +419,10 @@ fn the_security_model_cites_tests_that_exist() {
         let source = std::fs::read_to_string(found).expect("the cited file is readable");
         // `::a_name` for a second citation on one path also parses; take the
         // leading identifier.
-        let name = name.split(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or(name);
+        let name = name
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or(name);
         assert!(
             source.contains(&format!("fn {name}(")),
             "the security model cites `{path}::{name}`, which is not a test in that file"
@@ -473,7 +507,9 @@ fn every_documented_command_exists() {
 
     let mut pages = Vec::new();
     for dir in ["docs", "docs/concepts", "docs/guides"] {
-        let Ok(entries) = std::fs::read_dir(root.join(dir)) else { continue };
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "md")
@@ -487,15 +523,23 @@ fn every_documented_command_exists() {
 
     let mut checked = 0;
     for page in &pages {
-        let Ok(text) = std::fs::read_to_string(page) else { continue };
-        let name = page.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let Ok(text) = std::fs::read_to_string(page) else {
+            continue;
+        };
+        let name = page
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         for (line_no, line) in text.lines().enumerate() {
             for (prefix, verify) in [("jan-klod-gateway ", true), ("make ", false)] {
                 let mut rest = line;
                 while let Some(at) = rest.find(prefix) {
                     rest = &rest[at + prefix.len()..];
-                    let word: String =
-                        rest.chars().take_while(|c| c.is_ascii_lowercase() || *c == '-').collect();
+                    let word: String = rest
+                        .chars()
+                        .take_while(|c| c.is_ascii_lowercase() || *c == '-')
+                        .collect();
                     if word.is_empty() {
                         continue;
                     }
@@ -506,8 +550,7 @@ fn every_documented_command_exists() {
                     } else {
                         makefile.contains(&format!("\n{word}:"))
                             || makefile.contains(&format!("\n{word} "))
-                            || makefile.contains(&format!("GUESTS := "))
-                                && makefile.contains(&word)
+                            || makefile.contains(&format!("GUESTS := ")) && makefile.contains(&word)
                     };
                     if verify {
                         assert!(
@@ -525,7 +568,10 @@ fn every_documented_command_exists() {
         }
     }
 
-    assert!(checked >= 5, "only {checked} commands parsed — this check went quiet");
+    assert!(
+        checked >= 5,
+        "only {checked} commands parsed — this check went quiet"
+    );
 }
 
 /// No shell block tells a reader to run `serve` with positional paths.
@@ -543,7 +589,9 @@ fn no_shell_block_recommends_positional_serve_paths() {
     let root = common::repo_root();
     let mut pages = vec![root.join("README.md")];
     for dir in ["docs", "docs/concepts", "docs/guides"] {
-        let Ok(entries) = std::fs::read_dir(root.join(dir)) else { continue };
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "md")
@@ -555,8 +603,14 @@ fn no_shell_block_recommends_positional_serve_paths() {
     }
 
     for page in &pages {
-        let Ok(text) = std::fs::read_to_string(page) else { continue };
-        let name = page.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let Ok(text) = std::fs::read_to_string(page) else {
+            continue;
+        };
+        let name = page
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let mut in_shell = false;
         for (line_no, line) in text.lines().enumerate() {
             let trimmed = line.trim();

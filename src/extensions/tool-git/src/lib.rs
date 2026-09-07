@@ -90,7 +90,11 @@ mod git {
             "status" => out.extend(["status".into(), "--short".into(), "--branch".into()]),
             "branch" => out.extend(["branch".into(), "--list".into(), "--no-color".into()]),
             "diff" => {
-                out.extend(["diff".into(), "--no-ext-diff".into(), "--no-textconv".into()]);
+                out.extend([
+                    "diff".into(),
+                    "--no-ext-diff".into(),
+                    "--no-textconv".into(),
+                ]);
                 if req.staged {
                     out.push("--staged".into());
                 }
@@ -109,7 +113,11 @@ mod git {
             }
             "show" => {
                 let rev = req.rev.ok_or_else(|| "op=show needs a `rev`".to_string())?;
-                out.extend(["show".into(), "--no-ext-diff".into(), "--no-textconv".into()]);
+                out.extend([
+                    "show".into(),
+                    "--no-ext-diff".into(),
+                    "--no-textconv".into(),
+                ]);
                 out.push(validate(rev, "rev")?);
             }
             other => {
@@ -149,8 +157,13 @@ mod git {
         if value.starts_with('-') {
             return Err(format!("{what} `{value}` must not start with `-`"));
         }
-        if !value.chars().all(|c| c.is_ascii_alphanumeric() || "._/-^~@{}".contains(c)) {
-            return Err(format!("{what} `{value}` has characters this tool does not accept"));
+        if !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._/-^~@{}".contains(c))
+        {
+            return Err(format!(
+                "{what} `{value}` has characters this tool does not accept"
+            ));
         }
         Ok(value.to_string())
     }
@@ -169,7 +182,11 @@ mod git {
         if code == 0 {
             return guest_fs::truncate(body);
         }
-        let detail = if stderr.trim().is_empty() { &body } else { stderr.trim_end() };
+        let detail = if stderr.trim().is_empty() {
+            &body
+        } else {
+            stderr.trim_end()
+        };
         guest_fs::truncate(format!("git exited {code}: {detail}"))
     }
 
@@ -179,7 +196,13 @@ mod git {
         use crate::{DEFAULT_COUNT, MAX_ARG_LEN, MAX_COUNT};
 
         fn req(op: &str) -> Request<'_> {
-            Request { op, path: None, rev: None, staged: false, count: None }
+            Request {
+                op,
+                path: None,
+                rev: None,
+                staged: false,
+                count: None,
+            }
         }
 
         /// The arguments after the hardening prefix — what git actually does.
@@ -191,28 +214,53 @@ mod git {
         fn every_op_is_hardened_against_repo_supplied_code() {
             for op in ["status", "diff", "log", "branch"] {
                 let args = argv(&req(op)).expect("op is allowed");
-                assert_eq!(&args[..HARDENING.len()], &HARDENING, "{op} must carry the prefix");
+                assert_eq!(
+                    &args[..HARDENING.len()],
+                    &HARDENING,
+                    "{op} must carry the prefix"
+                );
             }
-            let shown = argv(&Request { rev: Some("HEAD"), ..req("show") }).expect("show is allowed");
+            let shown = argv(&Request {
+                rev: Some("HEAD"),
+                ..req("show")
+            })
+            .expect("show is allowed");
             assert_eq!(&shown[..HARDENING.len()], &HARDENING);
         }
 
         #[test]
         fn status_and_branch_take_no_caller_input() {
-            assert_eq!(tail(&argv(&req("status")).unwrap()), ["status", "--short", "--branch"]);
-            assert_eq!(tail(&argv(&req("branch")).unwrap()), ["branch", "--list", "--no-color"]);
+            assert_eq!(
+                tail(&argv(&req("status")).unwrap()),
+                ["status", "--short", "--branch"]
+            );
+            assert_eq!(
+                tail(&argv(&req("branch")).unwrap()),
+                ["branch", "--list", "--no-color"]
+            );
         }
 
         #[test]
         fn diff_reads_the_index_only_when_asked() {
-            assert_eq!(tail(&argv(&req("diff")).unwrap()), ["diff", "--no-ext-diff", "--no-textconv"]);
-            let staged = argv(&Request { staged: true, ..req("diff") }).unwrap();
+            assert_eq!(
+                tail(&argv(&req("diff")).unwrap()),
+                ["diff", "--no-ext-diff", "--no-textconv"]
+            );
+            let staged = argv(&Request {
+                staged: true,
+                ..req("diff")
+            })
+            .unwrap();
             assert!(tail(&staged).contains(&"--staged"));
         }
 
         #[test]
         fn a_pathspec_is_passed_after_a_separator_so_it_cannot_be_a_flag() {
-            let args = argv(&Request { path: Some("src/lib.rs"), ..req("diff") }).unwrap();
+            let args = argv(&Request {
+                path: Some("src/lib.rs"),
+                ..req("diff")
+            })
+            .unwrap();
             let tail = tail(&args);
             assert_eq!(&tail[tail.len() - 2..], ["--", "src/lib.rs"]);
         }
@@ -221,10 +269,24 @@ mod git {
         fn log_defaults_and_clamps_its_page_size() {
             let default = argv(&req("log")).unwrap();
             assert!(tail(&default).contains(&DEFAULT_COUNT.to_string().as_str()));
-            let huge = argv(&Request { count: Some(10_000), ..req("log") }).unwrap();
-            assert!(tail(&huge).contains(&MAX_COUNT.to_string().as_str()), "page size is clamped");
-            let zero = argv(&Request { count: Some(0), ..req("log") }).unwrap();
-            assert!(tail(&zero).contains(&"1"), "0 commits is not a useful answer");
+            let huge = argv(&Request {
+                count: Some(10_000),
+                ..req("log")
+            })
+            .unwrap();
+            assert!(
+                tail(&huge).contains(&MAX_COUNT.to_string().as_str()),
+                "page size is clamped"
+            );
+            let zero = argv(&Request {
+                count: Some(0),
+                ..req("log")
+            })
+            .unwrap();
+            assert!(
+                tail(&zero).contains(&"1"),
+                "0 commits is not a useful answer"
+            );
         }
 
         #[test]
@@ -238,23 +300,42 @@ mod git {
         #[test]
         fn an_argument_that_looks_like_an_option_is_refused() {
             // The classic: a "revision" that is really `git show --upload-pack=…`.
-            let err = argv(&Request { rev: Some("--upload-pack=sh"), ..req("show") }).unwrap_err();
+            let err = argv(&Request {
+                rev: Some("--upload-pack=sh"),
+                ..req("show")
+            })
+            .unwrap_err();
             assert!(err.contains("must not start with `-`"), "{err}");
-            let err = argv(&Request { path: Some("--output=/tmp/x"), ..req("log") }).unwrap_err();
+            let err = argv(&Request {
+                path: Some("--output=/tmp/x"),
+                ..req("log")
+            })
+            .unwrap_err();
             assert!(err.contains("must not start with `-`"), "{err}");
         }
 
         #[test]
         fn shell_metacharacters_are_refused_even_though_no_shell_is_involved() {
             for bad in ["a;rm -rf /", "$(id)", "`id`", "a|b", "x&y"] {
-                assert!(argv(&Request { rev: Some(bad), ..req("show") }).is_err(), "{bad}");
+                assert!(
+                    argv(&Request {
+                        rev: Some(bad),
+                        ..req("show")
+                    })
+                    .is_err(),
+                    "{bad}"
+                );
             }
         }
 
         #[test]
         fn a_pathspec_cannot_leave_the_repository() {
             for bad in ["/etc/passwd", "../secrets", "a/../../b"] {
-                let err = argv(&Request { path: Some(bad), ..req("diff") }).unwrap_err();
+                let err = argv(&Request {
+                    path: Some(bad),
+                    ..req("diff")
+                })
+                .unwrap_err();
                 assert!(err.contains("inside the repository"), "{bad}: {err}");
             }
         }
@@ -262,7 +343,11 @@ mod git {
         #[test]
         fn over_long_arguments_are_refused() {
             let long = "a".repeat(MAX_ARG_LEN + 1);
-            assert!(argv(&Request { rev: Some(&long), ..req("show") }).is_err());
+            assert!(argv(&Request {
+                rev: Some(&long),
+                ..req("show")
+            })
+            .is_err());
         }
 
         #[test]
@@ -273,9 +358,20 @@ mod git {
 
         #[test]
         fn ordinary_revisions_pass() {
-            for good in ["HEAD", "HEAD~3", "main", "origin/main", "a1b2c3d", "v1.0.0", "HEAD@{1}"] {
-                let args = argv(&Request { rev: Some(good), ..req("show") })
-                    .unwrap_or_else(|e| panic!("{good} should be accepted: {e}"));
+            for good in [
+                "HEAD",
+                "HEAD~3",
+                "main",
+                "origin/main",
+                "a1b2c3d",
+                "v1.0.0",
+                "HEAD@{1}",
+            ] {
+                let args = argv(&Request {
+                    rev: Some(good),
+                    ..req("show")
+                })
+                .unwrap_or_else(|e| panic!("{good} should be accepted: {e}"));
                 assert!(args.contains(&good.to_string()));
             }
         }
@@ -299,7 +395,13 @@ mod git {
 mod component {
     use crate::git;
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({ world: "tool-world", path: "../../../wit" });
     }
@@ -377,7 +479,10 @@ mod component {
                 op,
                 path: value.get("path").and_then(serde_json::Value::as_str),
                 rev: value.get("rev").and_then(serde_json::Value::as_str),
-                staged: value.get("staged").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                staged: value
+                    .get("staged")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
                 count: value.get("count").and_then(serde_json::Value::as_u64),
             };
 
@@ -394,7 +499,13 @@ mod component {
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

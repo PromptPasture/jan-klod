@@ -50,7 +50,9 @@ pub fn parse_task(text: &str, tasks: &[&str]) -> Option<String> {
 /// Pull the model out of a `<provider-instance>/<model>` routing entry.
 #[must_use]
 pub fn model_from_route(route: &str) -> Option<&str> {
-    let model = route.split_once('/').map_or(route, |(_provider, model)| model);
+    let model = route
+        .split_once('/')
+        .map_or(route, |(_provider, model)| model);
     Some(model.trim()).filter(|model| !model.is_empty())
 }
 
@@ -67,7 +69,10 @@ pub fn model_from_route(route: &str) -> Option<&str> {
 /// chain and is not built; a bare model name is the form that means what it says.
 #[must_use]
 pub fn unhonoured_provider(route: &str) -> Option<&str> {
-    route.split_once('/').map(|(provider, _)| provider.trim()).filter(|p| !p.is_empty())
+    route
+        .split_once('/')
+        .map(|(provider, _)| provider.trim())
+        .filter(|p| !p.is_empty())
 }
 
 #[cfg(test)]
@@ -108,6 +113,10 @@ mod tests {
         // The chain is fixed at boot, so this half cannot be honoured. Saying so
         // is the difference between a documented limit and a wrong endpoint.
         assert_eq!(unhonoured_provider("groq/llama-3.3-70b"), Some("groq"));
-        assert_eq!(unhonoured_provider("gpt-4o"), None, "a bare model claims nothing");
+        assert_eq!(
+            unhonoured_provider("gpt-4o"),
+            None,
+            "a bare model claims nothing"
+        );
     }
 }

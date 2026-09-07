@@ -21,10 +21,10 @@ mod tui;
 use std::io::{self, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::process::ExitCode;
 
 use jan_klod::{answer_prompt, stream_turn, StreamEvent};
 
@@ -86,7 +86,11 @@ fn main() -> ExitCode {
             StreamEvent::Error(msg) => eprint!("\n  error: {msg}"),
             // The turn is blocked until this is answered, so ask right here on
             // the same stdin the REPL already owns.
-            StreamEvent::Prompt { question, options, default } => {
+            StreamEvent::Prompt {
+                question,
+                options,
+                default,
+            } => {
                 eprintln!("\n  ? {question}");
                 eprint!("  [{}] (Enter = {default}): ", options.join("/"));
                 let _ = io::stderr().flush();
@@ -119,7 +123,10 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
         return None;
     }
     let bin = gateway_bin();
-    eprintln!("jan-klod: gateway not found at {addr}, starting {} …", bin.display());
+    eprintln!(
+        "jan-klod: gateway not found at {addr}, starting {} …",
+        bin.display()
+    );
     let child = Command::new(&bin)
         // `--bind` rather than positional paths: naming `config.yaml`/`ext`
         // explicitly (the only way to reach the third positional) overrode the
@@ -132,7 +139,10 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
         .spawn();
     match child {
         Err(err) => {
-            eprintln!("jan-klod: could not start gateway ({}): {err}", bin.display());
+            eprintln!(
+                "jan-klod: could not start gateway ({}): {err}",
+                bin.display()
+            );
             eprintln!("jan-klod: start it manually: jan-klod-gateway serve --bind {addr}");
             None
         }
@@ -169,7 +179,9 @@ fn wait_for_gateway(addr: &str, timeout: Duration) {
 
 fn is_up(addr: &str) -> bool {
     TcpStream::connect_timeout(
-        &addr.parse().unwrap_or_else(|_| "127.0.0.1:8787".parse().unwrap()),
+        &addr
+            .parse()
+            .unwrap_or_else(|_| "127.0.0.1:8787".parse().unwrap()),
         Duration::from_millis(300),
     )
     .is_ok()

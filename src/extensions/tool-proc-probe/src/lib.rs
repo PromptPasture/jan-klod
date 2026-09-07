@@ -8,7 +8,13 @@
 
 #[cfg(target_arch = "wasm32")]
 mod component {
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({
             world: "tool-world",
@@ -33,7 +39,10 @@ mod component {
 
     impl Lifecycle for Component {
         fn init(ctx: ExtensionContext) -> Result<(), String> {
-            log(LogLevel::Info, &format!("init id={} version={}", ctx.id, ctx.version));
+            log(
+                LogLevel::Info,
+                &format!("init id={} version={}", ctx.id, ctx.version),
+            );
             Ok(())
         }
         fn start() -> Result<(), String> {
@@ -65,22 +74,39 @@ mod component {
         fn invoke(arguments: String) -> Result<String, ToolError> {
             let value: serde_json::Value =
                 serde_json::from_str(&arguments).map_err(|_| ToolError::InvalidArguments)?;
-            let command = value.get("command").and_then(serde_json::Value::as_str).ok_or(ToolError::InvalidArguments)?;
+            let command = value
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ToolError::InvalidArguments)?;
             let args: Vec<String> = value
                 .get("args")
                 .and_then(serde_json::Value::as_array)
-                .map(|items| items.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default();
 
             let exit = host_process::exec(command, &args, None, None).map_err(|err| {
-                log(LogLevel::Warn, &format!("exec {command} was refused or failed ({err:?})"));
+                log(
+                    LogLevel::Warn,
+                    &format!("exec {command} was refused or failed ({err:?})"),
+                );
                 ToolError::ExecutionFailed
             })?;
             Ok(exit.stdout)
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

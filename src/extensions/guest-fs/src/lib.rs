@@ -25,7 +25,14 @@ pub const MAX_DEPTH: usize = 24;
 /// These are the build/vendor trees that dominate a walk's cost while almost never
 /// being what the caller meant; naming one in the pattern (`target/**/*.rs`) opts
 /// back in.
-pub const PRUNED_DIRS: [&str; 6] = [".git", "node_modules", "target", ".venv", "__pycache__", ".jj"];
+pub const PRUNED_DIRS: [&str; 6] = [
+    ".git",
+    "node_modules",
+    "target",
+    ".venv",
+    "__pycache__",
+    ".jj",
+];
 
 /// One directory entry, as `host-fs.entry` hands it over.
 pub struct Entry {
@@ -57,7 +64,11 @@ pub fn truncate(output: String) -> String {
     while safe_len > 0 && !output.is_char_boundary(safe_len) {
         safe_len -= 1;
     }
-    format!("{}\n…[truncated: {} bytes omitted]", &output[..safe_len], output.len() - safe_len)
+    format!(
+        "{}\n…[truncated: {} bytes omitted]",
+        &output[..safe_len],
+        output.len() - safe_len
+    )
 }
 
 /// Expand a slash-less pattern to search recursively.
@@ -207,7 +218,9 @@ pub fn walk(root: &str, pattern: &str, list: &dyn Fn(&str) -> Option<Vec<Entry>>
     let mut queue = vec![(String::new(), 0usize)];
 
     while let Some((dir, depth)) = queue.pop() {
-        let Some(entries) = list(&join(root, &dir)) else { continue };
+        let Some(entries) = list(&join(root, &dir)) else {
+            continue;
+        };
         for entry in entries {
             visits += 1;
             if visits > MAX_VISITS {
@@ -299,13 +312,18 @@ mod tests {
     use crate::PRUNED_DIRS;
 
     /// A fake tree: directory path → entries. Root is `""`.
-    fn tree<'a>(dirs: &'a [(&'a str, &'a [(&'a str, bool)])]) -> impl Fn(&str) -> Option<Vec<Entry>> + 'a {
+    fn tree<'a>(
+        dirs: &'a [(&'a str, &'a [(&'a str, bool)])],
+    ) -> impl Fn(&str) -> Option<Vec<Entry>> + 'a {
         move |path: &str| {
             let key = if path == "." { "" } else { path };
             dirs.iter().find(|(d, _)| *d == key).map(|(_, entries)| {
                 entries
                     .iter()
-                    .map(|(name, is_dir)| Entry { name: (*name).to_string(), is_dir: *is_dir })
+                    .map(|(name, is_dir)| Entry {
+                        name: (*name).to_string(),
+                        is_dir: *is_dir,
+                    })
                     .collect()
             })
         }
@@ -381,7 +399,10 @@ mod tests {
         assert!(PRUNED_DIRS.contains(&"target"));
         assert_eq!(walk(".", "**/*.rs", &list).paths, vec!["src/main.rs"]);
         // Naming the pruned directory opts back in.
-        assert_eq!(walk(".", "target/**/*.rs", &list).paths, vec!["target/build.rs"]);
+        assert_eq!(
+            walk(".", "target/**/*.rs", &list).paths,
+            vec!["target/build.rs"]
+        );
     }
 
     #[test]
@@ -393,12 +414,16 @@ mod tests {
 
     #[test]
     fn the_result_cap_bounds_the_walk_and_is_reported() {
-        let many: Vec<(String, bool)> =
-            (0..MAX_RESULTS + 50).map(|i| (format!("f{i}.rs"), false)).collect();
+        let many: Vec<(String, bool)> = (0..MAX_RESULTS + 50)
+            .map(|i| (format!("f{i}.rs"), false))
+            .collect();
         let list = |path: &str| {
             (path == "." || path.is_empty()).then(|| {
                 many.iter()
-                    .map(|(name, is_dir)| Entry { name: name.clone(), is_dir: *is_dir })
+                    .map(|(name, is_dir)| Entry {
+                        name: name.clone(),
+                        is_dir: *is_dir,
+                    })
                     .collect()
             })
         };
@@ -426,7 +451,10 @@ mod tests {
         let big = "x".repeat(MAX_OUTPUT_BYTES + 100);
         let result = truncate(big);
         assert!(result.len() < MAX_OUTPUT_BYTES + 200);
-        assert!(result.contains("…[truncated:"), "truncation marker must be present");
+        assert!(
+            result.contains("…[truncated:"),
+            "truncation marker must be present"
+        );
     }
 
     #[test]
@@ -434,6 +462,9 @@ mod tests {
         // A 2-byte char ('é') repeated so the cap lands mid-character.
         let big = "é".repeat(MAX_OUTPUT_BYTES);
         let result = truncate(big);
-        assert!(result.contains("…[truncated:"), "truncation marker must be present");
+        assert!(
+            result.contains("…[truncated:"),
+            "truncation marker must be present"
+        );
     }
 }

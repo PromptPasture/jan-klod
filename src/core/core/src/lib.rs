@@ -15,18 +15,18 @@
 mod bindings;
 pub mod conductor;
 pub mod delegate;
-mod host;
 pub mod egress;
+mod host;
 pub mod host_fs;
 pub mod host_process;
 pub mod http;
 pub mod intercept;
 pub mod interceptor_host;
+pub mod registry_host;
 pub mod route;
 pub mod serve;
 pub mod store;
 pub mod telegram;
-pub mod registry_host;
 pub mod tool_host;
 
 use std::fmt;
@@ -44,7 +44,9 @@ pub use host::{ConfigSection, HostState};
 
 /// The user's home directory, if the environment names one.
 fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Whether `cwd` may be adopted as the workspace with nobody having said so.
@@ -128,7 +130,10 @@ impl Runtime {
     /// Returns [`CoreError::Config`] if the config fails to load, [`CoreError::Linker`]
     /// if a host capability cannot be wired, or [`CoreError::Load`] if a present
     /// component fails to compile.
-    pub fn boot(config_path: impl AsRef<Path>, ext_dir: impl AsRef<Path>) -> Result<Self, CoreError> {
+    pub fn boot(
+        config_path: impl AsRef<Path>,
+        ext_dir: impl AsRef<Path>,
+    ) -> Result<Self, CoreError> {
         let config_dir = config_path
             .as_ref()
             .parent()
@@ -151,13 +156,12 @@ impl Runtime {
         for instance in order {
             let path = ext_dir.join(instance.component_file());
             let state = if path.exists() {
-                let component = Component::from_file(&engine, &path).map_err(|source| {
-                    CoreError::Load {
+                let component =
+                    Component::from_file(&engine, &path).map_err(|source| CoreError::Load {
                         id: instance.id.clone(),
                         path: path.display().to_string(),
                         source: source.into(),
-                    }
-                })?;
+                    })?;
                 LoadState::Compiled(component)
             } else {
                 LoadState::Missing(path)
@@ -270,17 +274,19 @@ impl Runtime {
                 HostState::new(id.clone(), section).with_egress(self.egress_policy()),
             );
 
-            let world = ExtensionWorld::instantiate(&mut store, component, &self.linker)
-                .map_err(|source| CoreError::Instantiate {
+            let world = ExtensionWorld::instantiate(&mut store, component, &self.linker).map_err(
+                |source| CoreError::Instantiate {
                     id: id.clone(),
                     source: source.into(),
-                })?;
+                },
+            )?;
             let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
 
-            let ctx = bindings::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext {
-                id: id.clone(),
-                version: "0.0.0".to_string(),
-            };
+            let ctx =
+                bindings::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext {
+                    id: id.clone(),
+                    version: "0.0.0".to_string(),
+                };
             lifecycle
                 .call_init(&mut store, &ctx)
                 .map_err(|source| CoreError::Lifecycle {
@@ -406,7 +412,10 @@ impl Runtime {
         }
         let tool_fleet = tool_host::ToolFleet::new(tool_extensions);
         let registry_fleet = registry_host::RegistryFleet::new(skills_extensions, mcp_extensions);
-        let mut tools = CombinedFleet { tools: tool_fleet, registry: registry_fleet };
+        let mut tools = CombinedFleet {
+            tools: tool_fleet,
+            registry: registry_fleet,
+        };
         let tools_advert = tools.all_metas_json();
 
         // An interceptor that consults a model (the intent router classifies simple
@@ -460,14 +469,16 @@ impl Runtime {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             let provider_fn = classifier_fn(classifier.clone());
-            interceptors.push(Box::new(interceptor_host::WasmInterceptor::instantiate_with_storage(
-                &self.engine,
-                &ext.instance.id,
-                component,
-                ConfigSection::new(config),
-                provider_fn,
-                persist.then(|| Arc::clone(&store)),
-            )?));
+            interceptors.push(Box::new(
+                interceptor_host::WasmInterceptor::instantiate_with_storage(
+                    &self.engine,
+                    &ext.instance.id,
+                    component,
+                    ConfigSection::new(config),
+                    provider_fn,
+                    persist.then(|| Arc::clone(&store)),
+                )?,
+            ));
         }
 
         // The fallback chain's *order* is what `providers:` configures; without
@@ -483,7 +494,6 @@ impl Runtime {
             limits: self.limits(),
             tools,
         })
-
     }
 
     /// The project's own instructions, if the workspace has an `AGENTS.md`.
@@ -551,7 +561,11 @@ impl Runtime {
         let mut policy = egress::EgressPolicy::public_only();
         for ext in &self.extensions {
             for key in ["base-url", "endpoint", "url"] {
-                if let Some(url) = ext.instance.config.get(key).and_then(serde_json::Value::as_str)
+                if let Some(url) = ext
+                    .instance
+                    .config
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
                 {
                     policy = policy.allowing(url);
                 }
@@ -575,34 +589,35 @@ impl Runtime {
     /// `None` (default-deny).
     fn open_workspace(&self) -> Option<host_fs::Workspace> {
         let root_owned;
-        let root: &str =
-            if let Some(r) = self.agent.get("workspace").and_then(serde_json::Value::as_str) {
-                // Explicit means explicit: an operator who names a root gets it,
-                // including one this would not adopt on its own.
-                r
-            } else {
-                let cwd = std::env::current_dir().ok()?;
-                if !adoptable_workspace(&cwd, dirs_home().as_deref()) {
-                    eprintln!(
-                        "WARN [core] not adopting `{}` as the workspace: it is your home \
+        let root: &str = if let Some(r) = self
+            .agent
+            .get("workspace")
+            .and_then(serde_json::Value::as_str)
+        {
+            // Explicit means explicit: an operator who names a root gets it,
+            // including one this would not adopt on its own.
+            r
+        } else {
+            let cwd = std::env::current_dir().ok()?;
+            if !adoptable_workspace(&cwd, dirs_home().as_deref()) {
+                eprintln!(
+                    "WARN [core] not adopting `{}` as the workspace: it is your home \
                          directory or a filesystem root, where a path jail protects nothing. \
                          Start jan-klod in a project directory, or set `workspace:` \
                          explicitly. Until then file tools are denied.",
-                        cwd.display()
-                    );
-                    return None;
-                }
-                root_owned = cwd.to_string_lossy().into_owned();
-                // Say what the agent can reach. The grant is implicit; the notice
-                // should not be.
-                eprintln!("INFO [core] workspace: {root_owned} (file tools are jailed here)");
-                &root_owned
-            };
+                    cwd.display()
+                );
+                return None;
+            }
+            root_owned = cwd.to_string_lossy().into_owned();
+            // Say what the agent can reach. The grant is implicit; the notice
+            // should not be.
+            eprintln!("INFO [core] workspace: {root_owned} (file tools are jailed here)");
+            &root_owned
+        };
         host_fs::Workspace::open(root).map_or_else(
             |_| {
-                eprintln!(
-                    "WARN [core] workspace `{root}` could not be opened; host-fs is denied"
-                );
+                eprintln!("WARN [core] workspace `{root}` could not be opened; host-fs is denied");
                 None
             },
             Some,
@@ -612,7 +627,10 @@ impl Runtime {
     /// Build the `host-process` runner from the top-level `execution:` config
     /// (`{ enabled, timeout-secs?, output-cap? }`). Disabled unless enabled *and* a
     /// workspace is configured (the exec cwd is jailed to it).
-    fn open_process_runner(&self, workspace: Option<&host_fs::Workspace>) -> host_process::ProcessRunner {
+    fn open_process_runner(
+        &self,
+        workspace: Option<&host_fs::Workspace>,
+    ) -> host_process::ProcessRunner {
         let exec = self.agent.get("execution");
         let enabled = exec
             .and_then(|e| e.get("enabled"))
@@ -668,7 +686,10 @@ impl Runtime {
         &self,
         http_factory: &dyn Fn() -> route::HttpFn,
     ) -> Result<Option<std::sync::Arc<std::sync::Mutex<route::ProviderCompleter>>>, CoreError> {
-        let named = self.agent.get("classifier").and_then(serde_json::Value::as_str);
+        let named = self
+            .agent
+            .get("classifier")
+            .and_then(serde_json::Value::as_str);
         let chosen = self.extensions.iter().find(|ext| {
             ext.instance.category == "provider"
                 && matches!(ext.state, LoadState::Compiled(_))
@@ -683,7 +704,9 @@ impl Runtime {
             }
             return Ok(None);
         };
-        let LoadState::Compiled(component) = &ext.state else { return Ok(None) };
+        let LoadState::Compiled(component) = &ext.state else {
+            return Ok(None);
+        };
         Ok(Some(std::sync::Arc::new(std::sync::Mutex::new(
             route::ProviderCompleter::instantiate(
                 &self.engine,
@@ -756,7 +779,9 @@ struct CombinedFleet {
 
 impl conductor::ToolInvoker for CombinedFleet {
     fn invoke(&mut self, call: &intercept::ToolCall) -> Option<String> {
-        self.tools.invoke(call).or_else(|| self.registry.invoke(call))
+        self.tools
+            .invoke(call)
+            .or_else(|| self.registry.invoke(call))
     }
 }
 
@@ -1021,14 +1046,18 @@ fn run_and_persist(
     // Locked around each use, never across the turn: an interceptor writing its
     // own `host-storage` mid-dispatch takes the same lock, and holding it here
     // would deadlock the first guest that remembered anything.
-    let history = store.lock().map(|store| replay(&store, session)).unwrap_or_default();
-    let result =
-        conductor::run_turn(
-            dispatcher, providers, tools, driver, sink, session, message, history, limits,
-        );
+    let history = store
+        .lock()
+        .map(|store| replay(&store, session))
+        .unwrap_or_default();
+    let result = conductor::run_turn(
+        dispatcher, providers, tools, driver, sink, session, message, history, limits,
+    );
     if let conductor::RunResult::Answered { text, .. } = &result {
         // Best-effort transcript append: a store failure never fails the answered turn.
-        let Ok(store) = store.lock() else { return result };
+        let Ok(store) = store.lock() else {
+            return result;
+        };
         let turn = store.list_keys(session).map_or(0, |keys| keys.len()) + 1;
         let value = serde_json::json!({ "user": message, "answer": text }).to_string();
         if let Err(err) = store.set(session, &format!("turn-{turn}"), &value) {
@@ -1037,7 +1066,6 @@ fn run_and_persist(
     }
     result
 }
-
 
 /// How many past turns are replayed into a new one.
 ///
@@ -1058,7 +1086,9 @@ fn replay(store: &store::Store, session: &str) -> Vec<intercept::Message> {
     entries.reverse(); // `recent` is newest-first; a conversation reads oldest-first
     let mut messages = Vec::with_capacity(entries.len() * 2);
     for entry in entries {
-        let Ok(turn) = serde_json::from_str::<serde_json::Value>(&entry.value) else { continue };
+        let Ok(turn) = serde_json::from_str::<serde_json::Value>(&entry.value) else {
+            continue;
+        };
         if let Some(user) = turn.get("user").and_then(serde_json::Value::as_str) {
             messages.push(Message {
                 role: Role::User,
@@ -1141,7 +1171,9 @@ fn order_chain(chain: Option<&serde_json::Value>, ids: &[String]) -> Vec<usize> 
         }
     }
     // Anything enabled but unlisted still runs, after the configured chain.
-    let unlisted: Vec<usize> = (0..ids.len()).filter(|index| !order.contains(index)).collect();
+    let unlisted: Vec<usize> = (0..ids.len())
+        .filter(|index| !order.contains(index))
+        .collect();
     order.extend(unlisted);
     order
 }
@@ -1149,7 +1181,10 @@ fn order_chain(chain: Option<&serde_json::Value>, ids: &[String]) -> Vec<usize> 
 /// Reorder `items` by `order` (a permutation of its indices).
 fn reorder<T>(items: Vec<T>, order: &[usize]) -> Vec<T> {
     let mut slots: Vec<Option<T>> = items.into_iter().map(Some).collect();
-    order.iter().filter_map(|index| slots.get_mut(*index).and_then(Option::take)).collect()
+    order
+        .iter()
+        .filter_map(|index| slots.get_mut(*index).and_then(Option::take))
+        .collect()
 }
 
 /// Headless driver: no interactive surface, so an `ask` takes the prompt's
@@ -1197,11 +1232,7 @@ impl fmt::Display for BootReport<'_> {
                 }
             }
         }
-        write!(
-            f,
-            "{compiled} loaded, {} missing",
-            exts.len() - compiled
-        )
+        write!(f, "{compiled} loaded, {} missing", exts.len() - compiled)
     }
 }
 
@@ -1317,7 +1348,10 @@ mod tests {
         let ids = ids(&["anthropic", "openai"]);
         assert_eq!(order_chain(None, &ids), vec![0, 1]);
         // A malformed/empty list is the same as none, not "no providers".
-        assert_eq!(order_chain(Some(&serde_json::json!("nonsense")), &ids), vec![0, 1]);
+        assert_eq!(
+            order_chain(Some(&serde_json::json!("nonsense")), &ids),
+            vec![0, 1]
+        );
     }
 
     #[test]
@@ -1340,14 +1374,16 @@ mod tests {
     #[test]
     fn a_provider_listed_twice_is_tried_once() {
         let ids = ids(&["anthropic", "openai"]);
-        let chain =
-            serde_json::json!([{ "provider": "openai" }, { "provider": "openai" }]);
+        let chain = serde_json::json!([{ "provider": "openai" }, { "provider": "openai" }]);
         assert_eq!(order_chain(Some(&chain), &ids), vec![1, 0]);
     }
 
     #[test]
     fn reorder_applies_the_permutation() {
-        assert_eq!(reorder(vec!["a", "b", "c"], &[2, 0, 1]), vec!["c", "a", "b"]);
+        assert_eq!(
+            reorder(vec!["a", "b", "c"], &[2, 0, 1]),
+            vec!["c", "a", "b"]
+        );
         // Out-of-range indices cannot panic or duplicate an item.
         assert_eq!(reorder(vec!["a", "b"], &[1, 9, 0]), vec!["b", "a"]);
     }

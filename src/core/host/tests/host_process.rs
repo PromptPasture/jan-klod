@@ -28,7 +28,9 @@ fn probe_component(engine: &Engine) -> Option<Component> {
 #[test]
 fn host_process_runs_a_command_through_a_guest() {
     let engine = Engine::default();
-    let Some(component) = probe_component(&engine) else { return };
+    let Some(component) = probe_component(&engine) else {
+        return;
+    };
 
     let workspace_dir = std::env::temp_dir().join(format!("jk-hostproc-{}", std::process::id()));
     std::fs::create_dir_all(&workspace_dir).unwrap();
@@ -49,14 +51,24 @@ fn host_process_runs_a_command_through_a_guest() {
 #[test]
 fn host_process_is_default_deny_when_disabled() {
     let engine = Engine::default();
-    let Some(component) = probe_component(&engine) else { return };
+    let Some(component) = probe_component(&engine) else {
+        return;
+    };
 
     // Disabled runner -> exec denied.
-    let mut tool =
-        ToolExtension::instantiate(&engine, "tool.proc-probe", &component, None, ProcessRunner::disabled())
-            .expect("tool instantiates");
+    let mut tool = ToolExtension::instantiate(
+        &engine,
+        "tool.proc-probe",
+        &component,
+        None,
+        ProcessRunner::disabled(),
+    )
+    .expect("tool instantiates");
     let out = tool.invoke(r#"{"command":"echo","args":["x"]}"#);
-    assert!(out.is_err(), "with execution disabled, host-process must deny: {out:?}");
+    assert!(
+        out.is_err(),
+        "with execution disabled, host-process must deny: {out:?}"
+    );
 }
 
 /// A command run *through a guest* does not carry the host's credentials.
@@ -72,12 +84,15 @@ fn host_process_is_default_deny_when_disabled() {
 #[test]
 fn a_guest_run_command_does_not_receive_the_hosts_credentials() {
     let engine = Engine::default();
-    let Some(component) = probe_component(&engine) else { return };
+    let Some(component) = probe_component(&engine) else {
+        return;
+    };
 
     std::env::set_var("OPENAI_API_KEY", "sk-guest-must-not-leak");
     std::env::set_var("JAN_KLOD_TOKEN", "bearer-guest-must-not-leak");
 
-    let workspace_dir = std::env::temp_dir().join(format!("jk-hostproc-env-{}", std::process::id()));
+    let workspace_dir =
+        std::env::temp_dir().join(format!("jk-hostproc-env-{}", std::process::id()));
     std::fs::create_dir_all(&workspace_dir).unwrap();
     let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
     let runner = ProcessRunner::new(workspace, Duration::from_secs(5), 64 * 1024);

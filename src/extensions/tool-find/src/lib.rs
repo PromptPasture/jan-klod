@@ -47,7 +47,13 @@ fn render(pattern: &str, outcome: &guest_fs::Outcome) -> String {
 mod component {
     use crate::render;
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({ world: "tool-world", path: "../../../wit" });
     }
@@ -108,7 +114,10 @@ mod component {
                 .get("pattern")
                 .and_then(serde_json::Value::as_str)
                 .ok_or(ToolError::InvalidArguments)?;
-            let root = value.get("path").and_then(serde_json::Value::as_str).unwrap_or(".");
+            let root = value
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(".");
 
             // A root the jail refuses is the tool's only hard failure: every other
             // unreadable directory is simply not walked.
@@ -127,12 +136,21 @@ mod component {
         host_fs::list_dir(dir).ok().map(|entries| {
             entries
                 .into_iter()
-                .map(|e| guest_fs::Entry { name: e.name, is_dir: e.is_dir })
+                .map(|e| guest_fs::Entry {
+                    name: e.name,
+                    is_dir: e.is_dir,
+                })
                 .collect()
         })
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);
@@ -146,16 +164,28 @@ mod tests {
 
     #[test]
     fn no_match_renders_as_a_statement_not_an_empty_string() {
-        let outcome = Outcome { paths: vec![], bounded_by: None };
+        let outcome = Outcome {
+            paths: vec![],
+            bounded_by: None,
+        };
         assert_eq!(render("**/*.zig", &outcome), "no files match **/*.zig");
     }
 
     #[test]
     fn a_bounded_walk_says_it_is_partial() {
-        let outcome = Outcome { paths: vec!["a.rs".to_string()], bounded_by: Some("result cap") };
+        let outcome = Outcome {
+            paths: vec!["a.rs".to_string()],
+            bounded_by: Some("result cap"),
+        };
         let rendered = render("*.rs", &outcome);
-        assert!(rendered.starts_with("a.rs\n"), "paths come first: {rendered}");
-        assert!(rendered.contains("partial: stopped at the result cap"), "{rendered}");
+        assert!(
+            rendered.starts_with("a.rs\n"),
+            "paths come first: {rendered}"
+        );
+        assert!(
+            rendered.contains("partial: stopped at the result cap"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -163,10 +193,23 @@ mod tests {
         let long = "d/".repeat(60) + "f.rs"; // ~124 bytes per path
         let paths: Vec<String> = (0..600).map(|i| format!("{i}{long}")).collect();
         let total = paths.len();
-        let rendered = render("**/*.rs", &Outcome { paths, bounded_by: None });
-        assert!(rendered.len() <= MAX_OUTPUT_BYTES + 64, "capped: {} bytes", rendered.len());
+        let rendered = render(
+            "**/*.rs",
+            &Outcome {
+                paths,
+                bounded_by: None,
+            },
+        );
+        assert!(
+            rendered.len() <= MAX_OUTPUT_BYTES + 64,
+            "capped: {} bytes",
+            rendered.len()
+        );
         let kept = rendered.lines().filter(|l| !l.starts_with('…')).count();
-        assert!(kept > 0 && kept < total, "some but not all paths kept: {kept}/{total}");
+        assert!(
+            kept > 0 && kept < total,
+            "some but not all paths kept: {kept}/{total}"
+        );
         assert!(
             rendered.contains(&format!("{} more paths omitted", total - kept)),
             "omitted count must match what was dropped: {rendered}"

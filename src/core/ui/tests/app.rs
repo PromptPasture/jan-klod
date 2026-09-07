@@ -18,7 +18,13 @@ fn submit_records_the_user_line_and_clears_input() {
     let sent = app.take_submission();
     assert_eq!(sent.as_deref(), Some("hello"), "trimmed message returned");
     assert!(app.input.is_empty(), "input cleared after submit");
-    assert_eq!(app.transcript, vec![Entry { who: Who::You, text: "hello".into() }]);
+    assert_eq!(
+        app.transcript,
+        vec![Entry {
+            who: Who::You,
+            text: "hello".into()
+        }]
+    );
 }
 
 #[test]

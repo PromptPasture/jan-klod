@@ -106,7 +106,9 @@ impl Workspace {
         let full = self.resolve(path)?;
         let read_dir = match std::fs::read_dir(&full) {
             Ok(rd) => rd,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(FsError::NotFound),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Err(FsError::NotFound)
+            }
             Err(_) => return Err(FsError::Io),
         };
         let mut entries = Vec::new();
@@ -191,7 +193,12 @@ mod tests {
         let (_dir, ws) = workspace();
         ws.write("z.txt", "1").unwrap();
         ws.write("a.txt", "2").unwrap();
-        let names: Vec<String> = ws.list_dir(".").unwrap().into_iter().map(|e| e.name).collect();
+        let names: Vec<String> = ws
+            .list_dir(".")
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
         assert_eq!(names, vec!["a.txt".to_string(), "z.txt".to_string()]);
     }
 

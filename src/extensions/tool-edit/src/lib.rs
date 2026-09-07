@@ -38,9 +38,9 @@ mod edit {
     /// is a change detector, not a security primitive — a collision costs a
     /// rejected edit (both candidates are reported ambiguous), never a bad write.
     fn fnv1a32(bytes: &[u8]) -> u32 {
-        bytes
-            .iter()
-            .fold(FNV_OFFSET, |hash, byte| (hash ^ u32::from(*byte)).wrapping_mul(FNV_PRIME))
+        bytes.iter().fold(FNV_OFFSET, |hash, byte| {
+            (hash ^ u32::from(*byte)).wrapping_mul(FNV_PRIME)
+        })
     }
 
     /// The anchor for the 1-based line `lineno` holding `text`.
@@ -79,7 +79,12 @@ mod edit {
         if contents.is_empty() {
             return Vec::new();
         }
-        contents.strip_suffix('\n').unwrap_or(contents).split('\n').map(str::to_string).collect()
+        contents
+            .strip_suffix('\n')
+            .unwrap_or(contents)
+            .split('\n')
+            .map(str::to_string)
+            .collect()
     }
 
     /// Resolve `target` to its 0-based line index.
@@ -207,8 +212,7 @@ mod edit {
         #[test]
         fn replace_swaps_a_single_line() {
             let content = "alpha\nbeta\ngamma\n";
-            let (out, replaced) =
-                replace(content, &anchor_of(content, 2), None, "BETA").unwrap();
+            let (out, replaced) = replace(content, &anchor_of(content, 2), None, "BETA").unwrap();
             assert_eq!(out, "alpha\nBETA\ngamma\n");
             assert_eq!(replaced, 1);
         }
@@ -242,7 +246,10 @@ mod edit {
             let changed = "header\na\nb\nc\n";
             let err = replace(changed, &stale, None, "B").unwrap_err();
             assert!(err.contains("matches no line"), "got {err}");
-            assert!(err.contains("op=view"), "rejection must say how to recover: {err}");
+            assert!(
+                err.contains("op=view"),
+                "rejection must say how to recover: {err}"
+            );
         }
 
         #[test]
@@ -261,8 +268,7 @@ mod edit {
         #[test]
         fn insert_places_contents_after_the_anchor() {
             let content = "a\nc\n";
-            let (out, inserted) =
-                insert(content, &anchor_of(content, 1), false, "b").unwrap();
+            let (out, inserted) = insert(content, &anchor_of(content, 1), false, "b").unwrap();
             assert_eq!(out, "a\nb\nc\n");
             assert_eq!(inserted, 1);
         }
@@ -292,7 +298,10 @@ mod edit {
         fn output_over_cap_is_truncated_with_marker() {
             let big = "x".repeat(MAX_OUTPUT_BYTES + 100);
             let result = truncate(big);
-            assert!(result.contains("…[truncated:"), "truncation marker must be present");
+            assert!(
+                result.contains("…[truncated:"),
+                "truncation marker must be present"
+            );
         }
     }
 }
@@ -301,7 +310,13 @@ mod edit {
 mod component {
     use crate::edit;
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({ world: "tool-world", path: "../../../wit" });
     }
@@ -366,7 +381,10 @@ mod component {
             let value: serde_json::Value =
                 serde_json::from_str(&arguments).map_err(|_| ToolError::InvalidArguments)?;
             let field = |key: &str| {
-                value.get(key).and_then(serde_json::Value::as_str).map(str::to_string)
+                value
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
             };
             let op = field("op").ok_or(ToolError::InvalidArguments)?;
             let path = field("path").ok_or(ToolError::InvalidArguments)?;
@@ -408,7 +426,13 @@ mod component {
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

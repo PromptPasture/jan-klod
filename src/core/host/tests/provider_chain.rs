@@ -23,14 +23,22 @@ mod common;
 /// as whichever provider is calling.
 fn per_provider_http() -> HttpFn {
     Box::new(move |_m, url: &str, _h, _b, _t| {
-        let who = if url.contains("alpha") { "from-alpha" } else { "from-beta" };
+        let who = if url.contains("alpha") {
+            "from-alpha"
+        } else {
+            "from-beta"
+        };
         let body = serde_json::json!({
             "choices": [{
                 "message": { "role": "assistant", "content": who },
                 "finish_reason": "stop"
             }]
         });
-        Ok(WireResponse { status: 200, headers: vec![], body: serde_json::to_vec(&body).unwrap() })
+        Ok(WireResponse {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&body).unwrap(),
+        })
     })
 }
 
@@ -90,7 +98,11 @@ fn the_configured_chain_decides_which_provider_is_tried_first() {
         &dir,
         "providers:\n  - provider: beta\n  - provider: alpha\n",
     );
-    assert_eq!(answer(&beta_first, &ext_dir), "from-beta", "the chain's first entry answers");
+    assert_eq!(
+        answer(&beta_first, &ext_dir),
+        "from-beta",
+        "the chain's first entry answers"
+    );
 
     // Reversing the list reverses the result: the order is genuinely read, not
     // coincidentally matching some other ordering.
@@ -98,7 +110,11 @@ fn the_configured_chain_decides_which_provider_is_tried_first() {
         &dir,
         "providers:\n  - provider: alpha\n  - provider: beta\n",
     );
-    assert_eq!(answer(&alpha_first, &ext_dir), "from-alpha", "reversing the chain reverses it");
+    assert_eq!(
+        answer(&alpha_first, &ext_dir),
+        "from-alpha",
+        "reversing the chain reverses it"
+    );
 }
 
 #[test]

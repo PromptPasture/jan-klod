@@ -19,7 +19,14 @@ fn updates_body(update_id: i64, chat_id: i64, text: &str) -> Vec<u8> {
 #[test]
 fn parse_updates_extracts_text_messages() {
     let updates = parse_updates(&updates_body(10, 42, "hello"));
-    assert_eq!(updates, vec![Update { update_id: 10, chat_id: 42, text: "hello".into() }]);
+    assert_eq!(
+        updates,
+        vec![Update {
+            update_id: 10,
+            chat_id: 42,
+            text: "hello".into()
+        }]
+    );
 }
 
 #[test]
@@ -40,8 +47,16 @@ fn parse_updates_skips_non_text_and_bad_shapes() {
 #[test]
 fn next_offset_is_one_past_the_highest_id() {
     let updates = vec![
-        Update { update_id: 4, chat_id: 1, text: "a".into() },
-        Update { update_id: 9, chat_id: 1, text: "b".into() },
+        Update {
+            update_id: 4,
+            chat_id: 1,
+            text: "a".into(),
+        },
+        Update {
+            update_id: 9,
+            chat_id: 1,
+            text: "b".into(),
+        },
     ];
     assert_eq!(next_offset(&updates), Some(10));
     assert_eq!(next_offset(&[]), None);

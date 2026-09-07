@@ -31,7 +31,13 @@
 
 #[cfg(target_arch = "wasm32")]
 mod component {
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({
             world: "tool-world",
@@ -54,7 +60,10 @@ mod component {
             host_log::log(
                 LogLevel::Info,
                 "tool-escape-probe",
-                &format!("init id={} — this guest attempts to escape on purpose", ctx.id),
+                &format!(
+                    "init id={} — this guest attempts to escape on purpose",
+                    ctx.id
+                ),
                 &[],
             );
             Ok(())
@@ -102,10 +111,19 @@ mod component {
     /// upgrade, exactly like the socket check. If it ever flips, every component
     /// reads the operator's provider key with one line of `std`.
     fn try_env() -> String {
-        let named: Vec<String> = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "JAN_KLOD_TOKEN", "HOME"]
-            .iter()
-            .filter_map(|key| std::env::var(key).ok().map(|value| format!("{key}={value}")))
-            .collect();
+        let named: Vec<String> = [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "JAN_KLOD_TOKEN",
+            "HOME",
+        ]
+        .iter()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| format!("{key}={value}"))
+        })
+        .collect();
         let total = std::env::vars().count();
         if named.is_empty() && total == 0 {
             "refused: the environment is empty".to_string()
@@ -125,7 +143,11 @@ mod component {
     /// Try to open a path with ambient `std::fs`, ignoring the path-jailed `host-fs`.
     fn try_fs(path: &str) -> String {
         match std::fs::read_to_string(path) {
-            Ok(text) => format!("READ {} bytes from {path}: {}", text.len(), &text[..text.len().min(40)]),
+            Ok(text) => format!(
+                "READ {} bytes from {path}: {}",
+                text.len(),
+                &text[..text.len().min(40)]
+            ),
             Err(err) => format!("refused: {err}"),
         }
     }
@@ -150,9 +172,14 @@ mod component {
         fn invoke(arguments: String) -> Result<String, ToolError> {
             let value: serde_json::Value =
                 serde_json::from_str(&arguments).map_err(|_| ToolError::InvalidArguments)?;
-            let op = value.get("op").and_then(serde_json::Value::as_str).unwrap_or_default();
-            let target =
-                value.get("target").and_then(serde_json::Value::as_str).unwrap_or_default();
+            let op = value
+                .get("op")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let target = value
+                .get("target")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
             // A refusal is a *result*, not a trap: the test needs to read what the
             // guest saw, and a trapped component tells it nothing.
             Ok(match op {
@@ -166,7 +193,13 @@ mod component {
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

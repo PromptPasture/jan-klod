@@ -49,12 +49,21 @@ struct ToolHost {
 
 impl WasiView for ToolHost {
     fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 
 impl g_log::Host for ToolHost {
-    fn log(&mut self, level: g_log::LogLevel, component: String, message: String, _fields: Vec<g_log::LogField>) {
+    fn log(
+        &mut self,
+        level: g_log::LogLevel,
+        component: String,
+        message: String,
+        _fields: Vec<g_log::LogField>,
+    ) {
         let level = match level {
             g_log::LogLevel::Debug => "DEBUG",
             g_log::LogLevel::Info => "INFO",
@@ -86,8 +95,11 @@ impl g_http::Host for ToolHost {
             // Default-deny: the tool was not granted egress.
             return Err(g_http::HttpError::Backend);
         };
-        let headers: Vec<(String, String)> =
-            request.headers.into_iter().map(|h| (h.name, h.value)).collect();
+        let headers: Vec<(String, String)> = request
+            .headers
+            .into_iter()
+            .map(|h| (h.name, h.value))
+            .collect();
         match client(
             &request.method,
             &request.url,
@@ -111,23 +123,35 @@ impl g_http::Host for ToolHost {
 
 impl g_fs::Host for ToolHost {
     fn read(&mut self, path: String) -> Result<String, g_fs::FsError> {
-        self.workspace.as_ref().map_or(Err(g_fs::FsError::Denied), |ws| ws.read(&path).map_err(to_gen_fs_error))
+        self.workspace
+            .as_ref()
+            .map_or(Err(g_fs::FsError::Denied), |ws| {
+                ws.read(&path).map_err(to_gen_fs_error)
+            })
     }
     fn write(&mut self, path: String, contents: String) -> Result<(), g_fs::FsError> {
         self.workspace
             .as_ref()
-            .map_or(Err(g_fs::FsError::Denied), |ws| ws.write(&path, &contents).map_err(to_gen_fs_error))
+            .map_or(Err(g_fs::FsError::Denied), |ws| {
+                ws.write(&path, &contents).map_err(to_gen_fs_error)
+            })
     }
     fn list_dir(&mut self, path: String) -> Result<Vec<g_fs::Entry>, g_fs::FsError> {
-        self.workspace.as_ref().map_or(Err(g_fs::FsError::Denied), |ws| {
-            ws.list_dir(&path).map(|entries| {
-                entries
-                    .into_iter()
-                    .map(|e| g_fs::Entry { name: e.name, is_dir: e.is_dir })
-                    .collect()
+        self.workspace
+            .as_ref()
+            .map_or(Err(g_fs::FsError::Denied), |ws| {
+                ws.list_dir(&path)
+                    .map(|entries| {
+                        entries
+                            .into_iter()
+                            .map(|e| g_fs::Entry {
+                                name: e.name,
+                                is_dir: e.is_dir,
+                            })
+                            .collect()
+                    })
+                    .map_err(to_gen_fs_error)
             })
-            .map_err(to_gen_fs_error)
-        })
     }
     fn exists(&mut self, path: String) -> bool {
         self.workspace.as_ref().is_some_and(|ws| ws.exists(&path))
@@ -150,8 +174,15 @@ impl g_proc::Host for ToolHost {
         cwd: Option<String>,
         stdin: Option<String>,
     ) -> Result<g_proc::Exit, g_proc::ProcError> {
-        match self.process.exec(&command, &args, cwd.as_deref(), stdin.as_deref()) {
-            Ok(exit) => Ok(g_proc::Exit { code: exit.code, stdout: exit.stdout, stderr: exit.stderr }),
+        match self
+            .process
+            .exec(&command, &args, cwd.as_deref(), stdin.as_deref())
+        {
+            Ok(exit) => Ok(g_proc::Exit {
+                code: exit.code,
+                stdout: exit.stdout,
+                stderr: exit.stderr,
+            }),
             Err(err) => Err(to_gen_proc_error(err)),
         }
     }
@@ -245,7 +276,11 @@ impl ToolExtension {
         drive(id, lifecycle.call_init(&mut store, &ctx), "init")?;
         drive(id, lifecycle.call_start(&mut store), "start")?;
 
-        Ok(Self { id: id.to_string(), store, world })
+        Ok(Self {
+            id: id.to_string(),
+            store,
+            world,
+        })
     }
 
     /// This extension's instance id.
@@ -333,7 +368,10 @@ impl ToolFleet {
     /// The advertised tool names.
     #[must_use]
     pub fn tool_names(&self) -> Vec<String> {
-        self.tools.iter().map(|(meta, _)| meta.name.clone()).collect()
+        self.tools
+            .iter()
+            .map(|(meta, _)| meta.name.clone())
+            .collect()
     }
 
     /// The advertised metadata for every tool (for `select-tools` advertising).
@@ -345,16 +383,31 @@ impl ToolFleet {
 
 impl crate::conductor::ToolInvoker for ToolFleet {
     fn invoke(&mut self, call: &crate::intercept::ToolCall) -> Option<String> {
-        let entry = self.tools.iter_mut().find(|(meta, _)| meta.name == call.name)?;
+        let entry = self
+            .tools
+            .iter_mut()
+            .find(|(meta, _)| meta.name == call.name)?;
         // A tool error is fed back to the model as the result, not an abort.
         Some(entry.1.invoke(&call.arguments).unwrap_or_else(|err| err))
     }
 }
 
-fn drive(id: &str, result: wasmtime::Result<Result<(), String>>, phase: &'static str) -> Result<(), CoreError> {
+fn drive(
+    id: &str,
+    result: wasmtime::Result<Result<(), String>>,
+    phase: &'static str,
+) -> Result<(), CoreError> {
     match result {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(message)) => Err(CoreError::LifecycleRejected { id: id.to_string(), phase, message }),
-        Err(source) => Err(CoreError::Lifecycle { id: id.to_string(), phase, source: source.into() }),
+        Ok(Err(message)) => Err(CoreError::LifecycleRejected {
+            id: id.to_string(),
+            phase,
+            message,
+        }),
+        Err(source) => Err(CoreError::Lifecycle {
+            id: id.to_string(),
+            phase,
+            source: source.into(),
+        }),
     }
 }

@@ -27,7 +27,9 @@ wasmtime::component::bindgen!({
 });
 
 use exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext;
-use exports::jan_klod::interfaces::llm_provider::{CompletionChunk, CompletionRequest, Message, Role};
+use exports::jan_klod::interfaces::llm_provider::{
+    CompletionChunk, CompletionRequest, Message, Role,
+};
 use jan_klod::interfaces::{host_config, host_http, host_log};
 
 /// Minimal host backing `provider-world`'s imports for the probe.
@@ -88,8 +90,11 @@ impl host_http::Host for ProbeHost {
         &mut self,
         request: host_http::HttpRequest,
     ) -> Result<host_http::HttpResponse, host_http::HttpError> {
-        let headers: Vec<(String, String)> =
-            request.headers.into_iter().map(|h| (h.name, h.value)).collect();
+        let headers: Vec<(String, String)> = request
+            .headers
+            .into_iter()
+            .map(|h| (h.name, h.value))
+            .collect();
         match jan_klod_core::http::fetch(
             &request.method,
             &request.url,
@@ -172,7 +177,9 @@ fn main() -> Result<()> {
     lifecycle
         .call_init(&mut store, &ctx)?
         .map_err(wasmtime::Error::msg)?;
-    lifecycle.call_start(&mut store)?.map_err(wasmtime::Error::msg)?;
+    lifecycle
+        .call_start(&mut store)?
+        .map_err(wasmtime::Error::msg)?;
 
     let model = instance
         .config

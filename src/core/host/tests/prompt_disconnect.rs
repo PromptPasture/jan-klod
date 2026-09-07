@@ -12,8 +12,11 @@ use jan_klod_core::route::HttpFn;
 
 mod common;
 
-const GUESTS: [&str; 3] =
-    ["provider-openai.wasm", "interceptor-tool-selector.wasm", "interceptor-permission.wasm"];
+const GUESTS: [&str; 3] = [
+    "provider-openai.wasm",
+    "interceptor-tool-selector.wasm",
+    "interceptor-permission.wasm",
+];
 
 /// A provider that calls a dangerous tool, so the gate parks the turn.
 fn tool_then_answer_http() -> HttpFn {

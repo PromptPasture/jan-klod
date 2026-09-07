@@ -17,7 +17,13 @@ mod routing;
 mod component {
     use crate::routing;
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod bindings {
         wit_bindgen::generate!({
             world: "interceptor-world",
@@ -90,7 +96,10 @@ mod component {
 
     impl Lifecycle for Component {
         fn init(ctx: ExtensionContext) -> Result<(), String> {
-            log(LogLevel::Info, &format!("init id={} version={}", ctx.id, ctx.version));
+            log(
+                LogLevel::Info,
+                &format!("init id={} version={}", ctx.id, ctx.version),
+            );
             Ok(())
         }
         fn start() -> Result<(), String> {
@@ -130,7 +139,10 @@ mod component {
 
             // Resolve the routing table entry (host-config serves `routing.<task>`).
             let Ok(raw) = host_config::get(&format!("routing.{task}")) else {
-                log(LogLevel::Info, &format!("task={task}; no route configured; proceeding"));
+                log(
+                    LogLevel::Info,
+                    &format!("task={task}; no route configured; proceeding"),
+                );
                 return Ok(Decision::Proceed);
             };
             // host-config serves JSON, so a string value arrives quoted.
@@ -158,7 +170,13 @@ mod component {
         }
     }
 
-    #[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+    #[allow(
+        unsafe_code,
+        missing_docs,
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery
+    )]
     mod glue {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);

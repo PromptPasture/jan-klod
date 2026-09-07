@@ -10,7 +10,13 @@
 //! - `tools/list` → POST `{"jsonrpc":"2.0","id":N,"method":"tools/list"}`
 //! - `tools/call`  → POST `{"jsonrpc":"2.0","id":N,"method":"tools/call","params":{"name":"...","arguments":{...}}}`
 
-#[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+#[allow(
+    unsafe_code,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery
+)]
 mod bindings {
     wit_bindgen::generate!({
         world: "mcp-registry-world",
@@ -95,7 +101,11 @@ fn connect_server(id: &str, url: &str) -> Server {
                 .map(|arr| {
                     arr.iter()
                         .map(|t| McpTool {
-                            name: t.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
+                            name: t
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_owned(),
                             description: t
                                 .get("description")
                                 .and_then(Value::as_str)
@@ -113,11 +123,21 @@ fn connect_server(id: &str, url: &str) -> Server {
                 LogLevel::Info,
                 &format!("connected to {id} ({} tools)", tools.len()),
             );
-            Server { id: id.to_owned(), url: url.to_owned(), status: true, tools }
+            Server {
+                id: id.to_owned(),
+                url: url.to_owned(),
+                status: true,
+                tools,
+            }
         }
         Err(err) => {
             log(LogLevel::Warn, &format!("failed to connect to {id}: {err}"));
-            Server { id: id.to_owned(), url: url.to_owned(), status: false, tools: Vec::new() }
+            Server {
+                id: id.to_owned(),
+                url: url.to_owned(),
+                status: false,
+                tools: Vec::new(),
+            }
         }
     }
 }
@@ -147,7 +167,10 @@ impl Lifecycle for Component {
         }
         let count = servers.len();
         SERVERS.with(|s| *s.borrow_mut() = servers);
-        log(LogLevel::Info, &format!("init id={} servers={count}", ctx.id));
+        log(
+            LogLevel::Info,
+            &format!("init id={} servers={count}", ctx.id),
+        );
         Ok(())
     }
 
@@ -206,19 +229,24 @@ impl McpRegistry for Component {
     }
 
     fn invoke_tool(name: String, arguments: String) -> Result<String, McpError> {
-        let (url, bare_name) = SERVERS.with(|s| {
-            s.borrow().iter().find_map(|srv| {
-                if !srv.status {
-                    return None;
-                }
-                // Try exact match, then bare name after `::`
-                let bare = name.split("::").last().unwrap_or(&name);
-                srv.tools.iter().find(|t| t.name == bare).map(|_| (srv.url.clone(), bare.to_owned()))
+        let (url, bare_name) = SERVERS
+            .with(|s| {
+                s.borrow().iter().find_map(|srv| {
+                    if !srv.status {
+                        return None;
+                    }
+                    // Try exact match, then bare name after `::`
+                    let bare = name.split("::").last().unwrap_or(&name);
+                    srv.tools
+                        .iter()
+                        .find(|t| t.name == bare)
+                        .map(|_| (srv.url.clone(), bare.to_owned()))
+                })
             })
-        }).ok_or(McpError::ToolNotFound)?;
+            .ok_or(McpError::ToolNotFound)?;
 
-        let args: Value =
-            serde_json::from_str(&arguments).unwrap_or_else(|_| Value::Object(serde_json::Map::default()));
+        let args: Value = serde_json::from_str(&arguments)
+            .unwrap_or_else(|_| Value::Object(serde_json::Map::default()));
         let params = json!({"name": bare_name, "arguments": args});
         let resp = json_rpc_post(&url, "tools/call", Some(params))
             .map_err(|_| McpError::InvocationFailed)?;
@@ -227,7 +255,8 @@ impl McpRegistry for Component {
             return Err(McpError::InvocationFailed);
         }
 
-        let result = resp.pointer("/result/content")
+        let result = resp
+            .pointer("/result/content")
             .map(Value::to_string)
             .or_else(|| resp.get("result").map(Value::to_string))
             .unwrap_or_else(|| "{}".to_owned());
@@ -235,11 +264,14 @@ impl McpRegistry for Component {
     }
 
     fn reconnect(server_id: String) -> Result<(), McpError> {
-        let (idx, url) = SERVERS.with(|s| {
-            s.borrow().iter().enumerate().find_map(|(i, srv)| {
-                (srv.id == server_id).then(|| (i, srv.url.clone()))
+        let (idx, url) = SERVERS
+            .with(|s| {
+                s.borrow()
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, srv)| (srv.id == server_id).then(|| (i, srv.url.clone())))
             })
-        }).ok_or(McpError::ServerNotFound)?;
+            .ok_or(McpError::ServerNotFound)?;
 
         let updated = connect_server(&server_id, &url);
         SERVERS.with(|s| {
@@ -251,7 +283,13 @@ impl McpRegistry for Component {
     }
 }
 
-#[allow(unsafe_code, missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+#[allow(
+    unsafe_code,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery
+)]
 mod glue {
     use crate::{bindings, Component};
     bindings::export!(Component with_types_in bindings);

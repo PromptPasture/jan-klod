@@ -59,8 +59,9 @@ impl Store {
     /// Returns [`StoreError::Backend`] if the database cannot be opened or the
     /// schema cannot be created.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let conn = Connection::open(path)
-            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
+        let conn = Connection::open(path).map_err(|e| StoreError::Backend {
+            detail: e.to_string(),
+        })?;
         Self::init(conn)
     }
 
@@ -69,8 +70,9 @@ impl Store {
     /// # Errors
     /// Returns [`StoreError::Backend`] if the connection cannot be created.
     pub fn open_in_memory() -> Result<Self, StoreError> {
-        let conn = Connection::open_in_memory()
-            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
+        let conn = Connection::open_in_memory().map_err(|e| StoreError::Backend {
+            detail: e.to_string(),
+        })?;
         Self::init(conn)
     }
 
@@ -85,7 +87,9 @@ impl Store {
                 PRIMARY KEY (namespace, key)
             );",
         )
-        .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
+        .map_err(|e| StoreError::Backend {
+            detail: e.to_string(),
+        })?;
         Ok(Self { conn })
     }
 
@@ -104,9 +108,16 @@ impl Store {
                  VALUES (?1, ?2, ?3, ?4, ?4)
                  ON CONFLICT(namespace, key)
                  DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-                params![namespace, key, value, i64::try_from(now).unwrap_or(i64::MAX)],
+                params![
+                    namespace,
+                    key,
+                    value,
+                    i64::try_from(now).unwrap_or(i64::MAX)
+                ],
             )
-            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
         self.get(namespace, key)
     }
 
@@ -132,7 +143,9 @@ impl Store {
                 },
             )
             .optional()
-            .map_err(|e| StoreError::Backend { detail: e.to_string() })?
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?
             .ok_or(StoreError::NotFound)
     }
 
@@ -147,7 +160,9 @@ impl Store {
                 params![namespace, key],
             )
             .map(|_| ())
-            .map_err(|e| StoreError::Backend { detail: e.to_string() })
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })
     }
 
     /// List every key in `namespace`, newest-first, **without** the value payload.
@@ -180,7 +195,12 @@ impl Store {
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
-    pub fn search(&self, namespace: &str, query: &str, limit: u32) -> Result<Vec<Entry>, StoreError> {
+    pub fn search(
+        &self,
+        namespace: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<Entry>, StoreError> {
         let pattern = format!("%{query}%");
         self.query_entries(
             "SELECT key, value, created_at, updated_at FROM entries
@@ -209,20 +229,32 @@ impl Store {
                 "SELECT namespace FROM entries GROUP BY namespace \
                  ORDER BY MAX(updated_at) DESC, namespace ASC",
             )
-            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| StoreError::Backend { detail: e.to_string() })
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })
     }
 
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
     pub fn purge_namespace(&self, namespace: &str) -> Result<(), StoreError> {
         self.conn
-            .execute("DELETE FROM entries WHERE namespace = ?1", params![namespace])
+            .execute(
+                "DELETE FROM entries WHERE namespace = ?1",
+                params![namespace],
+            )
             .map(|_| ())
-            .map_err(|e| StoreError::Backend { detail: e.to_string() })
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })
     }
 
     /// Run a `SELECT key, value, created_at, updated_at` query into `Entry`s.
@@ -232,7 +264,9 @@ impl Store {
         params: impl rusqlite::Params,
         namespace: &str,
     ) -> Result<Vec<Entry>, StoreError> {
-        let mut stmt = self.conn.prepare(sql).map_err(|e| StoreError::Backend { detail: e.to_string() })?;
+        let mut stmt = self.conn.prepare(sql).map_err(|e| StoreError::Backend {
+            detail: e.to_string(),
+        })?;
         let rows = stmt
             .query_map(params, |row| {
                 let key: String = row.get(0)?;
@@ -245,8 +279,13 @@ impl Store {
                     updated_at: to_u64(row.get::<_, i64>(3)?),
                 })
             })
-            .map_err(|e| StoreError::Backend { detail: e.to_string() })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| StoreError::Backend { detail: e.to_string() })
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })
     }
 }
 

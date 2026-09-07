@@ -58,7 +58,8 @@ extensions:
             });
             Ok(updates.to_string().into_bytes())
         } else {
-            sent.borrow_mut().push(String::from_utf8_lossy(body.unwrap()).to_string());
+            sent.borrow_mut()
+                .push(String::from_utf8_lossy(body.unwrap()).to_string());
             Ok(br#"{"ok":true}"#.to_vec())
         }
     };
@@ -68,8 +69,16 @@ extensions:
 
     let sent = sent.into_inner();
     assert_eq!(sent.len(), 1, "exactly one reply sent");
-    assert!(sent[0].contains("\"chat_id\":555"), "reply targets the chat: {}", sent[0]);
-    assert!(sent[0].contains("pong"), "reply carries the answer: {}", sent[0]);
+    assert!(
+        sent[0].contains("\"chat_id\":555"),
+        "reply targets the chat: {}",
+        sent[0]
+    );
+    assert!(
+        sent[0].contains("pong"),
+        "reply carries the answer: {}",
+        sent[0]
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -120,7 +129,11 @@ fn write_then_answer_http() -> jan_klod_core::route::HttpFn {
 #[test]
 fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
     let ext_dir = common::repo_root().join("ext");
-    if !common::guests_staged(&["provider-openai.wasm", "tool-fs.wasm", "interceptor-permission.wasm"]) {
+    if !common::guests_staged(&[
+        "provider-openai.wasm",
+        "tool-fs.wasm",
+        "interceptor-permission.wasm",
+    ]) {
         return;
     }
 
@@ -179,9 +192,12 @@ workspace: {}
             } else {
                 serde_json::json!([])
             };
-            Ok(serde_json::json!({ "ok": true, "result": result }).to_string().into_bytes())
+            Ok(serde_json::json!({ "ok": true, "result": result })
+                .to_string()
+                .into_bytes())
         } else {
-            sent.borrow_mut().push(String::from_utf8_lossy(body.unwrap()).to_string());
+            sent.borrow_mut()
+                .push(String::from_utf8_lossy(body.unwrap()).to_string());
             Ok(br#"{"ok":true}"#.to_vec())
         }
     };
@@ -193,8 +209,14 @@ workspace: {}
         .iter()
         .find(|m| m.contains("Allow `fs`"))
         .unwrap_or_else(|| panic!("the user was asked before the write: {sent:?}"));
-    assert!(question.contains("\"chat_id\":555"), "asked in the right chat: {question}");
-    assert!(question.contains("always"), "the standing options are offered: {question}");
+    assert!(
+        question.contains("\"chat_id\":555"),
+        "asked in the right chat: {question}"
+    );
+    assert!(
+        question.contains("always"),
+        "the standing options are offered: {question}"
+    );
     // Over a chat surface the user has no terminal and no other context, so the
     // question has to carry the whole decision: which file, and what goes in it.
     assert!(
@@ -217,5 +239,8 @@ workspace: {}
         sent.iter().any(|m| m.contains("\"chat_id\":777")),
         "the unrelated chat still got a turn: {sent:?}"
     );
-    assert_eq!(next, 103, "the offset covers every update consumed, answer-poll included");
+    assert_eq!(
+        next, 103,
+        "the offset covers every update consumed, answer-poll included"
+    );
 }

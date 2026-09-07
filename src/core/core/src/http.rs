@@ -73,7 +73,14 @@ pub fn fetch(
     body: Option<&[u8]>,
     timeout_ms: u32,
 ) -> Result<WireResponse, WireError> {
-    fetch_within(&crate::egress::EgressPolicy::public_only(), method, url, headers, body, timeout_ms)
+    fetch_within(
+        &crate::egress::EgressPolicy::public_only(),
+        method,
+        url,
+        headers,
+        body,
+        timeout_ms,
+    )
 }
 
 /// As [`fetch`], but the destination must satisfy `policy` first.

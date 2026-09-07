@@ -51,16 +51,25 @@ extensions:
     let greeting = agent.run("session-1", "hello");
     assert_eq!(
         greeting,
-        RunResult::Answered { text: "pong".into(), agentic: false },
+        RunResult::Answered {
+            text: "pong".into(),
+            agentic: false
+        },
         "a greeting short-circuits the agentic loop"
     );
 
     // A multi-step English prompt passes the heuristics to the LLM classifier
     // tier (safe-default `agentic` in v1) → the shaping + ReAct path runs.
-    let task = agent.run("session-1", "Refactor the auth module and run the whole test suite");
+    let task = agent.run(
+        "session-1",
+        "Refactor the auth module and run the whole test suite",
+    );
     assert_eq!(
         task,
-        RunResult::Answered { text: "pong".into(), agentic: true },
+        RunResult::Answered {
+            text: "pong".into(),
+            agentic: true
+        },
         "a multi-step prompt runs the agentic path"
     );
 

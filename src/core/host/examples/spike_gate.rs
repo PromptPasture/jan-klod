@@ -45,7 +45,9 @@ fn main() -> Result<()> {
     let component_path = args
         .next()
         .unwrap_or_else(|| "../extensions/spike/spike.wasm".to_string());
-    let prompt = args.next().unwrap_or_else(|| "hello, component model".to_string());
+    let prompt = args
+        .next()
+        .unwrap_or_else(|| "hello, component model".to_string());
 
     let engine = Engine::default();
     let component = Component::from_file(&engine, &component_path)

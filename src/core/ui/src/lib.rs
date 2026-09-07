@@ -21,7 +21,9 @@ fn auth_header() -> String {
     std::env::var("JAN_KLOD_TOKEN")
         .ok()
         .filter(|t| !t.trim().is_empty())
-        .map_or_else(String::new, |token| format!("Authorization: Bearer {token}\r\n"))
+        .map_or_else(String::new, |token| {
+            format!("Authorization: Bearer {token}\r\n")
+        })
 }
 
 /// One event streamed back over SSE as a turn runs (mirrors the core's
@@ -58,7 +60,13 @@ pub fn parse_frame(kind: &str, data: &str) -> StreamEvent {
         Ok(v) => v,
         Err(err) => return StreamEvent::Error(format!("malformed SSE frame ({kind}): {err}")),
     };
-    let field = |k: &str| value.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    let field = |k: &str| {
+        value
+            .get(k)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
     match kind {
         "delta" => StreamEvent::Delta(field("text")),
         "tool" => StreamEvent::Tool(field("name")),
@@ -69,11 +77,20 @@ pub fn parse_frame(kind: &str, data: &str) -> StreamEvent {
             options: value
                 .get("options")
                 .and_then(serde_json::Value::as_array)
-                .map(|items| items.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default(),
             default: field("default"),
         },
-        _ => StreamEvent::Error(if kind == "error" { field("error") } else { format!("unknown event `{kind}`") }),
+        _ => StreamEvent::Error(if kind == "error" {
+            field("error")
+        } else {
+            format!("unknown event `{kind}`")
+        }),
     }
 }
 
@@ -96,7 +113,8 @@ pub fn stream_turn(
         body.len(),
         body
     );
-    let mut stream = TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
+    let mut stream =
+        TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
     #[allow(clippy::duration_suboptimal_units)] // no stable Duration::from_mins
     let read_timeout = Duration::from_secs(300);
     stream
@@ -152,7 +170,8 @@ pub fn answer_prompt(addr: &str, session: &str, answer: &str) -> Result<(), Stri
         body.len(),
         body
     );
-    let mut stream = TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
+    let mut stream =
+        TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|err| err.to_string())?;
@@ -164,7 +183,10 @@ pub fn answer_prompt(addr: &str, session: &str, answer: &str) -> Result<(), Stri
     stream
         .read_to_string(&mut raw)
         .map_err(|err| format!("reading response: {err}"))?;
-    let body = raw.split_once("\r\n\r\n").map_or(raw.as_str(), |(_h, b)| b).trim();
+    let body = raw
+        .split_once("\r\n\r\n")
+        .map_or(raw.as_str(), |(_h, b)| b)
+        .trim();
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|err| format!("malformed response body: {err} (in {body:?})"))?;
     if value.get("accepted").and_then(serde_json::Value::as_bool) == Some(true) {
@@ -173,7 +195,10 @@ pub fn answer_prompt(addr: &str, session: &str, answer: &str) -> Result<(), Stri
         Err(value
             .get("error")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| format!("unexpected response: {body}"), |e| format!("core: {e}")))
+            .map_or_else(
+                || format!("unexpected response: {body}"),
+                |e| format!("core: {e}"),
+            ))
     }
 }
 
@@ -193,7 +218,8 @@ pub fn send_turn(addr: &str, session: &str, message: &str) -> Result<String, Str
         body
     );
 
-    let mut stream = TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
+    let mut stream =
+        TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
     // A turn can take a while (model latency); 5-minute read cap. (No stable
     // `Duration::from_mins`, so `from_secs` is the readable option here.)
     #[allow(clippy::duration_suboptimal_units)]
@@ -218,8 +244,8 @@ fn parse_answer(raw: &str) -> Result<String, String> {
         .split_once("\r\n\r\n")
         .map_or(raw, |(_headers, body)| body)
         .trim();
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|err| format!("malformed response body: {err} (in {body:?})"))?;
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|err| format!("malformed response body: {err} (in {body:?})"))?;
     let answer = value.get("answer").and_then(serde_json::Value::as_str);
     let error = value.get("error").and_then(serde_json::Value::as_str);
     match (answer, error) {
