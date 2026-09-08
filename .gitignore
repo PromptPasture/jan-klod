@@ -593,3 +593,7 @@ src/core/**/*.cdx.json
 
 # Bundle output (make bundle)
 /dist/
+
+# Agent working notes, local to a checkout
+/.agents/TODO.md
+/.agents/LOOP.md
