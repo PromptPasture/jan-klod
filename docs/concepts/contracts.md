@@ -4,14 +4,14 @@ title: Contracts
 description: Stable WIT interfaces that form the boundary between core and extensions
 tags: [contracts, wit, interfaces, extensions, wasm]
 created: 2026-06-28T00:00:00Z
-updated: 2026-07-01T00:00:00Z
+updated: 2026-09-08T00:00:00Z
 ---
 
 Contracts are the stable interfaces that the core exposes and extensions consume or implement. They are the API surface that must not break — a breaking change here breaks all extensions.
 
 Every extension is a sandboxed WASM component, so **WIT interfaces are the only
 extension contract** — there is no native/in-core extension tier. (UIs are not
-extensions; they connect to core over an `api-*` network surface — see
+extensions; they connect to core over its host-side client surface — see
 [UI ↔ core](#ui--core-client-surface) below.)
 
 ## WIT interface overview
@@ -192,15 +192,31 @@ interface extension-lifecycle {
 
 ## UI ↔ core (client surface)
 
-There is **no native UI contract.** UIs are not extensions and run in their own
-processes; they reach core the same way any external client does — over an
-`api-*` surface (REST + SSE), the LSP/server model. The shape of that surface is
-the `api-*` extension's published API (e.g. `api-rest`'s HTTP routes + SSE event
-stream), not a WIT extension boundary and not a Rust trait baked into core.
+There is **no WIT UI contract.** UIs are not extensions and run in their own
+processes; they reach core the same way any external client does — over the
+core's host-side client surface, the LSP/server model. Today that surface is the
+REST + SSE API described in [Architecture → Transport](architecture.md#transport);
+it is built into the core binary since Phase 3, so the earlier question of a
+separate `api-rest` guest is closed.
 
-*(Open: whether core also exposes a minimal built-in local control endpoint so a
-UI client can attach to a bare core with no `api-*` enabled. Current lean: a UI
-deployment includes `api-rest`.)*
+**Planned, Phase 13 — the client protocol becomes a contract of the same rank as
+WIT.** A `protocol` crate holds the typed commands and notifications, a
+`protocol-version`, and a JSON Schema export; it is versioned and tested for
+compatibility like the WIT package. Transports: stdio JSON-RPC, WebSocket, and
+REST + SSE as a projection. ACP is an adapter over it (Phase 18), not the internal
+schema. See the [vision](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions)
+and the [roadmap](roadmap.md#phase-13--client-protocol).
+
+## Versioning (planned, Phase 16)
+
+The `jan-klod:interfaces` package is free to change until the first public
+release. From then on it follows semver: a **major** bump for any change an
+existing component cannot survive (removed or re-typed function, changed record
+field), a **minor** bump for additive change. Every extension carries the
+`api-version` it was built against (in `extension-lifecycle` and in its
+manifest); the host refuses an incompatible major with a clear error and keeps
+**N-1 minor** compatibility through adapters rather than breaking releases — the
+Zed model. Plan in the [roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).
 
 ## Storage is not a contract extensions implement
 

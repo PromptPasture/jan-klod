@@ -1,11 +1,11 @@
 ---
 type: concept
 title: Roadmap
-description: Phased plan from the Rust + Wasmtime + Component Model foundation decision to a shippable, polyglot-extension agent runtime, then on to a file-workspace-capable agent (streaming, host-fs/host-process, tool fleet), and finally to a publicly released product (v0.1.0).
-tags: [roadmap, planning, rust, wasmtime, component-model, phases]
+description: Phased plan from the Rust + Wasmtime + Component Model foundation decision to a shippable, polyglot-extension agent runtime (v0.1.0, Phases 1–12), then on to the Harness-as-a-Platform vision — client protocol, event-sourced session log, OS-level effect sandbox, capability manifest + signed registry, web client + GUI shell, MCP/ACP ports (Phases 13–18).
+tags: [roadmap, planning, rust, wasmtime, component-model, phases, vision]
 created: 2026-06-29
-updated: 2026-07-03
-status: v0.1.0 complete (all phases 1–12 done)
+updated: 2026-09-08
+status: v0.1.0 complete (Phases 1–12 done); Phases 13–18 (Harness as a Platform) not-started
 ---
 
 # Roadmap
@@ -84,6 +84,12 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 10 — Skills + MCP registry | `done` | **Done 2026-07-03.** `registry-skills` (scans `.agents/skills/*.md`, parses YAML frontmatter `name:`/`description:`, exposes via `skill-registry` WIT, `invoke` renders template); `registry-mcp` (SSE/streamable-HTTP MCP gateway, JSON-RPC `tools/list` + `tools/call`). `registry_host.rs` binds both worlds; `CombinedFleet` dispatches tool calls to `ToolFleet` then `RegistryFleet`. `host-fs` added to `skill-registry-world`. |
 | 11 — UX polish | `done` | **Done 2026-07-03.** REST surface migrated to resource model (`POST /turn` retired; `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message` added); `store::list_namespaces` + `AgentSession::list_sessions`; workspace auto-detection (defaults to `$PWD` when `workspace:` key absent); per-token streaming in TUI via mpsc channel + `apply_delta`/`finish_turn`. UI client and integration tests updated. |
 | 12 — Release: GitHub + web | `done` | **Done 2026-07-03.** GitHub Actions release workflow (`.github/workflows/release.yml`; tag `v*` → matrix linux/darwin × x86_64/arm64 bundles + SHA256SUMS, `gh release create`); `scripts/install.sh` (OS/arch detect, checksum verify, installs to `~/.local/bin`); `pages/index.html` (GitHub Pages landing); `docs/quickstart.md`; README rewrite. |
+| 13 — Client protocol | `not-started` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. Gate: `jan-klod-ui` drives a full turn — streaming, `ask`, cancel — over stdio JSON-RPC; REST + SSE tests still pass as a projection; protocol version negotiated at connect. |
+| 14 — Event-sourced session log | `not-started` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
+| 15 — OS-level effect sandbox | `not-started` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot and in the turn; the security-model row cites the tests. |
+| 16 — Capability manifest + signed registry | `not-started` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
+| 17 — Web client + GUI shell | `not-started` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. Needs 13. Gate: a browser and a Tauri window drive a turn with `ask` + cancel from one front-end codebase served by the core. |
+| 18 — Ecosystem ports | `not-started` | [#40](https://github.com/PromptPasture/jan-klod/issues/40). Vision decision 6. Needs 13. Gate: an ACP client fixture runs a turn against the core; an MCP client lists and calls a core-exposed tool — both offline. |
 
 Built-extension language assignments and their own status live in the
 [Extension Technologies brainstorm](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md#near-term-assignments-provisional--confirmed-at-the-phase-1-gate).
@@ -327,7 +333,156 @@ produces a model-driven file edit in under 15 minutes.
 
 ---
 
+## Post-v0.1: Harness as a Platform (Phases 13–18)
+
+[Vision — Harness as a Platform](../decisions/2026-09-08-harness-platform-vision/Vision.md)
+(2026-09-08) reframes jan-klod as an **agent runtime** — kernel + distributions +
+clients — and records six decisions. They are phased below by dependency: the
+protocol (13) is what the web client (17) and the ecosystem ports (18) build on;
+the event log (14) is host-only and independent; the sandbox (15) and the
+registry (16) are independent of everything and can run in parallel with 13–14.
+Work items are GitHub Issues: one umbrella per phase ([#35](https://github.com/PromptPasture/jan-klod/issues/35), [#36](https://github.com/PromptPasture/jan-klod/issues/36), [#37](https://github.com/PromptPasture/jan-klod/issues/37), [#38](https://github.com/PromptPasture/jan-klod/issues/38), [#39](https://github.com/PromptPasture/jan-klod/issues/39), [#40](https://github.com/PromptPasture/jan-klod/issues/40)), one issue per slice; cross-cutting items are [#59](https://github.com/PromptPasture/jan-klod/issues/59), [#60](https://github.com/PromptPasture/jan-klod/issues/60), [#61](https://github.com/PromptPasture/jan-klod/issues/61), [#62](https://github.com/PromptPasture/jan-klod/issues/62), [#63](https://github.com/PromptPasture/jan-klod/issues/63).
+Library choices are still made just-in-time inside each phase.
+
+## Phase 13 — Client protocol
+
+**Goal:** the client surface becomes a contract of the same rank as WIT — its own
+versioned schema, its own compatibility tests — so TUI, web, GUI, editors and
+scripts share one wire format. Supersedes the Phase 3 lean "UI always connects via
+REST"; REST + SSE stay as one *projection* of the protocol.
+
+- **13a — Protocol crate + schema.** A `protocol` crate in the core workspace:
+  typed commands (`session/create`, `session/list`, `session/message`,
+  `turn/answer`, `turn/cancel`) and notifications (the conductor's `Event`
+  variants — `text-delta`, `tool-invoked`, `tool-result`, `warning`, `done` — plus
+  `ask` and `session/updated`), a `protocol-version`, a JSON Schema export, and a
+  test that every existing SSE event maps onto a notification. Resolves the open
+  question "own schema vs. ACP wholesale": own schema, ACP as an adapter (Phase 18).
+- **13b — stdio JSON-RPC transport.** a gateway `rpc` subcommand speaks the protocol
+  over stdin/stdout (the Codex `app-server` / LSP shape); `jan-klod-ui` moves onto
+  it, spawning the gateway on demand when no server is running. The REST/SSE
+  driver's `ask`/answer round-trip is reused, not duplicated.
+- **13c — WebSocket transport.** The same protocol over WebSocket on the existing
+  listener, for browser clients (Phase 17). Token auth as for REST.
+
+**Exit gate:** `jan-klod-ui` drives a full turn — streaming, `ask`, cancel — over
+stdio JSON-RPC; REST + SSE tests still pass; protocol version negotiated at connect.
+
+## Phase 14 — Event-sourced session log
+
+**Goal:** the session's canonical record is the event stream the clients already
+consume, not a transcript. Transcript, `GET /session/:id`, and SSE become
+projections; resume, fork, replay and audit fall out.
+
+- **14a — Event table + writer sink.** An append-only `events` table
+  (`session`, `seq`, `ts`, `kind`, `payload`) in the host-side SQLite `Store`; an
+  `EventSink` that persists every conductor `Event` plus the user message, the
+  `ask` and its answer, and the permission decision. Event-log schema version is
+  independent of the protocol version.
+- **14b — Projections + resume + fork.** Transcript and session listing are rebuilt
+  from events; resuming a session replays the log into the context interceptor;
+  `session/fork` at event *N* creates an independent session. The old transcript
+  storage is retired or migrated with a one-shot migration.
+
+**Exit gate:** after a restart, a resumed session's transcript rebuilt from the log
+equals the pre-restart transcript; a fork from event *N* runs independently.
+
+## Phase 15 — OS-level effect sandbox
+
+**Goal:** confine what a `host-process` command *does*, not only who may call it.
+Closes the Phase 7 "OS isolation" carry-forward and the
+[security-model gap](security-model.md#known-gaps).
+
+- **15a — Policy object + approval-only mode.** `execution.sandbox` in
+  `config.yaml`: `mode: os | approval-only`, `writable: [paths]`, `network: bool`.
+  Platform detection at boot; where no backend exists the run is
+  **approval-only** and says so at boot and in the turn. Tests for the policy
+  parsing and the reporting; no backend yet.
+- **15b — macOS Seatbelt backend.** A generated `sandbox-exec` profile: workspace
+  read/write, everything else read-only or denied, network per policy.
+- **15c — Linux Landlock backend.** Landlock filesystem rules (+ seccomp for
+  network where Landlock cannot express it); graceful fallback to approval-only on
+  kernels without Landlock.
+- **15d — Windows spike.** Feasibility of a restricted token / AppContainer for a
+  spawned command; outcome recorded as a dated decision; approval-only stays the
+  Windows default until a backend exists.
+
+**Exit gate:** a `tool-shell` command writing outside the workspace is denied on
+macOS and Linux; elsewhere the run reports approval-only; the security-model row
+for `host-process` cites the new tests.
+
+## Phase 16 — Capability manifest + signed registry
+
+**Goal:** an extension declares what it needs before it is loaded, the host
+cross-checks the declaration against the component's real imports, and installs
+are verified. Extends the Phase 5 "staging" carry-forward; prerequisite for a
+public extension ecosystem.
+
+- **16a — Manifest + boot cross-check.** A manifest beside each `.wasm` (or an
+  embedded custom section): requested capabilities, `api-version`, name, version,
+  author. At load the host compares the manifest with the component's actual
+  imports (Wasmtime component type introspection) and with the `config.yaml`
+  grants; a mismatch is refused with a reason.
+- **16b — WIT versioning policy.** Semver rules for the `jan-klod:interfaces`
+  package written down in [Contracts](contracts.md); `api-version` carried in
+  `extension-lifecycle`; the host refuses an incompatible major with a clear
+  error and adapts N-1 minors.
+- **16c — `ext install` with provenance.** a gateway `ext install <url|path>` subcommand:
+  download to staging, checksum, signature (lean: minisign — small, no PKI),
+  WIT validation, then move into `ext/`. A tampered artefact never reaches `ext/`.
+- **16d — Registry index + `ext search`.** A static JSON index over HTTP (the
+  Configurator's assumption) listing name, version, `api-version`, requested
+  capabilities, checksum, signature; `ext search`/`ext list` read it; the
+  Configurator shows requested capabilities before download.
+
+**Exit gate:** a component whose manifest omits a capability it imports is refused
+at boot; a tampered download is refused; an install from a static index fixture
+works offline; a WIT major mismatch is a clear error.
+
+## Phase 17 — Web client + GUI shell
+
+**Goal:** one front-end codebase serves both the browser and the desktop window.
+Needs Phase 13c.
+
+- **17a — Web client.** A static, dependency-light TypeScript SPA served by the
+  core at `/`, speaking the protocol over WebSocket: sessions, streaming, `ask`,
+  cancel — TUI parity. First first-party TypeScript in the repo: supply-chain
+  hygiene (lockfile, `cargo-deny`-equivalent audit, no build framework beyond a
+  bundler) is part of the slice.
+- **17b — Tauri shell.** `jan-klod-ui --gui` opens a Tauri window over the same
+  front-end; the `gui` bundle ships it. System webview, no bundled browser.
+
+**Exit gate:** a browser and a Tauri window drive a turn with `ask` + cancel from
+one front-end codebase.
+
+## Phase 18 — Ecosystem ports
+
+**Goal:** MCP and ACP in both directions. The inbound halves exist (`registry-mcp`,
+`agent-*`); this phase adds the core *as* a server on each. Needs Phase 13a.
+
+- **18a — Core as an MCP server.** a gateway `mcp` subcommand exposes the core over
+  MCP stdio: an `ask` tool and session tools, so other agents can call jan-klod.
+- **18b — ACP server side.** a gateway `acp` subcommand maps ACP onto the protocol so
+  editors (Zed and others) connect without a bespoke plugin.
+- **18c — `registry-mcp` stdio transport.** MCP servers over a long-lived child
+  process — the Phase 7 "long-lived children" carry-forward — behind the Phase 15
+  policy.
+
+**Exit gate:** an ACP client fixture runs a turn against the core; an MCP client
+lists and calls a core-exposed tool — both offline.
+
 ## Cross-cutting (continuous, not a phase)
+
+Resource-budget and developer-experience items from the vision, tracked as
+issues, not phases: **lazy guest instantiation** (instantiate a component on
+first call, not at boot), an **AOT component cache** (`.cwasm` keyed by
+component hash + Wasmtime version), an **accelerated `host-fs.grep`** (native
+tree search behind the existing jail, the guest only shapes the request), the
+**Rust extension PDK** (`make ext-new NAME=` template + guest test harness
+guide), and **named distributions** in the Configurator (`coding`,
+`headless-chat`, `minimal`).
+
+
 
 - **Observability** — structured logging, Prometheus, OpenTelemetry — wired from Phase 1.
 - **Testing** — `cargo test` for core; a WASM-component test harness that loads a

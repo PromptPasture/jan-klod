@@ -4,7 +4,7 @@ title: Architecture
 description: High-level architecture of the Jan-Klod agent runtime
 tags: [architecture, core, extensions, rust, wasm, wasmtime]
 created: 2026-06-28T00:00:00Z
-updated: 2026-07-03T00:00:00Z
+updated: 2026-09-08T00:00:00Z
 ---
 
 > **Foundation:** the core is **Rust + Wasmtime** running WebAssembly
@@ -19,6 +19,15 @@ updated: 2026-07-03T00:00:00Z
 > *decision* is a sandboxed **interceptor** extension — see
 > [Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
 > All implementation choices are resolved as of v0.1.0.
+>
+> **Post-v0.1 (2026-09-08):** jan-klod is framed as an **agent runtime** — kernel
+> + distributions + clients — in
+> [Vision — Harness as a Platform](../decisions/2026-09-08-harness-platform-vision/Vision.md),
+> phased as roadmap Phases 13–18: the client protocol as a first-class versioned
+> contract, an event-sourced session log, an OS-level effect sandbox for
+> `host-process`, capability manifests + a signed registry, a web client with a
+> Tauri shell, MCP + ACP in both directions. Items below marked *(planned, Phase N)*
+> come from there; everything else describes what is built.
 
 ## Philosophy
 
@@ -56,6 +65,33 @@ integrations are likewise extensions or external clients, never built in.
 > component boundary twice. Cost accepted: the loop conductor is no longer a
 > swappable, polyglot component. See
 > [the decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
+
+## Layers
+
+The system read top-down, as the [vision](../decisions/2026-09-08-harness-platform-vision/Vision.md#architecture--five-layers)
+fixes it. Built and planned parts share one picture so the target is visible from
+the current state:
+
+```
+L4 Clients        TUI (ratatui, built) | Web client + Tauri shell (Phase 17) | IDE via ACP (Phase 18) | chat channels (Telegram, built)
+L3 Protocol       REST + SSE (built) → one versioned command/event schema over stdio JSON-RPC / WebSocket / SSE (Phase 13)
+L2 Extensions     provider | tool | interceptor | registry | agent | chat        (WASM Components, polyglot — built)
+L1 Capabilities   host-fs | host-process | host-http | host-storage | host-config | host-log | host-event   (default-deny, built)
+                  + OS-level effect sandbox behind host-process (Phase 15); manifest-declared grants (Phase 16)
+L0 Kernel         lifecycle | capability broker | loop conductor | SQLite store (built) | session event log (Phase 14) | protocol server (Phase 13)
+```
+
+- **L0 stays boring** — mechanism, no policy. The only planned additions are the
+  protocol server and the event log; both are host-side because both hold the
+  session, the most sensitive thing the runtime has.
+- **L1 is the syscall layer.** Each capability is default-deny and granted per
+  component (today in `config.yaml`; from Phase 16 also declared in a manifest the
+  host cross-checks against the component's real imports).
+- **L2 keeps the taxonomy below.** Nothing "smart" lives anywhere else.
+- **L3 is the ABI for clients.** Today REST + SSE; Phase 13 makes it a versioned
+  contract of the same rank as WIT, with REST + SSE kept as one projection.
+- **L4 holds no state the core does not.** Every client is a projection of the
+  session over L3.
 
 ## Extension model
 
@@ -170,25 +206,23 @@ chat-whatsapp         drives the core loop; uses host-socket
 ### User interfaces (separate clients)
 
 UIs are **not extensions and are not part of core.** They are optional, separate
-**client processes** that connect to a running core over an `api-*` HTTP+SSE
-surface — the same way an editor talks to a language server. Core never embeds a
-UI; a headless deployment (Raspberry Pi, container, Telegram-only) runs no UI
-client at all.
+**client processes** that connect to a running core over its host-side client
+surface (see [Transport](#transport)) — the same way an editor talks to a language
+server. Core never embeds a UI; a headless deployment (Raspberry Pi, container,
+Telegram-only) runs no UI client at all. Since Phase 3 the surface is built into
+the core binary, so a UI client attaches to any running core; the earlier open
+question (a separate `api-rest` guest vs. a built-in endpoint) is closed.
 
-A single client binary presents either a terminal or a graphical UI depending on
-how it is launched:
+| Launch | Surface | Technology | Status |
+|---|---|---|---|
+| `jan-klod-ui` (default) | Terminal UI | `ratatui`, over REST + SSE today; over stdio JSON-RPC from Phase 13 | built |
+| browser → core `/` | Web UI | a static, dependency-light TypeScript front-end served by the core, speaking the protocol over WebSocket | planned, Phase 17 |
+| `jan-klod-ui --gui` | Native window | a **Tauri shell around the same web front-end** — system webview, not a third client codebase | planned, Phase 17 |
+| editor | IDE integration | ACP server side mapped onto the protocol | planned, Phase 18 |
 
-| Launch | Surface | Technology |
-|---|---|---|
-| `jan-klod-ui` (default) | Terminal UI | `ratatui` |
-| `jan-klod-ui --gui` | Native window | Tauri *(planned, not yet implemented)* |
-| browser → `api-rest` | Web UI | served by the `api-rest` extension; open a browser tab |
-
-All three are clients of the same `api-*` surface, so they share one backend and
-carry no agent logic. *(Open: whether core also exposes a small built-in local
-control endpoint so a UI client can attach to a bare core with no `api-*`
-enabled, or whether a UI deployment always includes `api-rest`. Current lean:
-require `api-rest`, matching the LSP/server model.)*
+All are clients of one surface, share one backend, and carry no agent logic. A
+client holds no state the core does not: every view is a projection of the
+session's event log (Phase 14) delivered over the protocol (Phase 13).
 
 ## Agent loop architecture
 
@@ -279,6 +313,14 @@ Events (SSE)**. UI clients, browsers, and remote ACP callers all consume this
 surface. Curl-debuggable, browser-compatible, no stub generation. Endpoints:
 `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`,
 `POST /session/:id/message` (SSE or JSON).
+
+**Planned, Phase 13:** this surface becomes a versioned **client protocol** of the
+same rank as the WIT contracts — a `protocol` crate with typed commands and
+notifications, a protocol version negotiated at connect, and three transports:
+stdio JSON-RPC (a gateway `rpc` subcommand, for the TUI and editors), WebSocket (for
+the web client), and the existing REST + SSE kept as one projection. Vision
+[decision 1](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions);
+plan in the [roadmap](roadmap.md#phase-13--client-protocol).
 
 ## Storage
 

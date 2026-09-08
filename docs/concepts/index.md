@@ -1,6 +1,6 @@
 # Concepts
 
-- [Roadmap](roadmap.md) — phased build plan from the Rust + Wasmtime foundation to a shippable runtime
+- [Roadmap](roadmap.md) — phased build plan: Phases 1–12 to v0.1.0, Phases 13–18 for the [Harness-as-a-Platform vision](../decisions/2026-09-08-harness-platform-vision/Vision.md)
 - [Architecture](architecture.md) — overall system design, extension model, agent loop
 - [Security model](security-model.md) — what a component is granted, how, where it is enforced, and which test proves it; plus the gaps
 - [Contracts](contracts.md) — stable WIT interfaces between core and extensions

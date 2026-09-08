@@ -4,7 +4,7 @@ title: Configurator
 description: Web UI for generating Jan-Klod configuration and deployment archives
 tags: [configurator, ui, zip, setup]
 created: 2026-06-28T00:00:00Z
-updated: 2026-06-29T00:00:00Z
+updated: 2026-09-08T00:00:00Z
 ---
 
 The Configurator is a Spring Initializr-style web UI. Users select extensions and provide settings; the UI generates a ready-to-run archive containing the core binary, selected `.wasm` extensions, and a pre-filled `config.yaml`.
@@ -54,6 +54,21 @@ Core runs headless and serves REST itself; the UI client selects its mode at
 launch: `jan-klod-ui` (TUI), `jan-klod-ui --gui`, or a browser pointed at the core's
 REST surface.
 
+**Planned — distributions.** The [vision](../decisions/2026-09-08-harness-platform-vision/Vision.md#product-shape--kernel-distributions-clients)
+names bundles by *what they are for*, not by which client they carry — the Linux
+distribution analogy. The presets become `coding` (providers + interceptors +
+the file/edit/find/git tool fleet + skills; UI client included), `headless-chat`
+(providers + interceptors + a chat channel; no UI client — Raspberry Pi and
+container), and `minimal` (one provider, the interceptor set, no tools). Client
+choice (TUI, GUI, web) is orthogonal and made at launch. Tracked as a
+cross-cutting issue, not a phase.
+
 ## Extension registry
 
 The registry is a simple HTTP file server: a directory of `.wasm` files with a metadata index. No crates.io, no npm. Extensions are downloaded at Configurator generation time and bundled into the ZIP.
+
+**Planned, Phase 16.** The index gains, per extension, its `api-version`, the
+capabilities its manifest requests, a checksum and a signature; the Configurator
+shows requested capabilities *before* download, and the gateway's `ext install` subcommand
+verifies provenance before anything reaches `ext/`. See the
+[roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).

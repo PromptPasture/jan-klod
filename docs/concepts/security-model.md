@@ -64,6 +64,16 @@ not enforced.
 
 Stated because a security page that lists only its wins is marketing.
 
+- **`host-process` confines the caller, not the command.** The grant is narrow —
+  `execution.enabled`, a workspace-relative cwd, a timeout, an output cap, a
+  scrubbed environment — but the command itself runs with the user's privileges
+  and can read or write anywhere the user can. The path jail belongs to
+  `host-fs`; nothing here confines what `sh -c` does once it is running. Closing
+  it needs an OS-level sandbox (Seatbelt on macOS, Landlock + seccomp on Linux;
+  an explicit approval-only mode where neither exists) — vision
+  [decision 2](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions),
+  planned as [roadmap Phase 15](roadmap.md#phase-15--os-level-effect-sandbox).
+  When it lands, this bullet becomes a row in the table above with its tests.
 - **DNS rebinding.** The egress policy resolves a hostname and checks every
   address it answers with, then hands the URL to the HTTP client, which resolves
   again. A name that answers differently the second time slips through. Closing it
