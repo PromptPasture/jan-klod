@@ -10,6 +10,13 @@ on:
     branches: [main]
   pull_request:
 
+# One run per branch/PR — cancel a superseded run rather than let it finish. No
+# paths-ignore for docs: docs_match_config.rs's tests read README.md, docs/**
+# and pages/index.md, so a doc-only push still has to run lint-test.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
