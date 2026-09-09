@@ -54,6 +54,17 @@ nursery = "warn"
 [profile.dev]
 debug = "line-tables-only"
 
+# And none at all for dependencies, as in the host workspace — the setting above
+# already reaches them (a `[profile.dev]` key applies to every crate built with
+# the profile), so this drops their remaining line tables rather than full debug
+# info. `"*"` matches non-workspace packages only, so the guests keep
+# `line-tables-only`.
+#
+# Native test builds only: the wasm guests use `[profile.release]` below, which
+# is untouched.
+[profile.dev.package."*"]
+debug = 0
+
 # Every guest is a wasm32-wasip2 component: shared size/LTO profile. Cargo only
 # reads [profile.*] from a workspace root, which is why this moved here from each
 # guest's own Cargo.toml when they merged into one workspace.

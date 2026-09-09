@@ -23,6 +23,24 @@ thiserror = "2"
 [profile.dev]
 debug = "line-tables-only"
 
+# Dependencies get none at all — not even the line tables.
+#
+# Note what the block above already does: a `[profile.dev]` setting applies to
+# every crate built with the profile, dependencies included, which is why the
+# 2026-07-06 change to it reclaimed so much. So this is not "deps still carry
+# full debug info"; it is the narrower step of dropping their remaining line
+# tables. Measured on a clean build of this workspace: 4.6GB -> 4.0GB.
+#
+# The asymmetry with the block above is deliberate: a backtrace through *our*
+# code still resolves to file:line, which is what a panic in a test needs. What
+# is given up is file:line on the third-party frames of a backtrace, and
+# stepping into a dependency in a debugger.
+#
+# `"*"` matches non-workspace packages only, so workspace members keep
+# `line-tables-only`.
+[profile.dev.package."*"]
+debug = 0
+
 # Linting policy, declared once and inherited by every crate via `lints.workspace = true`.
 # Levels are `warn` (visible, non-blocking locally); CI denies warnings (Slice 1b gate).
 [workspace.lints.rust]
