@@ -84,12 +84,24 @@ spike-deps:
 
 # The TinyGo spike is the Slice 1a gate canary — a one-off, not a real guest, so it
 # stays separate from GUESTS and out of `all`.
+#
+# Its spike.wasm is committed (the one exception to the ignored guest components,
+# see .gitignore), so that the test asserting the polyglot claim needs neither a
+# TinyGo install nor a prior build. That makes the build flags part of what lands
+# in git: -no-debug -opt=z takes it from 562 KB to 75 KB, smaller than the mean
+# Rust guest instead of 4x it, and cuts the host's Cranelift compile of it. The
+# trade is the DWARF a guest panic would use — acceptable for a canary whose only
+# assertion is one successful call across the boundary. Rebuild with `make
+# spike-guest` and commit the result.
 SPIKE_DIR := spike
 SPIKE_WIT := $(WIT_DIR)/spike
 spike-guest: spike-deps
-	cd $(SPIKE_DIR) && tinygo build -target=wasip2 \
+	cd $(SPIKE_DIR) && tinygo build -target=wasip2 -no-debug -opt=z \
 		-wit-package $(SPIKE_WIT) -wit-world spike -o spike.wasm .
 
+# spike.wasm is deliberately absent here: it is a committed fixture, not a build
+# output, and `clean` deleting it is what made the polyglot test depend on whether
+# its sibling had run first.
 clean:
-	rm -rf $(SPIKE_DIR)/spike.wasm target \
+	rm -rf target \
 		$(addprefix $(EXT_DIR)/,$(addsuffix .wasm,$(GUESTS)))

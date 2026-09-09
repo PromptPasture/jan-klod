@@ -583,6 +583,12 @@ target/
 src/extensions/**/*.wasm
 ext/*.wasm
 
+# …except the TinyGo spike, which is a committed fixture: the test that backs the
+# polyglot claim loads it, and requiring a TinyGo install to produce it first is
+# what made that test depend on which of the two polyglot tests ran first. Built
+# with -no-debug -opt=z (~75 KB) by `make -C src/extensions spike-guest`.
+!src/extensions/spike/spike.wasm
+
 # wkg-fetched WIT deps — reproducible from the committed lock via `wkg wit fetch`
 wit/**/deps/
 
