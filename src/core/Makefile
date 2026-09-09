@@ -1,4 +1,4 @@
-.PHONY: build check test clippy audit deny clean
+.PHONY: build check test test-fast clippy audit deny clean
 
 # Builds, tests, and lints the Rust host workspace (core + config + host crates).
 # Strictly core: actually running the integrated system needs the guests staged in
@@ -21,6 +21,21 @@ check:
 # Host-side unit tests (config/boot + ureq status mapping).
 test:
 	cargo test
+
+# The same suite under cargo-nextest: one process per test rather than one per
+# binary, scheduled across all cores in a single pass. Config in .config/
+# nextest.toml; install the runner with `make setup` from the repo root.
+#
+# Kept beside `test` rather than replacing it — the gates (`make gate`, ci.yml,
+# the hooks) stay on `cargo test` for now. nextest also gives the process
+# isolation that merging the integration test binaries into one will need, since
+# several of those tests set conflicting process-global env vars.
+#
+# nextest does not run doctests. This workspace has none — all four Doc-tests
+# targets report zero — so nothing is lost; if one is ever added, `cargo test
+# --doc` belongs beside this.
+test-fast:
+	cargo nextest run
 
 # The repo lint policy, enforced as CI will (-D warnings).
 clippy:

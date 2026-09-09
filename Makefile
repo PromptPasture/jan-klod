@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
+.PHONY: help wit all core extensions supervisor bundle test test-core test-guests test-fast harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
 
 .DEFAULT_GOAL := all
 
@@ -27,6 +27,7 @@ help:
 	@echo "  test        run host-side unit tests (core + guests + supervisor)"
 	@echo "  test-core   run the host workspace's tests only"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
+	@echo "  test-fast   run the host workspace's tests under cargo-nextest"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
@@ -72,6 +73,11 @@ test-core:
 test-guests:
 	$(MAKE) -C $(EXT) test
 	cd $(SUPERVISOR) && go vet ./... && go test ./...
+
+# `test-core` under cargo-nextest — one process per test instead of one per
+# binary, all cores in one pass. See src/core/Makefile for the caveats.
+test-fast:
+	$(MAKE) -C $(CORE) test-fast
 
 # Build the tiny Go blue/green supervisor (static, dependency-free binary).
 supervisor:
@@ -187,7 +193,7 @@ config:
 
 # One-time developer setup: install cargo supply-chain plugins and wire git hooks.
 setup:
-	cargo install cargo-audit cargo-deny cargo-cyclonedx
+	cargo install cargo-audit cargo-deny cargo-cyclonedx cargo-nextest
 	$(MAKE) install-hooks
 
 install-hooks:
