@@ -33,9 +33,12 @@ make -C src/extensions all \
 
 export JK_REQUIRE_GUESTS=1
 
-make test \
-  && pass "make test" \
-  || { fail "make test failed"; exit 1; }
+# Not `make test`: that starts with the host workspace suite, which `make gate`
+# below re-runs in full (both are `cargo test --workspace` on src/core). The two
+# legs gate never reaches are the guests' native tests and the Go supervisor.
+make test-guests \
+  && pass "make test-guests" \
+  || { fail "make test-guests failed"; exit 1; }
 
 make clippy \
   && pass "make clippy" \
@@ -44,10 +47,12 @@ make clippy \
 # ── Job 2: component harness ──────────────────────────────────────────────────
 step "Job 2/3 · component harness (exit gate)"
 
-make harness \
-  && pass "make harness" \
-  || { fail "make harness failed"; exit 1; }
-
+# `make gate` only — not `make harness` first. harness names nine test targets
+# (component_harness, agent_loop, persistence, api_rest, telegram, host_fs,
+# host_process, tool_fleet, tool_wiring), every one a file in src/core/host/tests/
+# that `cargo test --workspace` already runs. It stays a hand-run dev target; here
+# it was a second build and run of nine wasmtime-linked binaries. Both stage the
+# guests, so nothing is lost by dropping it.
 make gate \
   && pass "make gate" \
   || { fail "make gate failed"; exit 1; }

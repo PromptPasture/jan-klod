@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
+.PHONY: help wit all core extensions supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
 
 .DEFAULT_GOAL := all
 
@@ -24,7 +24,9 @@ help:
 	@echo "  all         build the host workspace + Rust guests (default)"
 	@echo "  core        build the host workspace"
 	@echo "  extensions  build the Rust guests, staged in ext/"
-	@echo "  test        run host-side unit tests"
+	@echo "  test        run host-side unit tests (core + guests + supervisor)"
+	@echo "  test-core   run the host workspace's tests only"
+	@echo "  test-guests run the guests' native tests + the Go supervisor only"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
@@ -57,8 +59,17 @@ extensions:
 
 # Host-side unit tests: the core workspace plus the guests' native (host-target)
 # tests (pure logic behind a wasm32 cfg-gate — e.g. the intent router).
-test:
+test: test-core test-guests
+
+# The host workspace's own tests. `gate` (cargo test --workspace, same manifest)
+# supersedes this, so a caller that runs `gate` anyway wants `test-guests` alone.
+test-core:
 	$(MAKE) -C $(CORE) test
+
+# The two legs `gate` does not reach: the guests' native tests and the Go
+# supervisor. Split out because the push hook and CI both run `gate`, and running
+# the full `test` beside it built and ran the host workspace suite twice.
+test-guests:
 	$(MAKE) -C $(EXT) test
 	cd $(SUPERVISOR) && go vet ./... && go test ./...
 

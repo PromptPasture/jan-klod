@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-09
+
+- **Fix**: **the push hook built and ran the host workspace test suite twice, and CI's harness job did the same.** `pre-push` ran `make test`, which begins with `cargo test` on `src/core`, and then `make gate`, which is `cargo test --workspace` on the same manifest. `src/core/Cargo.toml` is a virtual manifest, so those two invocations are the same invocation — checked rather than assumed: both resolve to an identical list of 41 test executables. Immediately before `gate` it also ran `make harness`, whose nine named test targets (`component_harness`, `agent_loop`, `persistence`, `api_rest`, `telegram`, `host_fs`, `host_process`, `tool_fleet`, `tool_wiring`) are all files in `src/core/host/tests/` and therefore already in that list. With `wasmtime` statically linked into every one of them, each push built and ran nine ~190MB binaries a second time for nothing.
+- `make test` is now `test-core` + `test-guests`, and the hook runs `test-guests` (the guests' native tests and the Go supervisor — the only two legs `gate` does not reach) followed by `gate` alone. `make test` itself expands to exactly what it did before.
+- CI's `harness` job carried the same pair with a sharper edge: `make harness` ran there with **no `JK_REQUIRE_GUESTS`**, so its own tests could skip and the job would still report success. `gate` stages the guests itself (`gate: extensions`) and exports the flag, so dropping `harness` removed the duplicate work and closed that hole in one move. That is the same shape as the pre-commit hook and the CI test job fixed on 2026-07-06 — a gate that reads green whether or not it ran anything — and it survived here because the sequence lives in bash rather than in a named target.
+- `make harness` stays as a hand-run target for targeted iteration; what changed is that nothing automatic calls it. Verified after the change: `make gate` is 228 passed, 0 failed, 0 ignored, no skips, across 44 test targets, in 1:19 on 8 cores; `make test-guests` is 23s.
+- Deliberately not changed: CI's `lint-test` job still runs the host suite that the `gate` job also runs. They are separate runners in parallel, so removing it would trade independent signal for runner minutes without shortening the wall clock. Tracked in #64 with the rest of the build-cost work.
+
 ## 2026-08-30
 
 - **Feature**: **`AGENTS.md` is read.** `configuration.md` has claimed for months that jan-klod "reads from `AGENTS.md` and `.agents/` at the project root". The `.agents/skills/` half was true; nothing read `AGENTS.md`. It is the file where a user writes the conventions they would otherwise repeat every session — which test command to run, what not to touch — so the claim was worth making true rather than deleting.

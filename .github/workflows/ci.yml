@@ -96,14 +96,17 @@ jobs:
         with:
           workspaces: src/core
 
-      # Builds every guest to wasm32-wasip2, then verifies each guest's WIT
-      # interface in isolation and runs the thin loop booted from config offline.
-      - run: make harness
-
-      # Exit gate: the full offline integration surface across all v1 guarantees —
-      # the thin loop with provider fallback, durable state + REST, UI + Telegram
-      # roundtrips, streaming/cancel/steering, the file-workspace substrate, and the
-      # tool fleet. Reuses the guests staged by `make harness`.
+      # Exit gate: builds every guest to wasm32-wasip2, then runs the full offline
+      # integration surface across all v1 guarantees — the thin loop with provider
+      # fallback, durable state + REST, UI + Telegram roundtrips, streaming/cancel/
+      # steering, the file-workspace substrate, and the tool fleet.
+      #
+      # `make harness` used to run first. It names nine test targets, every one a
+      # file in src/core/host/tests/ that this job's `cargo test --workspace`
+      # already runs — so it was a second build and run of nine wasmtime-linked
+      # binaries, and it ran *without* JK_REQUIRE_GUESTS, meaning its own tests
+      # could skip and still report success. `gate` stages the guests itself
+      # (`gate: extensions`) and sets the flag, so dropping it loses nothing.
       - run: make gate
 
   supply-chain:
