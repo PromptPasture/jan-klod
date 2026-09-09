@@ -2,16 +2,22 @@
 //! language" claim, backed by an actual test rather than a spike binary someone
 //! had to run by hand.
 //!
-//! Loads the committed `spike.wasm` (TinyGo, built against `wit/spike`),
+//! Loads `src/extensions/spike/spike.wasm` (TinyGo, built against `wit/spike`),
 //! instantiates it with the host's own WASI wiring, calls its exported
 //! `complete`, and checks the round trip. Runs every gate, no toolchain
 //! required.
 //!
+//! That artifact is a **committed fixture**, the one exception to the ignored
+//! guest components: `.gitignore` negates it, `make -C src/extensions clean`
+//! leaves it alone, and `make -C src/extensions spike-guest` regenerates it with
+//! `-no-debug -opt=z` (~75 KB, and no DWARF for a guest panic) for whoever
+//! commits the new one. Nothing in a test run writes to it.
+//!
 //! This proves the Component Model boundary is genuinely language-neutral, not
-//! that today's `wit/` still compiles under TinyGo — the artifact is committed,
-//! not rebuilt, since that needs `tinygo`/`wkg` most contributors lack.
+//! that today's `wit/` still compiles under TinyGo — the committed artifact is
+//! what runs, since rebuilding needs the `tinygo`/`wkg` most contributors lack.
 //! [`the_committed_artifact_is_rebuildable`] covers that half when the toolchain
-//! is present.
+//! is present, building into a temp dir so the fixture stays untouched.
 
 // Dominated by `bindgen!` output; exempt from the workspace's doc/style lints.
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
@@ -78,7 +84,10 @@ fn a_component_built_from_go_completes_a_call_through_the_host() {
     assert!(
         path.exists(),
         "the committed TinyGo component is missing at {} — the polyglot claim has \
-         no evidence without it",
+         no evidence without it. It is tracked, so restore it with `git checkout \
+         -- {}` rather than rebuilding; only rebuild (`make -C src/extensions \
+         spike-guest`, needs tinygo + wkg) if you mean to commit a new one",
+        path.display(),
         path.display()
     );
 

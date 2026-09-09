@@ -110,10 +110,16 @@ guest — targets land in Slice 1b).
 First-party guests **default to Rust** (see the
 [extension-technology decision](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md));
 TinyGo is the case-by-case exception and the polyglot canary: `make gate` loads
-the committed Go-built `spike.wasm` and calls across the boundary, and rebuilds
-it from source if you have `tinygo` and `wkg` installed (announced as a skip if
-you do not). So a WIT change that a non-Rust toolchain cannot express fails on
-the machine of anyone carrying that toolchain, rather than nowhere.
+the committed Go-built `spike.wasm` and calls across the boundary, and — if you
+have `tinygo` and `wkg` installed — rebuilds it from source **into a temp dir**
+and calls that too, leaving the committed copy alone (announced as a skip if you
+do not). So a WIT change that a non-Rust toolchain cannot express fails on the
+machine of anyone carrying that toolchain, rather than nowhere.
+
+That `spike.wasm` is the one guest component the repository tracks, built with
+`-no-debug -opt=z` (~75 KB) so committing it is reasonable. `make -C
+src/extensions clean` does not delete it; if you regenerate it with `make -C
+src/extensions spike-guest`, commit the result.
 
 ### Rust (default)
 
