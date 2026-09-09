@@ -25,10 +25,11 @@
 //! ([`log_user_message`]), and an `ask`, its answer and any steering follow-up,
 //! through [`PersistingDriver`].
 //!
-//! [`decode`] deliberately covers only [`Event`], so those other kinds read as
-//! [`DecodeError::UnknownKind`]. Rebuilding a whole turn from the log — which
-//! needs all of them — is the projection work of the next slice, and giving
-//! `decode` a wider return type now would be guessing at its shape.
+//! Reading back comes in two widths. [`decode_record`] returns a [`Record`] —
+//! anything a row can hold — and is what rebuilding a turn needs.
+//! [`decode`] returns an [`Event`] and refuses the rest, for a caller that only
+//! handles events, such as one re-emitting a session to a client. They share one
+//! parser, so they cannot disagree about an envelope.
 
 use std::sync::Mutex;
 
@@ -45,13 +46,20 @@ use crate::store::{Store, StoreError};
 /// already has to cope with a kind it does not know.
 pub const EVENT_LOG_VERSION: u32 = 1;
 
-/// Why a stored row could not be turned back into an [`Event`].
+/// Why a stored row could not be turned back into a [`Record`] or an [`Event`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DecodeError {
-    /// A `kind` this build does not know. Also what a non-event record reads as
-    /// — see the module docs.
+    /// A `kind` this build does not know at all — written by a newer one.
     #[error("unknown event kind `{0}`")]
     UnknownKind(String),
+    /// A kind this build knows, asked of [`decode`], which only returns events.
+    ///
+    /// Distinct from [`Self::UnknownKind`] on purpose: "I have never heard of
+    /// this" and "this is a record, not an event" are different facts, and
+    /// reporting the second as the first would send a reader looking for a
+    /// version mismatch that is not there.
+    #[error("`{0}` is a record, not an event")]
+    NotAnEvent(String),
     /// Written by a newer build, in a shape this one cannot be trusted to read.
     #[error("event log version {found} is newer than this build's {EVENT_LOG_VERSION}")]
     UnsupportedVersion {
@@ -108,12 +116,34 @@ pub fn encode(event: &Event) -> (&'static str, String) {
     (kind, envelope(&data))
 }
 
-/// Rebuild the event a row was written from.
+/// Anything a row can hold: a turn event, or one of the records that never
+/// passed through an `EventSink`.
 ///
-/// # Errors
-/// [`DecodeError`] when the kind is unknown, the version is newer than this
-/// build's, or a field is missing or of the wrong type.
-pub fn decode(kind: &str, payload: &str) -> Result<Event, DecodeError> {
+/// Rebuilding a turn needs all of them, which is why this exists alongside
+/// [`Event`] rather than the log storing only events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Record {
+    /// The message that started the turn.
+    UserMessage(String),
+    /// A prompt an interceptor blocked the turn on.
+    Ask {
+        /// The question put to the user.
+        question: String,
+        /// Empty means free text; non-empty means choose one.
+        options: Vec<String>,
+        /// What was taken if nobody answered.
+        default: String,
+    },
+    /// The answer that unblocked the turn — the user's, or the default.
+    Answer(String),
+    /// A steering message injected mid-turn.
+    FollowUp(String),
+    /// One of the conductor's turn events.
+    Event(Event),
+}
+
+/// The `data` object of a row, once the envelope has been checked.
+fn open_envelope(payload: &str) -> Result<Value, DecodeError> {
     let envelope: Value =
         serde_json::from_str(payload).map_err(|e| DecodeError::Malformed(e.to_string()))?;
     let version = envelope
@@ -124,35 +154,90 @@ pub fn decode(kind: &str, payload: &str) -> Result<Event, DecodeError> {
     if version > EVENT_LOG_VERSION {
         return Err(DecodeError::UnsupportedVersion { found: version });
     }
-    let data = envelope
+    envelope
         .get("data")
-        .ok_or_else(|| DecodeError::Malformed("no `data` in the envelope".to_owned()))?;
-    let text = |field: &str| -> Result<String, DecodeError> {
-        data.get(field)
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| DecodeError::Malformed(format!("`{kind}` has no string `{field}`")))
-    };
+        .cloned()
+        .ok_or_else(|| DecodeError::Malformed("no `data` in the envelope".to_owned()))
+}
+
+/// A required string field.
+fn text(kind: &str, data: &Value, field: &str) -> Result<String, DecodeError> {
+    data.get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| DecodeError::Malformed(format!("`{kind}` has no string `{field}`")))
+}
+
+/// A required list-of-strings field. An entry that is not a string is an error
+/// rather than a skipped element: a prompt that silently lost one of its
+/// options would be answered against a list the user never saw.
+fn strings(kind: &str, data: &Value, field: &str) -> Result<Vec<String>, DecodeError> {
+    data.get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| DecodeError::Malformed(format!("`{kind}` has no list `{field}`")))?
+        .iter()
+        .map(|item| {
+            item.as_str().map(str::to_owned).ok_or_else(|| {
+                DecodeError::Malformed(format!("`{kind}`'s `{field}` holds a non-string"))
+            })
+        })
+        .collect()
+}
+
+/// Rebuild whatever a row was written from.
+///
+/// # Errors
+/// [`DecodeError`] when the kind is unknown to this build, the version is newer
+/// than it, or a field is missing or of the wrong type.
+pub fn decode_record(kind: &str, payload: &str) -> Result<Record, DecodeError> {
+    let data = open_envelope(payload)?;
     match kind {
-        "text-delta" => Ok(Event::TextDelta(text("text")?)),
-        "tool-invoked" => Ok(Event::ToolInvoked(ToolCall {
-            id: text("id")?,
-            name: text("name")?,
-            arguments: text("arguments")?,
-        })),
-        "tool-result" => Ok(Event::ToolResult(ToolOutcome {
-            tool_call_id: text("id")?,
-            content: text("content")?,
-        })),
-        "warning" => Ok(Event::Warning(text("message")?)),
-        "done" => Ok(Event::Done {
-            text: text("answer")?,
+        KIND_USER_MESSAGE => Ok(Record::UserMessage(text(kind, &data, "message")?)),
+        KIND_ASK => Ok(Record::Ask {
+            question: text(kind, &data, "question")?,
+            options: strings(kind, &data, "options")?,
+            default: text(kind, &data, "default")?,
+        }),
+        KIND_ANSWER => Ok(Record::Answer(text(kind, &data, "answer")?)),
+        KIND_FOLLOW_UP => Ok(Record::FollowUp(text(kind, &data, "message")?)),
+        "text-delta" => Ok(Record::Event(Event::TextDelta(text(kind, &data, "text")?))),
+        "tool-invoked" => Ok(Record::Event(Event::ToolInvoked(ToolCall {
+            id: text(kind, &data, "id")?,
+            name: text(kind, &data, "name")?,
+            arguments: text(kind, &data, "arguments")?,
+        }))),
+        "tool-result" => Ok(Record::Event(Event::ToolResult(ToolOutcome {
+            tool_call_id: text(kind, &data, "id")?,
+            content: text(kind, &data, "content")?,
+        }))),
+        "warning" => Ok(Record::Event(Event::Warning(text(kind, &data, "message")?))),
+        "done" => Ok(Record::Event(Event::Done {
+            text: text(kind, &data, "answer")?,
             agentic: data
                 .get("agentic")
                 .and_then(Value::as_bool)
                 .ok_or_else(|| DecodeError::Malformed("`done` has no bool `agentic`".to_owned()))?,
-        }),
+        })),
         other => Err(DecodeError::UnknownKind(other.to_owned())),
+    }
+}
+
+/// Rebuild the event a row was written from, for a caller that only handles
+/// events — re-emitting a session to a client, say.
+///
+/// Kept beside [`decode_record`] rather than replaced by it: "give me the
+/// events" and "give me everything that happened" are both real questions, and
+/// a caller that answers only the first should not have to match on records it
+/// has nothing to do with. Both share one parser, so the two cannot disagree
+/// about an envelope.
+///
+/// # Errors
+/// [`DecodeError::NotAnEvent`] for a record that is not an event, plus
+/// everything [`decode_record`] can return.
+pub fn decode(kind: &str, payload: &str) -> Result<Event, DecodeError> {
+    match decode_record(kind, payload)? {
+        Record::Event(event) => Ok(event),
+        _ => Err(DecodeError::NotAnEvent(kind.to_owned())),
     }
 }
 
@@ -451,13 +536,36 @@ mod tests {
         );
     }
 
+    /// The example kind here used to be `user-message`, chosen when it was not
+    /// yet a kind this build knew. It is one now, so the test needs a kind that
+    /// genuinely does not exist — otherwise it would be asserting the opposite
+    /// of what it says.
     #[test]
     fn an_unknown_kind_names_itself() {
         let payload = json!({ "v": EVENT_LOG_VERSION, "data": {} }).to_string();
         assert_eq!(
-            decode("user-message", &payload),
-            Err(DecodeError::UnknownKind("user-message".to_owned())),
+            decode_record("invented-by-a-later-build", &payload),
+            Err(DecodeError::UnknownKind(
+                "invented-by-a-later-build".to_owned()
+            )),
             "a record kind this build does not know must say which"
+        );
+    }
+
+    /// A kind this build knows, asked of the event-only decoder. Not
+    /// `UnknownKind`: sending a reader after a version mismatch that is not
+    /// there is worse than saying plainly what the row is.
+    #[test]
+    fn a_record_asked_of_the_event_decoder_says_so() {
+        let payload = envelope(&json!({ "message": "hello" }));
+        assert_eq!(
+            decode(KIND_USER_MESSAGE, &payload),
+            Err(DecodeError::NotAnEvent(KIND_USER_MESSAGE.to_owned()))
+        );
+        assert_eq!(
+            decode_record(KIND_USER_MESSAGE, &payload).unwrap(),
+            Record::UserMessage("hello".to_owned()),
+            "and the wider decoder reads the same row fine"
         );
     }
 
@@ -754,5 +862,136 @@ mod driver_tests {
         let mut driver = PersistingDriver::new(&mut inner, &store, "s1");
         assert_eq!(driver.ask(&prompt()), "yes");
         assert_eq!(driver.follow_up().as_deref(), Some("steer"));
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+
+    /// Answers yes and steers once, so one pass produces every non-event kind.
+    struct Stub;
+    impl Driver for Stub {
+        fn ask(&mut self, _: &UserPrompt) -> String {
+            "yes".to_owned()
+        }
+        fn follow_up(&mut self) -> Option<String> {
+            Some("actually, in Rust".to_owned())
+        }
+    }
+
+    /// Every non-event kind round-trips from what its writer actually produces,
+    /// rather than from a hand-built payload — so a change to either side of
+    /// the pair shows up here.
+    #[test]
+    fn the_non_event_records_round_trip_from_what_is_written() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+
+        log_user_message(&store, "s1", "what does this repo do?");
+
+        let mut inner = Stub;
+        {
+            let mut driver = PersistingDriver::new(&mut inner, &store, "s1");
+            driver.ask(&UserPrompt {
+                question: "Run `cargo build`?".to_owned(),
+                options: vec!["yes".to_owned(), "no".to_owned()],
+                default_answer: "no".to_owned(),
+            });
+            driver.follow_up();
+        }
+
+        let rows = store.lock().unwrap().session_events("s1").unwrap();
+        let decoded: Vec<Record> = rows
+            .iter()
+            .map(|row| {
+                decode_record(&row.kind, &row.payload)
+                    .unwrap_or_else(|e| panic!("`{}` did not decode: {e}", row.kind))
+            })
+            .collect();
+
+        assert_eq!(
+            decoded,
+            vec![
+                Record::UserMessage("what does this repo do?".to_owned()),
+                Record::Ask {
+                    question: "Run `cargo build`?".to_owned(),
+                    options: vec!["yes".to_owned(), "no".to_owned()],
+                    default: "no".to_owned(),
+                },
+                Record::Answer("yes".to_owned()),
+                Record::FollowUp("actually, in Rust".to_owned()),
+            ]
+        );
+    }
+
+    /// An `ask` with no options is free text, not a broken prompt — the empty
+    /// list has to survive as an empty list.
+    #[test]
+    fn a_free_text_ask_keeps_its_empty_option_list() {
+        let payload = envelope(&json!({
+            "question": "What should I call it?",
+            "options": [],
+            "default": "",
+        }));
+        assert_eq!(
+            decode_record(KIND_ASK, &payload).unwrap(),
+            Record::Ask {
+                question: "What should I call it?".to_owned(),
+                options: Vec::new(),
+                default: String::new(),
+            }
+        );
+    }
+
+    /// A non-string among the options is an error, not a skipped entry: a
+    /// prompt that quietly lost an option would be answered against a list the
+    /// user never saw.
+    #[test]
+    fn an_option_that_is_not_a_string_is_malformed() {
+        let payload = envelope(&json!({
+            "question": "q",
+            "options": ["yes", 7],
+            "default": "no",
+        }));
+        assert!(matches!(
+            decode_record(KIND_ASK, &payload),
+            Err(DecodeError::Malformed(ref m)) if m.contains("non-string")
+        ));
+    }
+
+    #[test]
+    fn a_record_missing_a_field_is_malformed() {
+        let payload = envelope(&json!({ "question": "q", "default": "no" }));
+        assert!(
+            matches!(
+                decode_record(KIND_ASK, &payload),
+                Err(DecodeError::Malformed(ref m)) if m.contains("options")
+            ),
+            "the missing field is named"
+        );
+    }
+
+    /// The envelope check applies to every kind, not only to events — a record
+    /// from a newer build is refused the same way.
+    #[test]
+    fn a_newer_version_is_refused_for_records_too() {
+        let payload = json!({ "v": EVENT_LOG_VERSION + 1, "data": { "message": "x" } }).to_string();
+        assert_eq!(
+            decode_record(KIND_USER_MESSAGE, &payload),
+            Err(DecodeError::UnsupportedVersion {
+                found: EVENT_LOG_VERSION + 1
+            })
+        );
+    }
+
+    /// Events still read through the wider decoder, wrapped rather than
+    /// changed — otherwise the two decoders would be describing different logs.
+    #[test]
+    fn events_read_through_the_record_decoder_as_well() {
+        let (kind, payload) = encode(&Event::Warning("careful".to_owned()));
+        assert_eq!(
+            decode_record(kind, &payload).unwrap(),
+            Record::Event(Event::Warning("careful".to_owned()))
+        );
     }
 }
