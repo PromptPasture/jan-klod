@@ -4,7 +4,7 @@ title: Roadmap
 description: Phased plan from the Rust + Wasmtime + Component Model foundation decision to a shippable, polyglot-extension agent runtime (v0.1.0, Phases 1–12), then on to the Harness-as-a-Platform vision — client protocol, event-sourced session log, OS-level effect sandbox, capability manifest + signed registry, web client + GUI shell, MCP/ACP ports (Phases 13–18).
 tags: [roadmap, planning, rust, wasmtime, component-model, phases, vision]
 created: 2026-06-29
-updated: 2026-09-08
+updated: 2026-09-09
 status: v0.1.0 complete (Phases 1–12 done); Phases 13–18 (Harness as a Platform) not-started
 ---
 
@@ -84,7 +84,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 10 — Skills + MCP registry | `done` | **Done 2026-07-03.** `registry-skills` (scans `.agents/skills/*.md`, parses YAML frontmatter `name:`/`description:`, exposes via `skill-registry` WIT, `invoke` renders template); `registry-mcp` (SSE/streamable-HTTP MCP gateway, JSON-RPC `tools/list` + `tools/call`). `registry_host.rs` binds both worlds; `CombinedFleet` dispatches tool calls to `ToolFleet` then `RegistryFleet`. `host-fs` added to `skill-registry-world`. |
 | 11 — UX polish | `done` | **Done 2026-07-03.** REST surface migrated to resource model (`POST /turn` retired; `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message` added); `store::list_namespaces` + `AgentSession::list_sessions`; workspace auto-detection (defaults to `$PWD` when `workspace:` key absent); per-token streaming in TUI via mpsc channel + `apply_delta`/`finish_turn`. UI client and integration tests updated. |
 | 12 — Release: GitHub + web | `done` | **Done 2026-07-03.** GitHub Actions release workflow (`.github/workflows/release.yml`; tag `v*` → matrix linux/darwin × x86_64/arm64 bundles + SHA256SUMS, `gh release create`); `scripts/install.sh` (OS/arch detect, checksum verify, installs to `~/.local/bin`); `pages/index.html` (GitHub Pages landing); `docs/quickstart.md`; README rewrite. |
-| 13 — Client protocol | `not-started` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. Gate: `jan-klod-ui` drives a full turn — streaming, `ask`, cancel — over stdio JSON-RPC; REST + SSE tests still pass as a projection; protocol version negotiated at connect. |
+| 13 — Client protocol | `in-progress` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. No transport yet, so `serve.rs` is unchanged. Gate: `jan-klod-ui` drives a full turn — streaming, `ask`, cancel — over stdio JSON-RPC; REST + SSE tests still pass as a projection; protocol version negotiated at connect. |
 | 14 — Event-sourced session log | `not-started` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
 | 15 — OS-level effect sandbox | `not-started` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot and in the turn; the security-model row cites the tests. |
 | 16 — Capability manifest + signed registry | `not-started` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
@@ -351,12 +351,16 @@ versioned schema, its own compatibility tests — so TUI, web, GUI, editors and
 scripts share one wire format. Supersedes the Phase 3 lean "UI always connects via
 REST"; REST + SSE stay as one *projection* of the protocol.
 
-- **13a — Protocol crate + schema.** A `protocol` crate in the core workspace:
-  typed commands (`session/create`, `session/list`, `session/message`,
-  `turn/answer`, `turn/cancel`) and notifications (the conductor's `Event`
-  variants — `text-delta`, `tool-invoked`, `tool-result`, `warning`, `done` — plus
-  `ask` and `session/updated`), a `protocol-version`, a JSON Schema export, and a
-  test that every existing SSE event maps onto a notification. Resolves the open
+- **13a — Protocol crate + schema. Done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)).
+  `jan-klod-protocol` in the core workspace: **eight** commands — the five planned
+  here plus `session/get` and `protocol/hello`, which this bullet had omitted, and
+  `turn/follow-up` — and **eight** notifications: the conductor's five `Event`
+  variants (`text-delta`, `tool-invoked`, `tool-result`, `warning`, `done`) plus
+  `ask`, `session/updated`, and `error`, which was also missing here and which the
+  SSE surface has emitted all along. `PROTOCOL_VERSION`, a committed JSON Schema
+  with a drift test, and a compatibility test asserting every SSE frame's payload
+  reaches a notification unchanged. The full list is in
+  [Contracts → UI ↔ core](contracts.md#ui--core-client-surface). Resolves the open
   question "own schema vs. ACP wholesale": own schema, ACP as an adapter (Phase 18).
 - **13b — stdio JSON-RPC transport.** a gateway `rpc` subcommand speaks the protocol
   over stdin/stdout (the Codex `app-server` / LSP shape); `jan-klod-ui` moves onto

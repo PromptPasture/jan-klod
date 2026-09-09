@@ -4,7 +4,7 @@ title: Contracts
 description: Stable WIT interfaces that form the boundary between core and extensions
 tags: [contracts, wit, interfaces, extensions, wasm]
 created: 2026-06-28T00:00:00Z
-updated: 2026-09-08T00:00:00Z
+updated: 2026-09-09T00:00:00Z
 ---
 
 Contracts are the stable interfaces that the core exposes and extensions consume or implement. They are the API surface that must not break — a breaking change here breaks all extensions.
@@ -199,13 +199,65 @@ REST + SSE API described in [Architecture → Transport](architecture.md#transpo
 it is built into the core binary since Phase 3, so the earlier question of a
 separate `api-rest` guest is closed.
 
-**Planned, Phase 13 — the client protocol becomes a contract of the same rank as
-WIT.** A `protocol` crate holds the typed commands and notifications, a
-`protocol-version`, and a JSON Schema export; it is versioned and tested for
-compatibility like the WIT package. Transports: stdio JSON-RPC, WebSocket, and
-REST + SSE as a projection. ACP is an adapter over it (Phase 18), not the internal
-schema. See the [vision](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions)
-and the [roadmap](roadmap.md#phase-13--client-protocol).
+**Phase 13 — the client protocol is a contract of the same rank as WIT.** The
+`jan-klod-protocol` crate (`src/core/protocol`) holds the typed commands and
+notifications, `PROTOCOL_VERSION`, and a JSON Schema export in
+[`schema/protocol.schema.json`](../../src/core/protocol/schema/protocol.schema.json)
+— which is what a non-Rust client generates its types from. The crate carries no
+transport and no request ids: each value serializes to the `method`/`params`
+pair, and the envelope around it belongs to whichever transport carries it
+(13b stdio, 13c WebSocket). Landed in 13a; the transports have not.
+
+**Commands** (client → core):
+
+| Command | Params | REST route today |
+|---|---|---|
+| `protocol/hello` | `version` | — (negotiation is new) |
+| `session/create` | — | `POST /sessions` |
+| `session/list` | — | `GET /sessions` |
+| `session/get` | `session` | `GET /session/:id` |
+| `session/message` | `session`, `message` | `POST /session/:id/message` |
+| `turn/answer` | `session`, `answer` | `POST /session/:id/answer` |
+| `turn/cancel` | `session` | — (today: drop the SSE connection) |
+| `turn/follow-up` | `session`, `message` | — (no steering over REST) |
+
+**Notifications** (core → client). The first five are `conductor::Event` one for
+one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable
+command, `session/updated` a transcript that moved:
+
+| Notification | Params | SSE frame today |
+|---|---|---|
+| `text-delta` | `text` | `delta` |
+| `tool-invoked` | `id`, `name`, `arguments` | `tool` (drops `arguments`) |
+| `tool-result` | `id`, `content` | `tool-result` |
+| `warning` | `message` | `warning` |
+| `done` | `answer`, `agentic` | `done` |
+| `ask` | `session`, `question`, `options`, `default` | `prompt` |
+| `error` | `message` | `error` (payload key `error`) |
+| `session/updated` | `session`, `preview` | — |
+
+REST + SSE is a **projection** of this, not a second contract, and it keeps its
+own older spellings — `delta`, `tool`, `prompt` — deliberately. Neither side is
+being renamed to match: `core/tests/protocol_events.rs` asserts every key an SSE
+frame carries reaches the notification with an equal value, which is what holds
+the two together. The projection may lose nothing; it may lag in naming.
+
+**Version rule.** `PROTOCOL_VERSION` is semver. Removing a command, renaming
+one, or removing a field bumps **major**; adding a command or an optional field
+bumps **minor**. A client sends the version it was built against in
+`protocol/hello` and the core answers with its own, so a mismatch surfaces at
+connect rather than mid-turn. The schema export carries the version too, so a
+bump cannot land without the schema being regenerated.
+
+**The open question the vision left — own schema, or ACP wholesale — is settled
+as: own schema.** ACP becomes an *adapter* over this contract in Phase 18, not
+the internal representation. The reason is ownership of the compatibility story:
+an editor protocol we do not control would decide when our own clients break,
+and three of the surfaces that must share this format (TUI, web, scripts) are
+not editors at all. An adapter costs one translation layer in one phase; adopting
+a foreign schema costs a veto over every future change. See the
+[vision](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions) and
+the [roadmap](roadmap.md#phase-13--client-protocol).
 
 ## Versioning (planned, Phase 16)
 
