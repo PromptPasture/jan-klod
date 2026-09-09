@@ -3,7 +3,7 @@
 //! *Phase 2* — real `Runtime`, two provider instances, all five v1 interceptors.
 //! The primary provider always fails so the turn only completes via fallback,
 //! proving intent → shaping → completion-with-fallback → answer. A second test
-//! drives ReAct + permission (tool call → driver approves → result fed back).
+//! drives `ReAct` + permission (tool call → driver approves → result fed back).
 //!
 //! *Phase 8* — same, plus `tool-fs` + a workspace. The provider emits a write
 //! tool call that the fleet dispatches to the real guest, which writes through

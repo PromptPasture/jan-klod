@@ -8,8 +8,9 @@
 //!
 //! Consequence: these modules now share a process, and a few set
 //! process-global env vars (answer timeouts, credential leak-canaries) that
-//! race under `cargo test`'s in-binary thread parallelism. Run this suite with
-//! `cargo nextest run` (`make test-fast`), which gives one process per test.
+//! race under `cargo test`'s in-binary thread parallelism. Run it with `cargo
+//! nextest run`, which gives one process per test — as `make test`, `make
+//! harness` and `make gate` all now do.
 
 mod common;
 

@@ -19,8 +19,10 @@ use crate::intercept::{
 };
 
 /// Default cap on `ReAct` iterations, so a model that keeps emitting tool calls
-/// can never spin (or spend) forever. Eight covers a real coding cycle (view,
-/// edit, test, read failure, fix, retest); raise via `limits.max-iterations`.
+/// can never spin — or spend — forever.
+///
+/// Eight covers a real coding cycle (view, edit, test, read failure, fix,
+/// retest); raise via `limits.max-iterations`.
 pub const DEFAULT_MAX_ITERATIONS: u32 = 8;
 
 /// Bounds a turn runs under.
