@@ -368,9 +368,12 @@ default taken when nobody replied, because a replay cannot otherwise tell an
 approval from a timed-out denial. Text deltas are stored one row per event and
 **not** coalesced — a replaying client needs them as they arrived.
 
-Logging is best-effort in the same sense the transcript append is: a store
-failure is reported once per turn and never cancels the turn, because a full
-disk should not be able to stop a conversation.
+Logging is best-effort: a store failure is reported once per turn and never
+cancels the turn, because a full disk should not be able to stop a conversation.
+
+**The log is the only record of a session.** `entries` held a `{user, answer}`
+row per turn until Phase 14b; nothing writes one now, and a second copy of the
+same session in a second format is the thing that phase existed to remove.
 
 ### The envelope, and why it has its own version
 
@@ -381,9 +384,46 @@ would be a mistake: a stored log outlives the clients that watched it happen, so
 different questions with different answers. A reader refuses a version newer
 than its own rather than guessing at the shape, and accepts older ones.
 
-The transcript in `entries` is still what a new turn replays from; making
-transcript, resume and fork projections *of this log* is
-[Phase 14b](roadmap.md#phase-14--event-sourced-session-log).
+### Everything else is a projection of it
+
+`core::projection::transcript` turns rows into the `Vec<Message>` a turn
+replays, and it is a pure function — no store, no I/O. Each row is placed the
+way `conductor::run_turn` places it rather than by a rule invented for the
+projection: a `follow-up` is a user message because that is how steering is
+injected, a `tool-result` is a `Role::Tool` message carrying the call's id
+because that is how the loop feeds a result back. `text-delta` rows are dropped
+in favour of `done` (the conductor's own words: deltas are a non-authoritative
+preview), so an agentic turn's *intermediate* assistant texts are not in the
+transcript — the same as the `{user, answer}` transcript this replaces.
+
+An `ask` and its answer are dropped too, and that is the load-bearing decision:
+the prompt is put to the *user* by an interceptor over a channel the model has
+no part in, so rendering the question as an assistant message would put words in
+the model's mouth and the answer as a user message would make a permission click
+look like something the user said.
+
+Resume reads the projection bounded to the last `REPLAYED_TURNS` turns, counted
+over `user-message` rows — turn boundaries, not row counts, since a turn is a
+variable number of rows and a row bound would open a conversation with a tool
+result answering a call the model cannot see. `GET /session/:id` serves the
+projection as `messages`, `GET /sessions` previews it, and `POST
+/session/:id/fork` copies a prefix into a new session that then diverges,
+renumbered from 1 and holding no link back.
+
+### Upgrading a database written before the log
+
+A one-shot conversion runs at boot (`event_log::migrate_transcripts`, called
+from `Runtime::open_store`) and turns each old `turn-N` row into a
+`user-message` and a `done`, dated with the row's own timestamp so an old
+session is not re-dated to the upgrade. It is idempotent — a session that has
+any events is skipped — and the old rows are left in place, because deleting
+them would make the conversion unrepeatable and irreversible in one step.
+
+Required rather than optional: with the read surfaces on the log, an
+unconverted database has sessions that are neither listed nor readable. What
+cannot be recovered is what the old format never held — tool calls, warnings,
+the `ask` and its answer — so a migrated turn is exactly two events, and its
+`done` carries `agentic: false` because the transcript did not record it.
 
 ## Stack
 

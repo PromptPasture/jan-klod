@@ -402,6 +402,79 @@ fn append_encoded(
     }
 }
 
+/// Turn transcripts written before the log existed into events.
+///
+/// Returns how many sessions were converted. Idempotent by construction: a
+/// session that already has any events is left alone, so this is safe to call
+/// on every open and does nothing on all but the first.
+///
+/// # Why this is a migration and not a fallback
+///
+/// Reading `entries` when the log is empty would have been less code and would
+/// have left two formats to read forever — which is the thing Phase 14 exists
+/// to remove. Converting once means every reader after this has one source.
+///
+/// # What is lost, precisely
+///
+/// A transcript row is `{user, answer}`, so a migrated turn becomes exactly two
+/// events. Everything a live turn also logs — the tool calls, the warnings, the
+/// `ask` and its answer — was never recorded in the old format and cannot be
+/// recovered. The migrated `done` carries `agentic: false` because the old
+/// transcript did not record it, and `false` is the reading that claims less.
+///
+/// # Errors
+/// [`StoreError`] if the store cannot be read or written.
+pub fn migrate_transcripts(store: &Store) -> Result<u64, StoreError> {
+    let mut migrated = 0;
+    for session in store.list_namespaces()? {
+        // Interceptors share this database under `ext/<component>/…`. Those are
+        // not conversations and have no transcript to convert.
+        if session.contains('/') || !store.session_events(&session)?.is_empty() {
+            continue;
+        }
+        // `recent` is newest-first, and `turn-10` sorts before `turn-9` as text,
+        // so order by the number rather than by the key.
+        let mut turns: Vec<(u64, crate::store::Entry)> = store
+            .recent(&session, u32::MAX)?
+            .into_iter()
+            .filter_map(|entry| {
+                let number = entry.key.strip_prefix("turn-")?.parse::<u64>().ok()?;
+                Some((number, entry))
+            })
+            .collect();
+        if turns.is_empty() {
+            continue;
+        }
+        turns.sort_by_key(|(number, _)| *number);
+
+        for (_, entry) in turns {
+            let Ok(turn) = serde_json::from_str::<Value>(&entry.value) else {
+                continue;
+            };
+            // The entry's own timestamp, so the converted events are dated when
+            // the turn happened rather than when the upgrade ran.
+            let ts = entry.created_at;
+            if let Some(user) = turn.get("user").and_then(Value::as_str) {
+                store.append_event_at(
+                    &session,
+                    KIND_USER_MESSAGE,
+                    &envelope(&json!({ "message": user })),
+                    ts,
+                )?;
+            }
+            if let Some(answer) = turn.get("answer").and_then(Value::as_str) {
+                let (kind, payload) = encode(&Event::Done {
+                    text: answer.to_owned(),
+                    agentic: false,
+                });
+                store.append_event_at(&session, kind, &payload, ts)?;
+            }
+        }
+        migrated += 1;
+    }
+    Ok(migrated)
+}
+
 /// Log the message that starts a turn, before any of its events.
 ///
 /// Called by the turn runner rather than by a wrapper: the message never passes
@@ -993,5 +1066,162 @@ mod record_tests {
             decode_record(kind, &payload).unwrap(),
             Record::Event(Event::Warning("careful".to_owned()))
         );
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    use crate::projection;
+
+    /// Write a transcript the way `run_and_persist` used to, so the test
+    /// migrates the real historical shape rather than a guess at it.
+    fn old_transcript(store: &Store, session: &str, turns: &[(&str, &str)]) {
+        for (index, (user, answer)) in turns.iter().enumerate() {
+            store
+                .set(
+                    session,
+                    &format!("turn-{}", index + 1),
+                    &json!({ "user": user, "answer": answer }).to_string(),
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn an_old_transcript_becomes_a_readable_log() {
+        let store = Store::open_in_memory().unwrap();
+        old_transcript(
+            &store,
+            "old",
+            &[
+                ("first question", "first answer"),
+                ("second", "second answer"),
+            ],
+        );
+
+        assert_eq!(migrate_transcripts(&store).unwrap(), 1);
+
+        let log = store.session_events("old").unwrap();
+        assert_eq!(
+            log.iter().map(|r| r.kind.as_str()).collect::<Vec<_>>(),
+            vec![KIND_USER_MESSAGE, "done", KIND_USER_MESSAGE, "done"],
+            "two turns, each a message and an answer"
+        );
+        assert_eq!(
+            projection::transcript(&log)
+                .iter()
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>(),
+            vec!["first question", "first answer", "second", "second answer"],
+            "and it projects to the conversation it was"
+        );
+    }
+
+    /// `turn-10` sorts before `turn-9` as text. Ordering by the number is the
+    /// difference between a migrated conversation and a shuffled one, and a
+    /// session has to reach ten turns before the bug is visible.
+    #[test]
+    fn turns_are_ordered_by_number_not_by_key() {
+        let store = Store::open_in_memory().unwrap();
+        let turns: Vec<(String, String)> = (1..=12)
+            .map(|i| (format!("q{i}"), format!("a{i}")))
+            .collect();
+        let borrowed: Vec<(&str, &str)> = turns
+            .iter()
+            .map(|(q, a)| (q.as_str(), a.as_str()))
+            .collect();
+        old_transcript(&store, "long", &borrowed);
+
+        migrate_transcripts(&store).unwrap();
+        let contents: Vec<String> = projection::transcript(&store.session_events("long").unwrap())
+            .iter()
+            .map(|m| m.content.clone())
+            .collect();
+        let expected: Vec<String> = (1..=12)
+            .flat_map(|i| [format!("q{i}"), format!("a{i}")])
+            .collect();
+        assert_eq!(contents, expected, "in turn order, not lexical key order");
+    }
+
+    /// Safe on every open, which is the property that lets it run at boot.
+    #[test]
+    fn migrating_twice_changes_nothing() {
+        let store = Store::open_in_memory().unwrap();
+        old_transcript(&store, "old", &[("q", "a")]);
+
+        assert_eq!(migrate_transcripts(&store).unwrap(), 1);
+        let after_first = store.session_events("old").unwrap();
+        assert_eq!(
+            migrate_transcripts(&store).unwrap(),
+            0,
+            "nothing left to do"
+        );
+        assert_eq!(
+            store.session_events("old").unwrap(),
+            after_first,
+            "and the log is untouched, not doubled"
+        );
+    }
+
+    /// A session that already logged natively must not be touched, even if it
+    /// also has transcript rows from before the upgrade.
+    #[test]
+    fn a_session_with_events_is_left_alone() {
+        let store = Store::open_in_memory().unwrap();
+        old_transcript(&store, "mixed", &[("q", "a")]);
+        store
+            .append_event(
+                "mixed",
+                KIND_USER_MESSAGE,
+                &envelope(&json!({ "message": "live" })),
+            )
+            .unwrap();
+
+        assert_eq!(migrate_transcripts(&store).unwrap(), 0);
+        let log = store.session_events("mixed").unwrap();
+        assert_eq!(log.len(), 1, "the native row is the only one");
+        assert!(log[0].payload.contains("live"));
+    }
+
+    /// The migrated events are dated when the turn happened, not when the
+    /// upgrade ran — the one fact about an old session a log must not invent.
+    #[test]
+    fn migrated_events_keep_the_transcripts_timestamps() {
+        let store = Store::open_in_memory().unwrap();
+        old_transcript(&store, "old", &[("q", "a")]);
+        let original = store.get("old", "turn-1").unwrap().created_at;
+
+        migrate_transcripts(&store).unwrap();
+        assert!(
+            store
+                .session_events("old")
+                .unwrap()
+                .iter()
+                .all(|row| row.ts == original),
+            "every converted row carries the turn's own timestamp"
+        );
+    }
+
+    /// Interceptor storage lives in the same database under `ext/<id>/…`. It is
+    /// not a conversation, and converting it would put an interceptor's private
+    /// state into a session list.
+    #[test]
+    fn interceptor_namespaces_are_not_sessions() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set("ext/interceptor.permission/grants", "turn-1", "{}")
+            .unwrap();
+        assert_eq!(migrate_transcripts(&store).unwrap(), 0);
+        assert!(store.event_sessions().unwrap().is_empty());
+    }
+
+    /// A namespace with keys that are not turns — anything host-storage wrote —
+    /// has no transcript to convert.
+    #[test]
+    fn a_namespace_without_turn_rows_is_skipped() {
+        let store = Store::open_in_memory().unwrap();
+        store.set("notes", "scratch", "{}").unwrap();
+        assert_eq!(migrate_transcripts(&store).unwrap(), 0);
     }
 }

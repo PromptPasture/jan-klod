@@ -164,8 +164,11 @@ fn an_instance_that_opts_in_keeps_its_state_across_a_restart() {
     );
 }
 
-/// One database now backs every opted-in interceptor *and* the session
-/// transcripts. Isolation therefore has to be enforced rather than assumed.
+/// One database backs every opted-in interceptor *and* every session's event
+/// log. Isolation therefore has to be enforced rather than assumed — and the
+/// two halves are enforced differently, which is what this pins: a guest's
+/// namespace is prefixed so it cannot name another component's, and the session
+/// log is in a table `host-storage` cannot address at all.
 #[test]
 fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
     if !common::guests_staged(&GUESTS) {
@@ -201,11 +204,20 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
             .any(|ns| ns.starts_with("ext/interceptor.permission/")),
         "the grant landed under the component's own subtree: {namespaces:?}"
     );
-    // And the session transcript is a namespace the guest could have *named*
-    // (`s1`) but cannot reach, because it never writes the prefix.
+    // The conversation is in this same database, and is no longer an `entries`
+    // namespace at all — it lives in `events`, which `host-storage` has no
+    // operation that reaches. Isolation used to rest entirely on the prefix a
+    // guest cannot write; the session is now also behind a door it cannot name.
     assert!(
-        namespaces.iter().any(|ns| ns == "s1"),
-        "the transcript is in the same database: {namespaces:?}"
+        !namespaces.iter().any(|ns| ns == "s1"),
+        "the session is not reachable as a namespace any more: {namespaces:?}"
+    );
+    assert!(
+        !store
+            .session_events("s1")
+            .expect("the log is readable")
+            .is_empty(),
+        "and it really is in this database, in the event log"
     );
 
     // `list_sessions` must not offer interceptor storage as a conversation.

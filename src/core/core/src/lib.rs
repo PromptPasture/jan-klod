@@ -807,12 +807,33 @@ impl Runtime {
             .and_then(|storage| storage.get("path"))
             .and_then(serde_json::Value::as_str)
             .map(|path| self.config_dir.join(path));
-        sqlite_path
+        let store = sqlite_path
             .map_or_else(store::Store::open_in_memory, store::Store::open)
-            .map(|store| Arc::new(Mutex::new(store)))
             .map_err(|source| CoreError::Store {
                 message: source.to_string(),
-            })
+            })?;
+        // Convert any transcript written before the event log existed. Called
+        // here rather than inside `Store::open` so the store stays ignorant of
+        // what a payload means: the envelope belongs to `event_log`, and a
+        // store that had to build one would know the format of the thing it is
+        // supposed to hold opaquely.
+        //
+        // A failure here does not fail the boot. Nothing is lost by deferring —
+        // the `entries` rows are still there and the next open tries again —
+        // whereas refusing to start would make an unreadable old session into
+        // an unusable install.
+        match event_log::migrate_transcripts(&store) {
+            Ok(0) => {}
+            Ok(sessions) => eprintln!(
+                "INFO [core] converted {sessions} session(s) from the pre-event-log \
+                 transcript into the event log"
+            ),
+            Err(err) => eprintln!(
+                "WARN [core] converting old transcripts failed ({err}); those sessions \
+                 will not be listed until it succeeds"
+            ),
+        }
+        Ok(Arc::new(Mutex::new(store)))
     }
 
     /// An interceptor's `host-config` section: its own config plus the top-level
@@ -1178,17 +1199,11 @@ fn run_and_persist(
         history,
         limits,
     );
-    if let conductor::RunResult::Answered { text, .. } = &result {
-        // Best-effort transcript append: a store failure never fails the answered turn.
-        let Ok(store) = store.lock() else {
-            return result;
-        };
-        let turn = store.list_keys(session).map_or(0, |keys| keys.len()) + 1;
-        let value = serde_json::json!({ "user": message, "answer": text }).to_string();
-        if let Err(err) = store.set(session, &format!("turn-{turn}"), &value) {
-            eprintln!("WARN [core] persisting turn for session {session} failed: {err}");
-        }
-    }
+    // No transcript append. The turn recorded itself as it ran — the user
+    // message before `run_turn`, every event through the sink — so writing a
+    // `{user, answer}` row here as well would be a second copy of the same
+    // session in a second format, which is the thing this phase removes. A
+    // migration converts the rows written before that was true.
     result
 }
 

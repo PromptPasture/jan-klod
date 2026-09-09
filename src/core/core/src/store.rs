@@ -309,7 +309,25 @@ impl Store {
         kind: &str,
         payload: &str,
     ) -> Result<LoggedEvent, StoreError> {
-        let ts = now_secs();
+        self.append_event_at(session, kind, payload, now_secs())
+    }
+
+    /// Append one event with an explicit timestamp.
+    ///
+    /// For records of things that happened earlier than now — a migration of a
+    /// transcript written before the log existed. Stamping those with the
+    /// migration's own time would date every old session to the upgrade, which
+    /// is the one fact about them a log must not invent.
+    ///
+    /// # Errors
+    /// [`StoreError::Backend`] on a SQL failure.
+    pub fn append_event_at(
+        &self,
+        session: &str,
+        kind: &str,
+        payload: &str,
+        ts: u64,
+    ) -> Result<LoggedEvent, StoreError> {
         let seq: i64 = self
             .conn
             .query_row(
