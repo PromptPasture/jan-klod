@@ -23,6 +23,7 @@ pub mod host_process;
 pub mod http;
 pub mod intercept;
 pub mod interceptor_host;
+pub mod projection;
 pub mod registry_host;
 pub mod route;
 pub mod sandbox;
