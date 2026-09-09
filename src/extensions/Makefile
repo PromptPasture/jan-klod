@@ -57,12 +57,15 @@ stage:
 # built beside the thing it describes and removed by `clean` with it.
 manifests: stage
 	sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(ROOT)/wit $(GUESTS)
+	sh $(ROOT)/scripts/manifests-verify.sh $(EXT_DIR) $(GUESTS)
 
 # Run the guests' native unit tests (host target, no wasm). Skips guests without
 # host-testable modules by only iterating TESTABLE_GUESTS; LIBS are pure Rust and
 # always testable.
 test:
 	@for g in $(LIBS) $(TESTABLE_GUESTS); do echo "== test $$g =="; cargo test -p $$g || exit 1; done
+	@echo "== manifest guards =="
+	sh $(ROOT)/scripts/manifests-selftest.sh $(EXT_DIR)
 
 # Build a single guest and stage it in ext/ (`make tool-fs`, e.g., for
 # targeted dev iteration — `all` above builds every guest at once). Rust guests
@@ -73,6 +76,10 @@ $(GUESTS):
 	cargo build --release --target wasm32-wasip2 -p $@
 	mkdir -p $(EXT_DIR)
 	cp target/wasm32-wasip2/release/$(subst -,_,$@).wasm $(EXT_DIR)/$@.wasm
+	# Its manifest too. Rebuilding one guest and leaving the old manifest
+	# beside it is the only way a staged manifest can describe something the
+	# component no longer is, and the next slice will believe it.
+	sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(ROOT)/wit $@
 
 
 # Supply-chain gates for the Rust guests (Slice 1b gate). One shared Cargo.lock
