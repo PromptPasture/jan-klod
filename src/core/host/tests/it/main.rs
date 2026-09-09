@@ -33,6 +33,7 @@ mod persistence;
 mod polyglot;
 mod prompt_disconnect;
 mod provider_chain;
+mod rpc;
 mod sandbox_boundary;
 mod session_memory;
 mod shipped_defaults;

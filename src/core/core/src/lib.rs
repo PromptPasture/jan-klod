@@ -27,6 +27,7 @@ pub mod manifest;
 pub mod projection;
 pub mod registry_host;
 pub mod route;
+pub mod rpc;
 pub mod sandbox;
 pub mod serve;
 pub mod store;

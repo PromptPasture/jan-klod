@@ -115,7 +115,7 @@ supply-chain: deny audit sbom
 # These are modules of one test binary (src/core/host/tests/it/main.rs), run by
 # --test name filter. A typo'd filter can still match other modules and exit 0,
 # so each name is checked against the filesystem before the run.
-HARNESS_MODULES := component_harness agent_loop persistence api_rest telegram \
+HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegram \
                    host_fs host_process tool_fleet tool_wiring
 harness: export JK_REQUIRE_GUESTS = 1
 harness: extensions

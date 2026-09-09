@@ -1364,6 +1364,7 @@ dependencies = [
  "jan-klod",
  "jan-klod-config",
  "jan-klod-core",
+ "jan-klod-protocol",
  "serde_json",
  "tiny_http",
  "wasmtime",

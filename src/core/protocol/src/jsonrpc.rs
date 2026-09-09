@@ -61,6 +61,11 @@ pub enum Id {
     Number(i64),
     /// A string id.
     Text(String),
+    /// No id could be read from the frame — the JSON did not parse, or it
+    /// parsed to something that is not a request. The spec requires the answer
+    /// to carry `null` in that case, which is the one thing a client can tell
+    /// apart from an answer to something it sent. A client must not *send* this.
+    Null,
 }
 
 /// One command, framed: a request that expects a [`Response`] carrying this id.

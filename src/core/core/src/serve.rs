@@ -190,8 +190,13 @@ pub fn health() -> Reply {
     }
 }
 
-/// `GET /sessions` — list all session ids with a preview of the first turn.
-fn handle_list_sessions(agent: &AgentSession) -> Reply {
+/// Every session with a preview, as any transport reports it.
+///
+/// Here rather than in [`crate::rpc`] because this is where it was written, and
+/// one shape is the point: a client that lists sessions over stdio and over
+/// REST must not have to render two.
+#[must_use]
+pub fn sessions_payload(agent: &AgentSession) -> serde_json::Value {
     let sessions: Vec<serde_json::Value> = agent
         .list_sessions()
         .into_iter()
@@ -209,9 +214,14 @@ fn handle_list_sessions(agent: &AgentSession) -> Reply {
             serde_json::json!({ "id": id, "preview": preview })
         })
         .collect();
+    serde_json::json!({ "sessions": sessions })
+}
+
+/// `GET /sessions` — list all session ids with a preview of the first turn.
+fn handle_list_sessions(agent: &AgentSession) -> Reply {
     Reply {
         status: 200,
-        body: serde_json::json!({ "sessions": sessions }).to_string(),
+        body: sessions_payload(agent).to_string(),
     }
 }
 
@@ -235,21 +245,51 @@ fn handle_fork_session(agent: &AgentSession, id: &str, body: &str) -> Reply {
         Ok(at_seq) => at_seq,
         Err(message) => return error_reply(400, &message),
     };
+    match fork(agent, id, at_seq) {
+        Forked::Created(payload) => Reply {
+            status: 201,
+            body: payload.to_string(),
+        },
+        Forked::Empty(message) => error_reply(404, &message),
+        Forked::Failed(message) => error_reply(500, &message),
+    }
+}
+
+/// What a fork did, in the three ways it can end.
+///
+/// Three variants rather than `Result<Value, String>` because the two failures
+/// are not the same failure, and every transport has to say so in its own
+/// vocabulary: the caller asked for something that is not there (`404`, or
+/// JSON-RPC `invalid params`) or the store broke (`500`, or `internal error`).
+/// Collapsing them would make a mistyped `at-seq` look like a broken database.
+pub enum Forked {
+    /// The child session, as `{"id": …, "copied": …}`.
+    Created(serde_json::Value),
+    /// Nothing was copied, so no fork was made.
+    Empty(String),
+    /// The store refused.
+    Failed(String),
+}
+
+/// Fork `id` at `at_seq` into a freshly generated child session.
+///
+/// The child's id is generated here, as `POST /sessions` generates one: a
+/// client naming it could collide with a live session, and `fork_events`
+/// refuses to write into a log that already exists, so the failure would be a
+/// confusing internal error rather than an id the client cannot pick wrongly.
+#[must_use]
+pub fn fork(agent: &AgentSession, id: &str, at_seq: u64) -> Forked {
     let child = new_session_id();
     match agent.fork_session(id, at_seq, &child) {
-        // Copying nothing means the fork would start empty, which `POST
-        // /sessions` already does better. Almost always a wrong `at-seq` or a
+        // Copying nothing means the fork would start empty, which creating a
+        // session already does better. Almost always a wrong `at-seq` or a
         // wrong session id, so it is reported rather than returning a session
         // that silently is not a fork of anything.
-        Ok(0) => error_reply(
-            404,
-            &format!("session `{id}` has no events at or before seq {at_seq}"),
-        ),
-        Ok(copied) => Reply {
-            status: 201,
-            body: serde_json::json!({ "id": child, "copied": copied }).to_string(),
-        },
-        Err(err) => error_reply(500, &format!("fork failed: {err}")),
+        Ok(0) => Forked::Empty(format!(
+            "session `{id}` has no events at or before seq {at_seq}"
+        )),
+        Ok(copied) => Forked::Created(serde_json::json!({ "id": child, "copied": copied })),
+        Err(err) => Forked::Failed(format!("fork failed: {err}")),
     }
 }
 
@@ -264,12 +304,19 @@ fn parse_at_seq(body: &str) -> Result<u64, String> {
         .ok_or_else(|| "`at-seq` must be a non-negative whole number".to_owned())
 }
 
+/// One session's message list, as any transport reports it. Shared for the same
+/// reason [`sessions_payload`] is.
+#[must_use]
+pub fn session_payload(agent: &AgentSession, id: &str) -> serde_json::Value {
+    let messages: Vec<serde_json::Value> = agent.transcript(id).iter().map(as_json).collect();
+    serde_json::json!({ "id": id, "messages": messages })
+}
+
 /// `GET /session/:id` — return transcript + metadata.
 fn handle_get_session(agent: &AgentSession, id: &str) -> Reply {
-    let messages: Vec<serde_json::Value> = agent.transcript(id).iter().map(as_json).collect();
     Reply {
         status: 200,
-        body: serde_json::json!({ "id": id, "messages": messages }).to_string(),
+        body: session_payload(agent, id).to_string(),
     }
 }
 
@@ -626,7 +673,11 @@ fn json_content_type() -> Header {
 }
 
 /// Generate a random hex session id (16 hex chars, using stdlib only).
-fn new_session_id() -> String {
+///
+/// `pub` so every transport mints them the same way — two schemes would
+/// eventually collide, and the collision would land in the store.
+#[must_use]
+pub fn new_session_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     // Mix timestamp nanos with a counter to get unique ids without a rand dep.
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

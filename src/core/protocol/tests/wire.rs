@@ -373,6 +373,45 @@ fn the_error_codes_are_the_ones_the_spec_reserves() {
     );
 }
 
+/// `COMMAND_METHODS` is written by hand, so it is compared against the
+/// exhaustive `match` in [`expected_method`] **in both directions**: a command
+/// missing from the list would be reported as `method not found` by a
+/// transport, and a stale name still in it would be reported as `invalid
+/// params` — a method the core does not have, described as one whose arguments
+/// were wrong.
+#[test]
+fn the_method_list_holds_every_command_and_nothing_else() {
+    let mut from_the_enum: Vec<&str> = every_command().iter().map(expected_method).collect();
+    from_the_enum.sort_unstable();
+    let mut listed: Vec<&str> = jan_klod_protocol::COMMAND_METHODS.to_vec();
+    listed.sort_unstable();
+    assert_eq!(
+        listed, from_the_enum,
+        "COMMAND_METHODS has fallen behind Command"
+    );
+}
+
+/// The spec's answer to a frame it could not read an id from. Serde's untagged
+/// representation is what makes this work, and untagged unit variants are
+/// obscure enough to be worth pinning.
+#[test]
+fn an_unreadable_frame_is_answered_with_a_null_id() {
+    let text = serde_json::to_string(&jsonrpc::Response::error(
+        jsonrpc::Id::Null,
+        jsonrpc::Error::new(jsonrpc::PARSE_ERROR, "not JSON"),
+    ))
+    .expect("serializes");
+    assert_eq!(
+        text,
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"not JSON"}}"#
+    );
+    let back: jsonrpc::Response = serde_json::from_str(&text).expect("parses");
+    assert_eq!(back.id, jsonrpc::Id::Null, "null reads back as Null");
+    // And it stays distinct from the id a client could actually send.
+    assert_ne!(jsonrpc::Id::Null, jsonrpc::Id::Number(0));
+    assert_ne!(jsonrpc::Id::Null, jsonrpc::Id::Text(String::new()));
+}
+
 /// While the protocol is `0.x`, a differing minor is a refusal — the whole
 /// reason this is not a major-only check.
 #[test]
@@ -614,7 +653,7 @@ fn generated_schema() -> serde_json::Value {
             },
             "jsonrpc.Id": {
                 "description": "Echoed back on the response that answers a request.",
-                "oneOf": [{ "type": "integer" }, { "type": "string" }],
+                "oneOf": [{ "type": "integer" }, { "type": "string" }, { "type": "null" }],
             },
             "jsonrpc.Request": one_of(
                 commands.iter().map(|c| framed(c, true)).collect(),

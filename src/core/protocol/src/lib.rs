@@ -39,6 +39,32 @@ use serde::{Deserialize, Serialize};
 /// See the crate documentation for what a change to each field means.
 pub const PROTOCOL_VERSION: &str = "0.1.0";
 
+/// Every `method` a [`Command`] can carry.
+///
+/// A transport needs this to tell two failures apart, and a client's dispatcher
+/// can use it too. When `{"method":"session/get"}` arrives without its
+/// `params`, deserializing [`Command`] fails; so does
+/// `{"method":"session/destroy"}`. One is JSON-RPC's `invalid params` and the
+/// other is `method not found`, and serde reports both as one error — the
+/// method name is what distinguishes them.
+///
+/// This is a hand-written list, which is exactly the kind of thing that falls
+/// behind the enum beside it. `wire.rs` compares it against the exhaustive
+/// `match` over [`Command`] in both directions, so a command added without a
+/// line here fails the tests rather than becoming a `method not found` that
+/// lies.
+pub const COMMAND_METHODS: &[&str] = &[
+    "protocol/hello",
+    "session/create",
+    "session/list",
+    "session/get",
+    "session/fork",
+    "session/message",
+    "turn/answer",
+    "turn/cancel",
+    "turn/follow-up",
+];
+
 /// Whether a client built against `client` can talk to a core speaking `core`.
 ///
 /// Same major, and — while the major is `0` — the same minor too. The second
