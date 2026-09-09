@@ -29,6 +29,50 @@
 
 use std::path::{Path, PathBuf};
 
+/// The `jan-klod:interfaces` package version this build speaks.
+///
+/// A constant rather than something read from `wit/` at runtime: an installed
+/// gateway has no `wit/` beside it, and a version read from a directory that
+/// may not exist is worse than one baked in. The drift that buys is real, so
+/// `host/tests/it/manifest.rs` asserts this equals what every `wit/*.wit`
+/// declares — the same agreement `scripts/manifests.sh` refuses to guess at.
+pub const API_VERSION: &str = "0.1.0";
+
+/// Whether a component built against `declared` can run on a host speaking
+/// `host`.
+///
+/// Same major, and — while the major is `0` — the same minor too. That second
+/// clause is cargo's rule for pre-1.0 crates and it is the one that matters
+/// today, because every version in play is `0.x`: a major-only check would
+/// accept a component built against `0.1` on a host speaking `0.9` and call it
+/// compatible. [`Contracts`](../../../docs/concepts/contracts.md) says the
+/// package is "free to change until the first public release", so pre-1.0
+/// versions carry no promise and treating a minor bump as breaking is the
+/// reading that cannot wave through an incompatibility.
+///
+/// From `1.0` on, a differing minor passes — additive change is what a minor
+/// bump means. Keeping **N-1 minor** compatibility through adapters, rather
+/// than merely tolerating the difference, is a policy with its own slice
+/// (16b) and is deliberately not invented here.
+///
+/// A version that does not parse is incompatible. Guessing at a malformed
+/// version is how a check becomes decoration.
+#[must_use]
+pub fn api_compatible(host: &str, declared: &str) -> bool {
+    let parts = |v: &str| -> Option<(u64, u64)> {
+        let mut it = v.split('.');
+        let major = it.next()?.parse().ok()?;
+        let minor = it.next()?.parse().ok()?;
+        Some((major, minor))
+    };
+    match (parts(host), parts(declared)) {
+        (Some((host_major, host_minor)), Some((their_major, their_minor))) => {
+            host_major == their_major && (host_major != 0 || host_minor == their_minor)
+        }
+        _ => false,
+    }
+}
+
 /// What a component's manifest declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
@@ -313,5 +357,56 @@ capabilities = [
             vec!["host-fs", "host-http"],
             "an inline array, sorted on read"
         );
+    }
+}
+
+#[cfg(test)]
+mod api_version_tests {
+    use super::api_compatible;
+
+    #[test]
+    fn the_same_version_is_compatible() {
+        assert!(api_compatible("0.1.0", "0.1.0"));
+        assert!(api_compatible("1.4.2", "1.4.2"));
+    }
+
+    #[test]
+    fn a_differing_major_is_not() {
+        assert!(!api_compatible("1.0.0", "2.0.0"));
+        assert!(!api_compatible("2.0.0", "1.9.9"));
+        assert!(!api_compatible("0.1.0", "1.0.0"));
+    }
+
+    /// The clause that matters today: everything in play is `0.x`, where a
+    /// major-only check would call `0.1` and `0.9` compatible.
+    #[test]
+    fn a_differing_minor_below_one_point_zero_is_not() {
+        assert!(!api_compatible("0.1.0", "0.2.0"));
+        assert!(!api_compatible("0.9.0", "0.1.0"));
+    }
+
+    /// And from 1.0 on it is, because that is what a minor bump means. Whether
+    /// the host also *adapts* an N-1 minor is 16b's question, not this one's.
+    #[test]
+    fn a_differing_minor_from_one_point_zero_on_is_compatible() {
+        assert!(api_compatible("1.3.0", "1.1.0"));
+        assert!(api_compatible("1.1.0", "1.3.0"));
+    }
+
+    /// A patch difference never matters at any major.
+    #[test]
+    fn a_patch_difference_is_ignored() {
+        assert!(api_compatible("0.1.0", "0.1.7"));
+        assert!(api_compatible("2.0.4", "2.0.0"));
+    }
+
+    /// Refuse rather than guess. A malformed version reaching a compatibility
+    /// check means something upstream is already wrong.
+    #[test]
+    fn an_unparseable_version_is_incompatible() {
+        assert!(!api_compatible("0.1.0", "dev"));
+        assert!(!api_compatible("0.1.0", "0"));
+        assert!(!api_compatible("", "0.1.0"));
+        assert!(!api_compatible("0.1.0", "0.x.0"));
     }
 }

@@ -231,6 +231,18 @@ impl Runtime {
                     })?;
                 match &declared {
                     Some(declared) => {
+                        // The contract version first: a component built against
+                        // a different interface package is refused here with
+                        // both versions named, rather than later as an obscure
+                        // "no such import" from the linker.
+                        if !manifest::api_compatible(manifest::API_VERSION, &declared.api_version) {
+                            return Err(CoreError::ApiVersion {
+                                id: instance.id.clone(),
+                                component: instance.component_file(),
+                                theirs: declared.api_version.clone(),
+                                ours: manifest::API_VERSION.to_owned(),
+                            });
+                        }
                         let undeclared = declared.undeclared(&capabilities);
                         if !undeclared.is_empty() {
                             return Err(CoreError::Undeclared {
@@ -1489,6 +1501,21 @@ pub enum CoreError {
         component: String,
         /// The undeclared interfaces, comma-separated.
         interfaces: String,
+    },
+    /// A component was built against an incompatible interface package.
+    #[error(
+        "{id}: `{component}` was built against jan-klod:interfaces@{theirs}, and this \
+         build speaks {ours}. Rebuild the component against this host's `wit/`"
+    )]
+    ApiVersion {
+        /// Instance id that was refused.
+        id: String,
+        /// The component file.
+        component: String,
+        /// The version the component declares.
+        theirs: String,
+        /// The version this host speaks.
+        ours: String,
     },
     /// A component ships no manifest, and none is permitted.
     #[error(

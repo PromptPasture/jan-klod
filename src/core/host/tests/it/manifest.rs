@@ -429,3 +429,90 @@ fn the_grant_is_off_by_default() {
         );
     }
 }
+
+/// `manifest::API_VERSION` is a constant, so it can drift from `wit/`. This is
+/// what stops it: the same agreement `scripts/manifests.sh` refuses to guess at,
+/// asserted from the other side.
+///
+/// A constant is right — an installed gateway has no `wit/` beside it, so a
+/// version read from that directory at runtime would be read from a directory
+/// that may not exist. The cost is exactly this test.
+#[test]
+fn the_hosts_api_version_matches_the_wit_package() {
+    let wit = common::repo_root().join("wit");
+    let mut declared: Vec<String> = std::fs::read_dir(&wit)
+        .expect("wit/ is readable")
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "wit"))
+        .filter_map(|e| {
+            let text = std::fs::read_to_string(e.path()).ok()?;
+            text.lines()
+                .find_map(|line| {
+                    line.strip_prefix("package jan-klod:interfaces@")
+                        .and_then(|rest| rest.strip_suffix(';'))
+                })
+                .map(str::to_owned)
+        })
+        .collect();
+    declared.sort();
+    declared.dedup();
+
+    assert_eq!(
+        declared.len(),
+        1,
+        "wit/ declares more than one package version, so there is no answer to \
+         which one the host speaks: {declared:?}"
+    );
+    assert_eq!(
+        declared[0],
+        jan_klod_core::manifest::API_VERSION,
+        "the host's API_VERSION constant has drifted from wit/"
+    );
+}
+
+/// A component built against a different interface package is refused, with
+/// both versions named — rather than failing later as an obscure missing
+/// import from the linker.
+#[test]
+fn a_component_built_against_another_api_version_is_refused() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let real_ext = common::repo_root().join("ext");
+    let dir = std::env::temp_dir().join(format!("jk-manifest-api-{}", std::process::id()));
+    let ext = dir.join("ext");
+    std::fs::create_dir_all(&ext).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    std::fs::copy(real_ext.join("tool-fs.wasm"), ext.join("tool-fs.wasm")).unwrap();
+
+    let manifest = std::fs::read_to_string(real_ext.join("tool-fs.manifest.toml")).unwrap();
+    assert!(
+        manifest.contains("api-version = \"0.1.0\""),
+        "the fixture rewrites this line, so it has to be there: {manifest}"
+    );
+    std::fs::write(
+        ext.join("tool-fs.manifest.toml"),
+        manifest.replace("api-version = \"0.1.0\"", "api-version = \"0.2.0\""),
+    )
+    .unwrap();
+
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        "\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
+    )
+    .unwrap();
+
+    let Err(error) = Runtime::boot(&config, &ext) else {
+        panic!("a component from another interface version must be refused");
+    };
+    let message = format!("{error}");
+    assert!(
+        message.contains("0.2.0") && message.contains("0.1.0"),
+        "both versions are named, so the reader knows which way the gap runs: {message}"
+    );
+    assert!(
+        message.contains("tool-fs"),
+        "and the component it is about: {message}"
+    );
+}
