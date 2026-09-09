@@ -85,7 +85,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 11 — UX polish | `done` | **Done 2026-07-03.** REST surface migrated to resource model (`POST /turn` retired; `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message` added); `store::list_namespaces` + `AgentSession::list_sessions`; workspace auto-detection (defaults to `$PWD` when `workspace:` key absent); per-token streaming in TUI via mpsc channel + `apply_delta`/`finish_turn`. UI client and integration tests updated. |
 | 12 — Release: GitHub + web | `done` | **Done 2026-07-03.** GitHub Actions release workflow (`.github/workflows/release.yml`; tag `v*` → matrix linux/darwin × x86_64/arm64 bundles + SHA256SUMS, `gh release create`); `scripts/install.sh` (OS/arch detect, checksum verify, installs to `~/.local/bin`); `pages/index.html` (GitHub Pages landing); `docs/quickstart.md`; README rewrite. |
 | 13 — Client protocol | `in-progress` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. No transport yet, so `serve.rs` is unchanged. Gate: `jan-klod-ui` drives a full turn — streaming, `ask`, cancel — over stdio JSON-RPC; REST + SSE tests still pass as a projection; protocol version negotiated at connect. |
-| 14 — Event-sourced session log | `not-started` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
+| 14 — Event-sourced session log | `in-progress` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. **14a done 2026-09-09** ([#44](https://github.com/PromptPasture/jan-klod/issues/44)): the append-only `events` table, the versioned envelope, and a fan-out sink plus driver wrapper logging every turn through `run_and_persist`. The transcript in `entries` is still what a turn replays from — making it a projection is 14b. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
 | 15 — OS-level effect sandbox | `in-progress` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, the `SandboxBackend` seam, boot-time resolution that never downgrades quietly, and `require: true` denying execution rather than degrading. No backend yet, so every platform is approval-only; the per-turn warning is deferred to 16a. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot and in the turn; the security-model row cites the tests. |
 | 16 — Capability manifest + signed registry | `not-started` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
 | 17 — Web client + GUI shell | `not-started` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. Needs 13. Gate: a browser and a Tauri window drive a turn with `ask` + cancel from one front-end codebase served by the core. |
@@ -378,11 +378,19 @@ stdio JSON-RPC; REST + SSE tests still pass; protocol version negotiated at conn
 consume, not a transcript. Transcript, `GET /session/:id`, and SSE become
 projections; resume, fork, replay and audit fall out.
 
-- **14a — Event table + writer sink.** An append-only `events` table
-  (`session`, `seq`, `ts`, `kind`, `payload`) in the host-side SQLite `Store`; an
-  `EventSink` that persists every conductor `Event` plus the user message, the
-  `ask` and its answer, and the permission decision. Event-log schema version is
-  independent of the protocol version.
+- **14a — Event table + writer sink. Done 2026-09-09** ([#44](https://github.com/PromptPasture/jan-klod/issues/44)).
+  The append-only `events` table (`session`, `seq`, `ts`, `kind`, `payload`,
+  keyed on `(session, seq)`) in the host-side SQLite `Store`; `PersistingSink`
+  fans out every conductor `Event` to the log without taking the stream from the
+  SSE/TUI sinks, and `PersistingDriver` records the `ask`, its answer and any
+  steering follow-up — the last of these beyond what this bullet asked for,
+  because a steered turn cannot be rebuilt without it. The user message is
+  logged first, so a session's log opens with its own input. The permission
+  decision needs no kind of its own: a denial is the `Warning` the conductor
+  already emits, an approval is the `ask`/`answer` pair. `EVENT_LOG_VERSION`
+  is independent of the protocol version. Wired in `run_and_persist`, the one
+  funnel all eight turn entry points share. Text deltas are not coalesced.
+  See [Architecture → Storage](architecture.md#storage).
 - **14b — Projections + resume + fork.** Transcript and session listing are rebuilt
   from events; resuming a session replays the log into the context interceptor;
   `session/fork` at event *N* creates an independent session. The old transcript

@@ -78,6 +78,16 @@ fn a_turn_appends_its_events_in_order() {
         "every row belongs to the session that produced it"
     );
 
+    // The whole shape of a simple turn, pinned rather than described: its own
+    // input, the assistant text, the outcome. `text-delta` being here is
+    // Acceptance line 2 holding against a real turn and not only against a
+    // unit test — a delta reaches the log exactly as it was emitted, uncoalesced.
+    assert_eq!(
+        log.iter().map(|row| row.kind.as_str()).collect::<Vec<_>>(),
+        vec![event_log::KIND_USER_MESSAGE, "text-delta", "done"],
+        "the log of one simple turn"
+    );
+
     // The turn's own input opens the log, before anything the model said.
     assert_eq!(log[0].kind, event_log::KIND_USER_MESSAGE);
     assert!(

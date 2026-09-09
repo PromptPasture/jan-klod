@@ -4,7 +4,7 @@ title: Architecture
 description: High-level architecture of the Jan-Klod agent runtime
 tags: [architecture, core, extensions, rust, wasm, wasmtime]
 created: 2026-06-28T00:00:00Z
-updated: 2026-09-08T00:00:00Z
+updated: 2026-09-09T00:00:00Z
 ---
 
 > **Foundation:** the core is **Rust + Wasmtime** running WebAssembly
@@ -341,6 +341,49 @@ sensitive thing the runtime holds, so the fewer parties that hold it the better.
 A component that wanted swappable backends would be trading the one guarantee
 this design exists to make for a plugin point nobody asked for. Postgres or
 Supabase, if they arrive, arrive as host backends behind the same `Store` type.
+
+### Two tables
+
+`entries` is the key/value store `host-storage` serves: `(namespace, key)`,
+opaque JSON values, updated in place. `events` is the **append-only turn log**:
+
+```sql
+events(session TEXT, seq INTEGER, ts INTEGER, kind TEXT, payload TEXT,
+       PRIMARY KEY (session, seq))
+```
+
+One row per thing that happened, `seq` numbered from 1 **per session** so a
+session's log reads as a sequence with no gaps. `seq` is allocated inside the
+insert (`SELECT COALESCE(MAX(seq), 0) + 1 … RETURNING seq`), so it cannot claim
+a number another append already took. There is no update and no single-row
+delete: a log whose rows could be rewritten would make every replay a claim
+about the present rather than the past. `purge_session_events` — forgetting a
+whole session — is the one removal path.
+
+What is logged, and by what: every `conductor::Event` via `PersistingSink`
+(a fan-out, so the SSE stream and the TUI still receive everything); the message
+that started the turn; and the `ask`, its answer and any steering follow-up via
+`PersistingDriver`. The answer is recorded whatever its provenance, including the
+default taken when nobody replied, because a replay cannot otherwise tell an
+approval from a timed-out denial. Text deltas are stored one row per event and
+**not** coalesced — a replaying client needs them as they arrived.
+
+Logging is best-effort in the same sense the transcript append is: a store
+failure is reported once per turn and never cancels the turn, because a full
+disk should not be able to stop a conversation.
+
+### The envelope, and why it has its own version
+
+Every `payload` is `{"v": <EVENT_LOG_VERSION>, "data": {…}}`. `EVENT_LOG_VERSION`
+(`core::event_log`) is **not** the client protocol's version, and merging them
+would be a mistake: a stored log outlives the clients that watched it happen, so
+"can this build read this row?" and "can this client talk to this core?" are
+different questions with different answers. A reader refuses a version newer
+than its own rather than guessing at the shape, and accepts older ones.
+
+The transcript in `entries` is still what a new turn replays from; making
+transcript, resume and fork projections *of this log* is
+[Phase 14b](roadmap.md#phase-14--event-sourced-session-log).
 
 ## Stack
 
