@@ -14,11 +14,18 @@
 # timeout. Omitting `on-timeout` disables termination — verified, not assumed: a
 # test that ran past this period was marked SLOW and passed.
 #
-# The period is 60s and not something tighter because a warning that fires on a
-# healthy run is one people stop reading. This was 30s first, chosen to surface
-# the regression above early, and it printed SLOW on every `make gate` for
-# `installed_layout::an_installed_gateway_verifies_its_own_components_from_anywhere`,
-# which legitimately takes that long under the full suite's parallelism. It also
-# bought nothing: that test's own assertion is the thing that catches its
-# regression, so the marker was noise on top of a check that already works.
-slow-timeout = { period = "60s" }
+# The period is 120s, and it got there by being wrong twice — a warning that
+# fires on a healthy run is one people stop reading, so the threshold has to sit
+# above what this suite legitimately does. It was 30s first, then 60s, and
+# `installed_layout::an_installed_gateway_verifies_its_own_components_from_anywhere`
+# printed SLOW on every single `make gate` at both. Measured under sustained
+# load, the five `installed_layout` tests take 40-61s each: every one spawns a
+# real gateway, and a gateway Cranelift-compiles all 18 staged components before
+# it answers (the cold-start cost #60 exists to remove). Any threshold below
+# ~90s is noise here.
+#
+# The marker earns little either way — the tests that trip it are slow by nature
+# — but it cannot simply be dropped, because omitting `slow-timeout` inherits
+# nextest's default, which *terminates*. An explicit period with no `on-timeout`
+# is the way to keep termination off.
+slow-timeout = { period = "120s" }

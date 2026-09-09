@@ -140,7 +140,16 @@ fn an_installed_gateway_serves_from_a_directory_that_is_not_a_checkout() {
     let _gateway = Gateway(child);
 
     assert!(
-        wait_until_listening(&addr, Duration::from_secs(40)),
+        // Generous on purpose, and it costs nothing when things work:
+        // `wait_until_listening` polls every 100ms and returns the moment the
+        // port opens, so this bounds only the *failure* case. The gateway
+        // Cranelift-compiles every staged component before it listens, which is
+        // ~24s on its own here; under the parallel runner saturating all cores
+        // it went past the 40s this used to allow and reported "an installed
+        // jan-klod could not start" — a claim about a real defect, made because
+        // the machine was busy. What the assertion is for is a gateway that
+        // never comes up at all, and for that a large deadline is right.
+        wait_until_listening(&addr, Duration::from_secs(180)),
         "the gateway never came up at {addr} — an installed jan-klod could not start \
          from {}",
         work.display()
