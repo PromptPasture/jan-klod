@@ -28,6 +28,7 @@ mod host_fs;
 mod host_process;
 mod installed_layout;
 mod local_model;
+mod manifest;
 mod persistence;
 mod polyglot;
 mod prompt_disconnect;

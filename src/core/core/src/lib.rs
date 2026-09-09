@@ -99,6 +99,48 @@ pub struct LoadedExtension {
     pub instance: ExtensionInstance,
     /// Whether its component was found and compiled.
     pub state: LoadState,
+    /// The `host-*` interfaces this component actually imports, sorted, read
+    /// from the compiled component rather than from anything that describes it.
+    ///
+    /// `None` when there was no component to read ([`LoadState::Missing`]).
+    /// `Some(&[])` is a different thing — a component that imports no host
+    /// capability at all, which `tool-escape-probe` nearly is. Keeping those
+    /// apart matters: one is "nothing to ask" and the other is "asks for
+    /// nothing", and a manifest check has to treat them differently.
+    pub capabilities: Option<Vec<String>>,
+}
+
+/// The `host-*` interfaces `component` imports, sorted and deduplicated.
+///
+/// Read from the component's own type, so it describes the artifact rather than
+/// any claim about it. Two things are deliberately not in the result, and both
+/// would otherwise be here:
+///
+/// * **Exports.** `tool-callable` and `extension-lifecycle` are what a guest
+///   *implements*. Only imports are asked for.
+/// * **Type-only imports.** `llm-types` and `store-types` are shapes; importing
+///   one grants nothing, so calling it a capability would tell an operator to
+///   allow something that does not exist to allow.
+///
+/// The same two exclusions the manifest generator makes
+/// (`scripts/manifests.sh`), for the same reasons — which is what lets the two
+/// be cross-checked against each other at all.
+fn host_capabilities(component: &Component, engine: &Engine) -> Vec<String> {
+    let mut found: Vec<String> = component
+        .component_type()
+        .imports(engine)
+        // An import is named for the interface, e.g.
+        // `jan-klod:interfaces/host-fs@0.1.0`.
+        .filter_map(|(name, _)| {
+            name.strip_prefix("jan-klod:interfaces/")
+                .and_then(|rest| rest.split('@').next())
+                .filter(|interface| interface.starts_with("host-"))
+                .map(str::to_owned)
+        })
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found
 }
 
 /// A booted core: the engine, the capability linker, and every enabled instance
@@ -160,20 +202,23 @@ impl Runtime {
         let mut extensions = Vec::with_capacity(order.len());
         for instance in order {
             let path = ext_dir.join(instance.component_file());
-            let state = if path.exists() {
+            let (state, capabilities) = if path.exists() {
                 let component =
                     Component::from_file(&engine, &path).map_err(|source| CoreError::Load {
                         id: instance.id.clone(),
                         path: path.display().to_string(),
                         source: source.into(),
                     })?;
-                LoadState::Compiled(component)
+                // Read once, here, while the component is compiled and in hand.
+                let capabilities = host_capabilities(&component, &engine);
+                (LoadState::Compiled(component), Some(capabilities))
             } else {
-                LoadState::Missing(path)
+                (LoadState::Missing(path), None)
             };
             extensions.push(LoadedExtension {
                 instance: instance.clone(),
                 state,
+                capabilities,
             });
         }
 
