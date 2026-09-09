@@ -583,6 +583,13 @@ target/
 src/extensions/**/*.wasm
 ext/*.wasm
 
+# The capability manifests staged beside them. Generated rather than committed
+# for the same reason the components are: a manifest here describes the `.wasm`
+# next to it, and after a bare clone there is no `.wasm` to describe. Built by
+# `make -C src/extensions manifests` and removed by `clean`, so `ext/` stays a
+# directory whose whole contents one command produces.
+ext/*.manifest.toml
+
 # …except the TinyGo spike, which is a committed fixture: the test that backs the
 # polyglot claim loads it, and requiring a TinyGo install to produce it first is
 # what made that test depend on which of the two polyglot tests ran first. Built

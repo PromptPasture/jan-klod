@@ -25,7 +25,7 @@ assumes — see the [Roadmap](../concepts/roadmap.md) for why each piece exists.
 | **Go** ≥ 1.23 | toolchain TinyGo builds on | TinyGo guests | `brew` |
 | **TinyGo** ≥ 0.34 | compiles Go guests to **components** (`wasip2`) | guest extensions | `brew` |
 | **wkg** ≥ 0.15 | resolves/fetches WIT package dependencies | building guests against `wit/` | `cargo install` |
-| **wasm-tools** | inspect/validate/compose components | always (debugging) | `cargo install` |
+| **wasm-tools** | inspect/validate components; `make extensions` reads a component's imports through it to generate each guest's capability manifest | **required to build guests** | `cargo install` |
 | `wasmtime` CLI ≥ 46 | run a component standalone | optional (debug only) | `brew` / installer |
 | `cargo-component` | build **Rust** guests as components | optional (Rust extensions) | `cargo install` |
 

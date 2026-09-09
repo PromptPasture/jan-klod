@@ -60,6 +60,15 @@ jobs:
         with:
           tool: cargo-nextest@0.9.143
 
+      # `make -C src/extensions all` generates each guest's capability manifest
+      # by reading the component's own imports out of `wasm-tools component wit`,
+      # so staging the guests now needs this. Pinned like everything else here:
+      # these Makefiles parse its output. Keep in step with WASM_TOOLS_VERSION in
+      # the root Makefile.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools@1.258.0
+
       # Two things resolve wit/spike/deps (wasi:cli & co) through bindgen!: the
       # spike_gate example, which `make clippy` compiles by passing the `examples`
       # feature it is gated behind, and the `it` test binary's polyglot module,
@@ -121,6 +130,12 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.143
+
+      # `make gate` builds the guests, which now also generates their manifests
+      # from the components' real imports. See the lint-test job above.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools@1.258.0
 
       # `make gate` builds the `it` test binary, and its polyglot module resolves
       # wit/spike through bindgen!, so this job needs wit/spike/deps too. It died

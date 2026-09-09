@@ -185,6 +185,10 @@ CARGO_DENY_VERSION := 0.20.2
 CARGO_AUDIT_VERSION := 0.22.2
 CARGO_CYCLONEDX_VERSION := 0.5.9
 CARGO_NEXTEST_VERSION := 0.9.143
+# Not a cargo plugin, but the same rule applies: `make extensions` reads its
+# output to generate each guest's capability manifest, so a change to how it
+# prints a component's WIT lands on us.
+WASM_TOOLS_VERSION := 1.258.0
 
 # One-time developer setup: cargo supply-chain plugins + git hooks.
 setup:
@@ -192,6 +196,7 @@ setup:
 	cargo install cargo-cyclonedx --version $(CARGO_CYCLONEDX_VERSION)
 	cargo install cargo-nextest --version $(CARGO_NEXTEST_VERSION)
 	cargo install cargo-deny --version $(CARGO_DENY_VERSION)
+	cargo install wasm-tools --version $(WASM_TOOLS_VERSION)
 	$(MAKE) install-hooks
 
 install-hooks:

@@ -32,17 +32,31 @@ LIBS := guest-fs
 # no wasm target required. Add a guest here once it carries such tests.
 TESTABLE_GUESTS := interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router interceptor-system tool-fs tool-shell tool-edit tool-find tool-git tool-fetch
 
-.PHONY: all clean test audit deny go-supply-chain spike-deps spike-guest $(GUESTS)
+.PHONY: all stage manifests clean test audit deny go-supply-chain spike-deps spike-guest $(GUESTS)
 
 # Build every Rust guest in one cargo invocation, not 13 serial `make` recipes —
 # cargo's own scheduler compiles independent guests in parallel across cores. The
 # polyglot TinyGo spike stays opt-in: `make spike-guest`.
-all:
+all: manifests
+
+# Staged components, then their manifests. `manifests` depends on this same
+# recipe's output, so it is ordered after it rather than beside it.
+stage:
 	cargo build --release --target wasm32-wasip2 $(addprefix -p ,$(GUESTS))
 	mkdir -p $(EXT_DIR)
 	@for g in $(GUESTS); do \
 		cp target/wasm32-wasip2/release/$$(echo $$g | tr - _).wasm $(EXT_DIR)/$$g.wasm; \
 	done
+
+# One manifest per staged component, declaring what it needs.
+#
+# Generated, not committed, and `ext/` is why: `git ls-files ext/` is empty and
+# `ext/*.wasm` is gitignored, so the directory is build output. A committed
+# manifest there would describe a component the repository does not contain —
+# after a bare clone it would be a declaration about a missing file. So it is
+# built beside the thing it describes and removed by `clean` with it.
+manifests: stage
+	sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(ROOT)/wit $(GUESTS)
 
 # Run the guests' native unit tests (host target, no wasm). Skips guests without
 # host-testable modules by only iterating TESTABLE_GUESTS; LIBS are pure Rust and
@@ -109,4 +123,5 @@ spike-guest: spike-deps
 # its sibling had run first.
 clean:
 	rm -rf target \
-		$(addprefix $(EXT_DIR)/,$(addsuffix .wasm,$(GUESTS)))
+		$(addprefix $(EXT_DIR)/,$(addsuffix .wasm,$(GUESTS))) \
+		$(addprefix $(EXT_DIR)/,$(addsuffix .manifest.toml,$(GUESTS)))
