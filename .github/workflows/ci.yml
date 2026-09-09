@@ -43,6 +43,14 @@ jobs:
         with:
           workspaces: src/core
 
+      # `make test` runs the suite under cargo-nextest — one process per test,
+      # and a filter matching nothing exits non-zero instead of reporting green.
+      # Prebuilt binary, as with the supply-chain plugins below: `cargo install`
+      # from source would rebuild it on every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       # The spike_gate example's bindgen! resolves wit/spike/deps (wasi:cli & co),
       # which are gitignored and fetched on demand from the committed wit/wkg.lock.
       # `cargo test` and `clippy --all-targets` compile that example, so populate the
@@ -95,6 +103,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/core
+
+      # `make gate` runs under cargo-nextest; see the lint-test job for why.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
       # Exit gate: builds every guest to wasm32-wasip2, then runs the full offline
       # integration surface across all v1 guarantees — the thin loop with provider

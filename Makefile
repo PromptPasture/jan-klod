@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext supervisor bundle test test-core test-guests test-fast harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
+.PHONY: help wit all core extensions ext supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
 
 .DEFAULT_GOAL := all
 
@@ -27,7 +27,6 @@ help:
 	@echo "  test        run host-side unit tests (core + guests + supervisor)"
 	@echo "  test-core   run the host workspace's tests only"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
-	@echo "  test-fast   run the host workspace's tests under cargo-nextest"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
@@ -71,8 +70,8 @@ ext: extensions
 # tests (pure logic behind a wasm32 cfg-gate — e.g. the intent router).
 test: test-core test-guests
 
-# The host workspace's own tests. `gate` (cargo test --workspace, same manifest)
-# supersedes this, so a caller that runs `gate` anyway wants `test-guests` alone.
+# The host workspace's own tests. `gate` runs the same suite over the same
+# manifest, so a caller that runs `gate` anyway wants `test-guests` alone.
 test-core:
 	$(MAKE) -C $(CORE) test
 
@@ -82,11 +81,6 @@ test-core:
 test-guests:
 	$(MAKE) -C $(EXT) test
 	cd $(SUPERVISOR) && go vet ./... && go test ./...
-
-# `test-core` under cargo-nextest — one process per test instead of one per
-# binary, all cores in one pass. See src/core/Makefile for the caveats.
-test-fast:
-	$(MAKE) -C $(CORE) test-fast
 
 # Build the tiny Go blue/green supervisor (static, dependency-free binary).
 supervisor:
@@ -152,19 +146,36 @@ supply-chain: deny audit sbom
 #
 # These were nine separate test *files*, named here with --test. They are now
 # modules of the single `it` target (src/core/host/tests/it/main.rs), so the
-# selection is a set of libtest name filters instead — libtest matches a test if
-# it contains any of them. What that costs: the build is no longer cheaper than
-# `gate`'s, because it is the same binary; only the run is shorter.
+# selection is a set of name filters instead — a test matching any of them runs.
+# What that costs: the build is no longer cheaper than `gate`'s, because it is
+# the same binary; only the run is shorter.
+#
+# A name filter is where this target can hollow out, so the names are checked
+# against the filesystem before they are used. nextest fails a run that matches
+# *nothing* (exit 4, where `cargo test` exits 0), but that is only a partial
+# guard: measured, one typo among the nine exits 0 having run 1 test instead of
+# 20, because the other eight still matched. So the loop below asks the source
+# whether each module exists rather than trusting the literals — the same move
+# as `every_guest_facing_backend_goes_through_the_policy`, which stopped listing
+# the files implementing a capability and started asking which ones do.
+#
+# This is the failure this list has already had once: `gate` below used to name
+# its test files, and `storage_scope` and `test_layout` were written, committed,
+# and simply not in it.
 #
 # JK_REQUIRE_GUESTS for the same reason `gate` sets it — this target stages the
 # guests itself, so a skipped test here can only mean something is wrong. It
 # went without the flag for a long time, which meant its own tests could vanish
 # and it would still print success.
+HARNESS_MODULES := component_harness agent_loop persistence api_rest telegram \
+                   host_fs host_process tool_fleet tool_wiring
 harness: export JK_REQUIRE_GUESTS = 1
 harness: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test it -- \
-	  component_harness:: agent_loop:: persistence:: api_rest:: telegram:: \
-	  host_fs:: host_process:: tool_fleet:: tool_wiring::
+	@for m in $(HARNESS_MODULES); do \
+	  test -f $(CORE)/host/tests/it/$$m.rs \
+	    || { echo "harness: no module $$m.rs in $(CORE)/host/tests/it/" >&2; exit 1; }; \
+	done
+	cd $(CORE) && cargo nextest run -p jan-klod-host $(addsuffix ::,$(HARNESS_MODULES))
 
 # Exit gate: the full offline integration surface, with nothing allowed to skip.
 #
@@ -175,10 +186,32 @@ harness: extensions
 # committed, and were not in it. So the gate now runs the whole suite under the
 # flag. Everything staged, nothing skipped, no list to forget.
 #
+# nextest, for two reasons the merge of the integration tests into one binary
+# created (host/tests/it/):
+#
+#  1. One process per test. Several modules in there set process-global env vars
+#     to conflicting values — JK_ANSWER_TIMEOUT_SECS at 5 and at 120, and two
+#     distinct pairs of credential leak-canaries. Under `cargo test`'s in-binary
+#     threading those race, and the canary pair races a security assertion into
+#     passing for a reason unrelated to what it measures.
+#  2. Zero tests is a failure. `cargo test` exits 0 when nothing matches; nextest
+#     exits 4. For a gate whose whole history is "it reported green without
+#     running", that belongs in the runner rather than in a check somebody has
+#     to remember to write.
+#
+# --no-fail-fast keeps what `cargo test` gave us here. nextest's default cancels
+# the run on the first failure; with the suite in one binary, `cargo test` was
+# exhaustive within it. A gate that takes three minutes should report every
+# failure, not the first one.
+#
+# Doctests run separately because nextest does not run them. None exist today
+# (~0.9s), but `missing_docs` is on, so the first one would otherwise go unrun.
+#
 # Everything is offline: canned host-http, no api key, no network.
 gate: export JK_REQUIRE_GUESTS = 1
 gate: extensions
-	cd $(CORE) && cargo test --workspace
+	cd $(CORE) && cargo nextest run --workspace --no-fail-fast
+	cd $(CORE) && cargo test --doc --workspace
 
 # Boot the real core against config.yaml: resolve enabled extensions against
 # ext/, compile present components, run their lifecycle, print the boot plan.

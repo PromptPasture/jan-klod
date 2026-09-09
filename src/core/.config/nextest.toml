@@ -1,14 +1,24 @@
 # cargo-nextest configuration for the host workspace. Deliberately near-empty:
-# the runner is the point, not tuning it. Wired up as `make test-fast` in this
-# directory's Makefile; the gates still run `cargo test`.
+# the runner is the point, not tuning it. Every test target here runs under it —
+# `make test`, `make harness`, `make gate`.
 
 [profile.default]
-# Warn at 30s, never terminate. nextest's own default is a 60s period *with*
-# termination, which would break one test's design on purpose:
-# prompt_disconnect's `a_disconnected_client_does_not_hold_the_turn_open` sets
-# JK_ANSWER_TIMEOUT_SECS to 120 deliberately, so that a regression is a turn
-# that runs to the deadline and then fails its `elapsed < 30s` assertion with a
-# message naming the cause. Killing it at 60s would replace that message with a
-# bare timeout. The passing path finishes in seconds, so warning at 30s makes a
-# regression here visible earlier than the assertion would.
-slow-timeout = { period = "30s" }
+# Warn at 60s, and **never terminate**.
+#
+# Not terminating is the part that matters. nextest's own default is a 60s
+# period *with* `on-timeout = "fail"`, and `prompt_disconnect`'s
+# `a_disconnected_client_does_not_hold_the_turn_open` sets
+# JK_ANSWER_TIMEOUT_SECS to 120 deliberately: a regression is a turn that runs
+# to the deadline and then fails its own `elapsed < 30s` assertion with a
+# message naming the cause. Killing it at 60s replaces that message with a bare
+# timeout. Omitting `on-timeout` disables termination — verified, not assumed: a
+# test that ran past this period was marked SLOW and passed.
+#
+# The period is 60s and not something tighter because a warning that fires on a
+# healthy run is one people stop reading. This was 30s first, chosen to surface
+# the regression above early, and it printed SLOW on every `make gate` for
+# `installed_layout::an_installed_gateway_verifies_its_own_components_from_anywhere`,
+# which legitimately takes that long under the full suite's parallelism. It also
+# bought nothing: that test's own assertion is the thing that catches its
+# regression, so the marker was noise on top of a check that already works.
+slow-timeout = { period = "60s" }
