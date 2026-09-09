@@ -11,9 +11,7 @@
 //!
 //! Like the dispatcher, it is decoupled from Wasmtime: completions go through the
 //! [`Completer`] trait and tools through the [`ToolInvoker`] trait, so the state
-//! machine is unit-tested with stubs. The wasm wiring (routed provider as a
-//! `Completer`, a `run-handle` streaming entry, and retry-with-correction) lands
-//! in following Slice 2c increments.
+//! machine is unit-tested with stubs.
 
 use crate::intercept::{
     Dispatcher, Driver, FinalAnswer, HookState, Message, Outcome, PendingRequest, Phase,
@@ -21,11 +19,8 @@ use crate::intercept::{
 };
 
 /// Default cap on `ReAct` iterations, so a model that keeps emitting tool calls
-/// can never spin forever — and on a metered endpoint, never spend forever.
-///
-/// Eight is a real constraint for coding work: view, edit, run the tests, read the
-/// failure, fix, run again is already six. Raise it with `limits.max-iterations`
-/// when a task needs the room and you are watching the bill.
+/// can never spin (or spend) forever. Eight covers a real coding cycle (view,
+/// edit, test, read failure, fix, retest); raise via `limits.max-iterations`.
 pub const DEFAULT_MAX_ITERATIONS: u32 = 8;
 
 /// Bounds a turn runs under.
@@ -70,10 +65,9 @@ pub struct Completion {
 
 /// The `finish-reason`s that mean the model ran out of room rather than finishing.
 ///
-/// `length` is the OpenAI-compatible spelling, and what `provider-anthropic`
-/// normalises its `max_tokens` to. The raw `max_tokens` is accepted as well, since
-/// a third-party guest may pass the provider's own wording through rather than
-/// mapping it — a signal this specific should not be lost to a spelling.
+/// `length` is the OpenAI-compatible spelling (what `provider-anthropic` maps
+/// `max_tokens` to); the raw `max_tokens` is accepted too in case a third-party
+/// guest passes the provider's own wording through unmapped.
 pub const TRUNCATED: [&str; 2] = ["length", "max_tokens"];
 
 impl Completion {
@@ -304,10 +298,8 @@ pub fn run_turn(
 /// short-circuit a simple prompt), then prior turns from `history` followed by
 /// this one. Returns whether the agentic (request-shaping) path should run.
 ///
-/// Prior turns first, then this one. Without this the model saw a single message
-/// per turn and a session had no memory at all: "now add a test for that" reached
-/// a model that had never seen "that". Trimming the result to the model's window
-/// is `select-context`'s job, which is why it now has something to trim.
+/// `history` must come before the new message, or a session has no memory at
+/// all. Trimming to the model's window is `select-context`'s job, not this one's.
 fn build_initial_request(
     dispatcher: &mut Dispatcher,
     driver: &mut dyn Driver,
@@ -405,14 +397,9 @@ fn after_tool_calls(pass: ToolPass, final_text: String, sink: &mut dyn EventSink
     }
 }
 
-/// Note that the turn stopped at its cycle cap rather than because it was done.
-///
-/// The cap used to `break` silently, so a task needing more steps than the limit
-/// returned whatever the last completion happened to say — often a fragment, and
-/// when the model was mid-tool-call, nothing at all — presented as the answer. The
-/// truncation warning exists for the same reason: a half-finished answer that looks
-/// finished is a wrong the reader acts on. The note goes in the text as well as on
-/// the event stream, because a headless caller (`ask`, a CI step) sees only text.
+/// Note that the turn stopped at its cycle cap rather than because it was done —
+/// a half-finished answer that looks finished is a wrong the reader acts on. Goes
+/// in the text as well as the event stream, since a headless caller sees only text.
 fn cut_short(text: &str, cap: u32, sink: &mut dyn EventSink) -> String {
     note_incomplete(
         text,
@@ -424,15 +411,10 @@ fn cut_short(text: &str, cap: u32, sink: &mut dyn EventSink) -> String {
     )
 }
 
-/// Mark a turn that ended before the model was done, and say why.
-///
-/// Shared by every early exit, because the harm is the same in each and it is not
-/// only what the reader sees. `run_and_persist` writes the answer to the durable
-/// transcript, and `replay` feeds that back to the model next session — so a turn
-/// that stopped halfway, recorded as if it were finished, teaches the model that
-/// the assistant said something it never got to say. For a coding agent, "I will
-/// now edit `main.rs`…" stored as a completed answer is worse than no memory at
-/// all.
+/// Mark a turn that ended before the model was done, and say why. Shared by
+/// every early exit: `run_and_persist` writes the answer to the durable
+/// transcript and `replay` feeds it back next session, so a half-finished turn
+/// recorded as complete would teach the model it said something it never said.
 fn note_incomplete(text: &str, note: &str, sink: &mut dyn EventSink) -> String {
     sink.emit(&Event::Warning(note.to_string()));
     if text.trim().is_empty() {
@@ -442,15 +424,11 @@ fn note_incomplete(text: &str, note: &str, sink: &mut dyn EventSink) -> String {
     }
 }
 
-/// Why a pass over the tool calls ended the loop.
-///
-/// The two used to collapse into one `bool`, and they are opposite things. A
-/// `tool-result` terminate is a **decision** — an interceptor saying this turn is
-/// over — and the answer in hand is the intended one. A sink cancel is an
-/// **interruption**: the client went away or someone pressed stop, and the model
-/// was mid-thought. Recording both as a finished answer meant a disconnect was
-/// stored in the durable transcript and replayed to the model next session as
-/// something the assistant had said.
+/// Why a pass over the tool calls ended the loop. Kept as separate variants
+/// rather than one `bool` because they are opposite things: a `tool-result`
+/// terminate is a **decision** (the answer in hand is intended), while a sink
+/// cancel is an **interruption** (the model was mid-thought) — collapsing them
+/// would record a disconnect as a finished answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolPass {
     /// Keep looping.
@@ -887,12 +865,8 @@ mod tests {
         assert_eq!(*seen.borrow(), vec![Some("gpt-x".to_string())]);
     }
 
-    /// A turn that hits the cycle cap says so, in the text and on the stream.
-    ///
-    /// The cap used to `break` silently, so a task needing more steps returned
-    /// whatever the last completion happened to say — often a fragment, sometimes
-    /// nothing — presented as the answer. Same reasoning as the truncation warning:
-    /// a half-finished answer that looks finished is a wrong the reader acts on.
+    /// A turn that hits the cycle cap says so, in the text and on the stream —
+    /// same reasoning as the truncation warning below.
     #[test]
     fn hitting_the_cycle_cap_is_reported_not_hidden() {
         let mut d = Dispatcher::new(vec![]);
@@ -1066,9 +1040,7 @@ mod tests {
             Limits::default(),
         );
         // Exactly the text, with no "stopped before the turn finished" note: a
-        // `tool-result` terminate is a *decision*, and the answer in hand is the
-        // intended one. A cancel is an interruption and is marked. Collapsing the
-        // two would either annotate deliberate endings or hide real ones.
+        // `tool-result` terminate is a decision, not an interruption.
         assert_eq!(
             out,
             RunResult::Answered {
@@ -1412,10 +1384,7 @@ mod tests {
             "the loop stopped and emitted a terminal Done: {:?}",
             sink.events
         );
-        // …and it is recorded as unfinished. `run_and_persist` writes this text to
-        // the durable transcript and `replay` feeds it back to the model next
-        // session, so a half-finished turn stored as an answer teaches the model
-        // that the assistant said something it never got to say.
+        // …and it is recorded as unfinished, not passed off as a real answer.
         let RunResult::Answered { text, .. } = out else {
             unreachable!()
         };

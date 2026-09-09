@@ -4,46 +4,29 @@
 //!
 //! ## The address is the attack surface
 //!
-//! Every other tool in the fleet is bounded by a *substrate* — `host-fs` jails
-//! paths, `host-process` jails commands. `host-http` has no such jail: it is
-//! outbound network access, and here the destination comes **from the model**.
-//! That is server-side request forgery in its textbook form, and a self-hosted
-//! agent is exactly where it bites, because the interesting targets are all
-//! reachable from the host and from nowhere else:
+//! Every other tool is bounded by a substrate (`host-fs` jails paths,
+//! `host-process` jails commands); `host-http` has none — it's outbound network
+//! access to a model-supplied destination, textbook SSRF. On a self-hosted agent
+//! the reachable targets are the interesting ones: cloud instance metadata
+//! (`169.254.169.254`), jan-klod's own REST surface (`127.0.0.1:8787`), the LAN,
+//! and non-HTTP `file://` URLs the model may try.
 //!
-//! - `http://169.254.169.254/…` — cloud instance metadata, i.e. credentials;
-//! - `http://127.0.0.1:8787/session/…` — **jan-klod's own REST surface**;
-//! - `http://192.168.1.1/…` — the router, the NAS, the printer;
-//! - `file:///etc/passwd` — not HTTP at all, but a URL the model may try.
+//! [`vet`] runs before every request: https/http only, and no loopback,
+//! link-local, private, or non-public destination unless `allow-private` opts
+//! in. Obfuscated address forms (integer IPs, octal octets) are refused rather
+//! than normalised — canonicalising every encoding just means eventually
+//! disagreeing with the resolver.
 //!
-//! So [`vet`] runs before any request: https/http only, and no loopback,
-//! link-local, private, or otherwise non-public destination unless the deployment
-//! opts in with `allow-private`. Obfuscated address forms (integer IPs, octal
-//! octets) are refused rather than normalised, because a parser that tries to
-//! canonicalise every encoding is a parser that eventually disagrees with the
-//! resolver.
-//!
-//! **This guard is not the boundary, and never was.** It runs inside the
-//! sandbox. It stops a *confused* model from following a URL into the host's
-//! private space, which is worth doing and is why it stays. It cannot stop a
-//! *component*, because a component that wants to skip a check it performs on
-//! itself simply does not perform it — and this runtime's premise is that it does
-//! not trust what it runs.
-//!
-//! The boundary is host-side, in `core::egress`: `host-http` refuses loopback,
-//! private, link-local and unique-local destinations unless the operator named
-//! that origin, and it resolves hostnames before deciding, so it catches the
-//! public name pointing at `127.0.0.1` that this guard cannot. Until 2026-08-11
-//! there was no host-side check at all and this comment was the whole of the
-//! runtime's SSRF defence.
+//! This guard runs inside the sandbox: it stops a confused model, not a hostile
+//! component (a component can skip a check it runs on itself). The real
+//! boundary is host-side, in `core::egress`, which resolves hostnames before
+//! deciding and so catches a public name pointing at `127.0.0.1`.
 //!
 //! ## Why it ships disabled
 //!
-//! A fetch is a *read*, but a URL is also an *exfiltration channel*: path and
-//! query carry whatever the model puts in them, so a prompt-injected turn can
-//! post the workspace to an attacker one GET at a time. That is a deployment
-//! decision, not a default, so `tool.fetch` is `enabled: false` in the shipped
-//! config with the reasoning next to it.
+//! A fetch is a read, but the URL is also an exfiltration channel — path and
+//! query can carry workspace data to an attacker one GET at a time. `tool.fetch`
+//! is `enabled: false` by default; enabling it is a deployment decision.
 //!
 //! The vetting and text extraction are pure Rust (unit-tested natively); the
 //! Component-Model glue below only compiles for `wasm32`.
@@ -136,11 +119,9 @@ mod fetch {
         {
             return Address::Unrecognised;
         }
-        // A hostname's last label cannot start with a digit (RFC 1123 leaves
-        // all-numeric TLDs invalid), and resolvers read such a name as an address
-        // instead — which is how `0x7f.0.0.1` reaches loopback while looking like
-        // a hostname. Anything ending that way is judged as an address, and the
-        // dotted-quad rules then refuse every form but the plain one.
+        // RFC 1123 forbids an all-numeric last label; resolvers read one as an
+        // address anyway — how `0x7f.0.0.1` reaches loopback while looking like
+        // a hostname. Treat it as an address so the dotted-quad rules catch it.
         if host
             .rsplit('.')
             .next()

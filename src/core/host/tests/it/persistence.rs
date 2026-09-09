@@ -1,9 +1,9 @@
-//! Phase 3 Slice 3a exit gate — durable state survives a restart.
+//! Durable state survives a restart.
 //!
 //! Boots a `Runtime` against a `config.yaml` whose `store.sqlite` points at a
-//! file, runs a turn (whose transcript is persisted host-side), then **drops the
-//! whole runtime and boots a fresh one against the same DB file** and reads the
-//! transcript back — proving state survives a restart, offline.
+//! file, runs a turn (persisted host-side), then **drops the whole runtime and
+//! boots a fresh one against the same DB file** and reads the transcript back —
+//! offline.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
@@ -81,14 +81,11 @@ extensions:
 
 /// A relative `storage.path` follows the deployment, not the shell.
 ///
-/// The shipped config now defaults to a durable store, which makes this a real
-/// hazard rather than a nicety: an installed jan-klod is launched from whatever
-/// repository the user happens to be in. Resolved against the working directory,
-/// the default would litter a `jan-klod.db` into every one of them and hand back
-/// a different conversation history per directory. Resolved against the config,
-/// there is one store per deployment.
-///
-/// The distinction is invisible in a checkout, where the two are the same place.
+/// An installed jan-klod runs from whatever directory the user happens to be
+/// in. Resolved against cwd, the default `jan-klod.db` would scatter across
+/// every directory with a different history each time; resolved against the
+/// config, there is one store per deployment. (Invisible in a checkout, where
+/// both paths coincide.)
 #[test]
 fn a_relative_storage_path_resolves_against_the_config_not_the_cwd() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -125,11 +122,8 @@ extensions:
         dir.join("jan-klod.db").exists(),
         "the store lands beside config.yaml, where the deployment is"
     );
-    // The first assertion is the one that carries this test: `cargo test` runs
-    // with the crate directory as cwd, so before the fix the database landed
-    // there and `dir` stayed empty. Changing the process cwd to `elsewhere` would
-    // make the check more direct, but cwd is process-wide and these tests run in
-    // parallel. This second assertion is cheap insurance, not the proof.
+    // The assertion above carries this test; cwd is process-wide and tests run
+    // in parallel, so we can't chdir to `elsewhere` to check more directly.
     assert!(
         !elsewhere.join("jan-klod.db").exists(),
         "and not in a sibling working directory"

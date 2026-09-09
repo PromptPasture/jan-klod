@@ -1,4 +1,4 @@
-//! Host-side persistent store (Phase 3 Slice 3a).
+//! Host-side persistent store.
 //!
 //! A SQLite-backed key/value + history store implementing the full
 //! [`memory-store`](../../../wit/memory-store.wit) operation set (a superset of
@@ -210,15 +210,10 @@ impl Store {
         )
     }
 
-    /// Delete every entry in `namespace`.
+    /// List every distinct namespace, most recently written first.
     ///
-    /// List all distinct namespaces in the store, most recently written first.
-    ///
-    /// `DISTINCT` with a bare aggregate in `ORDER BY` is not valid `SQLite`
-    /// ("misuse of aggregate: `MIN()`"), so this returned `Backend` on every call —
-    /// and its one caller wrote `unwrap_or_default()`, which turned the error into
-    /// an empty list. Every session picker had no sessions in it, and nothing said
-    /// why. Grouping is the form that actually expresses "one row per namespace".
+    /// Grouped rather than a bare `DISTINCT` + `ORDER BY MAX(...)`, which `SQLite`
+    /// rejects as a misuse of aggregates.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -243,6 +238,8 @@ impl Store {
             })
     }
 
+    /// Delete every entry in `namespace`.
+    ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
     pub fn purge_namespace(&self, namespace: &str) -> Result<(), StoreError> {

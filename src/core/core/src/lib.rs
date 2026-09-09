@@ -51,18 +51,10 @@ fn dirs_home() -> Option<PathBuf> {
 
 /// Whether `cwd` may be adopted as the workspace with nobody having said so.
 ///
-/// `host-fs` is documented as jailed to `workspace:`, "or `$PWD` when it is
-/// absent" — and that default is what makes jan-klod usable without
-/// configuration: the repository you are standing in is the one you mean. But the
-/// jail is only worth something if the root is narrower than the machine, and
-/// nothing checked that. Launched from `/`, the "jail" is the filesystem.
-/// Launched from `$HOME` — which is where a shell starts — it is every document,
-/// key and dotfile the user owns.
-///
-/// So auto-adoption declines those two cases and says why. It is not a security
-/// boundary against a determined operator, who can still name any root
-/// explicitly; it is a guard against the accident of `cd`, which is how this
-/// would actually go wrong.
+/// `host-fs` defaults to `$PWD` when `workspace:` is unset, so the jail is only
+/// meaningful if the root is narrower than the machine. Declines `/` (jail = the
+/// filesystem) and `$HOME` (jail = every file the user owns). Not a defense
+/// against a determined operator — just a guard against an accidental `cd`.
 fn adoptable_workspace(cwd: &Path, home: Option<&Path>) -> bool {
     // A filesystem root has no parent.
     if cwd.parent().is_none() {
@@ -202,12 +194,10 @@ impl Runtime {
     /// ids that were started.
     ///
     /// Categories whose world imports more than the neutral `extension-world`
-    /// grants are instantiated through **their own** seam — the same one
-    /// [`Self::build_agent`] uses — rather than the shared linker: a `tool-*`
-    /// guest imports `host-fs`/`host-process`, and `registry-*` imports
-    /// `host-fs`/`host-event`, none of which the neutral linker can satisfy. They
-    /// get the same default-deny substrates here, so this boot-plan path proves
-    /// exactly what the agent path will do.
+    /// grants (`tool-*` needs `host-fs`/`host-process`, `registry-*` needs
+    /// `host-fs`/`host-event`) go through their own seam — the same one
+    /// [`Self::build_agent`] uses — with the same default-deny substrates, so
+    /// this boot-plan path proves exactly what the agent path will do.
     ///
     /// # Errors
     /// Returns [`CoreError::Instantiate`] if a component cannot be instantiated,
@@ -351,11 +341,10 @@ impl Runtime {
     /// Boot the thin-loop agent from config: instantiate every enabled+compiled
     /// `interceptor.*` as a dispatcher (in boot/load order) and every
     /// `provider.*` as a completer fallback chain, ready to run turns through the
-    /// [`conductor`]. This supersedes [`Self::route_agent_loop`] — the loop is now
-    /// core mechanism, not the `manager-agent-loop` guest.
+    /// [`conductor`].
     ///
     /// `http_factory` mints a fresh `host-http` backend per provider (each provider
-    /// instance owns its own store). In v1 an interceptor's `llm-provider` import is
+    /// instance owns its own store). An interceptor's `llm-provider` import is
     /// backed by a dedicated provider instance (see [`Self::open_classifier`]).
     ///
     /// # Errors
@@ -387,12 +376,10 @@ impl Runtime {
         };
         let tools_advert = tools.all_metas_json();
 
-        // An interceptor that consults a model (the intent router classifies simple
-        // vs agentic) gets its **own** provider instance rather than a handle into
-        // the chain above: the conductor holds the chain mutably for the whole
-        // turn, so an interceptor reaching into it mid-dispatch would alias it. A
-        // second instance costs one more component + client and keeps the seam
-        // straightforward.
+        // An interceptor that consults a model (intent routing) gets its own
+        // provider instance rather than a handle into the chain above: the
+        // conductor holds the chain mutably for the whole turn, so reaching into
+        // it mid-dispatch would alias it.
         let classifier = self.open_classifier(http_factory)?;
 
         // Opened before the interceptors, because they share it: an interceptor's
@@ -530,19 +517,11 @@ impl Runtime {
                         .or_insert_with(|| serde_json::Value::String(project.to_string()));
                 }
             }
-            // Durability is opt-in per instance, and off by default.
-            //
-            // `interceptor-permission` records standing grants ("always allow
-            // `fs:write`") through `host-storage`, and documents them as
-            // run-scoped — "a permission boundary should not quietly become
-            // permanently open because of a click last week". That property was
-            // enforced by nothing: it held because this host happened to back
-            // `host-storage` with a private map. Handing every interceptor the
-            // session store would have repealed it silently, which is how a
-            // security property dies. So the store is granted only where the
-            // config asks for it, the same default-deny shape as `host-fs` and
-            // `host-process`, and `permission_grants_do_not_survive_a_restart`
-            // fails if that default ever flips.
+            // Durability is opt-in per instance, off by default. `interceptor-permission`
+            // stores standing grants ("always allow `fs:write`") as run-scoped;
+            // handing every interceptor the session store would make grants
+            // survive a restart, silently breaking that guarantee. Same
+            // default-deny shape as `host-fs`/`host-process`.
             let persist = ext
                 .instance
                 .config
@@ -566,20 +545,11 @@ impl Runtime {
 
     /// The project's own instructions, if the workspace has an `AGENTS.md`.
     ///
-    /// Read **host-side**, and handed to `interceptor-system` as config rather than
-    /// by granting interceptors `host-fs`. The guest needs the *contents* of one
-    /// file, not the ability to open files: widening the interceptor world so a
-    /// decision component could read the disk would trade the boundary for a
-    /// convenience, and every other interceptor would inherit it.
-    ///
-    /// Only the workspace root. `configuration.md` promised "or the nearest
-    /// ancestor directory", and that is a promise not to keep: climbing above the
-    /// root is precisely what the path jail exists to prevent, and a repository
-    /// checked out inside another project would silently inherit its instructions.
-    ///
-    /// Bounded, because a system prompt is paid for on every single turn. A file
-    /// larger than the cap is truncated with a note saying so, rather than
-    /// silently halved or silently dropped.
+    /// Read **host-side** and handed to `interceptor-system` as config, rather
+    /// than granting interceptors `host-fs` just to read one file. Only the
+    /// workspace root — climbing to an ancestor directory would let a nested
+    /// checkout inherit another project's instructions. Truncated at a cap with a
+    /// note, since a system prompt is paid for on every turn.
     fn project_instructions(workspace: Option<&host_fs::Workspace>) -> Option<String> {
         /// Generous for conventions, small next to a context window.
         const MAX_BYTES: usize = 16 * 1024;
@@ -619,11 +589,10 @@ impl Runtime {
     /// The destinations guests may reach, derived from what the operator already
     /// wrote down.
     ///
-    /// Every enabled instance's `base-url` (and an MCP server's `endpoint`) is an
-    /// endpoint the operator chose, so it is allowed even when it is local — which
-    /// is the whole point, because a self-hosted model lives on `127.0.0.1`.
-    /// Everything else is public-only. A guest cannot widen this: the policy is
-    /// built here and closed over by the host's HTTP backend.
+    /// Every enabled instance's `base-url`/`endpoint`/`url` is allowed even when
+    /// local (a self-hosted model lives on `127.0.0.1`); everything else is
+    /// public-only. A guest cannot widen this — it's built here and closed over
+    /// by the host's HTTP backend.
     #[must_use]
     pub fn egress_policy(&self) -> egress::EgressPolicy {
         let mut policy = egress::EgressPolicy::public_only();
@@ -740,12 +709,11 @@ impl Runtime {
 
     /// Instantiate the provider that answers interceptors' `llm-provider` calls.
     ///
-    /// Which instance: the top-level `classifier:` key names one, otherwise the
-    /// head of the fallback chain. Pointing it at a small local model is the
-    /// reason the key exists — classification is a two-token question and does
-    /// not want the expensive model the turn itself uses.
+    /// Uses the instance named by top-level `classifier:`, else the head of the
+    /// fallback chain — lets classification (a two-token question) run on a
+    /// small local model instead of the turn's expensive one.
     ///
-    /// Returns `None` when no provider is enabled; callers then fall back to the
+    /// Returns `None` when no provider is enabled; callers fall back to the
     /// conservative default rather than failing the boot.
     ///
     /// # Errors
@@ -788,22 +756,14 @@ impl Runtime {
     /// Open the host-side persistent store: top-level `storage.path` gives a
     /// durable `SQLite` file, and its absence an ephemeral in-memory one.
     ///
-    /// Storage is **not** an extension. It was configured as one — an
-    /// `extensions.store.sqlite` instance whose `path` this read — which
-    /// advertised a swappable component family (`store-sqlite`,
-    /// `store-postgres`, `store-supabase`) that never existed: the one component
-    /// that did, `store-memory`, exported a `memory-store` interface the core
-    /// never called once. The design was always host-side, for a reason the
-    /// architecture notes record: the sandbox has no filesystem, so a store guest
-    /// would need one granted back, and the transcript is the most sensitive
-    /// thing the runtime holds. Guests reach it through `host-storage` only,
-    /// namespaced to themselves.
+    /// Storage is **not** an extension: a store guest would need `host-fs`
+    /// granted back to it, and the transcript is the most sensitive thing the
+    /// runtime holds. Guests reach it only through `host-storage`, namespaced to
+    /// themselves.
     ///
     /// A relative `path` resolves against the directory holding `config.yaml`,
-    /// **not** the working directory. An installed jan-klod is launched from
-    /// whatever repository the user is in; resolving against the cwd would drop a
-    /// `jan-klod.db` into each one and give a different conversation history per
-    /// directory the agent happened to be started from.
+    /// not the working directory — otherwise each directory jan-klod is started
+    /// from would get its own `jan-klod.db` and conversation history.
     fn open_store(&self) -> Result<Arc<Mutex<store::Store>>, CoreError> {
         let sqlite_path = self
             .agent
@@ -1135,12 +1095,10 @@ fn run_and_persist(
     result
 }
 
-/// How many past turns are replayed into a new one.
-///
-/// A bound belongs here, before the store read, as well as in `select-context`:
-/// loading a thousand turns to then drop most of them costs a query and the
-/// memory either way. The token-aware trimming on top is the context
-/// interceptor's job — this is only "do not read the whole history of the world".
+/// How many past turns are replayed into a new one. Bounded here (before the
+/// store read) as well as in `select-context`, so loading history never costs a
+/// query over the whole world; token-aware trimming on top is the context
+/// interceptor's job.
 const REPLAYED_TURNS: u32 = 20;
 
 /// The conversation so far, oldest-first, as loop messages.
@@ -1177,15 +1135,12 @@ fn replay(store: &store::Store, session: &str) -> Vec<intercept::Message> {
 
 /// The closure interceptors' `llm-provider` resolves to.
 ///
-/// **A classification failure is not a turn failure.** With no provider
-/// available, a poisoned lock, or a call that errors, the answer is `"agentic"`
-/// — the conservative label, which routes the prompt through the full loop
-/// rather than short-circuiting it. Defaulting the other way would silently
-/// downgrade real work on any provider hiccup.
+/// A classification failure is not a turn failure: no provider, a poisoned
+/// lock, or an erroring call all default to `"agentic"`, the conservative label
+/// that routes through the full loop rather than short-circuiting it.
 ///
-/// The classifier is shared by `Arc` rather than borrowed: the closure outlives
-/// the call that builds it, and a lifetime cast to pretend otherwise is exactly
-/// what this workspace's `unsafe_code = "deny"` exists to prevent.
+/// Shared by `Arc` rather than borrowed, since the closure outlives the call
+/// that builds it.
 fn classifier_fn(
     classifier: Option<std::sync::Arc<std::sync::Mutex<route::ProviderCompleter>>>,
 ) -> interceptor_host::ProviderFn {
@@ -1209,16 +1164,9 @@ fn classifier_fn(
 ///
 /// `chain` is the top-level `providers:` list — `[{provider: openai, …}, …]`.
 /// Returns indices into `ids`, in the order the conductor should try them.
-///
-/// Two rules make this safe to apply to a config that has drifted from the
-/// enabled instance set, which is the normal state of an example config someone
-/// edited:
-///
-/// - **A named provider that is not enabled is skipped, with a warning.** The
-///   shipped config lists `ollama` as a "last resort" nobody has enabled; that
-///   should not be a boot failure, but silence would hide a typo.
-/// - **An enabled provider the list does not mention is kept, at the end.** It is
-///   enabled, so dropping it would be a worse surprise than ordering it last.
+/// Tolerates a config that has drifted from the enabled instance set: a named
+/// provider that isn't enabled is skipped with a warning (not a boot failure),
+/// and an enabled provider the list omits still runs, at the end.
 fn order_chain(chain: Option<&serde_json::Value>, ids: &[String]) -> Vec<usize> {
     let Some(entries) = chain.and_then(serde_json::Value::as_array) else {
         return (0..ids.len()).collect();

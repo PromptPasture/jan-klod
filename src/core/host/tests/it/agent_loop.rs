@@ -1,14 +1,13 @@
-//! Thin-loop exit test — boots the real `Runtime` from a `config.yaml` and runs
-//! turns through the core conductor (Slice 2c), the way Phase 2's exit gate will.
+//! Boots the real `Runtime` from a `config.yaml` and runs turns through the
+//! core conductor.
 //!
-//! Unlike `routing.rs` (the retired v0 `manager-agent-loop` path), this drives
-//! `Runtime::build_agent` → `AgentSession::run`: the enabled `interceptor.*`
-//! become the dispatcher and the enabled `provider.*` the completer fallback
-//! chain. The provider's `host-http` is canned, so the whole loop runs with no
-//! network and no API key.
+//! Drives `Runtime::build_agent` -> `AgentSession::run`: enabled
+//! `interceptor.*` become the dispatcher, enabled `provider.*` the completer
+//! fallback chain. `host-http` is canned, so the loop runs with no network and
+//! no API key.
 //!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`; build them
-//! with `make ext`.
+//! Skips (passes as a no-op) when the guests are not staged in `ext/`; build
+//! them with `make ext`.
 
 use jan_klod_core::conductor::RunResult;
 use jan_klod_core::Runtime;

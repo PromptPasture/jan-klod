@@ -128,10 +128,8 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
         bin.display()
     );
     let child = Command::new(&bin)
-        // `--bind` rather than positional paths: naming `config.yaml`/`ext`
-        // explicitly (the only way to reach the third positional) overrode the
-        // gateway's own resolution, so an installed jan-klod launched from the
-        // user's repository looked for files that are not there.
+        // `--bind` rather than positional paths, so config/ext stay unnamed and
+        // the gateway resolves them itself instead of defaulting to the cwd.
         .args(["serve", "--bind", addr])
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())

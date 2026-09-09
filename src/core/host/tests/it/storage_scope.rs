@@ -1,20 +1,8 @@
 //! What an interceptor's `host-storage` may outlive, and what it may see.
-//!
-//! `interceptor-permission` records standing grants — "always allow `fs:write`"
-//! — through `host-storage`, and its own documentation states the property that
-//! makes them safe: **run-scoped, never persisted**, because "a permission
-//! boundary should not quietly become permanently open because of a click last
-//! week."
-//!
-//! Nothing enforced that. It held because the host happened to back
-//! `host-storage` with a private `HashMap`, three fields away from an open
-//! `SQLite` connection holding session transcripts. Wiring the two together is a
-//! one-line change that reads like a bug fix — the store is *right there*, and an
-//! interceptor that wants to remember a context summary has nowhere else to put
-//! it — and it would have repealed the security property with nothing failing.
-//!
-//! So durability is now a grant, off by default, and this file is the thing that
-//! notices if that default flips:
+//! `interceptor-permission`'s standing grants ("always allow `fs:write`") must
+//! be run-scoped, never persisted — a permission boundary shouldn't quietly
+//! become permanent because of a click last week. Durability is a grant
+//! (`persist: true`), off by default; this file notices if that default flips:
 //!
 //! 1. A standing grant does not survive a restart. (The documented property.)
 //! 2. An instance that asks for `persist: true` does keep its state.

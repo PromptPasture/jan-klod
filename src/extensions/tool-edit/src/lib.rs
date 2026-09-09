@@ -11,16 +11,14 @@
 //!   `contents` next to the anchored line.
 //!
 //! An **anchor** is a short hash of a line's *number and content*
-//! (`fnv1a32(lineno \0 text)`), so it validates position and text together: if the
-//! file changed since the model viewed it, no anchor resolves and the edit is
-//! **rejected without a write**. Stale edits fail loudly instead of corrupting
-//! code — the reliability property [`docs/concepts/small-model-harness.md`]
-//! specifies for this tool.
+//! (`fnv1a32(lineno \0 text)`): if the file changed since the model viewed it, no
+//! anchor resolves and the edit is **rejected without a write** — stale edits
+//! fail loudly instead of corrupting code (see
+//! [`docs/concepts/small-model-harness.md`]).
 //!
-//! Rejections are returned as an `ok` result whose text explains how to recover
-//! (re-view, retry), because `tool-error` carries no message and the model needs
-//! the reason to self-correct. `err` is reserved for malformed arguments and
-//! `host-fs` failures.
+//! Rejections come back as an `ok` result with recovery text (re-view, retry),
+//! since `tool-error` carries no message. `err` is reserved for malformed
+//! arguments and `host-fs` failures.
 //!
 //! The patch logic is pure Rust (unit-tested natively); the Component-Model glue
 //! below only compiles for `wasm32`.

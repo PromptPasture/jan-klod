@@ -1,16 +1,13 @@
 //! Exit gates that prove the full loop end-to-end, offline.
 //!
-//! *Phase 2* — boots the real `Runtime` with two provider instances and all five v1
-//! interceptors. The primary provider's `host-http` always fails so the turn only
-//! completes when provider fallback engages, proving the full pipeline (intent →
-//! shaping → completion with fallback → grounded answer). A second test drives the
-//! `ReAct` + permission path (dangerous tool call → driver approves → canned result
-//! fed back).
+//! *Phase 2* — real `Runtime`, two provider instances, all five v1 interceptors.
+//! The primary provider always fails so the turn only completes via fallback,
+//! proving intent → shaping → completion-with-fallback → answer. A second test
+//! drives ReAct + permission (tool call → driver approves → result fed back).
 //!
-//! *Phase 8* — boots the `Runtime` with all v1 interceptors + `tool-fs` + a
-//! workspace. The provider emits an `fs` `{"op":"write"}` tool call; the fleet dispatches it to
-//! the real guest which writes the file **through `host-fs`**, proving the model →
-//! permission → fleet → host-fs → answer path.
+//! *Phase 8* — same, plus `tool-fs` + a workspace. The provider emits a write
+//! tool call that the fleet dispatches to the real guest, which writes through
+//! `host-fs` — proving model → permission → fleet → host-fs → answer.
 //!
 //! Both skip (pass as a no-op) when guests are not staged in `ext/`.
 
@@ -196,9 +193,8 @@ routing:
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
 
-    // Providers boot in id order (primary, secondary); the first http_factory call
-    // backs `primary` with a failing transport and the second backs `secondary`
-    // with the canned success. So any completion must fall back to `secondary`.
+    // Providers boot in id order: the first http_factory call backs `primary`
+    // with a failing transport, the second backs `secondary` with success.
     let call = Cell::new(0u32);
     let factory = || {
         let n = call.get();
@@ -211,10 +207,8 @@ routing:
     };
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // A multi-step query: intent-router proceeds (agentic), the shaping
-    // interceptors run (task-router resolves routing.chat -> primary-model, context
-    // trims, tool-selector passes tools), then the completion falls back from the
-    // failing primary to the answering secondary.
+    // A multi-step query: intent-router proceeds agentic, shaping interceptors
+    // run, then completion falls back from the failing primary to secondary.
     let out = agent.run(
         "gate-session",
         "Refactor the module and run the whole test suite",

@@ -10,25 +10,21 @@
 //!
 //! ## Why a tool at all, when `tool-shell` could run `git`
 //!
-//! Because "let the agent see its diff" should not cost the user arbitrary command
-//! execution. `tool-shell` takes a command *from the model*; this tool takes an
-//! **op from a closed set** and builds the argv itself, so the only program it can
-//! ever run is `git` and the only subcommands are the five below — none of which
-//! mutate the repository. There is no `commit`, `checkout`, `reset`, or `push`:
-//! not disabled by policy, simply not expressible in the contract. That is the
-//! difference between a capability granted and a capability *shaped*.
+//! "Let the agent see its diff" should not cost arbitrary command execution.
+//! `tool-shell` takes a command from the model; this tool takes an op from a
+//! closed set and builds the argv itself, so only `git` runs and only the five
+//! read-only subcommands below are reachable. There is no `commit`, `checkout`,
+//! `reset`, or `push` — not disabled by policy, simply not expressible.
 //!
 //! ## Reading a repository is not inherently side-effect-free
 //!
-//! A repository is data the agent did not write, and git treats parts of it as
-//! *configuration*: `.git/config` can point `core.fsmonitor` at a command that
-//! runs on `git status`, `core.hooksPath` at a directory of scripts, and
-//! `.gitattributes` can name external diff/textconv drivers that run on `git
-//! diff`. A hostile (or merely careless) checkout could therefore turn "show me
-//! the diff" into code execution. Every invocation disables those paths
-//! explicitly — see [`HARDENING`] — so inspecting an untrusted repo stays
-//! inspection. Aliases need no guard: git refuses to let an alias shadow a real
-//! subcommand, and only real subcommands are ever emitted.
+//! Git treats parts of a repo as configuration: `.git/config` can point
+//! `core.fsmonitor` at a command run on `git status`, `core.hooksPath` at a
+//! script directory, and `.gitattributes` can name diff/textconv drivers run on
+//! `git diff`. A hostile checkout could turn "show me the diff" into code
+//! execution. Every invocation disables those paths explicitly — see
+//! [`HARDENING`] — so inspecting an untrusted repo stays inspection. Aliases
+//! need no guard: git refuses to let one shadow a real subcommand.
 //!
 //! The argv construction is pure Rust (unit-tested natively); the Component-Model
 //! glue below only compiles for `wasm32`.
@@ -145,11 +141,11 @@ mod git {
     /// Reject arguments that git would read as options, plus anything outside the
     /// characters revisions and paths are actually made of.
     ///
-    /// A leading `-` is the whole risk: `rev` and `path` are the only caller-supplied
-    /// argv entries, and `--upload-pack=…`-style options are how a value becomes a
-    /// command. The charset check then keeps shell metacharacters out of the argv
-    /// even though `host-process` never involves a shell — defence that does not
-    /// depend on the substrate's implementation staying shell-free.
+    /// A leading `-` is the whole risk: `rev` and `path` are the only
+    /// caller-supplied argv entries, and `--upload-pack=…`-style options are how
+    /// a value becomes a command. The charset check also excludes shell
+    /// metacharacters, defence-in-depth even though `host-process` never
+    /// involves a shell.
     fn validate(value: &str, what: &str) -> Result<String, String> {
         if value.is_empty() || value.len() > MAX_ARG_LEN {
             return Err(format!("{what} must be 1..={MAX_ARG_LEN} characters"));
@@ -170,9 +166,9 @@ mod git {
 
     /// Format a finished run for the model.
     ///
-    /// A non-zero exit is *information* (not a repository, unknown revision), so it
-    /// comes back as a readable result rather than an opaque tool error the model
-    /// cannot act on — the same call the `tool-edit` rejection path made.
+    /// A non-zero exit is information (not a repository, unknown revision), so
+    /// it comes back as a readable result rather than an opaque tool error the
+    /// model cannot act on.
     pub fn render(code: i32, stdout: &str, stderr: &str) -> String {
         let body = if stdout.trim().is_empty() && code == 0 {
             "(no output)".to_string()

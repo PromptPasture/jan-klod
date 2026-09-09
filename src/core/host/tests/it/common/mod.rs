@@ -28,17 +28,10 @@ const REQUIRE: &str = "JK_REQUIRE_GUESTS";
 /// Whether every named guest is staged in `ext/` — and therefore whether the
 /// caller may run.
 ///
-/// **Skipping is how a broken assertion hides.** These tests skip when `ext/` is
-/// unstaged so `cargo test` works before `make ext`, and that is genuinely useful
-/// — but a skipped test reports as passing, so an assertion that could never hold
-/// looks green for as long as nobody stages the guests. That is not hypothetical:
-/// `shipped_defaults` asserted `!report.contains("missing")` against a report
-/// whose summary line always reads "0 missing", and it sat green for a full day
-/// because it never actually ran.
-///
-/// So the skip is allowed only when nobody has asked for the real thing. With
-/// `JK_REQUIRE_GUESTS` set — which `make gate` and CI do — a missing guest panics
-/// with what to run, instead of quietly reporting success.
+/// A skipped test reports as passing, so an unstaged `ext/` can hide a broken
+/// assertion indefinitely (it has happened). Skipping is allowed only when
+/// nobody has asked for the real thing: with `JK_REQUIRE_GUESTS` set (`make
+/// gate`, CI), a missing guest panics with what to run instead of skipping.
 pub fn guests_staged(guests: &[&str]) -> bool {
     let ext_dir = repo_root().join("ext");
     let absent: Vec<&str> = guests
@@ -59,11 +52,9 @@ pub fn guests_staged(guests: &[&str]) -> bool {
     false
 }
 
-/// Whether `program` answers a version query.
-///
-/// Both spellings, because `--version` is not universal: `TinyGo` answers
-/// `tinygo version` and prints "Unknown command: --version" — with exit status 0,
-/// so probing only the flag reported a compiler that is installed as absent.
+/// Whether `program` answers a version query. Tries both spellings: `TinyGo`
+/// only answers the bare `version` subcommand, not `--version`, so checking
+/// only one can misreport an installed compiler as absent.
 fn runnable(program: &str) -> bool {
     ["--version", "version"].iter().any(|flag| {
         std::process::Command::new(program)
@@ -76,14 +67,10 @@ fn runnable(program: &str) -> bool {
 }
 
 /// Whether an optional developer toolchain is present, with **no** requirement
-/// that it be.
-///
-/// Distinct from [`tool_available`] on purpose. That one exists for prerequisites
-/// a full run must have, so `JK_REQUIRE_GUESTS` turns its absence into a failure.
-/// This one is for a check that is genuinely conditional — rebuilding the `TinyGo`
-/// canary needs `tinygo` and `wkg`, which CI does not carry and which most
-/// contributors will not install. Making that a hard failure would only teach
-/// people to unset the flag. The skip is announced rather than silent.
+/// that it be. Distinct from [`tool_available`]: this is for a genuinely
+/// optional toolchain (e.g. `tinygo`/`wkg`, which CI doesn't carry) where a hard
+/// failure would just teach people to unset `JK_REQUIRE_GUESTS`. Skip is
+/// announced, not silent.
 pub fn optional_tool(program: &str) -> bool {
     if runnable(program) {
         return true;
@@ -92,13 +79,9 @@ pub fn optional_tool(program: &str) -> bool {
     false
 }
 
-/// Whether an external program a test needs is on `PATH`.
-///
-/// Same policy as [`guests_staged`], for the same reason: a test that quietly
-/// vanishes because a prerequisite is missing occupies the space where a real
-/// check would be. `tool_git`'s assertions — that the write half of git is not
-/// expressible, that a refused call leaves the repository untouched — are worth
-/// nothing if they silently do not run.
+/// Whether an external program a test needs is on `PATH`. Same policy as
+/// [`guests_staged`] and for the same reason: a test that quietly vanishes when
+/// a prerequisite is missing proves nothing while looking green.
 pub fn tool_available(program: &str) -> bool {
     if runnable(program) {
         return true;

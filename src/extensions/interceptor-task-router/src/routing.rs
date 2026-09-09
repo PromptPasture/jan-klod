@@ -58,15 +58,10 @@ pub fn model_from_route(route: &str) -> Option<&str> {
 
 /// The provider name a route names but the runtime cannot honour.
 ///
-/// A route may be written `provider/model`, and only the **model** is applied:
-/// the fallback chain is fixed when the agent boots, so setting a model string
-/// does not move the request to a different endpoint. `groq/llama-3.3-70b` sends
-/// `llama-3.3-70b` to whichever provider answers — which is not groq, and will
-/// fail as an unknown model or, worse, quietly resolve to something else.
-///
-/// Returning it lets the caller say so rather than discard it silently, which is
-/// what this did before. Routing to a *provider* needs per-task reordering of the
-/// chain and is not built; a bare model name is the form that means what it says.
+/// A `provider/model` route only applies the model — the fallback chain is fixed
+/// at boot, so `groq/llama-3.3-70b` sends the model name to whichever provider
+/// answers, not necessarily groq. Returned so the caller can warn instead of
+/// silently discarding it.
 #[must_use]
 pub fn unhonoured_provider(route: &str) -> Option<&str> {
     route

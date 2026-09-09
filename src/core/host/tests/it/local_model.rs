@@ -1,28 +1,10 @@
-//! A model on localhost, with no API key, over a real socket.
-//!
-//! "Runs on any model" is one of the four claims, and self-hosting means a local
-//! one: Ollama, LM Studio, llama.cpp. Every other provider test injects a canned
-//! `HttpFn`, which is right for testing the loop and wrong for testing this — it
-//! skips the real HTTP client, the egress policy, and the question of whether a
-//! provider works at all without credentials. Three things had to hold for a local
-//! model and none of them was covered:
-//!
-//! 1. **A provider with no `api-key` must boot and complete.** It does —
-//!    `provider-openai` adds `Authorization` only when a key is present — but
-//!    nothing said so, and `config.yaml` demands `${OPENAI_API_KEY}` two lines
-//!    above, which is a reasonable thing to assume is mandatory.
-//! 2. **The egress policy must permit the endpoint.** `127.0.0.1:11434` is
-//!    loopback, which the policy refuses by default; it is allowed because a
-//!    provider's `base-url` is lifted out of config. That is the whole reason the
-//!    rule is per-origin rather than a flag.
-//! 3. **`type:` must name a component that exists.** It did not. The shipped
-//!    `ollama` block said `type: ollama` → `provider-ollama.wasm`, which has never
-//!    existed, so enabling the most common self-hosted setup produced a missing
-//!    component and no provider.
-//!
-//! So this stands up an OpenAI-shaped endpoint on loopback, points a keyless
-//! provider at it the way the shipped config now does, and drives a turn through
-//! the real client.
+//! A model on localhost, with no API key, over a real socket — the self-hosted
+//! case (Ollama, LM Studio, llama.cpp). Other provider tests inject a canned
+//! `HttpFn`, which skips exactly what matters here: that a keyless provider
+//! boots and completes, that the egress policy permits a provider's own
+//! `base-url` even on loopback, and that `type:` names a component that
+//! actually exists. This stands up an OpenAI-shaped endpoint on loopback and
+//! drives a turn through the real client to cover all three.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
@@ -114,8 +96,8 @@ fn a_keyless_local_model_completes_a_turn_over_a_real_socket() {
 
     let ollama = FakeOllama::start("the local model answered");
     let config = dir.join("config.yaml");
-    // Exactly the shape of the shipped `provider.ollama` block: a `type: openai`
-    // component, a loopback `base-url`, and no `api-key` at all.
+    // Shape of the shipped `provider.ollama` block: `type: openai`, loopback
+    // `base-url`, no `api-key`.
     std::fs::write(
         &config,
         format!(
@@ -134,9 +116,9 @@ extensions:
     .unwrap();
 
     let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
-    // The real client, bounded by the real policy — not a canned `HttpFn`. The
-    // endpoint is loopback, so this only reaches it because the policy lifts a
-    // provider's `base-url` out of config.
+    // The real client, bounded by the real policy — not a canned `HttpFn`. Reaches
+    // this loopback endpoint only because the policy lifts a provider's `base-url`
+    // out of config.
     let policy = runtime.egress_policy();
     let factory = move || -> jan_klod_core::route::HttpFn {
         let policy = policy.clone();
@@ -172,17 +154,12 @@ extensions:
     );
 }
 
-/// A failure names the endpoint and what to check.
+/// A failure names the endpoint and what to check, rather than surfacing a
+/// generated binding's Debug output (`ProviderError { code: 5, ... }`) that
+/// names nothing and wrongly implies retrying could help.
 ///
-/// The message used to be the Debug of a generated binding:
-/// `provider error: ProviderError { code: 5, name: "transient", message: "Any
-/// other transient error." }`. Three problems in one line — a wasm-binding
-/// internal reached the user, "transient" invited retrying something that could
-/// never succeed, and nothing named the endpoint the reader had to go and look at.
-///
-/// The endpoint here is a port with nothing listening, which is the most common
-/// first-run failure for a local model: the server is not started, or the address
-/// has a typo.
+/// The endpoint here is a port with nothing listening — the most common
+/// first-run failure for a local model.
 #[test]
 fn an_unreachable_provider_says_so_and_names_the_endpoint() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -239,8 +216,8 @@ extensions:
         !message.contains("ProviderError {"),
         "no generated-binding Debug reaches the user: {message}"
     );
-    // The egress hint matters: a typo'd base-url and a denied origin fail here
-    // identically, and the reader needs to know the second is possible.
+    // A typo'd base-url and a denied origin fail identically, so the message
+    // must hint at egress as a possible cause.
     assert!(
         message.contains("egress"),
         "the message mentions egress: {message}"

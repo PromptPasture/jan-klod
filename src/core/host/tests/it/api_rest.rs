@@ -1,10 +1,9 @@
-//! Phase 3 Slice 3b — an external HTTP client drives the loop.
+//! An external HTTP client drives the loop.
 //!
-//! Boots a `Runtime`, binds the host-side REST surface on an ephemeral port, and
-//! from a **separate client thread** `POST`s a turn and reads the streamed
-//! response — proving the outside world can reach and drive the loop offline. The
-//! `AgentSession` is `!Send` (Wasmtime-backed), so it stays on the main thread and
-//! the client runs on the spawned thread.
+//! Boots a `Runtime`, binds the host-side REST surface on an ephemeral port,
+//! and from a **separate client thread** `POST`s a turn and reads the streamed
+//! response — offline. `AgentSession` is `!Send` (Wasmtime-backed), so it
+//! stays on the main thread while the client runs on the spawned thread.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 

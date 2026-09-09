@@ -1,18 +1,10 @@
 //! Every test directory in this repo belongs to a crate that cargo builds.
 //!
-//! `src/core/tests/` held eighteen tests across three files and none of them ran.
-//! The directory sits beside `src/core/Cargo.toml`, which is a **virtual**
-//! manifest — `[workspace]` with no `[package]` — so it belongs to no crate, and
-//! cargo silently builds nothing from it. `cargo test` was green throughout,
-//! because a test that is never compiled cannot fail. They were orphaned by the
-//! reorganisation that split the repo into `src/core` + `src/extensions`; nothing
-//! in a review diff makes a moved directory look unreachable.
-//!
-//! This is the third variant of the same failure — the pre-commit hook deleting
-//! `ext/` so guest tests skipped, `JK_REQUIRE_GUESTS` for tests that skip
-//! themselves, and now tests that are not built at all. Each was invisible for the
-//! same reason: the suite's own report is the thing under test, and it says
-//! "passed" either way.
+//! A `tests/` dir beside a **virtual** manifest (`[workspace]`, no `[package]`)
+//! belongs to no crate — cargo silently builds nothing from it, and `cargo
+//! test` still reports green, because a test that's never compiled can't fail.
+//! This walks every `tests/` directory and flags any sitting beside a virtual
+//! manifest.
 
 use std::path::{Path, PathBuf};
 
@@ -63,9 +55,8 @@ fn every_tests_directory_belongs_to_a_crate_cargo_builds() {
     let mut orphans = Vec::new();
     for dir in &dirs {
         let Some(parent) = dir.parent() else { continue };
-        // Else: a `tests/` beside a package manifest (cargo builds it), or no
-        // manifest at all — e.g. `wit/tests` or a fixture directory — which cargo
-        // was never going to build and nobody expects it to.
+        // Otherwise: beside a package manifest (cargo builds it), or no
+        // manifest at all (e.g. a fixture dir) — nobody expects those built.
         if is_package(parent) == Some(false) {
             // A `tests/` beside a virtual workspace manifest: cargo builds nothing.
             orphans.push(dir.clone());

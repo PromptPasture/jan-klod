@@ -108,12 +108,9 @@ pub struct PendingRequest {
 
 /// Whether the loop actually dispatches `phase`.
 ///
-/// The match is **exhaustive on purpose**: adding a case to [`Phase`] will not
-/// compile until someone says here whether the loop reaches it, which turns "is
-/// this phase real?" from a promise into a build error. `session-start` and
-/// `on-error` were carried in the contract for months without ever being
-/// dispatched — an extension could subscribe, load, report healthy, and silently
-/// never run. Both were removed; this is what stops the next one being added.
+/// The match is **exhaustive on purpose**: adding a [`Phase`] variant won't
+/// compile until someone says here whether the loop reaches it — otherwise an
+/// extension could subscribe to a phase that silently never runs.
 #[must_use]
 pub const fn is_dispatched(phase: Phase) -> bool {
     match phase {
@@ -273,8 +270,7 @@ pub trait Interceptor {
     fn intercept(&mut self, input: &InterceptInput) -> Result<Decision, InterceptorError>;
 }
 
-/// The attached driver (TUI, chat, api-*) that answers an `Ask`. In Phase 2 this
-/// is the offline test harness.
+/// The attached driver (TUI, chat, api-*) that answers an `Ask`.
 pub trait Driver {
     /// Surface `prompt` and return the user's answer (or a default when headless).
     fn ask(&mut self, prompt: &UserPrompt) -> String;
@@ -369,11 +365,6 @@ mod phase_tests {
     use super::{is_dispatched, ALL_PHASES};
 
     /// The contract may not declare a phase the loop never reaches.
-    ///
-    /// This is the assertion the removed `session-start`/`on-error` would have
-    /// failed for months. It is cheap because the real work is done by the
-    /// compiler: `is_dispatched` matches exhaustively, so a new `Phase` variant
-    /// cannot be added without someone stating whether the loop drives it.
     #[test]
     fn every_declared_phase_is_one_the_loop_dispatches() {
         for phase in ALL_PHASES {

@@ -1,10 +1,9 @@
-//! Host adapter for `tool-*` extensions (Phase 7 / Phase 8).
+//! Host adapter for `tool-*` extensions.
 //!
-//! Instantiates a `tool-world` guest and satisfies its imports — `host-log`,
-//! `host-config`, `host-http`, and the Phase 7 **`host-fs`** — then exposes its
-//! `tool-callable` exports (`meta`/`invoke`). `host-fs` is backed by an optional
-//! [`Workspace`]: **default-deny** — with no workspace configured every op returns
-//! `denied`, so a tool cannot touch the filesystem unless the deployment opted in.
+//! Instantiates a `tool-world` guest, satisfies its imports (`host-log`,
+//! `host-config`, `host-http`, `host-fs`), and exposes its `tool-callable`
+//! exports (`meta`/`invoke`). `host-fs` is backed by an optional [`Workspace`]:
+//! default-deny — with no workspace configured every op returns `denied`.
 
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
@@ -39,11 +38,9 @@ struct ToolHost {
     process: ProcessRunner,
     /// Outbound HTTP, or `None` for default-deny (`host-http`).
     ///
-    /// `tool-world` imports `host-http`, but a tool having *access to the
-    /// interface* and a deployment having *granted egress* are different things:
-    /// a file tool that suddenly makes network calls is exactly what a sandbox is
-    /// for. So this is `None` unless the instance's config opts in, the same shape
-    /// as `workspace` for `host-fs` and `process` for `host-process`.
+    /// Having the interface imported and having egress granted are different
+    /// things — a file tool suddenly making network calls is what the sandbox
+    /// guards against. `None` unless the instance's config opts in.
     http: Option<crate::route::HttpFn>,
 }
 
@@ -219,11 +216,10 @@ impl ToolExtension {
         Self::instantiate_with_http(engine, id, component, workspace, process, None)
     }
 
-    /// Instantiate a tool **with outbound HTTP granted** (`http = Some(client)`).
+    /// Instantiate a tool with outbound HTTP granted (`http = Some(client)`).
     ///
-    /// Separate from [`Self::instantiate`] so granting egress is something a
-    /// caller does on purpose: the default stays no-network, and only an instance
-    /// whose config asks for it gets a client.
+    /// Separate from [`Self::instantiate`] so granting egress is opt-in per call
+    /// site rather than a default.
     ///
     /// # Errors
     /// Returns a [`CoreError`] if wiring, instantiation, or lifecycle fails.
@@ -244,19 +240,9 @@ impl ToolExtension {
         g_proc::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = ToolHost {
-            // `inherit_stderr`, not `inherit_stdio`.
-            //
-            // Inheriting all three handed every guest the host's **standard
-            // input**, and `tool-escape-probe` reads 26 bytes of it straight off
-            // the terminal. `jan-klod-gateway ask` runs in the user's shell, so a
-            // component could read what is being typed — including the answer to
-            // a permission prompt, which is the one input whose whole purpose is
-            // to be a human's decision.
-            //
-            // stderr stays: a guest's panic message is the only thing that makes
-            // a broken component diagnosable, and unlike stdin it grants no
-            // authority. A guest can write misleading lines there, which is
-            // cosmetic — host log lines are tagged by the host, not the guest.
+            // `inherit_stderr`, not `inherit_stdio`: inheriting stdin would let a
+            // guest read the terminal, including a human's answer to a permission
+            // prompt. stderr stays for panic diagnostics; it grants no authority.
             wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: id.to_string(),

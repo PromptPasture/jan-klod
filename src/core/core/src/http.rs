@@ -5,11 +5,10 @@
 //! [`crate::host::HostState`] and the `provider_probe` example both adapt their
 //! generated request/response types to the functions here.
 //!
-//! [`ureq`] gives us a synchronous client with rustls TLS and **no async
-//! runtime**, which keeps the sync Wasmtime baseline intact — the first network
-//! extension (`provider-openai`) needs HTTP, not `tokio`. Per the `host-http`
-//! contract, 4xx/5xx are surfaced as errors; transport failures collapse onto
-//! the matching variant.
+//! [`ureq`] gives a synchronous client with rustls TLS and no async runtime,
+//! keeping the sync Wasmtime baseline intact. Per the `host-http` contract,
+//! 4xx/5xx are surfaced as errors; transport failures collapse onto the
+//! matching variant.
 
 use std::time::Duration;
 

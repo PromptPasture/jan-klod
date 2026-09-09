@@ -1,7 +1,4 @@
 //! Dispatcher and phase semantics for the interceptor chain.
-//!
-//! Lived in `src/core/tests/` — beside a *virtual* workspace manifest, which has
-//! no package to own it — so cargo never compiled it. See `store.rs`.
 
 use std::cell::RefCell;
 use std::rc::Rc;

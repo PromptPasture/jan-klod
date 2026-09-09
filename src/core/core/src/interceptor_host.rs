@@ -51,11 +51,9 @@ use bind::jan_klod::interfaces::llm_types as g_types;
 /// The completion backend an interceptor's `llm-provider` import resolves to:
 /// given the request the guest assembled, return the assistant text.
 ///
-/// It takes the **whole request**, not just the prompt. An interceptor that
-/// consults a model constrains it — `interceptor-intent-router` sets a grammar
-/// admitting exactly two labels — and a seam that passed only the last user
-/// message would silently drop that constraint, turning a two-token classifier
-/// into free-form generation the guest then has to parse.
+/// Takes the **whole request**, not just the prompt: `interceptor-intent-router`
+/// constrains it with a grammar admitting exactly two labels, and a seam that
+/// passed only the last message would silently drop that constraint.
 ///
 /// Injected so the tier runs offline in tests; `Runtime::build_agent` backs it
 /// with a real provider instance.
@@ -78,28 +76,15 @@ struct InterceptorHost {
 
 /// The backing for one interceptor's `host-storage`.
 ///
-/// This used to be unconditionally a private `HashMap`, which made every write
-/// through the contract a lie by omission: `interceptor-permission` records
-/// standing grants ("always allow writes under `src/`") through `host-storage`,
-/// and those grants vanish when the process does — while the core holds an open
-/// `SQLite` store, used for session transcripts, three fields away. An
-/// interceptor that summarises context, or learns a routing preference, has
-/// nowhere to put it.
+/// Durable only for an instance whose config sets `persist: true` — the
+/// ephemeral default is load-bearing, since the permission gate's standing
+/// grants are documented as dying with the process; making every interceptor
+/// durable would quietly turn "always allow" into "allow forever".
 ///
-/// So a durable store is available — but only to an instance whose config sets
-/// `persist: true`, because the ephemeral default is itself load-bearing: the
-/// permission gate's standing grants are documented as dying with the process,
-/// and making every interceptor durable would quietly turn "always allow" into
-/// "allow forever". Durability is a grant, like a workspace or a subprocess.
-///
-/// Sharing one database needs a second rule,
-/// because until now isolation came for free from the map being private: with one
-/// database behind every guest, an interceptor could name `session-abc` and read
-/// the transcript, or name a peer's namespace and read its decisions. **Every
-/// namespace is therefore prefixed with the component's own id** — a guest cannot
-/// express a namespace outside its own subtree, because it never gets to write the
-/// prefix. The core's own namespaces contain no `/`, so nothing a guest can ask
-/// for collides with them.
+/// Every namespace is prefixed with the component's own id, so sharing one
+/// database does not let a guest name `session-abc` and read the transcript, or
+/// name a peer's namespace and read its decisions. The core's own namespaces
+/// contain no `/`, so nothing a guest can ask for collides with them.
 enum Storage {
     /// A private map, for when no store is open (unit tests, offline harnesses).
     Ephemeral {
@@ -1061,12 +1046,8 @@ mod tests {
         ));
     }
 
-    /// And a tool nobody classified does not.
-    ///
-    /// This test used to assert the opposite — that `web_search` proceeds
-    /// untouched — which is what a denylist does with every name it has not heard
-    /// of. That is the behaviour that let `tool-edit` write files unasked. Under
-    /// an allowlist the unclassified call is exactly the one to stop.
+    /// And a tool nobody classified does not: under an allowlist, an
+    /// unclassified call is exactly the one to stop.
     #[test]
     fn permission_asks_about_a_tool_nobody_has_classified() {
         let Some(p) = load_permission() else { return };

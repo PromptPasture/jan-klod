@@ -233,12 +233,9 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     Ok(chunks)
 }
 
-/// A transport failure in words rather than a binding name.
-///
-/// The log line said `http error: HttpError::ConnectionFailed`, which names a
-/// generated Rust variant to somebody reading their terminal. The same class of
-/// leak reached the user through the provider error itself until yesterday; a
-/// binding identifier is never the thing to show.
+/// A transport/status error from `host-http`, described in words rather than a
+/// generated binding variant name (e.g. `HttpError::ConnectionFailed`) — nobody
+/// reading a terminal or a provider error should see a Rust identifier.
 const fn describe_http(err: &HttpError) -> &'static str {
     match err {
         HttpError::ConnectionFailed => {

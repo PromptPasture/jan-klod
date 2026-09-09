@@ -162,12 +162,10 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     let message = choice.get("message").ok_or(ProviderError::Transient)?;
 
     let mut chunks = VecDeque::new();
-    // Text *and* tool calls, not one or the other. A model routinely narrates
-    // before it acts ("I'll read the file first, then…"), and treating the two as
-    // alternatives dropped that text on the floor: it never reached the stream, so
-    // the UI showed nothing while tools ran, and it never reached the assistant
-    // message, so the next turn could not see what the model said it was doing.
-    // Text precedes the calls, which is the order the model emitted them in.
+    // Text and tool calls both, not one or the other: a model often narrates
+    // before acting, and dropping that text would leave the UI blank while tools
+    // run and hide it from the next turn's context. Text precedes calls, matching
+    // emission order.
     if let Some(content) = message.get("content").and_then(Value::as_str) {
         if !content.is_empty() {
             chunks.push_back(CompletionChunk::TextDelta(content.to_owned()));
@@ -201,13 +199,9 @@ fn str_field(obj: &Value, key: &str) -> String {
         .to_owned()
 }
 
-/// Map a transport/status error from `host-http` onto a provider error.
-/// A transport failure in words rather than a binding name.
-///
-/// The log line said `http error: HttpError::ConnectionFailed`, which names a
-/// generated Rust variant to somebody reading their terminal. The same class of
-/// leak reached the user through the provider error itself until yesterday; a
-/// binding identifier is never the thing to show.
+/// A transport/status error from `host-http`, described in words rather than a
+/// generated binding variant name (e.g. `HttpError::ConnectionFailed`) — nobody
+/// reading a terminal or a provider error should see a Rust identifier.
 const fn describe_http(err: &HttpError) -> &'static str {
     match err {
         HttpError::ConnectionFailed => {

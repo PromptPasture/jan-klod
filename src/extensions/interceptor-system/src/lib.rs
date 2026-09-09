@@ -1,33 +1,23 @@
-//! `interceptor-system` — the standing instructions a turn runs under.
-//!
-//! Until this existed, **no system message ever reached the model**. Every
-//! request was the conversation and nothing else: the model was never told it was
-//! an agent, that its paths are workspace-relative, that a write will be
-//! confirmed, or that editing part of a file beats re-emitting the whole thing.
-//! For the small models this runtime is built around, that framing is not a nicety
-//! — it is most of the difference between a tool call and a paragraph describing
-//! one.
+//! `interceptor-system` — the standing instructions a turn runs under. Without
+//! it, the model gets the raw conversation with no framing: it isn't told it's
+//! an agent, that paths are workspace-relative, or that writes get confirmed —
+//! for the small models this runtime targets, that framing is most of the
+//! difference between a tool call and a paragraph describing one.
 //!
 //! ## Why an extension, and why `select-model`
 //!
-//! A system prompt is **policy**, and core holds none — so it lives in a
-//! sandboxed guest that can be swapped, reconfigured, or switched off like any
-//! other decision.
+//! A system prompt is policy, so it lives in a swappable/reconfigurable guest
+//! rather than core.
 //!
-//! It runs at `select-model`, the first request-shaping phase, rather than the
-//! `select-context` phase it more obviously belongs to. Ordering is structural
-//! here: `select-model` runs before `select-context`, so the prompt is already in
-//! the message list when `interceptor-context` measures it against the token
-//! budget. Added afterwards, it would be the one message the budget never counted
-//! — a small, permanent under-estimate in the component whose whole job is not
-//! to exceed the window.
+//! It runs at `select-model` (not the more obvious `select-context`) because
+//! that phase runs first: the prompt must already be in the message list when
+//! `interceptor-context` measures the token budget, or those tokens go uncounted.
 //!
 //! ## Idempotence
 //!
-//! It prepends only when no system message is present. A turn already carrying
-//! one (a driver that set it, a second interceptor, a replayed conversation that
-//! preserved it) is left alone, so the instructions cannot accumulate one copy
-//! per turn.
+//! Prepends only when no system message is already present, so a turn that
+//! already has one (driver-set, another interceptor, a replayed conversation)
+//! doesn't accumulate copies.
 //!
 //! The assembly is pure Rust (unit-tested natively); the Component-Model glue
 //! below only compiles for `wasm32`.
@@ -72,30 +62,21 @@ files you read.";
         }
     }
 
-    /// The standing instructions plus the project's own, if it has any.
+    /// The standing instructions plus the project's own (`AGENTS.md`), if any.
     ///
-    /// `AGENTS.md` in the workspace root is where a user writes the conventions
-    /// they would otherwise repeat every session: which test command to run, what
-    /// not to touch, how this codebase spells things. `configuration.md` has
-    /// claimed for months that the file is read; nothing read it.
+    /// Appended and labelled rather than merged: the standing prompt states what
+    /// the *runtime* enforces (true regardless of the repo), while project
+    /// instructions are a request from the codebase — a model that can't tell
+    /// them apart would treat "you may write anywhere" in a checked-in file as a
+    /// fact about the sandbox.
     ///
-    /// Appended rather than merged, and labelled, because the two have different
-    /// authority. The standing prompt describes what the *runtime* enforces — the
-    /// sandbox refuses absolute paths, writes are confirmed — and those sentences
-    /// are true regardless of what a repository asks for. Project instructions are
-    /// a request from the codebase. A model that cannot tell them apart will treat
-    /// "you may write anywhere" in a checked-in file as a fact about the sandbox.
-    ///
-    /// Switching the prompt off (`prompt: ""`) drops the project section too: it is
-    /// an explicit "no system message", and honouring half of it would be worse
-    /// than either answer.
+    /// `prompt: ""` drops the project section too — an explicit "no system
+    /// message" and honouring half of it would be worse than either answer.
     #[must_use]
     pub fn resolve_with_project(configured: Option<&str>, project: Option<&str>) -> Option<String> {
         let base = resolve(configured)?;
-        // `?` here would drop the *whole* system prompt when a project has no
-        // AGENTS.md — which is the common case, and which is what the first version
-        // of this function did. An integration test caught it; these arguments
-        // combine, they do not gate each other.
+        // Arguments combine rather than gate each other — no AGENTS.md (the
+        // common case) must not drop the whole prompt.
         let Some(project) = project.map(str::trim).filter(|text| !text.is_empty()) else {
             return Some(base);
         };
@@ -110,11 +91,7 @@ files you read.";
     mod tests {
         use super::{resolve, DEFAULT};
 
-        /// The three combinations, because the first version of
-        /// `resolve_with_project` used `?` on the project argument and so returned
-        /// `None` — no system prompt at all — whenever a repository had no
-        /// `AGENTS.md`. That is the common case. These are cheap and would have
-        /// caught it before the integration test did.
+        /// The three combinations of configured prompt and project instructions.
         #[test]
         fn project_instructions_are_added_without_replacing_the_standing_ones() {
             use super::resolve_with_project;

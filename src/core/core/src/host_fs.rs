@@ -1,15 +1,13 @@
-//! Host-side `host-fs` backend (Phase 7 Slice 7a) — a **path-jailed** view of a
-//! workspace directory.
+//! Host-side `host-fs` backend — a path-jailed view of a workspace directory.
 //!
-//! Security is the point: the guest sees a workspace, never the wider filesystem.
 //! Every requested path is workspace-relative and [`resolve`]d against the root;
 //! absolute paths and `..` escapes are rejected. Default-deny lives at the wiring
-//! layer — a `host-fs` import with no [`Workspace`] configured returns `Denied` for
-//! every op.
+//! layer — a `host-fs` import with no [`Workspace`] configured returns `Denied`
+//! for every op.
 //!
-//! Symlink caveat (v1): jailing is **lexical** (normalize `.`/`..` then prefix-check
-//! against the canonicalized root). A symlink *inside* the workspace whose target is
-//! outside is not followed-and-rejected here; hardening that is a later refinement.
+//! Caveat: jailing is lexical (normalize `.`/`..`, then prefix-check against the
+//! canonicalized root). A symlink inside the workspace pointing outside is not
+//! detected.
 
 use std::path::{Component, Path, PathBuf};
 

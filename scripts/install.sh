@@ -15,10 +15,8 @@ INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 
-# The asset name must match what .github/workflows/release.yml builds, which
-# spells 64-bit ARM differently per OS: `aarch64` on Linux, `arm64` on macOS.
-# Normalising both to `aarch64` (as this did) asked for a file that is never
-# published — a 404 on every Apple Silicon Mac, i.e. most people who try this.
+# release.yml spells 64-bit ARM differently per OS: `aarch64` on Linux,
+# `arm64` on macOS. Don't normalize both to one value — that 404s on Mac.
 case "${OS}/${ARCH}" in
   linux/x86_64)          ARCH="x86_64"  ;;
   linux/aarch64|linux/arm64) ARCH="aarch64" ;;
@@ -55,8 +53,7 @@ trap 'rm -rf "${TMP}"' EXIT
 curl -sSfL "${URL}" -o "${TMP}/${BUNDLE}"
 curl -sSfL "${CHECKSUMS_URL}" -o "${TMP}/SHA256SUMS.txt"
 
-# Verify checksum. macOS ships `shasum`, not `sha256sum`; using only the latter
-# made every darwin install abort here under `set -e`, after downloading.
+# macOS ships `shasum`, not `sha256sum` — fall back to it.
 if command -v sha256sum > /dev/null 2>&1; then
   SHA_CHECK="sha256sum -c -"
 elif command -v shasum > /dev/null 2>&1; then
@@ -69,13 +66,8 @@ cd "${TMP}"
 grep "${BUNDLE}" SHA256SUMS.txt | ${SHA_CHECK}
 cd - > /dev/null
 
-# Extract and install.
-#
-# The components are the product. This used to copy the two binaries and stop,
-# leaving `config.yaml` and `ext/*.wasm` in the temp directory to be deleted —
-# so the installed agent booted with every extension missing and no tools at all.
-# Everything the bundle carries is installed; the gateway finds the data
-# directory relative to its own path, so `cd` into any repository and run.
+# Extract and install everything the bundle carries — not just the binaries,
+# or the installed agent boots with no extensions and no tools.
 tar -xzf "${TMP}/${BUNDLE}" -C "${TMP}"
 EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}"
 DATA_DIR="${DATA_DIR:-$(dirname "${INSTALL_DIR}")/share/jan-klod}"
@@ -92,8 +84,7 @@ echo "Installed: ${INSTALL_DIR}/jan-klod"
 echo "Installed: ${INSTALL_DIR}/jan-klod-gateway"
 echo "Installed: ${DATA_DIR}/ (config.yaml + $(ls "${DATA_DIR}/ext" | wc -l | tr -d " ") components)"
 
-# Prove it: the gateway resolves its own data directory and every enabled
-# extension loads. An install that cannot verify itself is not an install.
+# Confirm every enabled extension actually loads.
 if ! "${INSTALL_DIR}/jan-klod-gateway" verify > /dev/null 2>&1; then
   echo "" >&2
   echo "warning: the installed components did not all verify. Run:" >&2

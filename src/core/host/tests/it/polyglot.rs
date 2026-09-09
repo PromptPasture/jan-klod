@@ -1,26 +1,17 @@
-//! A component built from another language runs in this host.
+//! A component built from another language runs in this host — the "any
+//! language" claim, backed by an actual test rather than a spike binary someone
+//! had to run by hand.
 //!
-//! "Any language" is one of the four things this runtime claims, and the only
-//! evidence for it was `examples/spike_gate.rs` — a binary someone had to run by
-//! hand. Two documents state that the TinyGo spike is "the standing polyglot
-//! canary (`make gate`)". `make gate` did not run it; the Makefile says plainly a
-//! few lines away that the spike "stays opt-in: `make spike-guest`". A claim
-//! nobody executes is the same shape as a denylist nobody updates.
-//!
-//! So the round-trip is a test now. It loads the committed `spike.wasm` — a
-//! reactor component TinyGo built against `wit/spike` — instantiates it in
-//! Wasmtime with the host's own WASI wiring, calls its exported `complete`, and
-//! checks the answer came back across the boundary. Every gate run, no toolchain
+//! Loads the committed `spike.wasm` (TinyGo, built against `wit/spike`),
+//! instantiates it with the host's own WASI wiring, calls its exported
+//! `complete`, and checks the round trip. Runs every gate, no toolchain
 //! required.
 //!
-//! **What this does and does not prove.** It proves the host can load and call a
-//! component that was not built from Rust, which is the load-bearing half: the
-//! Component Model boundary is genuinely language-neutral rather than a Rust ABI
-//! with extra steps. It does *not* prove the current `wit/` still compiles under
-//! TinyGo, because the artifact is committed rather than rebuilt — that needs
-//! `tinygo` and `wkg`, and requiring them would make the gate unrunnable for most
-//! people. [`the_committed_artifact_is_rebuildable`] closes that half when the
-//! toolchain happens to be present, and says so when it is not.
+//! This proves the Component Model boundary is genuinely language-neutral, not
+//! that today's `wit/` still compiles under TinyGo — the artifact is committed,
+//! not rebuilt, since that needs `tinygo`/`wkg` most contributors lack.
+//! [`the_committed_artifact_is_rebuildable`] covers that half when the toolchain
+//! is present.
 
 // Dominated by `bindgen!` output; exempt from the workspace's doc/style lints.
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
@@ -38,10 +29,8 @@ wasmtime::component::bindgen!({
     world: "spike",
 });
 
-/// Even though the `spike` world declares no imports, a TinyGo `wasip2`
-/// component pulls in `wasi:cli`/`wasi:io` for its runtime, so the host has to
-/// satisfy those. That is itself part of what is being checked: a guest from
-/// another toolchain arrives with its own runtime expectations.
+/// The `spike` world declares no imports, but a TinyGo `wasip2` component still
+/// pulls in `wasi:cli`/`wasi:io` for its runtime, which the host must satisfy.
 struct Host {
     ctx: WasiCtx,
     table: ResourceTable,
@@ -95,16 +84,11 @@ fn a_component_built_from_go_completes_a_call_through_the_host() {
     );
 }
 
-/// The other half: does today's `wit/` still produce a working Go guest?
-///
-/// Only checkable where `tinygo` and `wkg` exist. That is a genuinely optional
-/// toolchain — CI does not carry it and most contributors will not install it —
-/// so this skips via [`common::optional_tool`] rather than the `JK_REQUIRE_GUESTS`
-/// policy: making it a hard failure would teach people to unset the flag, which
-/// costs more than it buys. The skip announces itself.
-///
-/// It matters because without it the committed artifact can drift from a contract
-/// it no longer matches, and the test above would keep passing against a fossil.
+/// The other half: does today's `wit/` still produce a working Go guest? Only
+/// checkable where `tinygo`/`wkg` exist, so this skips via
+/// [`common::optional_tool`] (an announced skip) rather than the
+/// `JK_REQUIRE_GUESTS` policy — forcing a hard failure on a toolchain most
+/// contributors lack would just teach people to unset the flag.
 #[test]
 fn the_committed_artifact_is_rebuildable() {
     if !common::optional_tool("tinygo") || !common::optional_tool("wkg") {

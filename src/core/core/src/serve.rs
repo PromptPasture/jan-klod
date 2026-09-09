@@ -1,4 +1,4 @@
-//! Host-side inbound HTTP surface — resource-model REST API (Phase 11b).
+//! Host-side inbound HTTP surface — resource-model REST API.
 //!
 //! Routes (v0.1.0):
 //!   GET  /health                   liveness probe
@@ -13,19 +13,16 @@
 //!
 //! ## Answering a mid-turn confirmation without threads
 //!
-//! An interceptor can stop a turn to ask the user something (the permission gate
-//! does exactly this). The loop is synchronous, so the turn *blocks* inside
-//! `Driver::ask` — which means the answer has to arrive on a different request
-//! while this one is still open, and a single-threaded server cannot accept it.
+//! An interceptor (e.g. the permission gate) can stop a turn to ask the user
+//! something; the loop is synchronous, so it *blocks* inside `Driver::ask`, and
+//! the answer must arrive on a different, concurrent request.
 //!
-//! Rather than make `AgentSession` `Send` and put turns on worker threads, the
-//! waiting driver **serves the socket itself**: it emits a `prompt` SSE frame,
-//! then keeps calling `Server::recv_timeout` until a matching
-//! `POST /session/:id/answer` arrives, replying `409` to anything else that comes
-//! in meanwhile. The concurrency stays exactly where it was — one request at a
-//! time — and the sync-Wasmtime, no-`tokio` posture of the rest of the core holds.
-//! An unanswered prompt times out at [`DEFAULT_ANSWER_TIMEOUT`] and takes the prompt's own
-//! default, which for the permission gate is a denial.
+//! Rather than make `AgentSession` `Send` and use worker threads, the waiting
+//! driver **serves the socket itself**: it emits a `prompt` SSE frame, then calls
+//! `Server::recv_timeout` in a loop until a matching `POST /session/:id/answer`
+//! arrives, replying `409` to anything else. Concurrency stays at one request at
+//! a time. An unanswered prompt times out at [`DEFAULT_ANSWER_TIMEOUT`] and takes
+//! the prompt's own default (a denial, for the permission gate).
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -46,32 +43,19 @@ const DEFAULT_ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Overrides [`DEFAULT_ANSWER_TIMEOUT`], in seconds.
 ///
-/// Three minutes is right for a person and wrong for a test. A test whose answer
-/// goes astray does not fail — it waits out the whole timeout and then *passes*,
-/// because the default answer is a denial and the assertions still hold. That is
-/// how `auth.rs` came to spend 360 seconds (two timeouts) on some runs and 1
-/// second on others, while reporting success either way; the suite looked
-/// intermittently slow rather than intermittently broken, and I spent this
-/// iteration measuring make targets before noticing that 360 is exactly 2 × 180.
-///
-/// With the wait short, a lost answer is a fast failure instead of a silent
-/// stall. Read per wait rather than cached so a test can set it per process.
+/// Three minutes is right for a person and wrong for a test: a test whose answer
+/// goes astray would otherwise wait out the whole timeout and still *pass*
+/// (default answer is a denial, assertions still hold), just slow. Read per wait
+/// rather than cached, so a test can set it per process.
 const TIMEOUT_ENV: &str = "JK_ANSWER_TIMEOUT_SECS";
 
 /// How often the wait pokes the event stream while parked.
 ///
-/// A failed *first* write means the client is already gone, and `ask` handles
-/// that. But a client that disappears a moment later leaves a write that
-/// succeeds — the bytes go into the socket buffer, and the FIN has not been
-/// processed yet — after which nothing notices for three minutes. That is the
-/// pin this module's own comment says the timeout prevents; three minutes of an
-/// agent serving nobody and answering `409` to everyone else is a pin.
-///
-/// So the wait ticks. Each tick writes an SSE comment, which does two things: a
-/// dead peer surfaces as a write error within one interval, and a live stream
-/// keeps sending bytes, which is what stops a reverse proxy from closing an idle
-/// event stream. Comments are the protocol's own no-op — a `:`-prefixed line that
-/// a conformant client ignores — so this needs nothing from the client side.
+/// A client that disappears after the first write leaves a socket that looks
+/// fine until the FIN is processed, which can take the whole timeout. Each tick
+/// writes an SSE comment: a dead peer surfaces as a write error within one
+/// interval, and a live stream gets bytes that keep a reverse proxy from closing
+/// it as idle. Comments (`:`-prefixed lines) are the protocol's own no-op.
 const HEARTBEAT: Duration = Duration::from_secs(5);
 
 /// The configured confirmation timeout.
@@ -315,13 +299,9 @@ struct PromptDriver<'a> {
     server: &'a Server,
     writer: SharedWriter,
     session: String,
-    /// The bearer token, if one is configured.
-    ///
-    /// This driver serves the socket itself while a turn is parked, so it does
-    /// **not** pass through `serve_once_authed` and has to check the token on its
-    /// own. Missing that is how the answer route — the one that approves a write
-    /// or a command — became the single unguarded endpoint the moment auth was
-    /// added everywhere else.
+    /// The bearer token, if one is configured. Checked here explicitly, since
+    /// this driver serves the socket itself while a turn is parked and never
+    /// passes through `serve_once_authed`.
     token: Option<&'a str>,
 }
 
@@ -421,16 +401,11 @@ impl PromptDriver<'_> {
 
 /// Whether a request may proceed.
 ///
-/// `None` means no token is configured, and everything is allowed — the
-/// historical behaviour, kept because the default bind is loopback and requiring
-/// a secret to talk to your own machine would be friction without a threat. When
-/// a token *is* configured it is required everywhere except `/health`, which
-/// leaks nothing and is what the supervisor probes.
-///
-/// Comparison is length-then-bytes rather than `==` on `&str` only in the sense
-/// that it compares the whole string every time; this is a local single-user
-/// surface, not a service where timing analysis of a bearer token is the
-/// realistic attack. The realistic attack is that there was no token at all.
+/// `None` means no token is configured and everything is allowed — the default
+/// bind is loopback, so requiring a secret to talk to your own machine would be
+/// friction without a threat. When a token *is* configured it is required
+/// everywhere except `/health`, which the supervisor probes and which leaks
+/// nothing.
 fn authorised(request: &Request, token: Option<&str>, path: &str) -> bool {
     let Some(expected) = token else { return true };
     if path == "/health" {

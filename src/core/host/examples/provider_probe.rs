@@ -1,12 +1,10 @@
 //! `provider_probe` — drive a provider extension's full `llm-provider.complete`
 //! path end-to-end against a live OpenAI-compatible endpoint.
 //!
-//! The core itself only runs lifecycle (`init`/`start`); nothing in-tree calls
-//! `complete` yet (the agent-loop manager that will is unbuilt). This probe is
-//! that missing caller: it instantiates `provider-world` directly, wires the
-//! same three host capabilities the core grants — with a **real** `host-http`
-//! reusing [`jan_klod_core::http`] — then issues one completion and prints the
-//! streamed chunks. It doubles as the seed of the component test harness.
+//! Instantiates `provider-world` directly, wires the same three host
+//! capabilities the core grants — with a real `host-http` reusing
+//! [`jan_klod_core::http`] — then issues one completion and prints the streamed
+//! chunks.
 //!
 //! Usage: `provider_probe [config] [ext-dir] [prompt]`. Requires the provider's
 //! api-key env (e.g. `OPENAI_API_KEY`) and network access — it makes a real,

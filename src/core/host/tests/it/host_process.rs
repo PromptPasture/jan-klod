@@ -1,9 +1,9 @@
-//! Phase 7 Slice 7b — `host-process` across the Component-Model boundary.
+//! `host-process` across the Component-Model boundary.
 //!
-//! Instantiates the `tool-proc-probe` guest (imports `host-process`) and drives its
+//! Instantiates the `tool-proc-probe` guest and drives its
 //! `invoke({command, args})` through a bounded runner: a command runs and its
 //! stdout comes back, and with execution disabled every call is denied
-//! (default-deny) — offline.
+//! (default-deny). Offline.
 //!
 //! Skips (passes as a no-op) when the guest is not staged in `ext/`.
 
@@ -73,14 +73,11 @@ fn host_process_is_default_deny_when_disabled() {
 
 /// A command run *through a guest* does not carry the host's credentials.
 ///
-/// The unit test in `core::host_process` covers the runner directly. This one
-/// covers the path that actually exists in a deployment: the model asks a
-/// sandboxed tool to run something, and the something inherits an environment.
-/// That environment held `OPENAI_API_KEY` — `config.yaml` expands `${…}`, so it
-/// is necessarily present — and `JAN_KLOD_TOKEN`, the REST bearer token. One
-/// `env` put both into tool output, which becomes a message in the transcript,
-/// which is sent to the model provider on the next turn. The exfiltration path
-/// was the obvious command, not a clever one.
+/// Unlike the `core::host_process` unit test, this covers the deployment path:
+/// a sandboxed tool inherits an environment that necessarily holds
+/// `OPENAI_API_KEY` (config expands `${...}`) and `JAN_KLOD_TOKEN`. A plain
+/// `env` command would put both into tool output — which becomes a transcript
+/// message sent to the model provider on the next turn.
 #[test]
 fn a_guest_run_command_does_not_receive_the_hosts_credentials() {
     let engine = Engine::default();

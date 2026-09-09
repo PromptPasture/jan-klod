@@ -1,4 +1,4 @@
-//! Host adapter for `registry-skills` and `registry-mcp` extensions (Phase 10).
+//! Host adapter for `registry-skills` and `registry-mcp` extensions.
 //!
 //! Each registry world gets its own inline `bindgen!` block, its own host state,
 //! and its own instantiation path — following the same pattern as `tool_host`.
@@ -154,12 +154,8 @@ struct McpHost {
     table: ResourceTable,
     component_id: String,
     config_json: String,
-    /// Destinations this registry may reach.
-    ///
-    /// `registry-mcp` received `host-http` unconditionally while a *tool* had to
-    /// be granted `network: true` for the same capability — and this is the
-    /// component that exists to talk to third-party servers. Its egress is now
-    /// bounded like everyone else's.
+    /// Destinations this registry may reach — bounded like any other extension's
+    /// egress, even though talking to third-party servers is its whole purpose.
     egress: crate::egress::EgressPolicy,
 }
 
@@ -261,10 +257,7 @@ const fn to_mcp_http_err(err: &crate::http::WireError) -> mcp_http::HttpError {
 }
 
 impl mcp_event::Host for McpHost {
-    /// One-way: the host records what the gateway reports. There is no delivery
-    /// side — `host-event` narrowed to `publish` when it turned out the queue
-    /// behind it was real here, stubbed for interceptors, and called by neither.
-    /// See `wit/host-event.wit`.
+    /// One-way: the host just records what the guest reports, no delivery side.
     fn publish(&mut self, topic: String, payload: String) {
         eprintln!("EVENT [{}] {topic}: {payload}", self.component_id);
     }

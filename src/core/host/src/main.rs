@@ -26,10 +26,9 @@ const INSTALLED_DATA: &str = "../share/jan-klod";
 /// Resolve a default config/ext path.
 ///
 /// The working directory wins, so running inside a checkout uses that checkout.
-/// Otherwise the copy installed alongside the binary is used — without this, an
-/// installed jan-klod only worked when launched from a directory that happened to
-/// contain a `config.yaml` and an `ext/`, which for a coding agent is never: the
-/// whole point is to `cd` into *your* repository and run it there.
+/// Otherwise the copy installed alongside the binary is used — a coding agent's
+/// whole point is to `cd` into *your* repository, not one that happens to have
+/// `config.yaml`/`ext/` in it.
 fn resolve_default(name: &str) -> String {
     let in_cwd = PathBuf::from(name);
     if in_cwd.exists() {
@@ -57,19 +56,13 @@ fn main() -> ExitCode {
     }
 }
 
-/// One question, one answer, on stdout.
+/// One question, one answer, on stdout — no server, no client, nothing to leave
+/// running: `jan-klod-gateway ask "what does this repo do?"` in a shell or CI
+/// step.
 ///
-/// The surface a self-hosted agent is most obviously missing: no server, no
-/// client, nothing to leave running — `jan-klod-gateway ask "what does this repo
-/// do?"` in a shell or a CI step. Two documents described this subcommand before
-/// it existed, in text written to justify withholding stdin from guests; the
-/// claim was invented and then half-believed two days later, which is a good
-/// argument for `every_documented_command_exists` below it.
-///
-/// Confirmations are asked on the terminal, because there is one. Running headless
-/// and letting the prompt default would deny every write and command — correct,
-/// and useless: the whole fleet past `fs:read` would be unavailable in the surface
-/// most likely to be scripted.
+/// Confirmations are asked on the terminal, because there is one. Running
+/// headless and taking every prompt's default would deny every write and
+/// command, making the whole fleet past `fs:read` unavailable here.
 fn ask(args: &[String]) -> ExitCode {
     let question = args.join(" ");
     if question.trim().is_empty() {
@@ -144,12 +137,8 @@ impl jan_klod_core::intercept::Driver for TerminalDriver {
 /// to a component that is present and instantiates. Prints the plan and exits
 /// non-zero if anything is missing or fails to start.
 ///
-/// This exists because "the component is not there" is otherwise a *silent*
-/// degradation — the runtime skips what it cannot find, so a bundle assembled
-/// without a guest, or a config naming one nobody built, starts happily and is
-/// merely less capable than it claims. `bundle.sh` runs this against the assembled
-/// bundle so a broken one cannot be released, and a user can run it to answer
-/// "why is that tool not working?".
+/// Otherwise a missing component is a silent degradation — the runtime skips
+/// what it cannot find and starts happily, merely less capable than it claims.
 fn verify(args: &[String]) -> ExitCode {
     // `--live` is opt-in because it spends a request: the offline checks are free
     // and should stay runnable in a build step, while asking a paid endpoint to say
@@ -207,11 +196,10 @@ fn verify(args: &[String]) -> ExitCode {
 
 /// Ask the configured model one question, and report what happened.
 ///
-/// Everything `verify` checked before this was offline: components resolve,
-/// instantiate and start. All of that passes with a wrong API key, an endpoint that
-/// is not running, a model name that does not exist, and a `base-url` egress will
-/// refuse — which is the entire list of things that actually go wrong on a first
-/// run. "verified" was therefore a claim about the parts nobody has trouble with.
+/// Everything `verify` checked before this was offline (components resolve,
+/// instantiate, start), which says nothing about a wrong API key, a dead
+/// endpoint, a bad model name, or egress refusing the `base-url` — the things
+/// that actually go wrong on a first run.
 fn verify_live(runtime: &Runtime) -> ExitCode {
     let policy = runtime.egress_policy();
     let factory = move || -> HttpFn {
@@ -297,10 +285,9 @@ fn serve(args: &[String]) -> ExitCode {
         }
     };
 
-    // Live host-http, bounded by the egress policy: outbound calls reach public
-    // destinations plus the endpoints config names, and nothing else. Handing a
-    // guest `jan_klod_core::http::fetch` directly would let it reach this
-    // gateway's own port, the cloud metadata service, and the LAN.
+    // Bounded by the egress policy: guests reach public destinations plus the
+    // endpoints config names, not this gateway's own port, the cloud metadata
+    // service, or the LAN.
     let policy = runtime.egress_policy();
     let factory = move || -> HttpFn {
         let policy = policy.clone();
@@ -378,10 +365,8 @@ fn telegram(args: &[String]) -> ExitCode {
         }
     };
 
-    // Bridge the telegram poller's fetch to the real host-http client. This one is
-    // the *host's* own call to api.telegram.org, not a guest's, so it uses the
-    // plain client — which now applies the public-only rule anyway. The read
-    // timeout must exceed the server-side long-poll window.
+    // The host's own call to api.telegram.org, not a guest's, so it uses the
+    // plain client. The read timeout must exceed the server-side long-poll window.
     let fetch = |method: &str, url: &str, headers: &[(&str, &str)], body: Option<&[u8]>| {
         let owned: Vec<(String, String)> = headers
             .iter()
@@ -427,20 +412,14 @@ fn arg(args: &[String], index: usize, default: &str) -> String {
 
 /// A warning when `bind` exposes the surface with nothing guarding it.
 ///
-/// Silent once a token is set: the point is to flag an *unguarded* exposure, and
-/// a warning that persists after the reader has done the thing it asked for is
-/// one they learn to ignore.
+/// Silent once a token is set — a warning that persists after the reader has
+/// done what it asked is one they learn to ignore.
 ///
-/// **The surface has no authentication.** Anyone who can reach it can start a
-/// turn, and the agent behind it reads and writes a workspace and — where the
-/// deployment allows it — runs commands. That is fine on `127.0.0.1`, which is
-/// the default and what the TUI connects to. On a routable address it is an open
-/// door, and the config file used to imply otherwise by advertising an `api-key:`
-/// nothing ever read.
-///
-/// A warning rather than a refusal: binding elsewhere is legitimate behind a
-/// reverse proxy that does authenticate, and a runtime that refuses a documented
-/// address would be its own kind of lie. It should not be *quiet*, though.
+/// The surface has no authentication: anyone who can reach it can start a turn,
+/// and the agent behind it reads/writes a workspace and, where allowed, runs
+/// commands. Fine on `127.0.0.1` (the default); an open door on a routable
+/// address. A warning rather than a refusal, since binding elsewhere behind an
+/// authenticating reverse proxy is legitimate.
 fn exposure_warning(bind: &str, has_token: bool) -> Option<String> {
     if has_token {
         return None;
@@ -469,12 +448,9 @@ fn exposure_warning(bind: &str, has_token: bool) -> Option<String> {
 
 /// Split `serve`'s arguments into positionals and an optional `--bind <addr>`.
 ///
-/// The flag exists so a caller can name the address *without* claiming the
-/// config and ext slots. Those are what [`arg_or`] resolves against the installed
-/// data directory, and naming them explicitly — which the UI had to do to reach
-/// the third positional — defeated that resolution: an installed jan-klod
-/// launched from the user's own repository looked for `./config.yaml` and failed
-/// to boot. The positional form still works for anyone naming all three.
+/// The flag lets a caller name the address without claiming the config/ext
+/// slots, which [`arg_or`] otherwise resolves against the installed data
+/// directory. The positional form still works for anyone naming all three.
 fn split_serve_args(args: &[String]) -> (Vec<String>, Option<String>) {
     let mut positional = Vec::new();
     let mut bind = None;
@@ -491,9 +467,9 @@ fn split_serve_args(args: &[String]) -> (Vec<String>, Option<String>) {
 
 /// Refuse a positional that is plainly an address in a *path* slot.
 ///
-/// The positional form is `serve [config] [ext] [addr]`, so slot 2 is legitimately
-/// an address; only the first two are paths. Returns the message to print, or
-/// `None` when the arguments are fine.
+/// The positional form is `serve [config] [ext] [addr]`, so only the first two
+/// slots are paths; slot 2 is legitimately an address. Returns the message to
+/// print, or `None` when the arguments are fine.
 fn misplaced_address(positional: &[String]) -> Option<String> {
     let offender = positional
         .iter()
@@ -508,14 +484,9 @@ fn misplaced_address(positional: &[String]) -> Option<String> {
 
 /// Whether a positional argument looks like a bind address rather than a path.
 ///
-/// `serve 127.0.0.1:8787` is the obvious thing to type, and it was read as a
-/// config path — so the error was `config file not found: 127.0.0.1:8787`, which
-/// tells the reader nothing about the flag they omitted. The README recommended
-/// the positional form, so it actively invited the mistake.
-///
-/// Deliberately narrow: `host:port` with a numeric port, or a bare `:port`. A real
-/// path can contain a colon, so this must not claim one is an address unless the
-/// tail is digits.
+/// Deliberately narrow: `host:port` with a numeric port, or a bare `:port`. A
+/// real path can contain a colon, so this must not claim one is an address
+/// unless the tail is digits.
 fn looks_like_an_address(arg: &str) -> bool {
     let Some((host, port)) = arg.rsplit_once(':') else {
         return false;

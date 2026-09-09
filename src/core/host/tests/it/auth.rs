@@ -19,13 +19,9 @@ use crate::common;
 
 const TOKEN: &str = "s3cret-token";
 
-/// Keep a lost answer loud.
-///
-/// The confirmation wait defaults to three minutes, which is right for a person
-/// and disastrous for a test: an answer that goes astray does not fail the test,
-/// it stalls it and then passes, because the timeout takes the prompt's default
-/// and the default is a denial. This suite spent 360 seconds — two full timeouts
-/// — on some runs and one second on others, reporting success either way.
+/// Keep a lost answer loud: the confirmation wait defaults to three minutes,
+/// and a lost answer silently falls back to a denial-timeout instead of
+/// failing fast, so a test with the real timeout can pass either way.
 fn short_answer_timeout() {
     // Set before any server thread starts, and every test in this binary wants
     // the same value.
@@ -54,9 +50,8 @@ extensions:
 /// line plus body.
 fn request(port: u16, target: &str, auth: Option<&str>) -> String {
     let header = auth.map_or_else(String::new, |t| format!("Authorization: Bearer {t}\r\n"));
-    // The answer route takes a different body. Sending the wrong one gets a 400,
-    // which the waiting driver treats as "still no answer" — so a test that got
-    // this wrong would sit out the full answer timeout and look like a deadlock.
+    // The answer route takes a different body — a 400 here reads to the waiting
+    // driver as "still no answer" and the test would stall for the full timeout.
     let body = if target.ends_with("/answer") {
         r#"{"answer":"yes"}"#
     } else {
@@ -158,13 +153,10 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     assert!(response.contains("pong"), "and the turn runs: {response}");
 }
 
-/// The one endpoint that must never be open.
-///
-/// While a turn is parked on a confirmation, the waiting driver serves the socket
-/// itself — it does not pass through the router, so it needs its own token check.
-/// Without one, the single unguarded route on an otherwise authenticated surface
-/// would be the route that **approves a write or a command**: an unauthenticated
-/// caller could answer "yes" to a permission prompt.
+/// The one endpoint that must never be open: while a turn is parked on a
+/// confirmation, the waiting driver serves the socket itself, bypassing the
+/// router, so it needs its own token check or an unauthenticated caller could
+/// approve a write or a command.
 #[test]
 fn an_unauthenticated_caller_cannot_answer_a_permission_prompt() {
     short_answer_timeout();
@@ -251,12 +243,9 @@ extensions:
             if line.starts_with("event: prompt") && refused.is_empty() {
                 // An outsider tries to approve the tool call first…
                 refused = request(port, "/session/p/answer", None);
-                // …then the legitimate client answers. Keep the reply: this is
-                // the request the rest of the test depends on, and discarding it
-                // is what let a lost answer pass as success. The turn would still
-                // reach `event: done` — via the timeout, whose default is a
-                // denial — so every assertion below held while the suite spent
-                // three minutes per lost answer.
+                // …then the legitimate client answers. Keep the reply — discarding
+                // it would let a lost answer (which still reaches `event: done`
+                // via the denial-timeout) pass as success.
                 accepted = request(port, "/session/p/answer", Some(TOKEN));
             }
         }
@@ -279,9 +268,8 @@ extensions:
         stream_text.contains("event: done"),
         "the legitimate answer still landed: {stream_text}"
     );
-    // And it completed *because it was answered*, not because the wait expired.
-    // Without this the test passes either way, since a timeout takes the prompt's
-    // default and the default is the denial these assertions already expect.
+    // And it completed *because it was answered*, not because the wait expired
+    // into the same denial these assertions would otherwise also satisfy.
     assert!(
         accepted.contains("200 OK") && accepted.contains("accepted"),
         "the authenticated answer was accepted rather than lost to the timeout: {accepted}"

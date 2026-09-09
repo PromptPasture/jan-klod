@@ -1,9 +1,9 @@
-//! Phase 7 Slice 7a — `host-fs` across the Component-Model boundary.
+//! `host-fs` across the Component-Model boundary.
 //!
-//! Instantiates the `tool-fs` guest, which imports `host-fs`, and drives its
-//! `invoke({op, path, ...})` (write then read) against a real path-jailed workspace:
-//! a normal path round-trips, an escaping path is denied, and with no workspace
-//! configured every op is denied (default-deny) — all offline.
+//! Instantiates the `tool-fs` guest and drives its `invoke({op, path, ...})`
+//! (write then read) against a real path-jailed workspace: a normal path
+//! round-trips, an escaping path is denied, and with no workspace configured
+//! every op is denied (default-deny). Offline.
 //!
 //! Skips (passes as a no-op) when the guest is not staged in `ext/`.
 

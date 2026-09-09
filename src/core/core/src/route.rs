@@ -1,16 +1,11 @@
 //! Provider instantiation and the conductor's provider adapter.
 //!
 //! The core lets one extension consume another's interface by instantiating the
-//! implementing extension and delegating into it. In the thin-loop architecture
-//! the only such consumer is the loop itself, which drives providers through the
-//! conductor's [`Completer`](crate::conductor::Completer) trait — see
-//! [`ProviderCompleter`]. The provider's `host-http` is injected as an [`HttpFn`]
-//! so a turn can run live (real client) or offline (canned reply) without
-//! changing the adapter.
-//!
-//! (This module previously also hand-wired the v0 `manager-agent-loop` guest via
-//! `llm-provider` / `memory-store` routing; that path is retired — the loop is now
-//! core mechanism in [`crate::conductor`], booted by `Runtime::build_agent`.)
+//! implementing extension and delegating into it. The loop drives providers
+//! through the conductor's [`Completer`](crate::conductor::Completer) trait —
+//! see [`ProviderCompleter`]. The provider's `host-http` is injected as an
+//! [`HttpFn`] so a turn can run live (real client) or offline (canned reply)
+//! without changing the adapter.
 
 use std::fmt::Write as _;
 
@@ -233,25 +228,16 @@ fn drive(
 /// trait: the provider becomes one link in the loop's fallback chain.
 pub struct ProviderCompleter {
     id: String,
-    /// The instance's configured endpoint, kept only to name it in a failure.
-    ///
-    /// A provider error without the address is most of a diagnosis withheld: the
-    /// three most likely causes are a wrong URL, a server that is not running, and
-    /// an origin egress does not allow, and all three are questions about *which*
-    /// endpoint.
+    /// The instance's configured endpoint, kept only to name it in a failure —
+    /// the likely causes (wrong URL, server down, egress denied) are all
+    /// questions about *which* endpoint.
     endpoint: String,
     store: Store<CapHost>,
     world: provider_bind::ProviderWorld,
 }
 
-/// A provider failure in the words the person running this needs.
-///
-/// This used to be `format!("provider error: {err:?}")` — the Debug of a generated
-/// binding — so a refused connection to a local model read as
-/// `ProviderError { code: 5, name: "transient", message: "Any other transient
-/// error." }`. Three separate problems: a wasm-binding internal reached the user,
-/// the word "transient" invited retrying something that would never succeed, and
-/// nothing named the endpoint the reader needed to look at.
+/// A provider failure in the words the person running this needs, rather than
+/// the Debug output of a generated binding.
 fn describe(err: p_llm::ProviderError, endpoint: &str) -> String {
     use p_llm::ProviderError as E;
     match err {

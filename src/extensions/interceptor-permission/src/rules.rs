@@ -12,22 +12,11 @@
 //!
 //! ## Why an allowlist
 //!
-//! This was a **denylist** of high-risk verbs: tool names containing `shell`,
-//! `write`, `exec`…, plus `op` values like `write` and `delete`. It reads as
-//! reasonable and it is the wrong shape, because the list can only name the verbs
-//! someone thought of. `tool-edit` shipped with the ops `view`, `replace` and
-//! `insert`. None of those words is `write`, and `edit` is not `shell` — so the
-//! tool whose entire purpose is modifying files in place went through the gate
-//! **without ever asking**, from the commit that added it. Nothing failed,
-//! because a denylist that misses something is indistinguishable from one that
-//! has nothing to catch.
-//!
-//! A fail-closed boundary cannot be spelled as "these things are dangerous". It
-//! has to be "these things are safe" — then a capability nobody has classified is
-//! gated by construction, which is what you want from the *unknown* ones
-//! specifically. The cost is real and worth naming: add a tool and it prompts
-//! until someone puts it on the list. That is the correct direction for the
-//! mistake to point.
+//! A denylist of dangerous verbs missed `tool-edit`'s `view`/`replace`/`insert`
+//! ops — none matched `write` or `shell`, so file edits went through ungated. A
+//! denylist can only catch verbs someone thought of; an allowlist gates anything
+//! unclassified by construction. Cost: new tools prompt until added to the list —
+//! the right direction for the mistake to point.
 
 /// Calls that run without confirmation: read-only operations of the shipped
 /// fleet, as `name` (every op) or `name:op`.
@@ -103,9 +92,8 @@ impl Policy {
     /// tool with a closed read-only op set — `git` — is allowed by name; one that
     /// can also mutate — `fs` — is allowed only per op.
     ///
-    /// Unparseable arguments cannot be classified, so they are not safe. That is
-    /// the fail-closed direction: the previous checks returned `false` ("not
-    /// dangerous") on malformed JSON.
+    /// Unparseable arguments cannot be classified, so they are not safe —
+    /// fail-closed rather than defaulting to "not dangerous".
     #[must_use]
     pub fn is_known_safe(&self, name: &str, arguments: &str) -> bool {
         let key = scope_key(name, arguments);
@@ -139,13 +127,10 @@ impl Policy {
 
     /// Run both checks and report the concern that governs the call.
     ///
-    /// **The scope check runs first, and that ordering is the security property.**
-    /// A concern is what a standing "always allow" gets filed against, and only
-    /// [`Concern::EscapesScope`] is un-rememberable — so if a path escape were
-    /// reported second, `{"op":"write","path":"/etc/passwd"}` would surface as the
-    /// *rememberable* `NotKnownSafe` and a prior "always allow fs:write" would
-    /// wave it through. Escapes dominate; the narrower concern only shows when
-    /// the arguments stay inside the workspace.
+    /// **Scope check runs first — that ordering is the security property.**
+    /// [`Concern::EscapesScope`] is un-rememberable; if a narrower concern won
+    /// instead, `{"op":"write","path":"/etc/passwd"}` could be waved through by a
+    /// prior "always allow fs:write".
     #[must_use]
     pub fn review(&self, name: &str, arguments: &str) -> Option<Concern> {
         if self.args_escape_scope(arguments) {
@@ -161,11 +146,9 @@ impl Policy {
 
     /// Whether a path-bearing argument escapes the workspace root.
     ///
-    /// Checked per whitespace-separated token, not just on the whole string. A
-    /// `command` value is one string containing several: `cat /etc/passwd` does
-    /// not *start* with a slash, so testing the string as a whole missed it
-    /// entirely and the call surfaced as the rememberable `shell:cat` — one
-    /// "always" away from standing approval to read any file on the machine.
+    /// Checked per whitespace-separated token, not the whole string — a
+    /// `command` value like `cat /etc/passwd` doesn't itself start with `/`, so
+    /// testing only the full string would miss the embedded path.
     fn path_escapes(&self, s: &str) -> bool {
         std::iter::once(s)
             .chain(s.split_whitespace())
@@ -197,16 +180,10 @@ fn string_list(section: &serde_json::Value, key: &str) -> Option<Vec<String>> {
 
 /// Whether a path argument names a file that conventionally holds credentials.
 ///
-/// `fs:read` is on the read-only allowlist, so it runs without asking — correct
-/// for source code, wrong for `.env`. Everything a tool returns becomes a message
-/// in the transcript, and the transcript is sent to the model provider on the
-/// next turn, so a silent read of a credential file is the workspace's secrets
-/// leaving the machine with nobody consulted.
-///
-/// The walk in `guest-fs` skips these files, which covers `find` and `grep`
-/// together — this gate cannot, because it sees the pattern rather than the files
-/// a pattern will match. What this covers is the explicit read: still possible,
-/// no longer silent.
+/// `fs:read` is allowlisted, so it runs silently — fine for source, wrong for
+/// `.env`, since everything a tool returns is sent to the model provider. This
+/// only catches the explicit read; `guest-fs` separately skips these files for
+/// `find`/`grep`, which see patterns rather than the files they'll match.
 fn names_a_credential_file(arguments: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
         return false;
@@ -219,10 +196,8 @@ fn names_a_credential_file(arguments: &str) -> bool {
 
 /// The name test, kept in step with `guest_fs::is_credential_file`.
 ///
-/// Deliberately duplicated rather than shared: this crate is a decision component
-/// with no dependency on a file-tool library, and a permission rule that could be
-/// changed by editing a tool's helper would be a permission rule the tool
-/// controls.
+/// Duplicated rather than shared: a permission rule must not be changeable by
+/// editing an unrelated tool's helper.
 fn credential_name(name: &str) -> bool {
     const NAMES: [&str; 8] = [
         ".env",
@@ -245,22 +220,14 @@ fn credential_name(name: &str) -> bool {
 
 /// Argument keys whose values may name a location on disk.
 ///
-/// The scope check used to scan **every** string in the arguments, which is
-/// wrong once a tool carries content as well as paths: `tool-edit`'s
-/// `{"contents": "// edited"}` starts with a slash, so replacing a line with a
-/// Rust, C, Go or JavaScript comment was reported as "references a path outside
-/// the workspace" — and scope escapes are deliberately un-rememberable, so the
-/// user could not even silence it. A gate that cries wolf about a code comment
-/// teaches people to click through it, which costs more than the narrow miss
-/// this trades for.
+/// Scanning every string is wrong once a tool carries content as well as paths:
+/// `tool-edit`'s `{"contents": "// edited"}` starts with `/`, so an unscoped
+/// check flags a code comment as an (un-rememberable) scope escape. `command` is
+/// included because a command line embeds paths (`cat /etc/passwd`).
 ///
-/// `command` is here because a command line embeds paths (`cat /etc/passwd`)
-/// and, without it, that call would surface as the *rememberable* `shell:cat`.
-///
-/// The narrowing is safe because this check is not the enforcement. `host-fs` is
-/// path-jailed host-side and refuses an escape whatever the interceptor decided
-/// (`host_fs::tests::escapes_are_denied`). This exists to put the escape in front
-/// of the user in the words they need, before the tool runs.
+/// This check isn't the enforcement — `host-fs` is path-jailed host-side and
+/// refuses escapes regardless. This exists to surface the escape to the user
+/// before the tool runs.
 const PATH_KEYS: &[&str] = &[
     "path",
     "paths",
@@ -333,27 +300,20 @@ impl Concern {
 
     /// Whether "don't ask again" may apply to this concern.
     ///
-    /// **A scope escape is never remembered.** Standing decisions are about a
-    /// *kind of action* ("yes, this agent may write files"), and a path leaving
-    /// the workspace is about a *specific argument* — the one thing a blanket
-    /// approval must not silently cover. Approving one write to `src/` must never
-    /// become approval for a write to `/etc/passwd`.
+    /// Standing decisions cover a *kind of action*; a scope escape or credential
+    /// touch is about a *specific argument*, which a blanket approval must never
+    /// silently cover (e.g. "always allow fs:write" must not cover `/etc/passwd`).
     #[must_use]
     pub const fn is_rememberable(self) -> bool {
-        // Neither an escape nor a credential read may be covered by a standing
-        // decision. "Always allow `fs:read`" would otherwise be one click away
-        // from standing approval to read every secret in the workspace, which is
-        // the same failure as approving a write to `src/` covering `/etc/passwd`.
         !matches!(self, Self::EscapesScope | Self::TouchesCredentials)
     }
 }
 
 /// The key a standing decision is filed under: the *kind* of action, not the
-/// exact arguments (which never repeat) and not the bare tool (too broad).
+/// exact arguments (never repeat) and not the bare tool (too broad).
 ///
 /// A multi-op tool keys on its `op` (`fs:write`), a command runner on the program
-/// it runs (`shell:cargo`), anything else on its name. So approving `cargo` for
-/// the session does not also approve `curl`.
+/// it runs (`shell:cargo`), anything else on its name.
 #[must_use]
 pub fn scope_key(name: &str, arguments: &str) -> String {
     let value = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
@@ -361,8 +321,7 @@ pub fn scope_key(name: &str, arguments: &str) -> String {
         return format!("{name}:{}", op.to_lowercase());
     }
     if let Some(command) = value.get("command").and_then(serde_json::Value::as_str) {
-        // The program, not the whole command line: `shell:cargo`, never
-        // `shell:cargo test --workspace`, which would never match twice.
+        // The program only: `shell:cargo`, so the key still matches on the next call.
         let program = command.split_whitespace().next().unwrap_or(command);
         let program = program.rsplit('/').next().unwrap_or(program);
         return format!("{name}:{}", program.to_lowercase());
@@ -372,17 +331,10 @@ pub fn scope_key(name: &str, arguments: &str) -> String {
 
 /// A one-line description of what the call will actually do.
 ///
-/// The prompt used to read "Allow tool `edit`? Reason: `edit` is not a known
-/// read-only call" — which asks a person to approve a file modification without
-/// telling them which file or what change. A boundary that produces uninformed
-/// consent is a formality; the whole reason to stop and ask is that a human can
-/// weigh *this* action, and they cannot weigh what they cannot see.
-///
-/// Everything here comes from the model, so everything here is sanitised. A
-/// `path` of `"a\nAllow tool `rm`? Reason: safe"` would otherwise let a
-/// suggested tool call draw its own second prompt in the terminal, and the one
-/// dialog whose entire purpose is to be trustworthy is the worst place to render
-/// attacker-controlled text verbatim. See [`one_line`].
+/// A confirmation prompt is only meaningful if the human can see what they're
+/// approving, not just that the tool is unclassified. Everything here comes
+/// from the model, so it is sanitised (see [`one_line`]) — otherwise a crafted
+/// argument could forge its own line in the terminal prompt.
 #[must_use]
 pub fn summarise(name: &str, arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
@@ -437,12 +389,10 @@ fn bytes(n: usize) -> String {
 
 /// Collapse `text` onto one bounded line that cannot forge prompt structure.
 ///
-/// Control characters — newlines above all — become spaces, so nothing the model
-/// supplies can start a line of its own in the terminal; runs of whitespace
-/// collapse so padding cannot push the real question off screen; and the result
-/// is truncated. Backticks and quotes are left alone: they cannot change the
-/// shape of a single line, and mangling them would misreport the code being
-/// approved, which is its own kind of lie.
+/// Control characters (newlines above all) become spaces so nothing the model
+/// supplies can start its own terminal line; whitespace runs collapse so padding
+/// can't push the real question off screen; the result is truncated. Backticks
+/// and quotes are left as-is — mangling them would misreport the actual content.
 #[must_use]
 pub fn one_line(text: &str, limit: usize) -> String {
     let mut out = String::with_capacity(text.len().min(limit) + 1);
@@ -468,21 +418,16 @@ pub fn one_line(text: &str, limit: usize) -> String {
 
 /// How many refusals of the same kind of call before it is refused outright.
 ///
-/// A denial tells the model "no" and the loop continues, so a model that does not
-/// take the hint asks again — and each ask is a prompt in front of the user. Three
-/// is generous for a misunderstanding and short of harassment. Nobody should be
-/// worn down into clicking yes; prompt fatigue is how a gate stops meaning
-/// anything, and a model that has asked three times is either broken or pushing.
+/// Each retry re-prompts the user; three is generous for a misunderstanding and
+/// short of prompt fatigue, which is how a confirmation gate stops meaning
+/// anything.
 pub const REFUSALS_BEFORE_STANDING_DENY: u32 = 3;
 
 /// What the model is told when a call is refused, and what to do about it.
 ///
-/// The message used to be `tool `edit` denied by user`: true, and useless. A model
-/// given no alternative retries the same call, which re-prompts the user, which is
-/// the loop that makes people switch the gate off. So the denial says what
-/// happened *and* what to do instead — and says something different once the
-/// refusal is standing, because "do not ask again" is only actionable if the model
-/// is told the difference.
+/// States what happened *and* what to do instead — a bare "denied" gives the
+/// model no alternative but to retry, which just re-prompts the user. The
+/// standing case reads differently so the model knows retrying is pointless.
 #[must_use]
 pub fn denial_message(what: &str, standing: bool) -> String {
     if standing {
@@ -580,18 +525,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The gap that motivated inverting the policy.
-    ///
-    /// Under the old denylist every one of these went through unasked: `edit`
-    /// contains no high-risk verb, and `replace`/`insert` are not `write`. The
-    /// tool whose entire purpose is modifying files in place was ungated from the
-    /// commit that added it.
-    /// Content is not a path.
-    ///
-    /// `{"contents":"// edited"}` starts with a slash. Scanning every string made
-    /// that a scope escape, so replacing a line with a comment in Rust, C, Go or
-    /// JavaScript raised "references a path outside the workspace" — and an escape
-    /// is un-rememberable by design, so it could not be silenced either.
+    /// Content is not a path: `{"contents":"// edited"}` starts with a slash, so
+    /// scanning every string (rather than only path-bearing keys) would flag a
+    /// code comment as a scope escape — un-rememberable, so unsilenceable too.
     #[test]
     fn replacement_text_is_not_mistaken_for_a_path() {
         let policy = Policy::default();

@@ -1,30 +1,20 @@
 //! A component granted the network cannot reach the machine it runs on.
+//! `tool-fetch`'s SSRF guard runs *inside the sandbox*, so it protects against a
+//! confused model, not a malicious component that simply omits the check —
+//! `host-http` otherwise hands out an unrestricted client. These tests stand up
+//! a real HTTP server on loopback and assert on *its* request count, not a
+//! returned error, since only that distinguishes a real boundary from a
+//! guest-side courtesy.
 //!
-//! `tool-fetch` carries an SSRF guard: it classifies the URL and refuses
-//! loopback, private and link-local destinations. That guard runs **inside the
-//! sandbox**. It protects a confused model from a URL the model chose; it says
-//! nothing about the component, which is the party this runtime declines to
-//! trust. A guest that simply omitted the check reached whatever it liked,
-//! because `host-http` handed out an unrestricted client.
+//! They drive `fetch_within` (the host backend) directly rather than a staged
+//! guest: an honest guest self-censors before this boundary is ever exercised,
+//! so testing through one made every assertion here vacuous.
 //!
-//! So these tests stand up a real HTTP server on loopback and ask *the server*
-//! whether anybody knocked. An assertion on a returned error would pass against a
-//! guest-side check; an assertion on the server's own request count only passes
-//! if the packet never left.
-//!
-//! **They drive `fetch_within` — the host backend — rather than a guest.** The
-//! first version of this file drove the staged `tool-fetch` and all three tests
-//! passed immediately, which was the tell: `tool-fetch` refuses loopback on its
-//! own, so the sentinel saw zero requests whether or not a host boundary existed.
-//! Every assertion was vacuous. No shipped guest will attempt an unconfigured
-//! private URL, precisely because the honest ones self-censor — so a guest is the
-//! wrong instrument for measuring what stops the dishonest one.
-//!
-//! What is verified instead: the policy the runtime derives from a real
-//! `config.yaml` refuses a live local service and permits the one the operator
-//! named, at the function every guest-facing backend calls; and
-//! [`every_guest_facing_backend_goes_through_the_policy`] checks that no backend
-//! has quietly gone back to the unbounded client.
+//! Verified: the policy derived from a real `config.yaml` refuses an
+//! unconfigured local service and permits the operator-named one, at the
+//! function every guest-facing backend calls; and
+//! [`every_guest_facing_backend_goes_through_the_policy`] checks no backend has
+//! quietly gone back to the unbounded client.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -144,9 +134,8 @@ fn a_live_local_service_is_not_reachable() {
     );
 }
 
-/// The reason the rule is per-origin rather than a switch: a self-hosted model
-/// lives on loopback, and refusing it would make the private runtime unable to
-/// reach the private model.
+/// The rule is per-origin, not a global switch: a self-hosted model lives on
+/// loopback too, and a blanket refusal would make it unreachable.
 #[test]
 fn an_endpoint_named_in_config_is_reachable() {
     let dir = std::env::temp_dir().join(format!("jk-egress-ok-{}", std::process::id()));
@@ -229,19 +218,13 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
 }
 
 /// Every place the host serves `host-http` to a guest must consult the policy.
-///
-/// The boundary is only as good as its installation: one backend still calling
-/// the unbounded client would reopen the whole hole while these tests stayed
-/// green, because they exercise the *other* backends. This reads the sources and
-/// insists the unbounded `http::fetch` appears in none of them.
+/// One backend still calling the unbounded client would reopen the whole hole
+/// while the tests above stay green, since they only exercise other backends.
+/// This scans the sources for the unbounded `http::fetch` instead.
 #[test]
 fn every_guest_facing_backend_goes_through_the_policy() {
-    // Derived, not named. The first version listed three files — and there were
-    // four: `route.rs`, the provider path, was missing, which is the busiest
-    // egress route in the runtime. A check whose coverage is a literal cannot
-    // notice a backend added after it was written, and this is the third time that
-    // shape has bitten; the fix is to ask the source which files implement the
-    // capability.
+    // Discovered by scanning, not a hard-coded file list — a literal list can't
+    // notice a new backend added after it was written.
     let core = common::repo_root().join("src/core/core/src");
     let mut backends = Vec::new();
     for entry in std::fs::read_dir(&core)
@@ -273,18 +256,13 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             .to_string_lossy()
             .into_owned();
         for (number, line) in text.lines().enumerate() {
-            // Code only. A doc comment explaining what must *not* be called would
-            // otherwise trip this, and a checker that fires on prose is one
-            // somebody silences — which costs more than the check is worth.
+            // Code only — matching comments would flag prose describing the ban.
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") {
                 continue;
             }
-            // `contains`, not `starts_with`: the call sites read
-            // `let result = crate::http::fetch(`, so anchoring to the line start
-            // matched nothing and this check passed against a backend I had
-            // deliberately broken. The trailing `(` is what keeps
-            // `http::fetch_within(` from matching.
+            // `contains`, not `starts_with`: call sites read `let result =
+            // crate::http::fetch(`. Trailing `(` keeps `fetch_within(` from matching.
             assert!(
                 !line.contains("crate::http::fetch(")
                     && !line.contains("jan_klod_core::http::fetch("),
@@ -296,11 +274,10 @@ fn every_guest_facing_backend_goes_through_the_policy() {
         }
     }
 
-    // The other way in: a caller that *hands* a guest the unbounded client. Providers
-    // and tools receive an `HttpFn` from whoever builds them, so `route.rs` needs no
-    // policy of its own — and that is exactly why a binary passing
-    // `Box::new(http::fetch)` would reopen the hole without touching any file above.
-    // `main.rs` did precisely that until 2026-08-11.
+    // The other way in: a caller that *hands* a guest the unbounded client.
+    // Providers and tools receive an `HttpFn` from whoever builds them, so a
+    // binary passing `Box::new(http::fetch)` reopens the hole without touching
+    // any file scanned above.
     for binary in ["host/src/main.rs", "ui/src/main.rs"] {
         let path = common::repo_root().join("src/core").join(binary);
         let Ok(text) = std::fs::read_to_string(&path) else {

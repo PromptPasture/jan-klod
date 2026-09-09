@@ -1,20 +1,13 @@
-//! What a component gets when nobody grants it anything.
+//! What a component gets when nobody grants it anything. `wasmtime_wasi`'s
+//! linker wires filesystem and socket support in full; what actually keeps a
+//! guest out is the `WasiCtx` defaults (no preopens, deny-all `SocketAddrCheck`)
+//! — defaults in a dependency we upgrade, not something these tests can see
+//! directly by exercising cooperative guests that ask through typed imports.
 //!
-//! Every guest's linker is built with `wasmtime_wasi::p2::add_to_linker_sync`,
-//! which wires `wasi:filesystem`, `wasi:sockets/tcp` and `wasi:sockets/udp` in
-//! full. What keeps those from being an escape hatch is not the linker but the
-//! `WasiCtx`: no preopens, and a `SocketAddrCheck` whose default refuses every
-//! address. Both are **defaults in a dependency we upgrade**. If a future
-//! wasmtime flips either one, `host-fs`'s path jail and `core::egress`'s
-//! destination policy become decoration — a guest would just open its own socket
-//! or its own file, and every existing test would keep passing, because every
-//! other guest is cooperative and asks politely through a typed import.
-//!
-//! So `tool-escape-probe` does not ask. It calls `std::net::TcpStream::connect`,
-//! `std::io::stdin`, and `std::fs::read_to_string` — ordinary Rust, no bespoke
-//! bindings, which is the realistic shape of the problem. These tests assert each
-//! attempt is refused, and the socket case asserts it against a real listening
-//! server's own request count rather than the error the guest reports.
+//! So `tool-escape-probe` doesn't ask: it calls raw `std::net::TcpStream`,
+//! `std::io::stdin`, `std::fs::read_to_string` directly, and these tests assert
+//! each attempt is refused — the socket case against a real listening server's
+//! own request count, not the guest's self-reported error.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
@@ -153,24 +146,15 @@ fn a_guest_cannot_read_the_hosts_filesystem() {
     }
 }
 
-/// The credentials are in the environment, so the guest must not have one.
-///
-/// The sibling of the subprocess leak fixed on 2026-08-15: a command run through
-/// `host-process` inherited `OPENAI_API_KEY` and `JAN_KLOD_TOKEN` because nothing
-/// cleared the environment. A guest reading them *directly* would be the shorter
-/// path, and it is closed only because `WasiCtxBuilder::inherit_env` is not called
-/// — a default in a crate we upgrade, exactly like the deny-all socket check. If it
-/// flips, every component reads the operator's provider key with one line of `std`,
-/// and nothing else in the suite would notice.
-///
-/// The secrets are set in *this* process before the guest runs, so the check is not
-/// measuring an empty environment: they are demonstrably there to be inherited.
+/// The guest must get no environment at all — closed only because
+/// `WasiCtxBuilder::inherit_env` is not called, a dependency default like the
+/// socket check above. Secrets are set in *this* process before the guest runs,
+/// so the check demonstrably isn't just measuring an empty environment.
 #[test]
 fn a_guest_cannot_read_the_hosts_environment() {
-    // Set *before* the guest is instantiated. `inherit_env` snapshots the
-    // environment when the `WasiCtx` is built, so setting these afterwards left the
-    // credential assertion passing even with inheritance switched on — the check
-    // that matters was the one measuring nothing.
+    // Set *before* the guest is instantiated: `inherit_env` snapshots the
+    // environment when the `WasiCtx` is built, so setting these after would leave
+    // the assertion passing even with inheritance switched on.
     std::env::set_var("OPENAI_API_KEY", "sk-guest-env-must-not-leak");
     std::env::set_var("JAN_KLOD_TOKEN", "bearer-guest-env-must-not-leak");
     let engine = Engine::default();
@@ -199,19 +183,14 @@ fn a_guest_cannot_read_the_hosts_environment() {
     }
 }
 
-/// stdin is the one the host was actually giving away.
+/// stdin is the one the host was actually giving away: a guest could read the
+/// terminal `jan-klod-gateway ask` runs in, including a permission answer typed
+/// at the prompt.
 ///
-/// The gateway inherited the parent's stdio and handed it to every guest, so a
-/// component could read the terminal `jan-klod-gateway ask` runs in — including a
-/// permission answer being typed at the prompt. `tool-escape-probe` read 26 bytes
-/// of it.
-///
-/// **This test feeds itself the input.** The first version simply asked the probe
-/// to read stdin and accepted "0 bytes" as success — which is what a test harness
-/// with no stdin returns whether or not the guest was granted any. It passed
-/// against the hole. So the parent re-executes this binary with a secret piped in
-/// and reads what the child reports: a vacuum cannot be mistaken for a boundary
-/// when the pipe demonstrably has bytes in it.
+/// This test feeds itself real input rather than asking the probe to read an
+/// empty test-harness stdin — "0 bytes" from an empty stdin is indistinguishable
+/// from "0 bytes" from a real boundary, so the parent re-executes this binary
+/// with a secret piped in and checks the child actually saw (and rejected) it.
 const SECRET: &str = "TOPSECRET-USER-KEYSTROKES";
 /// Set on the re-executed child so it runs the probe instead of the parent half.
 const CHILD: &str = "JK_STDIN_PROBE_CHILD";
@@ -234,13 +213,10 @@ fn a_guest_gets_no_standard_input() {
         return;
     }
 
-    // libtest's `--exact` matches the *full* test path. While each file here was
-    // its own test binary that was the bare function name; now that they are
-    // modules of one `it` target it is module-qualified, and the old literal
-    // matched nothing — the child ran zero tests and this test failed with "the
-    // child reported nothing". Derived rather than rewritten by hand, so a
-    // rename or another move cannot silently desynchronise it: `module_path!()`
-    // is `it::sandbox_boundary`, and libtest's name drops the crate root.
+    // libtest's `--exact` matches the module-qualified path, not the bare
+    // function name. Derived via `module_path!()` (which is `it::sandbox_boundary`,
+    // dropping the crate root to match libtest) so a future module move can't
+    // silently desync this literal.
     let test_path = module_path!().split_once("::").map_or_else(
         || TEST_NAME.to_owned(),
         |(_, module)| format!("{module}::{TEST_NAME}"),

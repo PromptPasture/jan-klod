@@ -1,13 +1,12 @@
 //! `tool-git` across the Component-Model boundary.
 //!
-//! Instantiates the `tool-git` guest against a real repository in a path-jailed
-//! workspace and drives the read-only ops end to end: `status`/`log`/`diff` report
-//! the real repository state through `host-process`, a mutating subcommand is
-//! refused by the guest before any process is spawned, and with execution disabled
-//! the substrate denies everything. Offline.
+//! Drives the read-only ops end to end against a real repo in a path-jailed
+//! workspace: `status`/`log`/`diff` report real state through `host-process`,
+//! a mutating subcommand is refused before any process spawns, and with
+//! execution disabled everything is denied. Offline.
 //!
-//! Skips (passes as a no-op) when the guest is not staged in `ext/`, or when `git`
-//! is not on PATH.
+//! Skips (passes as a no-op) when the guest isn't staged in `ext/`, or `git`
+//! isn't on PATH.
 
 use std::time::Duration;
 

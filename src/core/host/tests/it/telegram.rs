@@ -1,9 +1,8 @@
-//! Phase 4 Slice 4b — a Telegram message drives a turn, offline.
+//! A Telegram message drives a turn, offline.
 //!
 //! Boots a `Runtime`, then runs one `poll_once` cycle with an **injected fetch**
-//! that returns a canned `getUpdates` (one message) and captures the outbound
-//! `sendMessage`. Proves the whole chat path — inbound message → loop (through the
-//! sandboxed guests) → reply — with no network and no Telegram, no UI client.
+//! that returns a canned `getUpdates` and captures the outbound `sendMessage` —
+//! proving inbound message -> loop -> reply with no network and no Telegram.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 

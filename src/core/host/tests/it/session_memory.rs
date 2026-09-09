@@ -1,16 +1,8 @@
-//! A session remembers what was said in it.
-//!
-//! `run_turn` assembled each request from the current user message alone. The
-//! transcript was persisted — `GET /session/:id` returned it, and it survived a
-//! restart — but it was never read back into a request, so the model saw one
-//! message per turn and a session had no memory at all. "Now add a test for that"
-//! reached a model that had never seen "that", which is most of what a coding
-//! agent is asked to do.
-//!
-//! These assert on **what the provider actually received**, captured from the
-//! wire, because that is the only place the difference shows: everything else
-//! (the store, the transcript endpoint, resume-by-id) looked correct while the
-//! model was being asked in isolation.
+//! A session remembers what was said in it — a request must actually replay
+//! prior turns to the model, not just persist them for the transcript endpoint.
+//! These assert on what the provider wire actually received, since the store and
+//! transcript endpoint can look correct while the model is still asked in
+//! isolation.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
@@ -159,8 +151,7 @@ fn resuming_a_session_after_a_restart_carries_its_history() {
         agent.run("resumed", "remember the widget refactor");
     }
 
-    // A fresh Runtime over the same SQLite file — what `jan-klod serve` does
-    // after a restart, and what "resumable by id" has to mean to be worth having.
+    // A fresh Runtime over the same SQLite file, as a restart of `jan-klod serve` would be.
     let recorded = Arc::clone(&seen);
     let factory = move || recording_http(&recorded);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime reboots");
@@ -202,8 +193,8 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
     }
 
     let messages = last_messages(&seen);
-    // 20 replayed turns × (question + answer) + the new message. The cap is what
-    // stops turn 500 from loading five hundred turns out of SQLite every time.
+    // 20 replayed turns × (question + answer) + the new message: replay is
+    // capped so a long session doesn't reload its whole history every turn.
     assert!(
         messages.len() <= 41,
         "replay is capped: {} messages",
@@ -346,13 +337,11 @@ workspace: {ws}
     config
 }
 
-/// The whole chain from the fleet to the wire is only observable here.
-///
-/// Every offline test of tool use works with a canned provider that returns
-/// `tool_calls` regardless of what it was sent — so a request that carried no
-/// tool schemas at all would still drive a green `ReAct` test, while a real model,
-/// never having been told the tools exist, would answer in prose forever. This
-/// reads the schemas back off the request body.
+/// The whole chain from the fleet to the wire, checked by reading tool schemas
+/// back off the request body. Other tool-use tests use a canned provider that
+/// returns `tool_calls` regardless of what it was sent, so they wouldn't catch a
+/// request that carried no tool schemas at all — a real model would just never
+/// call the tool.
 #[test]
 fn the_model_is_actually_told_which_tools_exist() {
     if !common::guests_staged(&[
@@ -398,8 +387,7 @@ fn the_model_is_actually_told_which_tools_exist() {
         "the find tool is advertised: {names:?}"
     );
 
-    // A name alone is not usable — the model needs the argument schema to build a
-    // call, and an empty `{}` here would look fine while making every call a guess.
+    // A name alone isn't enough — the model needs the argument schema to build a call.
     let find = tools
         .iter()
         .find(|t| t["function"]["name"] == "find")
@@ -428,13 +416,8 @@ impl jan_klod_core::conductor::EventSink for WarningSink {
     }
 }
 
-/// A truncated completion reaches the user as a warning, not as a full stop.
-///
-/// `finish_reason: "length"` was parsed by the provider guest and then thrown
-/// away when the host drained the chunk stream, so an answer the model cut off
-/// mid-sentence was indistinguishable from one it finished — the kind of wrong a
-/// user acts on. This drives the whole path with a canned reply that stops at the
-/// limit.
+/// A truncated completion (`finish_reason: "length"`) reaches the user as a
+/// warning, not silently indistinguishable from a completed answer.
 #[test]
 fn a_truncated_answer_is_flagged_to_the_client() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -446,7 +429,7 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     let _guard = common::TempDir(dir.clone());
     let config = write_config(&dir);
 
-    // A reply the model ran out of room on, exactly as an endpoint reports it.
+    // A reply the model ran out of room on, as an endpoint would report it.
     let http = || -> HttpFn {
         Box::new(move |_m, _u, _h, _b, _t| {
             let body = serde_json::json!({
@@ -482,19 +465,12 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     );
 }
 
-/// `AGENTS.md` in the workspace reaches the model, labelled as the project's.
+/// `AGENTS.md` in the workspace reaches the model, labelled as the project's
+/// (docs claim jan-klod reads it; this proves the claim, since it once didn't).
 ///
-/// `configuration.md` has claimed for months that jan-klod "reads from `AGENTS.md`
-/// and `.agents/` at the project root". `.agents/skills/` was true;
-/// `AGENTS.md` was not read by anything. It is the file where a user writes the
-/// conventions they would otherwise repeat every session — which test command to
-/// run, what not to touch — so the claim was worth making true rather than
-/// deleting.
-///
-/// Read host-side and passed to `interceptor-system` as config, not by granting
-/// interceptors `host-fs`: the guest needs one file's contents, not the ability to
-/// open files, and widening the interceptor world would hand that to every decision
-/// component.
+/// Read host-side and passed to `interceptor-system` as config, rather than
+/// granting interceptors `host-fs` just to read one file — that would widen
+/// file access to every decision component for no reason.
 #[test]
 fn project_instructions_from_agents_md_reach_the_model() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-system.wasm"]) {
@@ -564,10 +540,9 @@ extensions:
         requests.contains("cargo nextest run"),
         "the project's own instructions reach the model: {requests}"
     );
-    // Labelled, because the two have different authority: the standing prompt
-    // describes what the runtime enforces, and a checked-in file is a request from
-    // the repository. A model that cannot tell them apart would read "you may write
-    // anywhere" in AGENTS.md as a fact about the sandbox.
+    // Labelled: the standing prompt describes what the runtime enforces, while
+    // AGENTS.md is just a request from the repo — conflating them would let
+    // AGENTS.md claim authority over the sandbox it doesn't have.
     assert!(
         requests.contains("from AGENTS.md"),
         "and are marked as the project's rather than the runtime's: {requests}"

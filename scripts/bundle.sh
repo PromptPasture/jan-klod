@@ -1,8 +1,6 @@
 #!/usr/bin/env sh
-# Assemble a self-contained jan-klod bundle: the core binary + selected guests +
-# a pre-filled config + a README, tarred as jan-klod-<version>-<os>-<arch>.tar.gz.
-# Persistence, the REST surface, telegram, and delegation are host-side in the core
-# binary (Phase 3/4), so ext/ holds only provider/interceptor/tool guests.
+# Assemble a self-contained jan-klod bundle: core binary + selected guests +
+# pre-filled config + README, tarred as jan-klod-<version>-<os>-<arch>.tar.gz.
 #
 # Usage: bundle.sh <core-binary> <ext-dir> <config> <out-dir>
 set -eu
@@ -24,25 +22,20 @@ mkdir -p "$DIR/ext"
 cp "$GATEWAY_BIN" "$DIR/jan-klod-gateway"
 cp "$UI_BIN" "$DIR/jan-klod"
 cp "$CONFIG" "$DIR/config.yaml"
-# Copy staged guests, minus the test instruments. `tool-escape-probe` exists to
-# attempt a sandbox escape so the suite can watch it fail; it is inert unless
-# someone enables it, but a release that ships a component named "escape probe"
-# invites exactly one question and deserves not to.
+# Exclude tool-escape-probe: a test-only sandbox-escape instrument, inert
+# unless enabled, but a bad look to ship in a release.
 if [ -d "$EXT_DIR" ]; then
 	find "$EXT_DIR" -maxdepth 1 -name '*.wasm' \
 		! -name 'tool-escape-probe.wasm' \
 		-exec cp {} "$DIR/ext/" \;
 fi
 
-# Verify the assembled bundle before tarring it. A missing guest is otherwise a
-# *silent* degradation: the runtime skips what it cannot find, so a bundle built
-# without `make ext` (or with one guest that failed to compile) would ship, boot
-# happily, and just be less capable than its own config claims. The core binary
-# does the checking — it already owns config resolution, so the release gate uses
-# the real resolver rather than a second, drifting copy of it in shell.
+# Verify the assembled bundle before tarring: a missing guest degrades silently
+# (the runtime just skips what it can't find), so check with the real resolver
+# instead of shipping a bundle that's quietly less capable than its config claims.
 #
-# The env vars are placeholders: `verify` only resolves and starts extensions, and
-# no provider call is made, but config expansion must not fail on an unset key.
+# API key env vars are placeholders — verify never calls a provider, but config
+# expansion fails on an unset key.
 ( cd "$DIR" && OPENAI_API_KEY="${OPENAI_API_KEY:-unset}" \
 	ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-unset}" \
 	GROQ_API_KEY="${GROQ_API_KEY:-unset}" \

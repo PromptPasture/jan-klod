@@ -1,14 +1,10 @@
 //! The `providers:` fallback chain actually orders the fallback.
 //!
-//! `config.yaml` documents the list as "tried top-to-bottom", but `build_agent`
-//! assembled the chain from enabled instances in *boot* order (alphabetical by id)
-//! and never read the list — so editing it changed nothing, and the order a user
-//! configured was whatever their instance names happened to sort to.
-//!
-//! Two providers answer with distinguishable text, so the test can name which one
-//! was tried first rather than merely observing that some provider worked: with
-//! the chain listing `beta` first, `beta` answers, even though `alpha` sorts
-//! earlier and would have won under the old behaviour.
+//! `build_agent` used to ignore the configured list and assemble providers in
+//! alphabetical boot order, so editing `providers:` changed nothing. Two
+//! providers answer with distinguishable text so the test can name which one
+//! was tried first — e.g. listing `beta` first makes it answer even though
+//! `alpha` sorts earlier.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
@@ -92,8 +88,7 @@ fn the_configured_chain_decides_which_provider_is_tried_first() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // `beta` first, against alphabetical boot order — this is the assertion the
-    // old behaviour failed.
+    // `beta` first, against alphabetical order — the case the old behaviour failed.
     let beta_first = config_with_chain(
         &dir,
         "providers:\n  - provider: beta\n  - provider: alpha\n",
@@ -128,9 +123,8 @@ fn an_unknown_name_in_the_chain_does_not_break_the_agent() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // The shipped config lists `ollama` as a last resort nobody enabled. That is a
-    // warning, not a boot failure — and the providers that *are* enabled still
-    // run, in the order given.
+    // `ollama` is listed but never enabled — a warning, not a boot failure;
+    // enabled providers still run in the order given.
     let config = config_with_chain(
         &dir,
         "providers:\n  - provider: ollama\n  - provider: beta\n  - provider: alpha\n",
@@ -149,9 +143,8 @@ fn a_provider_the_chain_omits_is_still_reachable() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // `alpha` is enabled but unlisted: it must not be silently dropped from the
-    // chain — enabling something and having it never used would be the worse
-    // surprise. It lands after the listed entries, so `beta` still answers.
+    // `alpha` is enabled but unlisted — it must still be reachable (not
+    // silently dropped), just after the listed entries, so `beta` answers first.
     let config = config_with_chain(&dir, "providers:\n  - provider: beta\n");
     assert_eq!(answer(&config, &ext_dir), "from-beta");
 

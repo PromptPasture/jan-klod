@@ -1,16 +1,8 @@
-//! The way a user actually starts it.
-//!
-//! Two consecutive fixes missed this path. The first taught the gateway to
-//! resolve `config.yaml`/`ext/` against its installed data directory; the UI kept
-//! naming them explicitly, so the resolution never ran. The second fixed the UI's
-//! spawn; nothing automated would have noticed if it had not.
-//!
-//! Both were *mechanism* corrections verified against the mechanism. What was
-//! missing is the shape every other durable test here has: exercise the entry
-//! point a user touches. So this assembles a real installed layout —
-//! `<prefix>/bin/jan-klod-gateway` beside `<prefix>/share/jan-klod/` — runs it
-//! **from an unrelated working directory** exactly as `jan-klod` spawns it, and
-//! asks whether it came up.
+//! The way a user actually starts it: assembles a real installed layout
+//! (`<prefix>/bin/jan-klod-gateway` beside `<prefix>/share/jan-klod/`), runs it
+//! from an unrelated working directory exactly as `jan-klod` spawns it, and
+//! checks it comes up. Tests of the resolution mechanism in isolation missed a
+//! path-resolution bug that only showed up when actually spawned this way.
 //!
 //! The binary is the one this crate builds (`CARGO_BIN_EXE_…`), so the test moves
 //! with the code rather than against a stale artefact.
@@ -126,8 +118,8 @@ fn an_installed_gateway_serves_from_a_directory_that_is_not_a_checkout() {
     let port = free_port();
     let addr = format!("127.0.0.1:{port}");
 
-    // Exactly what `jan-klod` spawns. Naming config.yaml/ext here instead — as it
-    // used to — is what broke: from `work` those paths do not exist.
+    // Exactly what `jan-klod` spawns — naming config.yaml/ext explicitly instead
+    // breaks, since from `work` those paths don't exist.
     let child = Command::new(&gateway)
         .args(["serve", "--bind", &addr])
         .current_dir(&work)
@@ -140,15 +132,10 @@ fn an_installed_gateway_serves_from_a_directory_that_is_not_a_checkout() {
     let _gateway = Gateway(child);
 
     assert!(
-        // Generous on purpose, and it costs nothing when things work:
-        // `wait_until_listening` polls every 100ms and returns the moment the
-        // port opens, so this bounds only the *failure* case. The gateway
-        // Cranelift-compiles every staged component before it listens, which is
-        // ~24s on its own here; under the parallel runner saturating all cores
-        // it went past the 40s this used to allow and reported "an installed
-        // jan-klod could not start" — a claim about a real defect, made because
-        // the machine was busy. What the assertion is for is a gateway that
-        // never comes up at all, and for that a large deadline is right.
+        // Generous on purpose and free when things work (polling returns the
+        // moment the port opens): Cranelift-compiling every staged component
+        // takes ~24s alone and more under a saturated parallel runner, so a
+        // tight deadline here flags a busy machine, not a real defect.
         wait_until_listening(&addr, Duration::from_secs(180)),
         "the gateway never came up at {addr} — an installed jan-klod could not start \
          from {}",
@@ -194,11 +181,8 @@ fn an_installed_gateway_verifies_its_own_components_from_anywhere() {
         stdout.contains("start cleanly"),
         "every component starts: {stdout}"
     );
-    // `0 missing`, not `!contains("missing")` — the report's summary line always
-    // carries the word, so the negative form is vacuously false. That exact
-    // mistake shipped once already in `shipped_defaults`, and I wrote it again
-    // here; the difference is that this suite now runs for real, so it failed
-    // immediately instead of sitting green.
+    // `0 missing`, not `!contains("missing")` — the summary line always carries
+    // the word, so the negative form would be vacuously false.
     assert!(stdout.contains("0 missing"), "nothing is missing: {stdout}");
 }
 
@@ -212,8 +196,7 @@ fn a_gateway_with_no_data_directory_beside_it_fails_and_says_why() {
     let _guard = common::TempDir(prefix.clone());
     let bin = prefix.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    // Binary alone — no `../share/jan-klod`. This is what the installer produced
-    // before it learned to copy the components.
+    // Binary alone — no `../share/jan-klod`.
     let lone = bin.join("jan-klod-gateway");
     std::fs::copy(env!("CARGO_BIN_EXE_jan-klod-gateway"), &lone).unwrap();
     let work = elsewhere(&prefix);
@@ -237,13 +220,8 @@ fn a_gateway_with_no_data_directory_beside_it_fails_and_says_why() {
 }
 
 /// `ask` answers on stdout, from an installed layout, in a directory that is not
-/// a checkout.
-///
-/// Documented in two places before it existed — sentences I wrote to justify
-/// withholding stdin from guests, describing a subcommand that fell through to the
-/// boot plan. This drives the real binary the way the docs say to, with stdin
-/// closed so a confirmation cannot be answered: EOF must take the prompt's default,
-/// which is a denial, rather than reading as approval.
+/// a checkout. Stdin is closed so a confirmation prompt can't be answered — EOF
+/// must take the prompt's default (denial), not read as approval.
 #[test]
 fn ask_answers_on_stdout_from_an_installed_layout() {
     if !common::guests_staged(&GUESTS) {
@@ -321,13 +299,9 @@ extensions:
     );
 }
 
-/// `verify --live` catches what the offline checks cannot.
-///
-/// Everything `verify` did before was offline — components resolve, instantiate
-/// and start — and all of it passes with a wrong API key, an endpoint that is not
-/// running, a model that does not exist, and a `base-url` egress will refuse.
-/// That is the whole list of things that actually go wrong on a first run, so
-/// "verified" was a claim about the parts nobody has trouble with.
+/// `verify --live` catches what the offline checks cannot: offline verify only
+/// proves components resolve, instantiate and start, which all pass even with a
+/// wrong API key or a dead endpoint — the actual first-run failure modes.
 #[test]
 fn verify_live_reports_a_provider_that_does_not_answer() {
     if !common::guests_staged(&GUESTS) {

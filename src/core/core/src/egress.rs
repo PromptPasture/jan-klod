@@ -1,48 +1,32 @@
 //! Where a sandboxed component is allowed to send a request.
 //!
-//! `host-http` used to hand every granted guest an unrestricted client. The only
-//! destination check in the runtime lived *inside* `tool-fetch`, which refuses
-//! private and loopback addresses before calling out — and that is not a
-//! boundary. It runs in the sandbox. It protects a confused model from a URL the
-//! model itself chose; it does nothing about the component, which could simply
-//! not perform the check. "The core trusts nothing it runs" and "the guest
-//! validates its own egress" cannot both be true.
+//! Destination checking cannot live in the guest (e.g. `tool-fetch` refusing
+//! private/loopback addresses before calling out): that protects a confused
+//! model from a URL it chose itself, not the host from a component that skips
+//! the check. Left unguarded, any networked guest could reach this gateway's own
+//! REST API, the cloud metadata endpoint (`169.254.169.254`), or anything else on
+//! the machine and LAN.
 //!
-//! What that left reachable, for any component granted the network:
-//!
-//! - `127.0.0.1:8787` — this gateway's own REST surface. Unauthenticated when no
-//!   token is set, which is the default for loopback. A tool could drive the
-//!   agent that is running it.
-//! - `169.254.169.254` — the cloud metadata endpoint on EC2, GCE and Azure, which
-//!   hands out IAM credentials to anything that asks.
-//! - Everything else on the machine and the LAN: databases, admin panels, another
-//!   jan-klod, the router.
-//!
-//! So the policy moves host-side. The default is **public destinations only**;
+//! So the policy lives host-side. Default is **public destinations only**;
 //! loopback, private, link-local and unique-local addresses are refused unless
 //! the operator named that origin.
 //!
-//! ## Why naming origins, and not a flag
+//! ## Why naming origins, not a flag
 //!
-//! Self-hosting means local models. `http://127.0.0.1:11434` is exactly where
-//! Ollama lives, and refusing it would make the private-by-default runtime unable
-//! to talk to the private-by-default model. A boolean "allow local" would open
-//! every local port to every granted guest to solve that.
-//!
-//! Instead the allowance is per-origin, and the operator has already written the
-//! origins down: a provider's `base-url`, an MCP server's endpoint. Those are
-//! lifted from config into the policy, so the local Ollama a user configured is
-//! reachable and the local Postgres they did not is not.
+//! Self-hosting means local models (Ollama on `127.0.0.1:11434`), so a
+//! private-by-default runtime still needs to reach a private-by-default model. A
+//! boolean "allow local" would open every local port to every granted guest.
+//! Instead the allowance is per-origin, lifted from config the operator already
+//! wrote (a provider's `base-url`, an MCP server's endpoint) — the local Ollama a
+//! user configured is reachable, the local Postgres they didn't is not.
 //!
 //! ## What this does not do
 //!
-//! It resolves the hostname and checks every address it gets, so a public name
+//! Resolves the hostname and checks every address returned, so a public name
 //! pointing at `127.0.0.1` is caught. It cannot close the window between that
-//! check and the connection — a name that resolves differently on the second
-//! lookup (DNS rebinding) would slip through. Closing that needs the resolved
-//! address pinned into the connection itself, which `ureq` does not expose.
-//! Recorded rather than hidden: it is a narrower hole than the one it replaces,
-//! and an operator who cares can bind their local services to a unix socket.
+//! check and the connection (DNS rebinding) — `ureq` gives no way to pin the
+//! resolved address into the connection itself. A narrower hole than the one it
+//! replaces; an operator who cares can bind local services to a unix socket.
 
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};

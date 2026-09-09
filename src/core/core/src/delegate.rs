@@ -1,29 +1,22 @@
-//! `agent-*` ACP delegation — outbound (Phase 4 Slice 4c).
+//! Outbound `agent-*` ACP delegation.
 //!
 //! Delegating a subtask to another AI agent is something the loop *calls*, like a
-//! tool — so it plugs into the conductor's existing [`ToolInvoker`] seam rather
-//! than a new mechanism. The model emits a `delegate` tool call
-//! (`{ "agent", "task", "context"? }`); [`AgentDelegate`] resolves the agent to its
-//! ACP endpoint and forwards the task over an injected [`AgentTransport`],
-//! returning the remote agent's answer as the tool result. The ACP wire format
-//! lives behind the transport, so the seam is unit-tested offline.
+//! tool — so it plugs into the conductor's existing [`ToolInvoker`] seam. The
+//! model emits a `delegate` tool call (`{ "agent", "task", "context"? }`);
+//! [`AgentDelegate`] resolves the agent to its ACP endpoint and forwards the task
+//! over an injected [`AgentTransport`], returning the remote agent's answer as
+//! the tool result. The wire format lives behind the transport, so the seam is
+//! unit-tested offline.
 //!
-//! **Inbound** delegation (core *called by* another ACP orchestrator) needs no new
-//! code: it is the host-side REST surface (`jan_klod_core::serve`) — an orchestrator
-//! `POST`s a task as a turn and reads the answer. The concrete ACP↔REST framing is
-//! a thin adapter over that surface.
+//! Inbound delegation (core called *by* another ACP orchestrator) needs no new
+//! code — it's just the host-side REST surface (`jan_klod_core::serve`).
 //!
 //! # Not wired
 //!
-//! **Nothing constructs this.** `Runtime::build_agent` assembles providers, tools,
-//! registries, and interceptors; the `agent` category is ranked for boot ordering
-//! and never instantiated, and no `AgentDelegate` reaches the `CombinedFleet`. So a
-//! model emitting a `delegate` tool call today gets "no tool named `delegate`".
-//!
-//! It is kept rather than deleted because it misleads nobody: it is host-side, so
-//! no extension can import it and wait forever the way `host-event`'s removed
-//! polling half could. What it needs is a transport and one line in `build_agent`,
-//! and until it has them this notice is the honest state of it.
+//! Nothing constructs this yet: `Runtime::build_agent` never instantiates the
+//! `agent` category, so a `delegate` tool call today gets "no tool named
+//! `delegate`". Kept rather than deleted since it's host-side and harmless to
+//! leave unused; needs a transport and one line in `build_agent` to activate.
 
 use std::collections::HashMap;
 

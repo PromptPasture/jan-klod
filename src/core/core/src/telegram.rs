@@ -1,35 +1,23 @@
-//! Telegram chat integration (Phase 4 Slice 4b).
+//! Telegram chat integration — headless, UI-less access via a Telegram bot.
 //!
-//! Unlocks headless, UI-less access: a Telegram bot drives the loop. The Telegram
-//! Bot API is **outbound HTTP** only — `getUpdates` (long-poll) and `sendMessage`
-//! (POST) — so this needs no new `host-socket` capability; the existing outbound
-//! HTTP suffices. Like the REST surface it is host-side (it drives the host-side
-//! loop); HTTP is injected as a [`Fetch`] closure so the whole path is testable
-//! offline.
+//! The Bot API is outbound HTTP only (`getUpdates` long-poll, `sendMessage`
+//! POST), so no new `host-socket` capability is needed. HTTP is injected as a
+//! [`Fetch`] closure so the whole path is testable offline.
 //!
-//! One inbound message → one turn (the chat id is the session, so a chat's history
-//! is durable) → the answer sent back.
+//! One inbound message -> one turn (chat id is the session id) -> the answer
+//! sent back.
 //!
 //! ## Confirmations in a chat
 //!
-//! This surface is the headless path — a Raspberry Pi with no UI client — so the
-//! permission gate has to work here or the agent can only ever read. It did not:
-//! turns ran through `AgentSession::run`, whose headless driver answers every
-//! confirmation with the prompt's default, silently denying writes nobody was
-//! asked about.
+//! This is the headless path, so the permission gate must still work here
+//! rather than silently taking every prompt's default. [`ChatDriver`] asks the
+//! question as a message and treats the user's next message in that chat as the
+//! answer, long-polling `getUpdates` itself while the turn is blocked.
 //!
-//! A chat is the one place a confirmation needs no new protocol: the bot asks the
-//! question as a message and **the user's next message in that chat is the
-//! answer**. [`ChatDriver`] does exactly that, long-polling `getUpdates` itself
-//! while the turn is blocked — the same shape as the REST surface's driver, which
-//! serves its own socket rather than moving turns onto threads.
-//!
-//! Two details make that safe to do mid-turn. Updates from *other* chats that
-//! arrive during the wait are **deferred, not dropped** — they are queued and run
-//! after the current turn, because advancing the poll offset past a message would
-//! lose it forever. And the wait is bounded ([`MAX_ANSWER_POLLS`]); when it
-//! expires the prompt's default applies, which for the permission gate is a
-//! denial.
+//! Updates from *other* chats seen during that wait are deferred, not dropped
+//! (advancing the poll offset past a message would lose it), and run after the
+//! current turn. The wait is bounded by [`MAX_ANSWER_POLLS`]; on expiry the
+//! prompt's default applies (a denial, for the permission gate).
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;

@@ -2,19 +2,15 @@
 
 .DEFAULT_GOAL := all
 
-# Top-level orchestration. The real work lives in two sub-makefiles:
-#   src/core/Makefile       — build/test/lint the Rust host workspace (core only)
-#   src/extensions/Makefile — build the guest components (staged in ext/)
-# This file validates the root-level WIT contracts, builds both subtrees, and owns
-# the integration targets that run the host against guests staged in ext/.
+# Orchestrates two sub-makefiles: src/core/Makefile (host workspace) and
+# src/extensions/Makefile (guest components, staged in ext/). Also owns the
+# root WIT contracts and the integration targets spanning both subtrees.
 
 CORE := src/core
 EXT := src/extensions
 SUPERVISOR := src/supervisor
 
-# Repo-root artifacts the host runs against (above any single subtree). EXT_DIR
-# mirrors the staging dir the extensions sub-makefile writes to — kept in sync by
-# convention (one shared constant doesn't yet justify a common include).
+# EXT_DIR mirrors the extensions sub-makefile's staging dir.
 CONFIG := $(abspath config.yaml)
 EXT_DIR := $(abspath ext)
 
@@ -42,12 +38,10 @@ help:
 	@echo "  install-hooks  configure git to use .github/hooks/"
 	@echo "  clean       remove build artifacts"
 
-# Validate the root-level WIT contract set (canonical, language-neutral — it sits
-# above any single language's code, so it stays a root concern).
+# Root-level WIT contracts are language-neutral, so they stay a root concern.
 wit:
 	wasm-tools component wit wit/
 
-# Build the whole project: the host workspace plus the Rust guests (staged in ext/).
 all: core extensions
 
 # --- Build (delegated to the sub-makefiles) ---
@@ -57,38 +51,27 @@ core:
 extensions:
 	$(MAKE) -C $(EXT) all
 
-# `make ext` is what twelve call sites already tell developers to run — every
-# skip notice in core and the tests, bundle.sh's refusal, ci.yml's comment. None
-# of them worked: there was no such target, and because `ext/` is a *directory*,
-# make answered "Nothing to be done for `ext'" and exited 0. So the remedy a
-# failing test handed you looked like it succeeded and staged nothing. Aliased
-# rather than rewriting twelve messages, since `ext` is plainly the name people
-# reach for. .PHONY is the load-bearing half — without it the directory wins.
+# Alias: `ext` is the name every skip notice tells developers to run, but
+# `ext/` is also a directory, so plain make no-ops on it without .PHONY.
 ext: extensions
 
-# Host-side unit tests: the core workspace plus the guests' native (host-target)
-# tests (pure logic behind a wasm32 cfg-gate — e.g. the intent router).
+# Host-side unit tests: the core workspace plus the guests' native tests.
 test: test-core test-guests
 
-# The host workspace's own tests. `gate` runs the same suite over the same
-# manifest, so a caller that runs `gate` anyway wants `test-guests` alone.
 test-core:
 	$(MAKE) -C $(CORE) test
 
-# The two legs `gate` does not reach: the guests' native tests and the Go
-# supervisor. Split out because the push hook and CI both run `gate`, and running
-# the full `test` beside it built and ran the host workspace suite twice.
+# The legs `gate` doesn't cover: guest native tests + the Go supervisor.
 test-guests:
 	$(MAKE) -C $(EXT) test
 	cd $(SUPERVISOR) && go vet ./... && go test ./...
 
-# Build the tiny Go blue/green supervisor (static, dependency-free binary).
+# Tiny Go blue/green supervisor (static, dependency-free binary).
 supervisor:
 	cd $(SUPERVISOR) && go build ./...
 
-# Assemble a self-contained, ready-to-run bundle (release core + staged guests +
-# config + README) as dist/jan-klod-<version>-<os>-<arch>.tar.gz. Persistence and
-# the REST surface are in-core, so ext/ holds only provider/interceptor/tool guests.
+# Self-contained release bundle: core binary + staged guests + config + README,
+# as dist/jan-klod-<version>-<os>-<arch>.tar.gz.
 BUNDLE_OUT ?= $(abspath dist)
 bundle: extensions
 	cd $(CORE) && cargo build --release -p jan-klod-host -p jan-klod
@@ -97,76 +80,41 @@ bundle: extensions
 clippy:
 	$(MAKE) -C $(CORE) clippy
 
-# --- Supply-chain gates (Slice 1b gate; CI enforces all of these) ---
+# --- Supply-chain gates (CI enforces all of these) ---
 
-# cargo-audit / cargo-deny over the host workspace AND every guest crate. Each
-# subtree owns its own invocation; the root just fans out to both.
+# Each subtree owns its own audit/deny invocation; root fans out to both.
 audit deny:
 	$(MAKE) -C $(CORE) $@
 	$(MAKE) -C $(EXT) $@
 
-# Software bill of materials for all Rust crates in the workspace, CycloneDX JSON.
-# cargo-cyclonedx reads Cargo.lock — no build required. Install once with:
-#   cargo install cargo-cyclonedx
+# CycloneDX SBOM for all Rust crates. Install once: cargo install cargo-cyclonedx
 sbom:
 	cd src/core && cargo cyclonedx --format json --quiet
 	jq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
 	  src/core/**/*.cdx.json > sbom.cdx.json
 
-# The full gate: Rust license/advisory/source policy + RUSTSEC audit (host +
-# guests), every Go module's verified-readonly vuln scan (guests + supervisor),
-# and the SBOM.
+# License/advisory/source policy + RUSTSEC audit (host + guests), Go vuln
+# scan (guests + supervisor), and the SBOM.
 supply-chain: deny audit sbom
 	$(MAKE) -C $(EXT) go-supply-chain
 	cd $(SUPERVISOR) && GOFLAGS=-mod=readonly go mod verify && govulncheck ./...
 
 # --- Integration (host + staged extensions; spans both subtrees) ---
 
-# Build the guests, then verify them offline through the Component Model:
-#   component_harness — each guest's WIT interface + lifecycle, in isolation;
-#   agent_loop        — the thin loop booted from config (Runtime::build_agent):
-#                       a greeting short-circuits, a multi-step prompt runs the
-#                       agentic path, both through the sandboxed provider + guests.
-#   persistence       — a turn's transcript survives a full Runtime restart against
-#                       the same host-side SQLite store (Phase 3 Slice 3a gate).
-#   api_rest          — an external HTTP client POSTs a turn and gets the answer,
-#                       driving the loop over the host-side REST surface (3b gate).
-#   telegram          — a canned inbound Telegram message drives a turn and a reply
-#                       is sent (Phase 4 Slice 4b), offline.
-#   host_fs           — a guest writes+reads a workspace file through host-fs; an
-#                       escape and a no-workspace call are denied (Phase 7 Slice 7a).
-#   host_process      — a guest runs a command through host-process; a disabled
-#                       runner denies (Phase 7 Slice 7b).
-#   tool_fleet        — a ToolFleet dispatches a tool call by name to the matching
-#                       tool-* extension (Phase 8 Slice 8a).
-#   tool_wiring       — build_agent instantiates an enabled tool.* into the fleet
-#                       from config + a workspace (Phase 8 Slice 8a).
-# All of them run against a canned host-http reply (no network, no api key) and
-# skip any guest not staged, so this target stages them first.
-#
-# These were nine separate test *files*, named here with --test. They are now
-# modules of the single `it` target (src/core/host/tests/it/main.rs), so the
-# selection is a set of name filters instead — a test matching any of them runs.
-# What that costs: the build is no longer cheaper than `gate`'s, because it is
-# the same binary; only the run is shorter.
-#
-# A name filter is where this target can hollow out, so the names are checked
-# against the filesystem before they are used. nextest fails a run that matches
-# *nothing* (exit 4, where `cargo test` exits 0), but that is only a partial
-# guard: measured, one typo among the nine exits 0 having run 1 test instead of
-# 20, because the other eight still matched. So the loop below asks the source
-# whether each module exists rather than trusting the literals — the same move
-# as `every_guest_facing_backend_goes_through_the_policy`, which stopped listing
-# the files implementing a capability and started asking which ones do.
-#
-# This is the failure this list has already had once: `gate` below used to name
-# its test files, and `storage_scope` and `test_layout` were written, committed,
-# and simply not in it.
-#
-# JK_REQUIRE_GUESTS for the same reason `gate` sets it — this target stages the
-# guests itself, so a skipped test here can only mean something is wrong. It
-# went without the flag for a long time, which meant its own tests could vanish
-# and it would still print success.
+# Build guests, then verify each through the Component Model, offline (canned
+# host-http, no api key, no network):
+#   component_harness — each guest's WIT interface + lifecycle, in isolation
+#   agent_loop         — the config-driven agent loop (greeting + multi-step)
+#   persistence        — a transcript survives a Runtime restart (SQLite store)
+#   api_rest           — a turn driven over the host-side REST surface
+#   telegram           — a canned inbound message drives a turn + reply
+#   host_fs            — guest read/write through host-fs; escapes denied
+#   host_process       — guest command through host-process; denied when disabled
+#   tool_fleet         — ToolFleet dispatches a call to the matching tool-* guest
+#   tool_wiring        — build_agent wires an enabled tool.* into the fleet
+# These are modules of one test binary (src/core/host/tests/it/main.rs), run by
+# --test name filter. A typo'd filter can still match other modules and exit 0,
+# so each name is checked against the filesystem before the run.
 HARNESS_MODULES := component_harness agent_loop persistence api_rest telegram \
                    host_fs host_process tool_fleet tool_wiring
 harness: export JK_REQUIRE_GUESTS = 1
@@ -177,50 +125,26 @@ harness: extensions
 	done
 	cd $(CORE) && cargo nextest run -p jan-klod-host $(addsuffix ::,$(HARNESS_MODULES))
 
-# Exit gate: the full offline integration surface, with nothing allowed to skip.
+# Exit gate: the full offline integration suite, nothing allowed to skip.
+# JK_REQUIRE_GUESTS turns a silently-skipped test into a failure.
 #
-# This used to name the test files to run — seventeen of them, each with a note
-# saying what it covered. The list is the problem. `JK_REQUIRE_GUESTS` exists
-# because a skipped test reports as passing, and the enforcement applied only to
-# files someone remembered to add: `storage_scope` and `test_layout` were written,
-# committed, and were not in it. So the gate now runs the whole suite under the
-# flag. Everything staged, nothing skipped, no list to forget.
-#
-# nextest, for two reasons the merge of the integration tests into one binary
-# created (host/tests/it/):
-#
-#  1. One process per test. Several modules in there set process-global env vars
-#     to conflicting values — JK_ANSWER_TIMEOUT_SECS at 5 and at 120, and two
-#     distinct pairs of credential leak-canaries. Under `cargo test`'s in-binary
-#     threading those race, and the canary pair races a security assertion into
-#     passing for a reason unrelated to what it measures.
-#  2. Zero tests is a failure. `cargo test` exits 0 when nothing matches; nextest
-#     exits 4. For a gate whose whole history is "it reported green without
-#     running", that belongs in the runner rather than in a check somebody has
-#     to remember to write.
-#
-# --no-fail-fast keeps what `cargo test` gave us here. nextest's default cancels
-# the run on the first failure; with the suite in one binary, `cargo test` was
-# exhaustive within it. A gate that takes three minutes should report every
-# failure, not the first one.
-#
-# Doctests run separately because nextest does not run them. None exist today
-# (~0.9s), but `missing_docs` is on, so the first one would otherwise go unrun.
-#
-# Everything is offline: canned host-http, no api key, no network.
+# nextest over `cargo test`: (1) one process per test — some modules set
+# conflicting process-global env vars, which race under in-binary threading;
+# (2) nextest exits nonzero on zero tests matched, `cargo test` exits 0.
+# --no-fail-fast reports every failure in the run, not just the first.
+# Doctests run separately since nextest doesn't run them.
 gate: export JK_REQUIRE_GUESTS = 1
 gate: extensions
 	cd $(CORE) && cargo nextest run --workspace --no-fail-fast
 	cd $(CORE) && cargo test --doc --workspace
 
-# Boot the real core against config.yaml: resolve enabled extensions against
-# ext/, compile present components, run their lifecycle, print the boot plan.
+# Boot the real core against config.yaml: resolve extensions against ext/,
+# compile present components, run their lifecycle, print the boot plan.
 run:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host -- $(CONFIG) $(EXT_DIR)
 
-# Serve the loop over the host-side REST surface (default 127.0.0.1:8787). Uses
-# live host-http (real provider calls), so the enabled provider needs its api-key
-# env. Override BIND=host:port.
+# Serve the loop over the host-side REST surface. Uses live host-http, so the
+# enabled provider needs its api-key env. Override BIND=host:port.
 BIND ?= 127.0.0.1:8787
 serve:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host -- serve $(CONFIG) $(EXT_DIR) $(BIND)
@@ -232,14 +156,12 @@ SESSION ?= cli
 chat:
 	cd $(CORE) && cargo run --quiet -p jan-klod -- $(ADDR) $(SESSION)
 
-# Run the Telegram bot (headless chat access, no UI client). Needs
-# TELEGRAM_BOT_TOKEN in the environment and network access.
+# Telegram bot (headless). Needs TELEGRAM_BOT_TOKEN + network.
 chat-telegram:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host -- telegram $(CONFIG) $(EXT_DIR)
 
-# Drive a provider's full llm-provider.complete path end-to-end against a live
-# OpenAI-compatible endpoint. Requires the provider's api-key env (e.g.
-# OPENAI_API_KEY) and network access — makes a real, token-costing call.
+# Drives a provider's llm-provider.complete path against a live endpoint.
+# Needs the provider's api-key env (e.g. OPENAI_API_KEY) — real, billed call.
 probe:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host --example provider_probe -- $(CONFIG) $(EXT_DIR)
 
@@ -247,7 +169,7 @@ probe:
 config:
 	cd $(CORE) && cargo run --quiet -p jan-klod-config --example dump -- $(CONFIG)
 
-# One-time developer setup: install cargo supply-chain plugins and wire git hooks.
+# One-time developer setup: cargo supply-chain plugins + git hooks.
 setup:
 	cargo install cargo-audit cargo-deny cargo-cyclonedx cargo-nextest
 	$(MAKE) install-hooks

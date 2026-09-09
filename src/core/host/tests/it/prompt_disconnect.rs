@@ -1,12 +1,9 @@
 //! A client that vanishes mid-prompt does not pin the agent.
 //!
-//! **Its own binary on purpose.** The confirmation wait is configured by
-//! `JK_ANSWER_TIMEOUT_SECS`, an environment variable, and environment variables
-//! are process-wide while tests run in parallel. This test needs a *long* timeout
-//! — the whole point is that the heartbeat ends the wait rather than the deadline
-//! — and `api_prompt.rs` needs a short one so a lost answer fails fast. Sharing a
-//! process, whichever test ran last would decide, and this one would pass on the
-//! deadline while appearing to prove the heartbeat.
+//! `JK_ANSWER_TIMEOUT_SECS` is a process-wide env var. This test needs it long
+//! (so the heartbeat, not the deadline, ends the wait) while `api_prompt.rs`
+//! needs it short — under nextest's one-process-per-test isolation both can
+//! set it independently.
 
 use jan_klod_core::route::HttpFn;
 
@@ -64,19 +61,13 @@ extensions:
 
 /// A client that vanishes mid-prompt does not pin the agent.
 ///
-/// `ask` already handles the case where writing the prompt frame *fails* — the
-/// client was gone before it was asked. But a client that disappears a moment
-/// later leaves a write that succeeds: the bytes go into the socket buffer and
-/// the FIN has not been processed. Nothing then noticed for the full confirmation
-/// timeout, three minutes by default, during which the agent serves nobody and
-/// answers `409` to everyone else. This module's own comment claimed the timeout
-/// prevented exactly that.
-///
-/// So the wait ticks, writing an SSE comment each time; a dead peer surfaces as a
-/// write error within one interval. This test drops the connection the moment the
-/// prompt arrives and asserts the turn finishes in seconds rather than at the far
-/// end of the wait — with the timeout deliberately left long, so that a
-/// regression shows up as a slow test rather than an unnoticed one.
+/// A dropped connection can leave a *successful* write (bytes buffered, FIN
+/// not yet seen), so nothing notices until the confirmation timeout — during
+/// which the agent serves nobody. The wait now ticks an SSE comment each
+/// interval, surfacing a dead peer as a write error well before the deadline.
+/// This test drops the connection right after the prompt arrives and asserts
+/// the turn finishes in seconds, with the timeout left deliberately long so a
+/// regression shows up as a slow test, not a silent pass.
 #[test]
 fn a_disconnected_client_does_not_hold_the_turn_open() {
     if !common::guests_staged(&GUESTS) {

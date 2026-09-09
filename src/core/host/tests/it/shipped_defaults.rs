@@ -1,24 +1,13 @@
 //! The **shipped defaults** gate: does the product a user installs actually work?
-//!
-//! Every other test in this tree builds its own `config.yaml` and, where it needs a
-//! driver or a tool, supplies a test double. That is the right shape for testing a
-//! mechanism — and it is exactly why three separate defects survived a green suite:
-//!
-//! - `extensions.tool` shipped empty, so a fresh install had no tools at all;
-//! - `Runtime::start_all` could not instantiate any tool/registry/interceptor, so
-//!   the default boot path failed on the shipped config;
-//! - the REST surface answered every confirmation with `HeadlessDriver`, so the
-//!   permission gate silently denied instead of asking.
-//!
-//! Each was invisible to a suite that never loaded the real `config.yaml` and never
-//! ran the production driver. This file closes that gap: it loads the repo's own
-//! `config.yaml`, boots the real `Runtime`, serves the real REST surface, and drives
-//! it with the **real UI client library** (`jan_klod_client`, the `jan-klod` UI
-//! crate renamed to dodge the probe example's generated bindings) — the same
-//! `stream_turn` a user's TUI
-//! calls. Only two things are faked, and only because a test may not do them for
-//! real: the provider's HTTP (no network, no tokens) and the workspace root (a temp
-//! directory, so the test cannot write into the repo it is running from).
+//! Every other test here builds its own `config.yaml` and test doubles, the right
+//! shape for testing a mechanism — but that shape let several boot-path defects
+//! (empty `extensions.tool`, `start_all` failing on the real config, the REST
+//! surface silently denying instead of asking) reach a green suite. This file
+//! loads the repo's own `config.yaml`, boots the real `Runtime`, serves the real
+//! REST surface, and drives it with the real UI client library
+//! (`jan_klod_client`, the `stream_turn` a user's TUI calls). Only the
+//! provider's HTTP and the workspace root (a temp dir, so a test can't write
+//! into the repo it runs from) are faked.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
@@ -40,8 +29,8 @@ use crate::common;
 /// The env vars the shipped config expands. Set to placeholders: the provider's
 /// HTTP is faked, so no key is ever used — but boot must not fail on a missing one.
 fn stub_env() {
-    // Every test in this binary sets the same values before any `Runtime::boot`,
-    // so the writes are idempotent even though the tests run concurrently.
+    // Idempotent writes, since every test in this binary sets the same values
+    // concurrently before its own `Runtime::boot`.
     #[allow(unsafe_code)]
     for key in [
         "OPENAI_API_KEY",
@@ -53,11 +42,9 @@ fn stub_env() {
     }
 }
 
-/// The shipped `config.yaml`, with a workspace root pointed at `dir`.
-///
-/// This is the *only* edit to the real file: the workspace key is commented out
-/// upstream (it defaults to `$PWD`), and a test that wrote into `$PWD` would be
-/// editing the repository it runs from.
+/// The shipped `config.yaml`, with a workspace root pointed at `dir` — the only
+/// edit to the real file, so the test doesn't write into `$PWD` (the upstream
+/// default) and edit the repo it runs from.
 fn shipped_config_with_workspace(dir: &std::path::Path) -> String {
     let shipped = std::fs::read_to_string(common::repo_root().join("config.yaml"))
         .expect("the shipped config.yaml is readable");
@@ -80,11 +67,9 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("the shipped config boots");
 
-    // Nothing the shipped config enables may be missing from a built `ext/`: a
-    // default that names a component nobody builds is a broken install.
-    //
-    // Asserted on the resolved state, not on the rendered report — the report's
-    // summary line says "0 missing", so string-matching it was always true.
+    // Nothing the shipped config enables may be missing from a built `ext/`.
+    // Asserted on resolved state, not the rendered report — the summary line
+    // always says "0 missing", so string-matching it would be vacuously true.
     let absent: Vec<&str> = runtime
         .extensions()
         .iter()

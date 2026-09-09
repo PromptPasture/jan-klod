@@ -19,16 +19,14 @@
 //! (`cargo test`); the Component-Model glue below only compiles for `wasm32`,
 //! where the real provider-backed classifier is supplied.
 
-// The router's only non-test consumer is the wasm32 `component` below. On other
-// targets (a host `cargo check`/`cargo test`) that consumer is cfg'd out, so its
-// items read as dead there — a target-conditional false positive. Real dead-code
-// detection still applies for the wasm32 artifact, where the component uses them.
+// The router's only non-test consumer is the wasm32 `component` below, so a
+// host `cargo test` sees its items as dead — a target-conditional false
+// positive, not a real one.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod router;
 
-// Everything below is the Component-Model implementation: it depends on the
-// generated WIT bindings, whose ABI shims only compile for `wasm32`. Gating it
-// keeps a native `cargo test` (host target) building just `router` + its tests.
+// Depends on generated WIT bindings, whose ABI shims only compile for `wasm32`;
+// gating it keeps a native `cargo test` building just `router` + its tests.
 #[cfg(target_arch = "wasm32")]
 mod component {
     use crate::router::{self, Intent};

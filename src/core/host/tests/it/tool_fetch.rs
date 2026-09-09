@@ -139,10 +139,8 @@ fn a_tool_without_granted_egress_cannot_reach_the_network_at_all() {
     let path = common::repo_root().join("ext").join("tool-fetch.wasm");
     let component = Component::from_file(&engine, &path).expect("component compiles");
 
-    // No client passed: the same shape `build_agent` uses for an instance whose
-    // config does not say `network: true`. `tool-world` still *imports*
-    // `host-http` — the point is that importing an interface is not the same as
-    // being granted the capability behind it.
+    // No client passed — same shape `build_agent` uses when config lacks
+    // `network: true`. Importing `host-http` isn't the same as being granted it.
     let mut tool = ToolExtension::instantiate(
         &engine,
         "tool.fetch",

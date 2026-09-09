@@ -1,10 +1,9 @@
-//! Phase 8 Slice 8a — the loop's tool dispatch (`ToolFleet` as a `ToolInvoker`).
+//! The loop's tool dispatch (`ToolFleet` as a `ToolInvoker`).
 //!
 //! Builds a fleet from the `tool-fs` guest and dispatches a `ToolCall` by the
-//! tool's advertised name (from `meta()`) through the `conductor::ToolInvoker` seam:
-//! the matching extension runs and returns its result; an unknown tool is skipped.
-//!
-//! Skips (passes as a no-op) when the guest is not staged in `ext/`.
+//! tool's advertised name through the `conductor::ToolInvoker` seam: the
+//! matching extension runs; an unknown tool returns `None`. Skips when the
+//! guest isn't staged in `ext/`.
 
 use jan_klod_core::conductor::ToolInvoker;
 use jan_klod_core::host_fs::Workspace;
@@ -193,17 +192,11 @@ fn shell_tool_runs_a_command_through_the_fleet() {
 
 /// A tree-wide grep does not sweep credentials into the transcript.
 ///
-/// `fs:grep` is on the permission gate's read-only allowlist, so it runs without
-/// asking — which is right, because a gate that interrupts every search is a gate
-/// people switch off. But everything a tool returns becomes a message in the
-/// transcript, and the transcript is sent to the model provider on the next turn.
-/// A grep for `password` across a repository that contains a `.env` would
-/// therefore hand the workspace's secrets to a third party because somebody
-/// searched for a word, with nobody asked and nothing logged.
-///
-/// The gate cannot help here: it sees the *pattern*, not the files a pattern will
-/// match. So the shared walk in `guest-fs` skips credential files, and this test
-/// stands one in a workspace and greps for a string that only it contains.
+/// `fs:grep` is allowlisted to run without asking (a gate on every search gets
+/// switched off) — but tool results become transcript sent to the provider, so
+/// a grep for `password` in a repo with a `.env` would leak it, unasked and
+/// unlogged. The gate sees only the *pattern*, not which files it will match,
+/// so `guest-fs`'s walk skips credential files itself.
 #[test]
 fn a_tree_grep_skips_credential_files() {
     let engine = Engine::default();

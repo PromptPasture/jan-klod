@@ -11,26 +11,20 @@
 //! the user; on the answer it [`Decision::Proceed`]s or [`Decision::Block`]s.
 //! Known read-only, in-scope calls proceed untouched.
 //!
-//! The allowlist replaced a denylist of high-risk verbs. A denylist can only name
-//! the verbs someone thought of, and `tool-edit` arrived with the ops `view`,
-//! `replace` and `insert` — none of them `write`, and `edit` is not `shell` — so
-//! the tool that modifies files in place was ungated from the commit that added
-//! it, with nothing failing to say so.
+//! The allowlist replaced a denylist of high-risk verbs, which can only name the
+//! verbs someone thought of — `tool-edit`'s `view`/`replace`/`insert` ops matched
+//! none of them and went ungated.
 //!
 //! ## Standing decisions ("always" / "never")
 //!
-//! A gate that asks the same question forty times is a gate people switch off,
-//! and a switched-off gate protects nothing — so the confirmation can be answered
-//! `always` or `never`, recorded per *kind of action* (`fs:write`, `shell:cargo`)
-//! and consulted before asking again. Three properties keep that from eroding the
-//! boundary:
+//! The confirmation can be answered `always`/`never`, recorded per *kind of
+//! action* (`fs:write`, `shell:cargo`) and consulted before asking again —
+//! otherwise a gate that asks the same question forty times gets switched off.
+//! Three properties keep that from eroding the boundary:
 //!
-//! - **Run-scoped, never persisted.** Decisions live in `host-storage`, which is
-//!   memory owned by this instance unless the operator grants `persist: true`.
-//!   Restart the agent and it asks again — a permission boundary should not
-//!   quietly become permanently open because of a click last week. This used to
-//!   be true only because the host had no other option; it is now the default
-//!   rather than the mechanism, and `storage_scope.rs` fails if it flips.
+//! - **Run-scoped, never persisted.** Decisions live in `host-storage`, owned by
+//!   this instance unless the operator grants `persist: true`. Restart and it
+//!   asks again; `storage_scope.rs` fails if that flips.
 //! - **A scope escape is never remembered** ([`rules::Concern::is_rememberable`]).
 //!   "Always allow writes" covers writing files, not writing `/etc/passwd`.
 //! - **Unreadable state means ask.** A storage error or an unrecognised stored
@@ -144,11 +138,8 @@ mod component {
     /// when there is a scope to file them against.
     fn prompt(tool: &str, arguments: &str, reason: &str, scope: Option<&str>) -> UserPrompt {
         let mut options = vec!["yes".to_string(), "no".to_string()];
-        // Lead with what the call *does*. "Allow tool `edit`? Reason: `edit` is
-        // not a known read-only call" asks someone to approve a file
-        // modification without naming the file or the change, and consent given
-        // without the material facts is not consent — the only reason to stop
-        // and ask is that a person can weigh this particular action.
+        // Lead with what the call *does*, not just why it's unclassified — the
+        // user needs to see the file/change to actually weigh the approval.
         let what = crate::rules::summarise(tool, arguments);
         let question = match scope {
             Some(key) => {
@@ -259,11 +250,8 @@ mod component {
                         log(LogLevel::Info, &format!("tool `{}` approved", call.name));
                         Ok(Decision::Proceed)
                     } else {
-                        // A refusal the model ignores becomes another prompt in
-                        // front of the user. Past a few, treat the asking itself
-                        // as the answer: nobody should be worn down into clicking
-                        // yes, and a model on its fourth attempt is either broken
-                        // or pushing.
+                        // Past a few refusals, treat the asking itself as the
+                        // answer rather than keep re-prompting the user.
                         let standing = match &scope {
                             Some(key) => {
                                 let count = count_refusal(key);

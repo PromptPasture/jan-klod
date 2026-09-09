@@ -1,13 +1,9 @@
 //! Component test harness — load a staged guest, wire host capabilities, and
-//! verify its WIT interface end-to-end through the Component Model.
-//!
-//! This is the generalisation of the `provider_probe` example: where the probe
-//! drives one provider against a *live* endpoint, the harness drives both
-//! first-party guests **offline and deterministically**. It instantiates each
-//! category world (`provider-world`, …), backs the imports with a
-//! reusable [`TestHost`] (config section, captured logs, a **canned** `host-http`
-//! so the provider needs no network), then runs lifecycle plus the guest's own
-//! interface.
+//! verify its WIT interface end-to-end through the Component Model, offline and
+//! deterministically (unlike `provider_probe`, which drives a live endpoint). It
+//! instantiates each category world, backs imports with a reusable [`TestHost`]
+//! (config section, captured logs, a canned `host-http`), then runs lifecycle
+//! plus the guest's own interface.
 //!
 //! Each test skips with a note when its component is not staged in `ext/`, so a
 //! bare `cargo test` (no guests built) stays green. Build the guests first
@@ -310,14 +306,9 @@ fn provider_openai_maps_auth_error() -> Result<()> {
     Ok(())
 }
 
-/// A reply carrying **both** a preamble and tool calls must yield both.
-///
-/// The parser treated them as alternatives (`if tool_calls … else if content …`),
-/// so a model that narrated before acting — which modern models routinely do —
-/// had its text dropped: it never reached the stream, so a UI showed nothing
-/// while tools ran, and it never reached the assistant message, so the next turn
-/// could not see what the model said it was doing. Only a reply with both fields
-/// shows the difference, which is why no existing test caught it.
+/// A reply carrying **both** a preamble and tool calls must yield both — a
+/// parser that treats them as `if tool_calls ... else if content ...` silently
+/// drops the preamble text that a model narrating before acting routinely sends.
 #[test]
 fn provider_openai_keeps_text_that_accompanies_tool_calls() -> Result<()> {
     use provider_bind::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext;

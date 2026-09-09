@@ -1,14 +1,9 @@
-//! Slice 1a gate (historical, reproducible): load the TinyGo-built `spike`
-//! component, call its exported `complete` across the Component Model boundary,
-//! print the echo. The gate verdict is recorded in
-//! `docs/decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md`; this
-//! example keeps it runnable by hand, with a prompt of your choosing.
+//! Load the TinyGo-built `spike` component, call its exported `complete` across
+//! the Component Model boundary, print the echo. Kept runnable by hand with a
+//! prompt of your choosing; the automated check is `tests/it/polyglot.rs`, run
+//! by `make gate`.
 //!
-//! The *automated* check is `tests/it/polyglot.rs`, which is what `make gate` runs.
-//! This header used to claim the gate ran this example. It did not.
-//!
-//! Synchronous Wasmtime on purpose — see the async-model decision in that
-//! decision folder.
+//! Synchronous Wasmtime on purpose (see `docs/decisions/2026-06-29-extension-technologies/`).
 
 // This example is dominated by `bindgen!`-generated code; exempt it from the
 // doc/style lints the workspace applies to real source.

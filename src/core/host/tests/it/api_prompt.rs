@@ -1,16 +1,15 @@
 //! A mid-turn confirmation, answered over HTTP.
 //!
-//! The permission gate can stop a turn to ask the user something. Over the REST
-//! surface that means the turn blocks *inside* the SSE response and the answer has
-//! to arrive as a separate request while that response is still open — the case a
-//! single-threaded server cannot serve by accident. This drives the whole path:
+//! The permission gate can park a turn mid-request to ask the user something.
+//! Over REST that means the turn blocks *inside* an open SSE response while the
+//! answer arrives on a separate connection:
 //!
 //!   client A: POST /session/:id/message (SSE)  → receives `event: prompt`
 //!   client B: POST /session/:id/answer         → the waiting turn takes it
 //!   client A: the stream continues to `event: done`
 //!
-//! The `AgentSession` is `!Send`, so it stays on the main thread and the clients
-//! run on spawned threads (as in `api_rest.rs`).
+//! `AgentSession` is `!Send`, so it stays on the main thread while clients run
+//! on spawned threads (as in `api_rest.rs`).
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
@@ -28,8 +27,8 @@ use tiny_http::Server;
 
 use crate::common;
 
-/// A lost answer must fail fast rather than stall for the three-minute default
-/// and then pass on the prompt's own denial. See `auth.rs` for the run this cost.
+/// A lost answer must fail fast, not stall for the 3-minute default and then
+/// silently pass on the prompt's own denial.
 fn short_answer_timeout() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "5");
 }
@@ -136,9 +135,8 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
     let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
     let port = server.server_addr().to_ip().expect("ip addr").port();
 
-    // Client A: start the turn and read frames as they arrive. When the `prompt`
-    // frame lands, client B answers on a second connection — while this stream is
-    // still open and the turn is blocked.
+    // Client A: start the turn, read frames as they arrive. When `prompt` lands,
+    // client B answers on a second connection while this stream stays open.
     let turn = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;

@@ -1,32 +1,29 @@
 //! `tool-escape-probe` — a guest that misbehaves on purpose.
 //!
 //! Every other guest here is cooperative: it asks for what it needs through a
-//! typed import and stays inside it. That makes for a poor test of a sandbox,
-//! because a boundary is only demonstrated by something pushing against it. The
-//! runtime's own SSRF guard lived inside `tool-fetch` for weeks precisely because
-//! nobody had written the component that skips the check.
+//! typed import and stays inside it. That's a poor test of a sandbox — a
+//! boundary is only demonstrated by something pushing against it.
 //!
-//! So this one skips every check. It ignores `host-http` and opens a TCP socket
-//! directly; it reads the process's standard input; it opens a path with plain
-//! `std::fs` instead of the path-jailed `host-fs`. It does all of this with
-//! ordinary Rust `std`, which is the point — an attacker does not need bespoke
-//! bindings, only the ambient authority the host forgot to withhold.
+//! So this one skips every check: it opens a TCP socket directly instead of
+//! going through `host-http`, reads the process's stdin, and opens paths with
+//! plain `std::fs` instead of the jailed `host-fs`. All with ordinary Rust
+//! `std` — an attacker needs no bespoke bindings, only ambient authority the
+//! host forgot to withhold.
 //!
-//! Each attempt reports what happened, and `sandbox_boundary.rs` asserts that the
-//! answer is always a refusal. Three properties this pins down that were true only
-//! by a dependency's defaults:
+//! Each attempt reports what happened, and `sandbox_boundary.rs` asserts the
+//! answer is always a refusal. Three properties this pins down hold only by a
+//! dependency's *default*, not by anything this runtime configures:
 //!
-//! - **`wasi:sockets` is wired into every guest's linker** by
-//!   `wasmtime_wasi::p2::add_to_linker_sync`. Connections are refused because
-//!   `SocketAddrCheck::default()` denies every address — a default, in a crate we
-//!   upgrade. If it ever flips, `host-http`'s egress policy becomes decoration:
-//!   a guest would simply open its own socket.
-//! - **`wasi:filesystem` is wired too**, and is empty only because no preopens are
+//! - **`wasi:sockets` is wired into every guest's linker**
+//!   (`wasmtime_wasi::p2::add_to_linker_sync`); connections are refused because
+//!   `SocketAddrCheck::default()` denies every address. If that default ever
+//!   flips, `host-http`'s egress policy becomes decoration.
+//! - **`wasi:filesystem` is wired too**, empty only because no preopens are
 //!   configured.
-//! - **stdin was inherited**, so a guest could read the terminal the gateway runs
-//!   in — including a permission answer typed at the prompt.
+//! - **stdin was inherited**, so a guest could read the terminal the gateway
+//!   runs in — including a permission answer typed at the prompt.
 //!
-//! Not shipped in `config.yaml`: it is a test instrument, staged like any other
+//! Not shipped in `config.yaml`: it's a test instrument, staged like any other
 //! guest and enabled only by the tests that drive it.
 
 #[cfg(target_arch = "wasm32")]
@@ -103,13 +100,9 @@ mod component {
 
     /// Try to read the host's environment, where the credentials are.
     ///
-    /// The sibling of the subprocess leak fixed on 2026-08-15: a command run
-    /// through `host-process` inherited `OPENAI_API_KEY` and `JAN_KLOD_TOKEN`
-    /// because nothing cleared the environment. A guest reading them *directly*
-    /// would be the shorter path, and it is closed only because
-    /// `WasiCtxBuilder::inherit_env` is not called — a default in a crate we
-    /// upgrade, exactly like the socket check. If it ever flips, every component
-    /// reads the operator's provider key with one line of `std`.
+    /// Closed only because `WasiCtxBuilder::inherit_env` is not called — a
+    /// crate default, exactly like the socket check. If it ever flips, every
+    /// component reads the operator's provider key with one line of `std`.
     fn try_env() -> String {
         let named: Vec<String> = [
             "OPENAI_API_KEY",

@@ -1,6 +1,4 @@
 //! Telegram update parsing and offset advance.
-//!
-//! Orphaned in `src/core/tests/` and never compiled; see `store.rs`.
 
 use jan_klod_core::telegram::{next_offset, parse_updates, Update};
 

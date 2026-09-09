@@ -1,15 +1,13 @@
 //! Shared pure-Rust helpers for the `host-fs`-routed guests (`tool-fs`,
 //! `tool-find`, `tool-edit`).
 //!
-//! This is a **library, not a component**: it holds no WIT bindings and imports
-//! no capability. Guests stay separate sandboxed components; they merely compile
-//! the same tested logic in rather than each keeping a copy — `truncate` had been
-//! duplicated byte-for-byte in two guests, and the moment `tool-fs` learned to
-//! grep a directory it would have needed `tool-find`'s walk as a third copy.
+//! A library, not a component: no WIT bindings, no capability import. Guests
+//! stay separate sandboxed components but share this tested logic instead of
+//! each keeping its own copy.
 //!
-//! What lives here is everything that is *policy about cost and shape* rather
-//! than about a particular tool: how much output a single call may return, how a
-//! glob matches, and how far a walk may go before it stops and says so.
+//! What lives here is policy about cost and shape rather than about a
+//! particular tool: how much output a call may return, how a glob matches, and
+//! how far a walk may go before it stops and says so.
 
 /// Result byte cap — one tool call must not consume the whole context budget.
 pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
@@ -145,37 +143,29 @@ fn should_descend(name: &str, pattern: &str) -> bool {
 
 /// Whether this file should be withheld from a walk's results.
 ///
-/// Credential files are withheld — unless the pattern *names* one, the same rule
-/// [`should_descend`] applies to pruned directories: asking for something by name
-/// opts back into it. A pattern of `**/*` or `src/**/*.rs` does not name `.env`,
-/// so a broad glob and every tree-wide grep still skip it. `**/.env` does.
+/// Credential files are withheld unless the pattern names one explicitly — the
+/// same opt-back-in rule as [`should_descend`] for pruned directories. `**/*`
+/// or `src/**/*.rs` does not name `.env`, so a broad glob still skips it;
+/// `**/.env` does not.
 ///
-/// The distinction matters because hiding a file unconditionally would teach the
-/// model that it does not exist, and an agent that has been told there is no
-/// `.env` will confidently tell the user the same. Listing a *name* discloses
-/// nothing; the contents are what needed protecting, and reading them is gated.
+/// Hiding it unconditionally would teach the model the file does not exist, and
+/// it would tell the user the same. Listing the name discloses nothing; the
+/// contents are what need protecting, and reading them is still gated.
 fn hidden_credential(name: &str, pattern: &str) -> bool {
     is_credential_file(name) && !pattern.split('/').any(|segment| segment == name)
 }
 
 /// Whether a file's name marks it as holding credentials.
 ///
-/// Reads and greps are on the permission gate's read-only allowlist, so they run
-/// **without asking** — which is right for source code and wrong for `.env`. A
-/// grep for `password` across a repository would otherwise return the contents of
-/// the credential file that happens to be in it, and everything a tool returns
-/// becomes a message in the transcript, which is sent to the model provider on
-/// the next turn. The workspace's secrets would leave the machine because
-/// somebody searched for a word.
+/// Reads and greps run without asking (they're on the permission gate's
+/// read-only allowlist) — right for source, wrong for `.env`: a grep for
+/// `password` would return its contents, which becomes a transcript message
+/// sent to the model provider next turn. The shared walk skips these so `find`
+/// and `grep` are both covered — the gate only sees the pattern, not the files
+/// it will match. An explicit read by path still works and is still gated.
 ///
-/// So the shared walk skips these, which covers `find` and `grep` together — the
-/// gate cannot help there, because it sees the *pattern*, not the files a pattern
-/// will match. An explicit read by path still works and is still gated, so
-/// nothing becomes impossible; it just stops being silent.
-///
-/// Matched on the file name only. This is a heuristic and named as one: it will
-/// miss `config/production.yaml` holding a database URL. It covers the
-/// conventional names, which is where the accident lives.
+/// Matched on file name only: a heuristic covering the conventional names, not
+/// e.g. `config/production.yaml` holding a database URL.
 #[must_use]
 pub fn is_credential_file(name: &str) -> bool {
     /// Exact names.

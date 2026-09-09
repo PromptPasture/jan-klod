@@ -1,15 +1,13 @@
-//! Host-side `host-process` backend (Phase 7 Slice 7b) — **bounded** command
-//! execution.
+//! Host-side `host-process` backend — bounded command execution.
 //!
-//! This is code execution, so the mediation is the point: **default-deny**
-//! (disabled unless a workspace is configured), the working directory is **jailed
-//! to the workspace** (reusing [`Workspace::resolve`]), and each run has a
-//! **timeout** and an **output cap**. v1 runs to completion by polling `try_wait`
-//! and killing on timeout.
+//! This is code execution, so mediation is the point: default-deny (disabled
+//! unless a workspace is configured), cwd jailed to the workspace (reusing
+//! [`Workspace::resolve`]), and each run bounded by a timeout and output cap.
+//! Runs to completion by polling `try_wait`, killing on timeout.
 //!
-//! v1 caveats: output is read after the child exits, so a command that fills the
-//! OS pipe buffer (very large output) before exiting could block — bounded by the
-//! timeout. Long-lived / streaming children are a later refinement.
+//! Caveat: output is read after the child exits, so a command that fills the OS
+//! pipe buffer before exiting could block — bounded by the timeout. Streaming
+//! children are unsupported.
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -19,25 +17,20 @@ use crate::host_fs::Workspace;
 
 /// The only environment variables a child process inherits by default.
 ///
-/// A subprocess used to receive the gateway's entire environment. That
-/// environment holds `OPENAI_API_KEY` — `config.yaml` expands `${OPENAI_API_KEY}`,
-/// so it is necessarily there — and `JAN_KLOD_TOKEN`, the bearer token for the
-/// REST surface. One `env` through `tool-shell` put both in tool output, which
-/// goes into the transcript, which goes to the model provider on the next turn.
-/// No exotic step: the obvious command.
+/// The environment is cleared and rebuilt from this allowlist instead of
+/// inherited wholesale: the host's env holds secrets (`OPENAI_API_KEY`,
+/// `JAN_KLOD_TOKEN`), and a plain `env` through `tool-shell` would put them in
+/// tool output, then the transcript, then the next request to the model. Each
+/// entry below is a name a coding agent's commands actually need:
 ///
-/// So the environment is cleared and rebuilt from this list. Each entry is here
-/// because a command a coding agent exists to run needs it, and none of them is a
-/// credential:
+/// - `PATH` — command resolution.
+/// - `HOME` — git/cargo config.
+/// - `CARGO_HOME`, `RUSTUP_HOME` — toolchain installed elsewhere.
+/// - `TMPDIR` — tools assume one exists.
+/// - `LANG`, `LC_ALL`, `LC_CTYPE` — text encoding, so output isn't mojibake.
 ///
-/// - `PATH` — without it `Command::new("cargo")` cannot resolve at all.
-/// - `HOME` — git reads `~/.gitconfig`, cargo reads `~/.cargo`.
-/// - `CARGO_HOME`, `RUSTUP_HOME` — for a toolchain installed somewhere else.
-/// - `TMPDIR` — a per-user temp directory on macOS; tools assume one exists.
-/// - `LANG`, `LC_ALL`, `LC_CTYPE` — text handling, so output is not mojibake.
-///
-/// `TERM` is **not** here on purpose: most tools drop colour without it, and ANSI
-/// escapes in tool output are context the model pays for and cannot use.
+/// `TERM` is deliberately excluded: ANSI colour escapes in tool output are
+/// context the model pays for and cannot use.
 pub const BASE_ENV: [&str; 8] = [
     "PATH",
     "HOME",

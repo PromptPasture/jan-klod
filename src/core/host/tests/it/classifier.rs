@@ -1,15 +1,12 @@
 //! Interceptors reach a real model.
 //!
-//! `interceptor-world` imports `llm-provider`, and `interceptor-intent-router`
-//! uses it to decide simple-vs-agentic when its heuristics cannot. But
-//! `build_agent` passed a closure returning the constant `"agentic"`, so the
-//! model tier was inert in every shipped configuration: the classification the
-//! docs describe never ran, and every non-obvious prompt took the expensive path.
+//! `interceptor-intent-router` uses the model tier to decide simple-vs-agentic
+//! when heuristics can't. `build_agent` used to pass a closure hardcoded to
+//! `"agentic"`, so the classifier never actually ran in any shipped config.
 //!
-//! These drive `build_agent` (not a hand-built interceptor) against a canned
-//! provider and assert the classifier was actually consulted and its verdict
-//! acted on — plus that a provider failure degrades to the conservative label
-//! rather than failing the turn.
+//! These drive `build_agent` against a canned provider and assert the
+//! classifier is consulted, its verdict acted on, and a provider failure
+//! degrades to the conservative label rather than failing the turn.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 

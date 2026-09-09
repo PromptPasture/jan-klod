@@ -1,10 +1,8 @@
-//! Phase 8 Slice 8a — `build_agent` instantiates enabled `tool.*` into the fleet.
+//! `build_agent` instantiates enabled `tool.*` extensions into the fleet.
 //!
-//! Boots a `Runtime` from a config that enables `tool.fs` and a workspace,
-//! and asserts the built `AgentSession` carries that tool — proving the config →
-//! capability → fleet wiring (the loop can now reach real tools). Offline.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Boots a `Runtime` from a config enabling `tool.fs`, and asserts the built
+//! `AgentSession` carries that tool — config -> capability -> fleet wiring.
+//! Offline; skips when the guests aren't staged in `ext/`.
 
 use jan_klod_core::Runtime;
 
@@ -66,19 +64,11 @@ workspace: {ws}
 
 /// The write tool is confirmed before it writes.
 ///
-/// This is the headline property, and it was false. The gate was a denylist of
-/// high-risk verbs; `tool-edit` arrived with the ops `view`, `replace` and
-/// `insert`, none of which is `write`, and `edit` contains no listed verb — so
-/// the tool whose whole purpose is modifying files in place ran unasked from the
-/// commit that added it. No test failed, because a denylist that misses a tool
-/// looks exactly like one with nothing to catch.
-///
-/// So this asserts on the bytes on disk, and runs the same turn twice: refused,
-/// the file is unchanged; approved, it changes. The second half is what makes the
-/// first half mean anything — `tool-edit` rejects an edit whose anchor no longer
-/// resolves, so a test with a made-up anchor would show "file unchanged" whether
-/// the gate existed or not. The anchor here is the real one, read out of the
-/// `view` result the model was given.
+/// A denylist of dangerous verbs previously gated writes; `tool-edit`'s ops
+/// (`view`/`replace`/`insert`) matched none of them, so edits ran unasked.
+/// This asserts the on-disk bytes across two turns — refused (unchanged) and
+/// approved (changed) — using the real anchor from a `view` result, so a
+/// stale or made-up anchor can't fake the "unchanged" outcome.
 #[test]
 fn an_edit_is_confirmed_before_it_touches_the_file() {
     if !common::guests_staged(&[
@@ -98,11 +88,9 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
         refused.contents, original,
         "a refused edit leaves the file untouched"
     );
-    // The question a person is actually shown, printed so that changing it is
-    // reviewed as a change to a consent dialog rather than buried in a matcher.
+    // Print the actual prompt shown, so changes to it are reviewed like UI copy.
     eprintln!("PROMPT: {:?}", refused.asked);
-    // Naming the file is the point: approving "tool `edit`" tells the user
-    // nothing about which file or what change.
+    // Naming the file matters: "approve tool `edit`" alone tells the user nothing.
     assert!(
         refused
             .asked
@@ -200,9 +188,8 @@ extensions:
                          "arguments":"{\"op\":\"view\",\"path\":\"main.rs\"}"}}]},
                         "finish_reason":"tool_calls"}]}),
                 1 => {
-                    // The `view` result came back in this request. Pull the real
-                    // anchor out of it: a made-up one would be rejected by the
-                    // tool itself and the test would prove nothing.
+                    // Pull the real anchor out of the `view` result — a made-up
+                    // one would be rejected by the tool, proving nothing.
                     let anchor = first_anchor(body.unwrap_or_default())
                         .expect("the view result carries an `anchor|lineno|text` line");
                     let args = format!(
