@@ -25,10 +25,13 @@
 //! and those need their own kinds and a wider decode result than [`decode`]'s
 //! `Event`.
 
+use std::sync::Mutex;
+
 use serde_json::{json, Value};
 
-use crate::conductor::Event;
+use crate::conductor::{Event, EventSink, Flow};
 use crate::intercept::{ToolCall, ToolOutcome};
+use crate::store::{Store, StoreError};
 
 /// The envelope format this build writes, and the highest it can read.
 ///
@@ -127,6 +130,79 @@ pub fn decode(kind: &str, payload: &str) -> Result<Event, DecodeError> {
                 .ok_or_else(|| DecodeError::Malformed("`done` has no bool `agentic`".to_owned()))?,
         }),
         other => Err(DecodeError::UnknownKind(other.to_owned())),
+    }
+}
+
+/// An [`EventSink`] that appends every event to a session's log, then forwards
+/// it to the sink that was already there.
+///
+/// A fan-out rather than a replacement: the SSE stream and the TUI transcript
+/// still get every event, and the log is a third reader rather than a new owner
+/// of the stream.
+///
+/// Two rules it follows, both taken from how the transcript append already
+/// behaves in `run_and_persist`:
+///
+/// * **A store failure never affects the turn.** [`Self::emit`] returns whatever
+///   the inner sink returned, always. Cancelling a turn because its *log* could
+///   not be written would let a full disk stop a conversation.
+/// * **The lock is taken per append and released before forwarding.** The core
+///   shares one `Mutex<Store>` with every interceptor's `host-storage`, so
+///   holding it across the inner sink's work — which can run arbitrary guest
+///   code — would deadlock the first guest that remembered anything.
+pub struct PersistingSink<'a> {
+    inner: &'a mut dyn EventSink,
+    store: &'a Mutex<Store>,
+    session: String,
+    /// Whether a failure has already been reported. One warning per turn, not
+    /// one per event: whatever breaks the store usually breaks it for every
+    /// event, and a text-delta storm would bury the notice in copies of itself.
+    warned: bool,
+}
+
+impl<'a> PersistingSink<'a> {
+    /// Wrap `inner`, logging each event against `session`.
+    pub fn new(inner: &'a mut dyn EventSink, store: &'a Mutex<Store>, session: &str) -> Self {
+        Self {
+            inner,
+            store,
+            session: session.to_string(),
+            warned: false,
+        }
+    }
+
+    /// Append one event, reporting the first failure and swallowing the rest.
+    fn append(&mut self, event: &Event) {
+        let (kind, payload) = encode(event);
+        // Scoped so the guard is dropped before `emit` forwards.
+        let outcome = match self.store.lock() {
+            Ok(store) => store
+                .append_event(&self.session, kind, &payload)
+                .map(|_| ()),
+            Err(_) => Err(StoreError::Backend {
+                detail: "the store lock is poisoned".to_owned(),
+            }),
+        };
+        if let Err(err) = outcome {
+            if !self.warned {
+                self.warned = true;
+                eprintln!(
+                    "WARN [core] logging events for session {} failed: {err}. The turn \
+                     continues; further failures this turn are not repeated.",
+                    self.session
+                );
+            }
+        }
+    }
+}
+
+impl EventSink for PersistingSink<'_> {
+    fn emit(&mut self, event: &Event) -> Flow {
+        // Logged before forwarding, so an event still reaches the record when
+        // the inner sink answers `Stop` — a client disconnecting does not make
+        // what already happened un-happen.
+        self.append(event);
+        self.inner.emit(event)
     }
 }
 
@@ -279,5 +355,144 @@ mod tests {
             decode("text-delta", r#"{"data":{"text":"x"}}"#),
             Err(DecodeError::Malformed(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod sink_tests {
+    use super::*;
+
+    /// Records what it was given, and can be told to cancel.
+    struct Recorder {
+        seen: Vec<Event>,
+        answer: Flow,
+    }
+
+    impl Recorder {
+        const fn new(answer: Flow) -> Self {
+            Self {
+                seen: Vec::new(),
+                answer,
+            }
+        }
+    }
+
+    impl EventSink for Recorder {
+        fn emit(&mut self, event: &Event) -> Flow {
+            self.seen.push(event.clone());
+            self.answer
+        }
+    }
+
+    fn sample() -> Vec<Event> {
+        vec![
+            Event::TextDelta("a".to_owned()),
+            Event::Warning("b".to_owned()),
+            Event::Done {
+                text: "c".to_owned(),
+                agentic: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn every_event_reaches_both_the_log_and_the_inner_sink() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+        let mut inner = Recorder::new(Flow::Continue);
+        {
+            let mut sink = PersistingSink::new(&mut inner, &store, "s1");
+            for event in sample() {
+                assert_eq!(sink.emit(&event), Flow::Continue);
+            }
+        }
+
+        assert_eq!(inner.seen, sample(), "the inner sink still sees everything");
+
+        let logged = store.lock().unwrap().session_events("s1").unwrap();
+        assert_eq!(logged.len(), 3);
+        assert_eq!(
+            logged.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "in the order they were emitted"
+        );
+        let decoded: Vec<Event> = logged
+            .iter()
+            .map(|row| decode(&row.kind, &row.payload).unwrap())
+            .collect();
+        assert_eq!(
+            decoded,
+            sample(),
+            "and they decode back to what was emitted"
+        );
+    }
+
+    /// The inner sink owns cancellation. A `Stop` from it — a disconnected SSE
+    /// client — must still reach the conductor through the wrapper.
+    #[test]
+    fn the_inner_sinks_stop_still_propagates() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+        let mut inner = Recorder::new(Flow::Stop);
+        let mut sink = PersistingSink::new(&mut inner, &store, "s1");
+        assert_eq!(sink.emit(&Event::TextDelta("x".to_owned())), Flow::Stop);
+    }
+
+    /// And the event is logged even then: the client going away does not make
+    /// what already happened un-happen.
+    #[test]
+    fn an_event_is_logged_even_when_the_inner_sink_cancels() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+        let mut inner = Recorder::new(Flow::Stop);
+        {
+            let mut sink = PersistingSink::new(&mut inner, &store, "s1");
+            sink.emit(&Event::TextDelta("x".to_owned()));
+        }
+        assert_eq!(store.lock().unwrap().session_events("s1").unwrap().len(), 1);
+    }
+
+    /// A store that cannot be reached must not cancel the turn. A poisoned lock
+    /// is the reachable version of "the store is broken" — a real SQL failure
+    /// needs the disk to fail, which a unit test cannot arrange — and it
+    /// exercises the same swallow-and-continue path.
+    #[test]
+    fn a_broken_store_does_not_cancel_the_turn() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let _guard = store.lock().unwrap();
+                panic!("poisoning the lock on purpose");
+            });
+            assert!(handle.join().is_err(), "the thread panicked as intended");
+        });
+        assert!(store.lock().is_err(), "the lock is poisoned");
+
+        let mut inner = Recorder::new(Flow::Continue);
+        let mut sink = PersistingSink::new(&mut inner, &store, "s1");
+        for event in sample() {
+            assert_eq!(
+                sink.emit(&event),
+                Flow::Continue,
+                "a turn is not cancelled because its log could not be written"
+            );
+        }
+        assert_eq!(inner.seen.len(), 3, "and the inner sink is unaffected");
+    }
+
+    /// Two sessions logged through two wrappers keep separate sequences, which
+    /// is what makes a session's log readable as a sequence.
+    #[test]
+    fn sessions_do_not_share_a_sequence() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+        let mut inner = Recorder::new(Flow::Continue);
+        {
+            let mut first = PersistingSink::new(&mut inner, &store, "a");
+            first.emit(&Event::TextDelta("1".to_owned()));
+        }
+        {
+            let mut second = PersistingSink::new(&mut inner, &store, "b");
+            second.emit(&Event::TextDelta("2".to_owned()));
+        }
+        let guard = store.lock().unwrap();
+        assert_eq!(guard.session_events("a").unwrap()[0].seq, 1);
+        assert_eq!(guard.session_events("b").unwrap()[0].seq, 1);
     }
 }
