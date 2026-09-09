@@ -57,8 +57,15 @@ fn install_into(prefix: &Path) -> PathBuf {
         .flatten()
     {
         let path = entry.path();
-        if path.extension().is_some_and(|e| e == "wasm") {
-            std::fs::copy(&path, ext_dst.join(entry.file_name())).expect("a guest is copied");
+        // Components *and* their manifests. The runtime refuses a component
+        // that ships without one, so a fixture carrying only `.wasm` files
+        // would test an installation that cannot boot — which is exactly what
+        // a release bundle would have been.
+        let name = entry.file_name();
+        let carried = path.extension().is_some_and(|e| e == "wasm")
+            || name.to_string_lossy().ends_with(".manifest.toml");
+        if carried {
+            std::fs::copy(&path, ext_dst.join(name)).expect("a guest is copied");
         }
     }
     installed

@@ -182,9 +182,12 @@ fn every_config_key_is_one_the_runtime_reads() {
     //   classifier — Runtime::open_classifier
     //   storage    — Runtime::open_store
     //   limits     — Runtime::limits
+    //   allow-unmanifested — Runtime::boot, the named widening for a component
+    //                        that ships no manifest
     //   providers  — order_chain, applied in build_agent
     //   routing    — interceptor-task-router, via host-config
-    const CONSUMED_TOP_LEVEL: [&str; 8] = [
+    const CONSUMED_TOP_LEVEL: [&str; 9] = [
+        "allow-unmanifested",
         "extensions",
         "workspace",
         "execution",

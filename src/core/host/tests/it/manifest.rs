@@ -315,3 +315,117 @@ fn declaring_a_capability_the_config_does_not_grant_still_boots() {
         "the turn ran one way or the other; what matters is that boot did not refuse"
     );
 }
+
+/// A component with no manifest beside it is refused by default.
+///
+/// The declaration is the thing that can be inspected *before* running
+/// anything, so a component that ships without one defeats the point of
+/// having them at all. Refusing by default is what makes the grant below a
+/// grant rather than a formality.
+#[test]
+fn a_component_with_no_manifest_is_refused() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-manifest-none-{}", std::process::id()));
+    let ext = dir.join("ext");
+    std::fs::create_dir_all(&ext).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    // The component alone — no manifest, as a hand-copied `.wasm` or a bundle
+    // built before manifests existed would leave it.
+    std::fs::copy(
+        common::repo_root().join("ext").join("tool-fs.wasm"),
+        ext.join("tool-fs.wasm"),
+    )
+    .unwrap();
+
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        "\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
+    )
+    .unwrap();
+
+    let Err(error) = Runtime::boot(&config, &ext) else {
+        panic!("a component with no manifest must be refused, and this booted");
+    };
+    let message = format!("{error}");
+    assert!(
+        message.contains("tool-fs.wasm") && message.contains("no manifest"),
+        "the refusal names the component and the reason: {message}"
+    );
+    assert!(
+        message.contains("allow-unmanifested"),
+        "and points at the way out, since a refusal a reader cannot act on is a dead end: {message}"
+    );
+}
+
+/// `allow-unmanifested: true` is the named widening — top-level, because every
+/// key under `extensions:` must be a category of named instances.
+#[test]
+fn allow_unmanifested_loads_a_component_that_declares_nothing() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-manifest-allow-{}", std::process::id()));
+    let ext = dir.join("ext");
+    std::fs::create_dir_all(&ext).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    std::fs::copy(
+        common::repo_root().join("ext").join("tool-fs.wasm"),
+        ext.join("tool-fs.wasm"),
+    )
+    .unwrap();
+
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        "\nallow-unmanifested: true\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
+    )
+    .unwrap();
+
+    let runtime = Runtime::boot(&config, &ext).expect("the grant permits an unmanifested load");
+    let loaded = runtime
+        .extensions()
+        .iter()
+        .find(|e| e.instance.component_file() == "tool-fs.wasm")
+        .expect("the tool loaded");
+    assert_eq!(
+        loaded.capabilities.as_deref(),
+        Some(["host-fs".to_owned()].as_slice()),
+        "the imports are still read — the grant waives the declaration, not the introspection"
+    );
+}
+
+/// The grant is off unless written. A config that does not mention it must
+/// behave as the refusing one above, so the earlier test cannot be passing for
+/// some other reason.
+#[test]
+fn the_grant_is_off_by_default() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-manifest-default-{}", std::process::id()));
+    let ext = dir.join("ext");
+    std::fs::create_dir_all(&ext).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    std::fs::copy(
+        common::repo_root().join("ext").join("tool-fs.wasm"),
+        ext.join("tool-fs.wasm"),
+    )
+    .unwrap();
+
+    let config = dir.join("config.yaml");
+    // Explicitly false, and separately absent — a grant that only works when
+    // spelled `true` should read the same either way.
+    for body in [
+        "\nallow-unmanifested: false\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
+        "\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
+    ] {
+        std::fs::write(&config, body).unwrap();
+        assert!(
+            Runtime::boot(&config, &ext).is_err(),
+            "without the grant, an unmanifested component is refused: {body:?}"
+        );
+    }
+}

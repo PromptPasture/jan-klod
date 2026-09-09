@@ -24,9 +24,13 @@ cp "$UI_BIN" "$DIR/jan-klod"
 cp "$CONFIG" "$DIR/config.yaml"
 # Exclude tool-escape-probe: a test-only sandbox-escape instrument, inert
 # unless enabled, but a bad look to ship in a release.
+# Each component's manifest travels with it: the runtime refuses a component
+# that ships without one, so a bundle carrying only `.wasm` files would install
+# and then refuse to boot.
 if [ -d "$EXT_DIR" ]; then
-	find "$EXT_DIR" -maxdepth 1 -name '*.wasm' \
-		! -name 'tool-escape-probe.wasm' \
+	find "$EXT_DIR" -maxdepth 1 \
+		\( -name '*.wasm' -o -name '*.manifest.toml' \) \
+		! -name 'tool-escape-probe.*' \
 		-exec cp {} "$DIR/ext/" \;
 fi
 

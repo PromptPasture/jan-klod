@@ -200,6 +200,14 @@ impl Runtime {
         });
 
         let ext_dir = ext_dir.as_ref();
+        // Top-level, not `extensions.allow-unmanifested` as first sketched:
+        // every key under `extensions:` must be a mapping of named instances
+        // (`ConfigError::CategoryNotMap`), so a boolean there is a hard config
+        // error rather than a flag. Verified before moving it.
+        let allow_unmanifested = agent
+            .get("allow-unmanifested")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         let mut extensions = Vec::with_capacity(order.len());
         for instance in order {
             let path = ext_dir.join(instance.component_file());
@@ -221,15 +229,29 @@ impl Runtime {
                         id: instance.id.clone(),
                         source,
                     })?;
-                if let Some(declared) = &declared {
-                    let undeclared = declared.undeclared(&capabilities);
-                    if !undeclared.is_empty() {
-                        return Err(CoreError::Undeclared {
+                match &declared {
+                    Some(declared) => {
+                        let undeclared = declared.undeclared(&capabilities);
+                        if !undeclared.is_empty() {
+                            return Err(CoreError::Undeclared {
+                                id: instance.id.clone(),
+                                component: instance.component_file(),
+                                interfaces: undeclared.join(", "),
+                            });
+                        }
+                    }
+                    // No manifest at all: refused, because an undeclared
+                    // component is one nobody can inspect before running it,
+                    // and the whole point of a declaration is to be checkable
+                    // ahead of time. `allow-unmanifested` is the named
+                    // widening for local development.
+                    None if !allow_unmanifested => {
+                        return Err(CoreError::NoManifest {
                             id: instance.id.clone(),
                             component: instance.component_file(),
-                            interfaces: undeclared.join(", "),
                         });
                     }
+                    None => {}
                 }
                 (LoadState::Compiled(component), Some(capabilities))
             } else {
@@ -1467,6 +1489,18 @@ pub enum CoreError {
         component: String,
         /// The undeclared interfaces, comma-separated.
         interfaces: String,
+    },
+    /// A component ships no manifest, and none is permitted.
+    #[error(
+        "{id}: `{component}` has no manifest beside it. Run `make ext` to generate \
+         one, or set top-level `allow-unmanifested: true` to load components that \
+         declare nothing"
+    )]
+    NoManifest {
+        /// Instance id that was refused.
+        id: String,
+        /// The component file whose manifest is absent.
+        component: String,
     },
     /// Instantiating a compiled component failed.
     #[error("instantiating {id}")]

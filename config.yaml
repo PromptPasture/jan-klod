@@ -292,6 +292,15 @@ extensions:
 storage:
   path: ./jan-klod.db
 
+# Load a component that ships no `<name>.manifest.toml` beside it. Off, because
+# a component nobody can inspect before running it is the thing a manifest
+# exists to prevent — and `make ext` generates one per guest, so the only way
+# to hit this is a component from somewhere else.
+#
+# Top-level rather than under `extensions:`, where every key must be a category
+# of named instances.
+# allow-unmanifested: true
+
 execution:
   enabled: false
   timeout-secs: 30            # a command that outruns this is killed
