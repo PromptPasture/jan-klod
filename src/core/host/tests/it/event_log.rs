@@ -142,3 +142,43 @@ fn each_session_logs_only_its_own_turn() {
         "the second turn's message did not leak into the first session's log"
     );
 }
+
+/// The read surfaces are projections now, so `transcript` and `list_sessions`
+/// must answer from the log rather than from the `entries` transcript. Asserted
+/// through the public API after a real turn, since that is what `GET
+/// /session/:id` and `GET /sessions` serve.
+#[test]
+fn the_read_surfaces_answer_from_the_log() {
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-eventlog-read-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    let config = config_with_store(&dir);
+
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
+    let factory = || common::canned_http("pong");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    agent.run("read-me", "what is this?");
+
+    let transcript = agent.transcript("read-me");
+    assert_eq!(
+        transcript
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>(),
+        vec!["what is this?", "pong"],
+        "the projected conversation, oldest first"
+    );
+
+    assert_eq!(
+        agent.list_sessions(),
+        vec!["read-me".to_string()],
+        "a session with a log is listed — the `entries` namespace is not what makes it visible"
+    );
+    assert!(
+        agent.transcript("never-happened").is_empty(),
+        "and a session that never ran reads as empty rather than failing"
+    );
+}

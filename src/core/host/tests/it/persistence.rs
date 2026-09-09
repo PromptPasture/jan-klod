@@ -56,7 +56,14 @@ extensions:
             matches!(out, RunResult::Answered { .. }),
             "the turn completes"
         );
-        assert_eq!(agent.transcript("chat-1").len(), 1, "one turn recorded");
+        // A turn is now two messages — the question and the answer — because
+        // the transcript is projected from the event log rather than read from
+        // one `{user, answer}` row per turn.
+        assert_eq!(
+            agent.transcript("chat-1").len(),
+            2,
+            "the turn's question and answer are recorded"
+        );
     } // runtime + agent (and the SQLite connection) dropped here
 
     assert!(db_path.exists(), "the store persisted a database file");
@@ -68,11 +75,14 @@ extensions:
         let agent = runtime.build_agent(&factory).expect("agent reboots");
 
         let transcript = agent.transcript("chat-1");
-        assert_eq!(transcript.len(), 1, "the turn survived the restart");
-        assert!(
-            transcript[0].value.contains("first answer"),
-            "the persisted answer is intact: {}",
-            transcript[0].value
+        assert_eq!(transcript.len(), 2, "the turn survived the restart");
+        assert_eq!(
+            transcript
+                .iter()
+                .map(|m| m.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hello there", "first answer"],
+            "the question and the answer are both intact, in order"
         );
     }
 

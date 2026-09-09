@@ -1059,35 +1059,51 @@ impl AgentSession {
     /// The durable transcript for `session`, oldest turn first. Reads from the
     /// host-side store, so it survives a `Runtime` restart against the same DB.
     #[must_use]
-    pub fn transcript(&self, session: &str) -> Vec<store::Entry> {
-        let mut entries = self
+    pub fn transcript(&self, session: &str) -> Vec<intercept::Message> {
+        // Returns messages, not `store::Entry`. An entry is a key/value row with
+        // a namespace, a key and two timestamps; a projected turn has none of
+        // those, so handing back entries would mean inventing fields that mean
+        // nothing and inviting a caller to read them.
+        //
+        // Unbounded, unlike `replay`: this is "show me the session", and a
+        // reader asking for a transcript wants the whole thing.
+        let events = self
             .store
             .lock()
-            .map(|store| store.recent(session, u32::MAX).unwrap_or_default())
+            .map(|store| store.session_events(session).unwrap_or_default())
             .unwrap_or_default();
-        entries.reverse(); // `recent` is newest-first; a transcript reads oldest-first
-        entries
+        projection::transcript(&events)
     }
 
     /// All known session ids, newest first.
     #[must_use]
     pub fn list_sessions(&self) -> Vec<String> {
+        // Sessions come from the log, not from `entries`. A namespace existed in
+        // `entries` because a transcript had been written there, so reading it
+        // for this would report nothing the moment the transcript write goes
+        // away — silently, since an empty list is a legitimate answer.
+        //
+        // Consequence worth knowing: a database written before the log existed
+        // has entries and no events, so its sessions are not listed here and
+        // read as empty through `transcript`. That is what makes the migration
+        // a requirement rather than an option.
         self.store
             .lock()
             .map(|store| {
                 // Not `unwrap_or_default()`: swallowing this is what let a broken
                 // query report "no sessions" for as long as nobody looked.
-                store.list_namespaces().unwrap_or_else(|err| {
+                store.event_sessions().unwrap_or_else(|err| {
                     eprintln!("WARN [core] listing sessions failed: {err}");
                     Vec::new()
                 })
             })
             .unwrap_or_default()
             .into_iter()
-            // Interceptors share this database, under `ext/<component>/…`. Their
-            // namespaces are not conversations, and listing them here would put
-            // `ext/interceptor.permission/grants` in a session picker.
-            .filter(|namespace| !namespace.contains('/'))
+            // Interceptors share this database, under `ext/<component>/…`. Those
+            // are `entries` namespaces and cannot appear as event sessions, but
+            // the filter stays: it costs nothing and the day something logs
+            // events under a slashed id, a session picker should not show it.
+            .filter(|session| !session.contains('/'))
             .collect()
     }
 }

@@ -4,7 +4,7 @@
 //!   GET  /health                   liveness probe
 //!   GET  /sessions                 list session ids + previews
 //!   POST /sessions                 create session → `{"id":"<id>"}`
-//!   GET  /session/:id              transcript + metadata
+//!   GET  /session/:id              message list, projected from the event log
 //!   POST /session/:id/message      send a message; SSE or JSON response
 //!   POST /session/:id/answer       answer a pending confirmation
 //!
@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::conductor::{Event, EventSink, Flow, RunResult};
-use crate::intercept::{Driver, UserPrompt};
+use crate::intercept::{Driver, Message, Role, UserPrompt};
 use crate::AgentSession;
 
 /// How long a turn waits for a confirmation before giving up and taking the
@@ -183,20 +183,15 @@ fn handle_list_sessions(agent: &AgentSession) -> Reply {
         .list_sessions()
         .into_iter()
         .map(|id| {
+            // The first thing the user said, which is what makes a session
+            // recognisable in a picker. Taken from the projection rather than
+            // from row 1 of the log, because row 1 need not be a user message
+            // in a session whose first turn was steered or interrupted.
             let preview = agent
                 .transcript(&id)
                 .into_iter()
-                .next()
-                .and_then(|e| {
-                    let v: serde_json::Value = serde_json::from_str(&e.value).ok()?;
-                    Some(
-                        v.get("user")?
-                            .as_str()?
-                            .chars()
-                            .take(80)
-                            .collect::<String>(),
-                    )
-                })
+                .find(|message| message.role == Role::User)
+                .map(|message| message.content.chars().take(80).collect::<String>())
                 .unwrap_or_default();
             serde_json::json!({ "id": id, "preview": preview })
         })
@@ -218,15 +213,35 @@ fn handle_create_session() -> Reply {
 
 /// `GET /session/:id` — return transcript + metadata.
 fn handle_get_session(agent: &AgentSession, id: &str) -> Reply {
-    let entries: Vec<serde_json::Value> = agent
-        .transcript(id)
-        .into_iter()
-        .filter_map(|e| serde_json::from_str(&e.value).ok())
-        .collect();
+    let messages: Vec<serde_json::Value> = agent.transcript(id).iter().map(as_json).collect();
     Reply {
         status: 200,
-        body: serde_json::json!({ "id": id, "turns": entries }).to_string(),
+        body: serde_json::json!({ "id": id, "messages": messages }).to_string(),
     }
+}
+
+/// One message as this surface serves it.
+///
+/// `messages`, not the `turns` this used to return. A turn was a
+/// `{user, answer}` pair because that is what the transcript row held; the
+/// session is now projected from its event log, which has tool results in it
+/// too, and pairing those back into turns would have to either drop them or
+/// invent a shape for them. A message list is what the projection produces and
+/// what a client can render without guessing.
+fn as_json(message: &Message) -> serde_json::Value {
+    let role = match message.role {
+        Role::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::Tool => "tool",
+    };
+    let mut object = serde_json::json!({ "role": role, "content": message.content });
+    // Present only where it means something — on a tool result, tying it to the
+    // call it answers.
+    if let Some(id) = &message.tool_call_id {
+        object["tool-call-id"] = serde_json::json!(id);
+    }
+    object
 }
 
 /// `POST /session/:id/message` — blocking (non-SSE) turn.
@@ -597,7 +612,45 @@ pub fn serve_authed(
 
 #[cfg(test)]
 mod tests {
-    use super::health;
+    use super::{as_json, health, Message, Role};
+
+    #[test]
+    fn a_message_serves_its_role_by_name() {
+        for (role, expected) in [
+            (Role::System, "system"),
+            (Role::User, "user"),
+            (Role::Assistant, "assistant"),
+            (Role::Tool, "tool"),
+        ] {
+            let json = as_json(&Message {
+                role,
+                content: "x".to_owned(),
+                tool_call_id: None,
+            });
+            assert_eq!(json["role"], serde_json::json!(expected));
+        }
+    }
+
+    /// The id is present only on a message that has one. A `"tool-call-id":
+    /// null` on every user message would invite a client to read it as a field
+    /// that is sometimes empty rather than sometimes absent.
+    #[test]
+    fn only_a_tool_result_carries_a_call_id() {
+        let plain = as_json(&Message {
+            role: Role::User,
+            content: "hello".to_owned(),
+            tool_call_id: None,
+        });
+        assert!(plain.get("tool-call-id").is_none(), "{plain}");
+
+        let result = as_json(&Message {
+            role: Role::Tool,
+            content: "# Jan-Klod".to_owned(),
+            tool_call_id: Some("call-1".to_owned()),
+        });
+        assert_eq!(result["tool-call-id"], serde_json::json!("call-1"));
+        assert_eq!(result["content"], serde_json::json!("# Jan-Klod"));
+    }
 
     #[test]
     fn health_reports_ok_with_a_version() {
