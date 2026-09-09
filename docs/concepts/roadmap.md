@@ -5,7 +5,7 @@ description: Phased plan from the Rust + Wasmtime + Component Model foundation d
 tags: [roadmap, planning, rust, wasmtime, component-model, phases, vision]
 created: 2026-06-29
 updated: 2026-09-09
-status: v0.1.0 complete (Phases 1–12 done); Harness as a Platform under way — Phase 14 done, 13 and 15 in progress, 16–18 not-started
+status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Harness as a Platform under way — Phase 14 done, 13, 15 and 16 in progress, 17–18 not-started
 ---
 
 # Roadmap
@@ -465,10 +465,31 @@ public extension ecosystem.
     kept, which is the fact
     [#46](https://github.com/PromptPasture/jan-klod/issues/46)'s deferred
     per-turn sandbox warning was waiting for.
-- **16b — WIT versioning policy.** Semver rules for the `jan-klod:interfaces`
-  package written down in [Contracts](contracts.md); `api-version` carried in
-  `extension-lifecycle`; the host refuses an incompatible major with a clear
-  error and adapts N-1 minors.
+- **16b — WIT versioning policy.** Split three ways
+  ([#51](https://github.com/PromptPasture/jan-klod/issues/51)), because the
+  refusal already landed with 16a and the adaptation has nothing to adapt yet.
+  - **16b-1 — the rules, written down. Done 2026-09-10** ([#88](https://github.com/PromptPasture/jan-klod/issues/88)).
+    [Contracts → Versioning](contracts.md#versioning) states what counts as a
+    major, minor or patch change to `wit/`, where the version lives, and why
+    **pre-1.0 is stricter** rather than laxer: a `0.x` version carries no
+    compatibility promise, so a differing minor is refused. Two changes that
+    look additive and are not — a field added to a record, a case added to an
+    `enum` — are called out, because the component model types both
+    structurally.
+  - **16b-2 — the version-bump check** ([#89](https://github.com/PromptPasture/jan-klod/issues/89)):
+    warn when a `wit/*.wit` changes without the package version moving. A
+    warning until the freeze, a failure after it.
+  - **16b-3 — N-1 minor compatibility** ([#90](https://github.com/PromptPasture/jan-klod/issues/90)):
+    deferred until the freeze. Below `1.0` a differing minor is refused by
+    policy, so there is no version pair an adapter would help.
+
+  **The freeze point.** Until the **first public release**, `wit/` may still
+  change freely and the rules above describe intent. From that release they
+  bind: a change to `wit/` requires the matching version bump, 16b-2's warning
+  becomes a failure, and an incompatible `api-version` is a compatibility
+  break rather than a development inconvenience. Nothing is tagged or released
+  yet, so that point is still ahead — which is exactly why the rules had to be
+  written before it rather than after.
 - **16c — `ext install` with provenance.** a gateway `ext install <url|path>` subcommand:
   download to staging, checksum, signature (lean: minisign — small, no PKI),
   WIT validation, then move into `ext/`. A tampered artefact never reaches `ext/`.
