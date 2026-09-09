@@ -318,16 +318,77 @@ What a manifest does not do is decide what a component may *do*. That is still
 A manifest makes a component's needs **inspectable before it runs** and its
 description **checkable against itself**; it is not a permission.
 
-## Versioning (planned, Phase 16)
+## Versioning
 
-The `jan-klod:interfaces` package is free to change until the first public
-release. From then on it follows semver: a **major** bump for any change an
-existing component cannot survive (removed or re-typed function, changed record
-field), a **minor** bump for additive change. Every extension carries the
-`api-version` it was built against (in `extension-lifecycle` and in its
-manifest); the host refuses an incompatible major with a clear error and keeps
-**N-1 minor** compatibility through adapters rather than breaking releases — the
-Zed model. Plan in the [roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).
+`jan-klod:interfaces` is versioned as an ABI, because that is what it is: an
+extension is compiled against it and the host cannot recompile one.
+
+**Where the version lives.** `package jan-klod:interfaces@X.Y.Z` at the top of
+every `wit/*.wit`, and every file must agree. Two versions leave no answer to
+which one the host speaks, so both readers of that number refuse rather than
+pick one: `scripts/manifests.sh` fails if `wit/` declares more than one, and
+`host/tests/it/manifest.rs::the_hosts_api_version_matches_the_wit_package`
+asserts the host's `core::manifest::API_VERSION` equals it. The host holds a
+constant rather than reading `wit/` because an installed gateway has no `wit/`
+beside it; that test is the price of the constant.
+
+**What counts as which bump.**
+
+| Change to `wit/` | Bump |
+|---|---|
+| A function or interface removed or renamed | **major** |
+| A function's parameters or result re-typed | **major** |
+| A record field removed, renamed, or re-typed | **major** |
+| A case added to an `enum` or `variant` | **major** |
+| A field added to an existing record | **major** |
+| A new function, interface, or record | **minor** |
+| Comments, doc text, formatting | **patch** |
+
+**Two rows look additive and are not**, which is the reason for a table rather
+than the sentence "additive is minor". The component model types records,
+enums and variants **structurally**: a record with one more field is a different
+type, not a compatible extension of the old one, so a guest built against the
+old shape cannot link against a host exporting the new one. The same goes for a
+case added to an `enum` or `variant` — and there a guest matching exhaustively
+over the old set does not cover the new case either. So both are major, by the
+test that defines major: an existing component cannot survive it.
+
+There is no such thing as an optional field to add. A field is part of the
+shape; optionality lives in its *type* (`option<T>`), which has to be there from
+the start to help.
+
+**Pre-1.0 is stricter than semver-by-habit suggests.** While the major is `0`
+the package is free to change, so a `0.x` version carries no compatibility
+promise — and *because* it carries none, a differing **minor** is refused. Read
+quickly, semver says `0.1` and `0.9` differ only in a minor and might be
+compatible; here they are not, and the host says so.
+`core::manifest::api_compatible` implements exactly this: same major, and the
+same minor while the major is `0`. From `1.0` on, a differing minor passes,
+which is what a minor bump means. A version that does not parse is
+incompatible — guessing is how a check becomes decoration.
+
+**What the host does with it today.** Every component ships an
+`api-version` in its [manifest](#the-extension-manifest), and `Runtime::boot`
+refuses an incompatible one, naming both versions and the component
+(`host/tests/it/manifest.rs::a_component_built_against_another_api_version_is_refused`).
+That is the whole of it, and two things it deliberately does **not** do are
+worth naming so nobody builds against them:
+
+- **There are no adapters.** An incompatible version is refused, not bridged.
+  Keeping N-1 minor compatibility by adapting — the Zed model — is
+  [slice 16b-3](https://github.com/PromptPasture/jan-klod/issues/90), deferred
+  until there is a version pair it would help; below `1.0` there is none.
+- **The version travels one way.** It reaches the host through the manifest.
+  `extension-lifecycle`'s `extension-context` carries the extension's *own*
+  build version (`version: string`), not the interface package's, so a guest
+  cannot currently read what the host speaks and adapt to it. That direction is
+  also #90.
+
+**The freeze.** Until the first public release these rules describe intent and
+`wit/` may still change freely; from that release they bind, and the
+version-bump check ([16b-2](https://github.com/PromptPasture/jan-klod/issues/89))
+becomes a failure rather than a warning. See the
+[roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).
 
 ## Storage is not a contract extensions implement
 
