@@ -1113,8 +1113,26 @@ fn run_and_persist(
         .lock()
         .map(|store| replay(&store, session))
         .unwrap_or_default();
+    // The event log, wrapped around whatever sink and driver the caller passed.
+    // Every entry point into a turn funnels through here, so one wrap covers
+    // them all — `run`, `run_with`, `run_streaming` and the rest cannot acquire
+    // a turn that goes unlogged by forgetting to opt in.
+    //
+    // The user message first, so a session's log opens with its own input
+    // rather than with the first thing the model said about it.
+    event_log::log_user_message(store, session, message);
+    let mut logged_sink = event_log::PersistingSink::new(sink, store, session);
+    let mut logged_driver = event_log::PersistingDriver::new(driver, store, session);
     let result = conductor::run_turn(
-        dispatcher, providers, tools, driver, sink, session, message, history, limits,
+        dispatcher,
+        providers,
+        tools,
+        &mut logged_driver,
+        &mut logged_sink,
+        session,
+        message,
+        history,
+        limits,
     );
     if let conductor::RunResult::Answered { text, .. } = &result {
         // Best-effort transcript append: a store failure never fails the answered turn.

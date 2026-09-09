@@ -18,19 +18,24 @@
 //! notifications mirror [`Event`] one for one — and reusing those types here
 //! would reintroduce exactly the coupling the separate version exists to avoid.
 //!
-//! # Scope
+//! # What is logged
 //!
-//! Only [`Event`] is covered. A turn also has records that never pass through
-//! an `EventSink` — the user message that started it, an `ask` and its answer —
-//! and those need their own kinds and a wider decode result than [`decode`]'s
-//! `Event`.
+//! Events, through [`PersistingSink`]. Plus the records a turn has that never
+//! pass through an `EventSink`: the message that started it
+//! ([`log_user_message`]), and an `ask`, its answer and any steering follow-up,
+//! through [`PersistingDriver`].
+//!
+//! [`decode`] deliberately covers only [`Event`], so those other kinds read as
+//! [`DecodeError::UnknownKind`]. Rebuilding a whole turn from the log — which
+//! needs all of them — is the projection work of the next slice, and giving
+//! `decode` a wider return type now would be guessing at its shape.
 
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
 use crate::conductor::{Event, EventSink, Flow};
-use crate::intercept::{ToolCall, ToolOutcome};
+use crate::intercept::{Driver, ToolCall, ToolOutcome, UserPrompt};
 use crate::store::{Store, StoreError};
 
 /// The envelope format this build writes, and the highest it can read.
@@ -58,6 +63,27 @@ pub enum DecodeError {
     Malformed(String),
 }
 
+/// The `kind` of a record that is not a [`Event`]: the message that started the
+/// turn.
+pub const KIND_USER_MESSAGE: &str = "user-message";
+/// The `kind` of the prompt an interceptor blocked the turn on.
+pub const KIND_ASK: &str = "ask";
+/// The `kind` of the answer that unblocked it — including the default taken
+/// when nobody answered, since a replay cannot tell those apart otherwise.
+pub const KIND_ANSWER: &str = "answer";
+/// The `kind` of a steering message injected mid-turn via `Driver::follow_up`.
+pub const KIND_FOLLOW_UP: &str = "follow-up";
+
+/// Wrap `data` in the versioned envelope every row shares.
+///
+/// Public because the records that are not [`Event`]s are built by their own
+/// call sites, and all of them must carry the same envelope — one function so a
+/// version bump cannot reach some rows and miss others.
+#[must_use]
+pub fn envelope(data: &Value) -> String {
+    json!({ "v": EVENT_LOG_VERSION, "data": data }).to_string()
+}
+
 /// The row one event becomes: its `kind` and its JSON envelope.
 ///
 /// The `match` is exhaustive with no wildcard arm, so a new [`Event`] variant
@@ -79,10 +105,7 @@ pub fn encode(event: &Event) -> (&'static str, String) {
         Event::Warning(message) => ("warning", json!({ "message": message })),
         Event::Done { text, agentic } => ("done", json!({ "answer": text, "agentic": agentic })),
     };
-    (
-        kind,
-        json!({ "v": EVENT_LOG_VERSION, "data": data }).to_string(),
-    )
+    (kind, envelope(&data))
 }
 
 /// Rebuild the event a row was written from.
@@ -170,40 +193,143 @@ impl<'a> PersistingSink<'a> {
             warned: false,
         }
     }
-
-    /// Append one event, reporting the first failure and swallowing the rest.
-    fn append(&mut self, event: &Event) {
-        let (kind, payload) = encode(event);
-        // Scoped so the guard is dropped before `emit` forwards.
-        let outcome = match self.store.lock() {
-            Ok(store) => store
-                .append_event(&self.session, kind, &payload)
-                .map(|_| ()),
-            Err(_) => Err(StoreError::Backend {
-                detail: "the store lock is poisoned".to_owned(),
-            }),
-        };
-        if let Err(err) = outcome {
-            if !self.warned {
-                self.warned = true;
-                eprintln!(
-                    "WARN [core] logging events for session {} failed: {err}. The turn \
-                     continues; further failures this turn are not repeated.",
-                    self.session
-                );
-            }
-        }
-    }
 }
 
 impl EventSink for PersistingSink<'_> {
     fn emit(&mut self, event: &Event) -> Flow {
         // Logged before forwarding, so an event still reaches the record when
         // the inner sink answers `Stop` — a client disconnecting does not make
-        // what already happened un-happen.
-        self.append(event);
+        // what already happened un-happen. The guard `append` takes is released
+        // before this returns, so the inner sink never runs under it.
+        let (kind, payload) = encode(event);
+        append_encoded(self.store, &self.session, &mut self.warned, kind, &payload);
         self.inner.emit(event)
     }
+}
+
+/// An [`intercept::Driver`] that logs each prompt and the answer it got, then
+/// behaves exactly as the driver it wraps.
+///
+/// A wrapper rather than a change to the trait: `ask` already returns the
+/// answer, so both halves of the exchange are visible from outside without
+/// `Driver` gaining anything. That matters because seven types implement
+/// `Driver` — the SSE prompt driver, the Telegram chat driver, the headless
+/// default and four test doubles — and none of them should have to know that
+/// something is recording.
+///
+/// The answer is logged whatever its provenance, including the default taken
+/// when nobody replied in time. A replay cannot otherwise tell "the user
+/// approved" from "the prompt timed out and the default denied it", and those
+/// are opposite facts about the same turn.
+pub struct PersistingDriver<'a> {
+    inner: &'a mut dyn Driver,
+    store: &'a Mutex<Store>,
+    session: String,
+    warned: bool,
+}
+
+impl<'a> PersistingDriver<'a> {
+    /// Wrap `inner`, logging its exchanges against `session`.
+    pub fn new(inner: &'a mut dyn Driver, store: &'a Mutex<Store>, session: &str) -> Self {
+        Self {
+            inner,
+            store,
+            session: session.to_string(),
+            warned: false,
+        }
+    }
+}
+
+impl Driver for PersistingDriver<'_> {
+    fn ask(&mut self, prompt: &UserPrompt) -> String {
+        append(
+            self.store,
+            &self.session,
+            &mut self.warned,
+            KIND_ASK,
+            &json!({
+                "question": prompt.question,
+                "options": prompt.options,
+                "default": prompt.default_answer,
+            }),
+        );
+        let answer = self.inner.ask(prompt);
+        append(
+            self.store,
+            &self.session,
+            &mut self.warned,
+            KIND_ANSWER,
+            &json!({ "answer": answer }),
+        );
+        answer
+    }
+
+    fn follow_up(&mut self) -> Option<String> {
+        let follow_up = self.inner.follow_up();
+        if let Some(message) = &follow_up {
+            append(
+                self.store,
+                &self.session,
+                &mut self.warned,
+                KIND_FOLLOW_UP,
+                &json!({ "message": message }),
+            );
+        }
+        follow_up
+    }
+}
+
+/// Append one record, wrapping `data` in the shared envelope first.
+fn append(store: &Mutex<Store>, session: &str, warned: &mut bool, kind: &str, data: &Value) {
+    append_encoded(store, session, warned, kind, &envelope(data));
+}
+
+/// Append an already-enveloped record, reporting the first failure per the
+/// `warned` flag and swallowing the rest.
+///
+/// The one place a store failure is interpreted, so the sink and the driver
+/// cannot drift on what it means. The lock is taken and released here, never
+/// held across a caller's own work — see [`PersistingSink`] for why that
+/// matters.
+fn append_encoded(
+    store: &Mutex<Store>,
+    session: &str,
+    warned: &mut bool,
+    kind: &str,
+    payload: &str,
+) {
+    let outcome = store.lock().map_or_else(
+        |_| {
+            Err(StoreError::Backend {
+                detail: "the store lock is poisoned".to_owned(),
+            })
+        },
+        |store| store.append_event(session, kind, payload).map(|_| ()),
+    );
+    if let Err(err) = outcome {
+        if !*warned {
+            *warned = true;
+            eprintln!(
+                "WARN [core] logging events for session {session} failed: {err}. The turn \
+                 continues; further failures this turn are not repeated."
+            );
+        }
+    }
+}
+
+/// Log the message that starts a turn, before any of its events.
+///
+/// Called by the turn runner rather than by a wrapper: the message never passes
+/// through a `Driver` or an `EventSink`, it is simply the turn's input.
+pub fn log_user_message(store: &Mutex<Store>, session: &str, message: &str) {
+    let mut warned = false;
+    append(
+        store,
+        session,
+        &mut warned,
+        KIND_USER_MESSAGE,
+        &json!({ "message": message }),
+    );
 }
 
 #[cfg(test)]
@@ -494,5 +620,139 @@ mod sink_tests {
         let guard = store.lock().unwrap();
         assert_eq!(guard.session_events("a").unwrap()[0].seq, 1);
         assert_eq!(guard.session_events("b").unwrap()[0].seq, 1);
+    }
+}
+
+#[cfg(test)]
+mod driver_tests {
+    use super::*;
+
+    /// Answers whatever it was told to, and reports a follow-up once.
+    struct Stub {
+        answer: String,
+        follow_ups: Vec<String>,
+    }
+
+    impl Driver for Stub {
+        fn ask(&mut self, _prompt: &UserPrompt) -> String {
+            self.answer.clone()
+        }
+        fn follow_up(&mut self) -> Option<String> {
+            self.follow_ups.pop()
+        }
+    }
+
+    fn prompt() -> UserPrompt {
+        UserPrompt {
+            question: "Run `rm -rf /`?".to_owned(),
+            options: vec!["yes".to_owned(), "no".to_owned()],
+            default_answer: "no".to_owned(),
+        }
+    }
+
+    fn kinds(store: &Mutex<Store>, session: &str) -> Vec<String> {
+        store
+            .lock()
+            .unwrap()
+            .session_events(session)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.kind)
+            .collect()
+    }
+
+    #[test]
+    fn an_ask_logs_the_prompt_then_the_answer() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+        let mut inner = Stub {
+            answer: "yes".to_owned(),
+            follow_ups: Vec::new(),
+        };
+        let answered = {
+            let mut driver = PersistingDriver::new(&mut inner, &store, "s1");
+            driver.ask(&prompt())
+        };
+
+        assert_eq!(answered, "yes", "the wrapper does not alter the answer");
+        assert_eq!(
+            kinds(&store, "s1"),
+            vec![KIND_ASK.to_owned(), KIND_ANSWER.to_owned()],
+            "the prompt is recorded before the answer, which is the order they happened"
+        );
+
+        let rows = store.lock().unwrap().session_events("s1").unwrap();
+        assert!(
+            rows[0].payload.contains("rm -rf") && rows[0].payload.contains("\"default\":\"no\""),
+            "the prompt row carries the question and the default: {}",
+            rows[0].payload
+        );
+        assert!(
+            rows[1].payload.contains("\"answer\":\"yes\""),
+            "and the answer row carries what came back: {}",
+            rows[1].payload
+        );
+    }
+
+    /// The distinction a replay cannot otherwise make: a prompt that timed out
+    /// and took its default looks identical to one a user answered, unless the
+    /// answer is recorded either way.
+    #[test]
+    fn a_defaulted_answer_is_logged_like_any_other() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+        let mut inner = Stub {
+            answer: "no".to_owned(),
+            follow_ups: Vec::new(),
+        };
+        {
+            let mut driver = PersistingDriver::new(&mut inner, &store, "s1");
+            driver.ask(&prompt());
+        }
+        let rows = store.lock().unwrap().session_events("s1").unwrap();
+        assert!(
+            rows[1].payload.contains("\"answer\":\"no\""),
+            "a denial is a fact about the turn, not an absence: {}",
+            rows[1].payload
+        );
+    }
+
+    #[test]
+    fn a_follow_up_is_logged_and_nothing_is_logged_when_there_is_none() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+        let mut inner = Stub {
+            answer: String::new(),
+            follow_ups: vec!["actually, in Rust".to_owned()],
+        };
+        let (first, second) = {
+            let mut driver = PersistingDriver::new(&mut inner, &store, "s1");
+            (driver.follow_up(), driver.follow_up())
+        };
+
+        assert_eq!(first.as_deref(), Some("actually, in Rust"));
+        assert_eq!(second, None, "the stub has no second follow-up");
+        assert_eq!(
+            kinds(&store, "s1"),
+            vec![KIND_FOLLOW_UP.to_owned()],
+            "one row for the steering message, none for the turn ending normally"
+        );
+    }
+
+    #[test]
+    fn a_broken_store_does_not_change_what_the_driver_answers() {
+        let store = Mutex::new(Store::open_in_memory().unwrap());
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let _guard = store.lock().unwrap();
+                panic!("poisoning the lock on purpose");
+            });
+            assert!(handle.join().is_err());
+        });
+
+        let mut inner = Stub {
+            answer: "yes".to_owned(),
+            follow_ups: vec!["steer".to_owned()],
+        };
+        let mut driver = PersistingDriver::new(&mut inner, &store, "s1");
+        assert_eq!(driver.ask(&prompt()), "yes");
+        assert_eq!(driver.follow_up().as_deref(), Some("steer"));
     }
 }

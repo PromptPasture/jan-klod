@@ -22,6 +22,7 @@ mod classifier;
 mod component_harness;
 mod docs_match_config;
 mod egress_boundary;
+mod event_log;
 mod gate;
 mod host_fs;
 mod host_process;
