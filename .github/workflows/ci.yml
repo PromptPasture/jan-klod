@@ -56,13 +56,13 @@ jobs:
         with:
           tool: cargo-nextest
 
-      # The spike_gate example's bindgen! resolves wit/spike/deps (wasi:cli & co),
-      # which are gitignored and fetched on demand from the committed wit/wkg.lock.
-      # `make clippy` compiles that example — it passes the `examples` feature the
-      # example is gated behind — so populate the deps first, the same `wkg wit
-      # fetch` a developer runs locally. The test targets no longer need this:
-      # since the examples became opt-in they are linted, not built, by anything
-      # on the test path.
+      # Two things resolve wit/spike/deps (wasi:cli & co) through bindgen!: the
+      # spike_gate example, which `make clippy` compiles by passing the `examples`
+      # feature it is gated behind, and the `it` test binary's polyglot module,
+      # which `make test` builds. Those deps are gitignored and fetched on demand
+      # from the committed wit/wkg.lock, so populate them first — the same `wkg
+      # wit fetch` a developer runs locally. Making the examples opt-in did not
+      # take this off the test path; the polyglot module was always on it.
       #
       # Prebuilt binary (pinned to the version that produced wit/wkg.lock) — instant,
       # unlike `cargo install wkg`, which recompiles from source every run. wkg ships
@@ -116,6 +116,25 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+
+      # `make gate` builds the `it` test binary, and its polyglot module resolves
+      # wit/spike through bindgen!, so this job needs wit/spike/deps too. It died
+      # on "failed to resolve directory while parsing WIT for path .../wit/spike"
+      # before running a single test: gating the examples behind a feature fixed
+      # the example this job used to build, but the test binary binds the same
+      # world. Same pinned install as the lint-test job above.
+      - name: Install wkg
+        uses: jaxxstorm/action-install-gh-release@v1
+        with:
+          repo: bytecodealliance/wasm-pkg-tools
+          tag: v0.15.1
+          extension-matching: disable
+          rename-to: wkg
+          chmod: 0755
+          cache: enable
+
+      - name: Fetch spike WIT deps
+        run: make -C src/extensions spike-deps
 
       # Exit gate: builds every guest to wasm32-wasip2, then runs the full offline
       # integration surface across all v1 guarantees — the thin loop with provider
