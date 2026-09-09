@@ -7,6 +7,7 @@
 //!   `jan-klod [config-path] [ext-dir]`            — boot + print the plan
 //!   `jan-klod serve [config-path] [ext-dir] [bind]` — boot + serve REST turns
 //!   `jan-klod serve --bind <addr>`                  — serve, resolving paths
+//!   `jan-klod rpc [config-path] [ext-dir]`        — boot + serve JSON-RPC on stdio
 //!   `jan-klod verify [config-path] [ext-dir]`     — check the install, then exit
 //!
 //!   config-path  path to config.yaml   (default: config.yaml)
@@ -49,6 +50,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("serve") => serve(&args[1..]),
+        Some("rpc") => rpc(&args[1..]),
         Some("telegram") => telegram(&args[1..]),
         Some("verify") => verify(&args[1..]),
         Some("ask") => ask(&args[1..]),
@@ -264,6 +266,57 @@ fn boot_plan(args: &[String]) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// Serve the client protocol over stdin/stdout: newline-delimited JSON-RPC, one
+/// frame per line, for a client that spawned this process. No port, no token,
+/// nothing left running — the client owns the process.
+///
+/// **Stdout is the protocol.** Nothing else may be written there: not the boot
+/// plan `serve` prints, not a warning, not a progress line, because a client
+/// splitting the stream on newlines would read it as a frame. Everything
+/// diagnostic goes to stderr, which is where the runtime already writes every
+/// log line it and its guests make — and guests are given `inherit_stderr`
+/// rather than `inherit_stdio`, so a component cannot reach this stream either.
+fn rpc(args: &[String]) -> ExitCode {
+    let config_path = arg_or(args, 0, "config.yaml");
+    let ext_dir = arg_or(args, 1, "ext");
+
+    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("jan-klod: boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Same bounded egress as `serve`: guests reach public destinations and the
+    // endpoints config names.
+    let policy = runtime.egress_policy();
+    let factory = move || -> HttpFn {
+        let policy = policy.clone();
+        Box::new(move |method, url, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+        })
+    };
+    let mut agent = match runtime.build_agent(&factory) {
+        Ok(agent) => agent,
+        Err(err) => {
+            eprintln!("jan-klod: agent boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // `BufReader::new(stdin())`, not `stdin().lock()`: the transport hands the
+    // reader to a thread so a mid-turn cancel can be read, and a `StdinLock`
+    // holds a `MutexGuard`, which is not `Send`.
+    let input = std::io::BufReader::new(std::io::stdin());
+    match jan_klod_core::rpc::serve(input, std::io::stdout(), &mut agent) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("jan-klod: rpc loop failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Boot the agent and serve turns over the host-side REST surface until killed.

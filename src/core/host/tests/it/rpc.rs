@@ -626,3 +626,91 @@ fn a_follow_up_steers_the_turn_it_arrives_during() {
         result(turn)
     );
 }
+
+// ─── The subcommand ──────────────────────────────────────────────────────────
+
+/// `jan-klod-gateway rpc` exists, and **stdout carries the protocol and nothing
+/// else**.
+///
+/// The only case here that needs a subprocess: everything above drives
+/// `rpc::serve` directly and so cannot notice a `println!` in the boot path, a
+/// warning on the wrong stream, or a subcommand that was never wired into the
+/// `match` in `main.rs`. A client splitting stdout on newlines reads any of
+/// those as a frame.
+///
+/// No model is needed — the handshake is answered before anything is asked of a
+/// provider — so this stays cheap enough to keep.
+#[test]
+fn the_gateway_subcommand_puts_the_protocol_on_stdout_and_logs_on_stderr() {
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
+        return;
+    }
+    let dir =
+        common::TempDir(std::env::temp_dir().join(format!("jk-rpc-subcmd-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).expect("creates the temp dir");
+    let config = dir.0.join("config.yaml");
+    std::fs::write(
+        &config,
+        "
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    intent-router:
+      enabled: true
+",
+    )
+    .expect("writes the config");
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_jan-klod-gateway"))
+        .arg("rpc")
+        .arg(&config)
+        .arg(common::repo_root().join("ext"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the gateway spawns");
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{{"version":"{PROTOCOL_VERSION}"}}}}"#
+    )
+    .expect("writes hello");
+    drop(stdin); // EOF, so the loop returns and the process exits
+
+    let finished = child.wait_with_output().expect("the gateway runs");
+    let stdout = String::from_utf8(finished.stdout).expect("stdout is utf-8");
+    let stderr = String::from_utf8(finished.stderr).expect("stderr is utf-8");
+    assert!(
+        finished.status.success(),
+        "exited {:?}; stderr: {stderr}",
+        finished.status.code()
+    );
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one frame answered one request, and nothing else was printed: {stdout:?}"
+    );
+    let response: jsonrpc::Response =
+        serde_json::from_str(lines[0]).unwrap_or_else(|e| panic!("{}: {e}", lines[0]));
+    assert_eq!(response.id, jsonrpc::Id::Number(1));
+    assert_eq!(
+        result(&response)["version"],
+        serde_json::json!(PROTOCOL_VERSION)
+    );
+
+    // Not merely "stdout was clean": the boot chatter exists and went to the
+    // other stream. A run that printed nothing anywhere would pass the
+    // assertion above while proving nothing about the separation.
+    assert!(
+        stderr.contains("INFO ["),
+        "the boot log is on stderr, where a client will not parse it: {stderr:?}"
+    );
+}
