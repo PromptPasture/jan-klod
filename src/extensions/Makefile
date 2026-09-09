@@ -95,9 +95,14 @@ spike-deps:
 # spike-guest` and commit the result.
 SPIKE_DIR := spike
 SPIKE_WIT := $(WIT_DIR)/spike
+# Overridable output path, so the drift test in polyglot.rs can rebuild through
+# this one recipe instead of duplicating the tinygo invocation, and write to a
+# temp dir rather than over the committed fixture. Relative paths resolve inside
+# $(SPIKE_DIR); pass an absolute one from anywhere else.
+SPIKE_WASM ?= spike.wasm
 spike-guest: spike-deps
 	cd $(SPIKE_DIR) && tinygo build -target=wasip2 -no-debug -opt=z \
-		-wit-package $(SPIKE_WIT) -wit-world spike -o spike.wasm .
+		-wit-package $(SPIKE_WIT) -wit-world spike -o $(SPIKE_WASM) .
 
 # spike.wasm is deliberately absent here: it is a committed fixture, not a build
 # output, and `clean` deleting it is what made the polyglot test depend on whether
