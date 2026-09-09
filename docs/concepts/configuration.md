@@ -75,10 +75,25 @@ capabilities = [
 ]
 ```
 
-**Nothing enforces it yet.** A manifest today is a description; refusing a
-component whose imports and declaration disagree is still to come. What decides
-what a component may actually *do* is this file — the grants above, each
-default-deny — and that has not changed.
+**The host checks it at boot**, so a component that ships without one, or with
+one that under-declares what it imports, or built against an incompatible
+`jan-klod:interfaces` version, is refused with a reason rather than loaded and
+trusted. The format and what is *not* refused are in
+[Contracts → The extension manifest](contracts.md#the-extension-manifest).
+
+| Key | Meaning | Default |
+|---|---|---|
+| `allow-unmanifested` | Load a component that ships no manifest beside it. **Top-level**, not under `extensions:` — every key there is a category of named instances | `false` |
+
+Off by default, because a component nobody can inspect before running it is the
+thing a manifest exists to prevent. `make ext` generates one per guest and
+`make bundle` carries them into a release, so the only way to meet this refusal
+is a component from somewhere else — which is exactly when you want to be
+asked. The grant waives the *declaration*, not the inspection: what a component
+imports is still read either way.
+
+What a manifest still does not decide is what a component may *do*. That
+remains this file's grants, each default-deny.
 
 ## Opaque config and `${VAR}` expansion
 

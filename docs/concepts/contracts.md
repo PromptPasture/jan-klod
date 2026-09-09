@@ -297,12 +297,26 @@ deliberately:
 An empty list is written as `capabilities = []` rather than omitted: "needs
 nothing" is a claim worth making, and a missing key reads as unfilled.
 
-**Nothing reads a manifest yet.** It is generated, verified against the
-component, and otherwise inert — the boot-time refusal of a component whose
-imports and declaration disagree is
-[slice 16a-2](https://github.com/PromptPasture/jan-klod/issues/87). Until that
-lands, a manifest is a description, not a guarantee, and reading it as one would
-be reading a guarantee that does not exist.
+**The host reads it at boot, and refuses three things.** A component whose
+manifest omits a capability it imports; a component with no manifest at all,
+unless top-level `allow-unmanifested: true` says otherwise; and a component
+built against an incompatible `jan-klod:interfaces` version. Each refusal names
+the component and what is wrong with it — the interface that is undeclared, the
+grant that would permit an unmanifested load, or both versions.
+
+Two things it deliberately does **not** refuse. Declaring a capability
+`config.yaml` does not grant is fine and grants nothing, because every
+capability is default-deny where it is used; refusing it would make the manifest
+a second place grants must be kept in step with, so an author would have to
+track every operator's config. And a differing *minor* version from `1.0` on
+passes, since that is what a minor bump means — though while the package is
+`0.x` a differing minor is refused, because a pre-release version carries no
+promise at all.
+
+What a manifest does not do is decide what a component may *do*. That is still
+`config.yaml`'s grants, each default-deny, unchanged by anything declared here.
+A manifest makes a component's needs **inspectable before it runs** and its
+description **checkable against itself**; it is not a permission.
 
 ## Versioning (planned, Phase 16)
 
