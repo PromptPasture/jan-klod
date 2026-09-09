@@ -11,13 +11,18 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use jan_klod_core::conductor::RunResult;
 use jan_klod_core::Runtime;
 
 use crate::common;
+
+/// Long enough that a healthy request never reaches it, so it bounds only the
+/// failure case rather than pacing the test.
+const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 
 /// A minimal OpenAI-compatible endpoint: one completion, then it keeps serving.
 struct FakeOllama {
@@ -25,6 +30,39 @@ struct FakeOllama {
     requests: Arc<AtomicU32>,
     saw_authorization: Arc<AtomicU32>,
     stop: Arc<AtomicU32>,
+    /// I/O the endpoint could not complete. Discarding these is what let
+    /// [`FakeOllama`] answer a request it had not read, so a test that trusts
+    /// what the endpoint saw has to assert this is empty first.
+    faults: Arc<Mutex<Vec<String>>>,
+}
+
+/// Read one whole HTTP request: the headers, then exactly `Content-Length` bytes
+/// of body. One `read` is not enough — either part can arrive in a later
+/// segment, and every byte still unread when the socket closes turns the reply
+/// into an RST that destroys the response already written.
+fn read_request(socket: &mut TcpStream) -> std::io::Result<String> {
+    let mut raw: Vec<u8> = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = socket.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        raw.extend_from_slice(&chunk[..read]);
+        let Some(head_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
+            continue;
+        };
+        let head = String::from_utf8_lossy(&raw[..head_end]).to_lowercase();
+        let body_len: usize = head
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(0);
+        if raw.len() >= head_end + 4 + body_len {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&raw).into_owned())
 }
 
 impl FakeOllama {
@@ -35,19 +73,46 @@ impl FakeOllama {
         let requests = Arc::new(AtomicU32::new(0));
         let saw_authorization = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicU32::new(0));
-        let (counted, authed, stopped) = (
+        let faults = Arc::new(Mutex::new(Vec::new()));
+        let (counted, authed, stopped, faulted) = (
             Arc::clone(&requests),
             Arc::clone(&saw_authorization),
             Arc::clone(&stop),
+            Arc::clone(&faults),
         );
+        let fault = move |what: &str, e: &dyn std::fmt::Debug| {
+            if let Ok(mut log) = faulted.lock() {
+                log.push(format!("{what}: {e:?}"));
+            }
+        };
         thread::spawn(move || {
             while stopped.load(Ordering::Relaxed) == 0 {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
                         counted.fetch_add(1, Ordering::Relaxed);
-                        let mut buf = [0_u8; 4096];
-                        let read = socket.read(&mut buf).unwrap_or(0);
-                        let request = String::from_utf8_lossy(&buf[..read]).to_lowercase();
+                        // BSD `accept()` hands back a socket that inherited the
+                        // listener's O_NONBLOCK — verified on this host — so
+                        // this is non-blocking on macOS and blocking on Linux.
+                        // Make it blocking with a deadline, and read the request
+                        // to completion: a single non-blocking read can return
+                        // part of it or none of it, and answering early leaves
+                        // the rest unread, so the close sends RST instead of FIN
+                        // and the RST discards the response already written. The
+                        // client sees "could not be reached" for a turn the
+                        // endpoint answered correctly.
+                        if let Err(e) = socket.set_nonblocking(false) {
+                            fault("set_nonblocking", &e);
+                        }
+                        if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
+                            fault("set_read_timeout", &e);
+                        }
+                        let request = match read_request(&mut socket) {
+                            Ok(request) => request.to_lowercase(),
+                            Err(e) => {
+                                fault("read_request", &e);
+                                continue;
+                            }
+                        };
                         if request.contains("authorization:") {
                             authed.fetch_add(1, Ordering::Relaxed);
                         }
@@ -63,9 +128,11 @@ impl FakeOllama {
                              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                             body.len()
                         );
-                        let _ = socket.write_all(response.as_bytes());
+                        if let Err(e) = socket.write_all(response.as_bytes()) {
+                            fault("write_all", &e);
+                        }
                     }
-                    Err(_) => thread::sleep(std::time::Duration::from_millis(10)),
+                    Err(_) => thread::sleep(Duration::from_millis(10)),
                 }
             }
         });
@@ -74,6 +141,7 @@ impl FakeOllama {
             requests,
             saw_authorization,
             stop,
+            faults,
         }
     }
 }
@@ -145,6 +213,20 @@ extensions:
         ollama.requests.load(Ordering::Relaxed) >= 1,
         "the request actually crossed a socket"
     );
+    // Assert this *before* what the endpoint saw: the header check below reads a
+    // counter derived from the request text, so an unreported read failure used
+    // to satisfy it with an empty string rather than with evidence.
+    let faults = ollama
+        .faults
+        .lock()
+        .expect("the fault log is not poisoned")
+        .clone();
+    assert!(
+        faults.is_empty(),
+        "the fake endpoint could not complete its own I/O, so it saw less than the \
+         request it answered: {faults:?}"
+    );
+
     // No key configured means no header invented: a local endpoint that rejects
     // unexpected credentials must not receive any.
     assert_eq!(
