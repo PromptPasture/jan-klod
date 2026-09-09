@@ -244,3 +244,152 @@ fn an_existing_database_gains_the_table_and_keeps_the_log() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ─── What a projection needs from the store ──────────────────────────────────
+
+/// The reason `event_sessions` exists rather than reusing `list_namespaces`:
+/// a session can have a log and no entries at all, which is exactly the state
+/// every session is in once the transcript stops being written to `entries`.
+#[test]
+fn sessions_with_events_are_listed_even_with_no_entries() {
+    let store = Store::open_in_memory().unwrap();
+    store.append_event("logged", "k", "{}").unwrap();
+
+    assert_eq!(store.event_sessions().unwrap(), vec!["logged".to_string()]);
+    assert!(
+        store.list_namespaces().unwrap().is_empty(),
+        "and `list_namespaces` sees nothing, which is the trap this avoids"
+    );
+}
+
+#[test]
+fn event_sessions_lists_each_session_once() {
+    let store = Store::open_in_memory().unwrap();
+    store.append_event("a", "k", "{}").unwrap();
+    store.append_event("a", "k", "{}").unwrap();
+    store.append_event("b", "k", "{}").unwrap();
+
+    let mut sessions = store.event_sessions().unwrap();
+    sessions.sort();
+    assert_eq!(sessions, vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn event_sessions_is_empty_when_nothing_is_logged() {
+    let store = Store::open_in_memory().unwrap();
+    store.set("ns", "k", "v").unwrap();
+    assert!(store.event_sessions().unwrap().is_empty());
+}
+
+#[test]
+fn a_fork_copies_a_prefix_and_renumbers_from_one() {
+    let store = Store::open_in_memory().unwrap();
+    for i in 1..=5 {
+        store
+            .append_event("parent", "k", &format!("{{\"i\":{i}}}"))
+            .unwrap();
+    }
+
+    let copied = store.fork_events("parent", 3, "child").unwrap();
+    assert_eq!(copied, 3, "only the prefix is copied");
+
+    let child = store.session_events("child").unwrap();
+    assert_eq!(
+        child.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3],
+        "the fork's own log reads as a sequence"
+    );
+    assert_eq!(
+        child.iter().map(|e| e.payload.clone()).collect::<Vec<_>>(),
+        store.session_events("parent").unwrap()[..3]
+            .iter()
+            .map(|e| e.payload.clone())
+            .collect::<Vec<_>>(),
+        "and carries the same payloads, in the same order"
+    );
+    assert!(
+        child.iter().all(|e| e.session == "child"),
+        "attributed to the fork, not the parent"
+    );
+}
+
+/// A fork is independent in both directions: appending to either afterwards
+/// must not appear in the other.
+#[test]
+fn a_fork_and_its_parent_diverge() {
+    let store = Store::open_in_memory().unwrap();
+    store.append_event("parent", "k", "{\"i\":1}").unwrap();
+    store.append_event("parent", "k", "{\"i\":2}").unwrap();
+    store.fork_events("parent", 1, "child").unwrap();
+
+    store
+        .append_event("child", "k", "{\"only\":\"child\"}")
+        .unwrap();
+    store
+        .append_event("parent", "k", "{\"only\":\"parent\"}")
+        .unwrap();
+
+    let child = store.session_events("child").unwrap();
+    let parent = store.session_events("parent").unwrap();
+    assert_eq!(child.len(), 2, "prefix + its own new event");
+    assert_eq!(parent.len(), 3, "untouched by the fork, then its own");
+    assert!(
+        child.iter().all(|e| !e.payload.contains("only\":\"parent")),
+        "the parent's later events did not reach the fork"
+    );
+    assert!(
+        parent.iter().all(|e| !e.payload.contains("only\":\"child")),
+        "nor the fork's the parent"
+    );
+    assert_eq!(
+        child.last().unwrap().seq,
+        2,
+        "the fork's numbering continues from its own prefix, not the parent's"
+    );
+}
+
+/// Forking into a session that already has a log would interleave two
+/// histories, and the result would read as one. Refused with a reason.
+#[test]
+fn forking_into_a_used_session_is_refused() {
+    let store = Store::open_in_memory().unwrap();
+    store.append_event("parent", "k", "{}").unwrap();
+    store.append_event("taken", "k", "{}").unwrap();
+
+    let Err(StoreError::Backend { detail }) = store.fork_events("parent", 1, "taken") else {
+        panic!("expected a refusal");
+    };
+    assert!(
+        detail.contains("taken") && detail.contains("already has events"),
+        "the refusal names the session and why: {detail}"
+    );
+    assert_eq!(
+        store.session_events("taken").unwrap().len(),
+        1,
+        "and nothing was copied"
+    );
+}
+
+/// A fork keeps the original timestamps: these are the parent's facts, and
+/// restamping them would claim they happened when the fork was made.
+#[test]
+fn a_fork_preserves_the_original_timestamps() {
+    let store = Store::open_in_memory().unwrap();
+    let original = store.append_event("parent", "k", "{}").unwrap();
+    store.fork_events("parent", 1, "child").unwrap();
+    assert_eq!(store.session_events("child").unwrap()[0].ts, original.ts);
+}
+
+/// Forking past the end copies what exists; forking at 0 copies nothing. Both
+/// are the caller's decision to make, so the store reports the count rather
+/// than guessing which is an error.
+#[test]
+fn a_fork_bound_outside_the_log_copies_what_there_is() {
+    let store = Store::open_in_memory().unwrap();
+    store.append_event("parent", "k", "{}").unwrap();
+    store.append_event("parent", "k", "{}").unwrap();
+
+    assert_eq!(store.fork_events("parent", 99, "all").unwrap(), 2);
+    assert_eq!(store.fork_events("parent", 0, "none").unwrap(), 0);
+    assert!(store.session_events("none").unwrap().is_empty());
+}

@@ -374,6 +374,74 @@ impl Store {
             })
     }
 
+    /// Every session that has at least one logged event, most recent first.
+    ///
+    /// The event-log counterpart to [`Self::list_namespaces`], and needed
+    /// separately rather than derived from it: a namespace exists in `entries`
+    /// because a transcript was written there, so once the transcript stops
+    /// being written that way, `list_namespaces` reports nothing while the log
+    /// is full of sessions. Ordered `MAX(ts) DESC` then by id, matching how
+    /// namespaces are ordered, so the two agree while both exist.
+    ///
+    /// # Errors
+    /// [`StoreError::Backend`] on a SQL failure.
+    pub fn event_sessions(&self) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT session FROM events GROUP BY session \
+                 ORDER BY MAX(ts) DESC, session ASC",
+            )
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })
+    }
+
+    /// Copy `session`'s events up to and including `at_seq` into `into`,
+    /// renumbered from 1. Returns how many rows were copied.
+    ///
+    /// The copy keeps each event's original `ts`. These are the same facts as
+    /// the parent's, and stamping them with the fork's creation time would
+    /// claim they happened when the fork was made.
+    ///
+    /// `seq` is assigned by `ROW_NUMBER()` rather than carried over, so the
+    /// fork's log is `1..n` by construction. Today that is the identity —
+    /// appends are contiguous, so `[1, at_seq]` already is `1..at_seq` — but a
+    /// fork whose log started at 4 would not be readable as a sequence, and
+    /// this way it cannot happen for a reason that has to stay true.
+    ///
+    /// # Errors
+    /// [`StoreError::Backend`] if `into` already has events (a fork must start
+    /// from nothing, or the two histories interleave) or on a SQL failure.
+    pub fn fork_events(&self, session: &str, at_seq: u64, into: &str) -> Result<u64, StoreError> {
+        if !self.session_events(into)?.is_empty() {
+            return Err(StoreError::Backend {
+                detail: format!("`{into}` already has events; a fork needs an unused session"),
+            });
+        }
+        let copied = self
+            .conn
+            .execute(
+                "INSERT INTO events (session, seq, ts, kind, payload)
+                 SELECT ?2, ROW_NUMBER() OVER (ORDER BY seq), ts, kind, payload
+                 FROM events WHERE session = ?1 AND seq <= ?3",
+                params![session, into, i64::try_from(at_seq).unwrap_or(i64::MAX)],
+            )
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        Ok(copied as u64)
+    }
+
     /// Delete every event logged for `session` — the log's only removal path,
     /// matching [`Self::purge_namespace`]'s shape for entries.
     ///
