@@ -24,6 +24,7 @@ pub mod intercept;
 pub mod interceptor_host;
 pub mod registry_host;
 pub mod route;
+pub mod sandbox;
 pub mod serve;
 pub mod store;
 pub mod telegram;
