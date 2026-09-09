@@ -1149,10 +1149,16 @@ fn run_and_persist(
     result
 }
 
-/// How many past turns are replayed into a new one. Bounded here (before the
-/// store read) as well as in `select-context`, so loading history never costs a
-/// query over the whole world; token-aware trimming on top is the context
-/// interceptor's job.
+/// How many past turns are replayed into a new one, bounded here as well as in
+/// `select-context`; token-aware trimming on top is the context interceptor's
+/// job.
+///
+/// This used to bound the store read itself (`recent(session, 20)` over the
+/// transcript). It no longer does: the log is read whole and trimmed in memory,
+/// because bounding an event log by *turns* is not something a `LIMIT` can
+/// express — a turn is a variable number of rows. So a long session now reads
+/// its whole log each turn and discards most of it. Correct, and a cost that
+/// grows with the session; tracked as #85 rather than left as a surprise.
 const REPLAYED_TURNS: u32 = 20;
 
 /// The conversation so far, oldest-first, as loop messages.
@@ -1161,30 +1167,12 @@ const REPLAYED_TURNS: u32 = 20;
 /// is skipped rather than failing the turn — a corrupt transcript row should cost
 /// context, not the ability to talk.
 fn replay(store: &store::Store, session: &str) -> Vec<intercept::Message> {
-    use intercept::{Message, Role};
-    let mut entries = store.recent(session, REPLAYED_TURNS).unwrap_or_default();
-    entries.reverse(); // `recent` is newest-first; a conversation reads oldest-first
-    let mut messages = Vec::with_capacity(entries.len() * 2);
-    for entry in entries {
-        let Ok(turn) = serde_json::from_str::<serde_json::Value>(&entry.value) else {
-            continue;
-        };
-        if let Some(user) = turn.get("user").and_then(serde_json::Value::as_str) {
-            messages.push(Message {
-                role: Role::User,
-                content: user.to_string(),
-                tool_call_id: None,
-            });
-        }
-        if let Some(answer) = turn.get("answer").and_then(serde_json::Value::as_str) {
-            messages.push(Message {
-                role: Role::Assistant,
-                content: answer.to_string(),
-                tool_call_id: None,
-            });
-        }
-    }
-    messages
+    // Read from the event log, not the `entries` transcript. Both are written
+    // today; the transcript write goes away once every read path is off it.
+    // `session_events` is oldest-first already, so nothing is reversed here —
+    // the log's order *is* the conversation's.
+    let events = store.session_events(session).unwrap_or_default();
+    projection::transcript(projection::last_turns(&events, REPLAYED_TURNS))
 }
 
 /// The closure interceptors' `llm-provider` resolves to.

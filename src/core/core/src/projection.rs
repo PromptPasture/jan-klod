@@ -44,7 +44,7 @@
 //! `before-loop` interceptor rewrote it, the model saw the rewrite and this
 //! replays the original.
 
-use crate::event_log::{decode_record, Record};
+use crate::event_log::{decode_record, Record, KIND_USER_MESSAGE};
 use crate::intercept::{Message, Role};
 use crate::store::LoggedEvent;
 
@@ -62,6 +62,34 @@ pub fn transcript(events: &[LoggedEvent]) -> Vec<Message> {
         .filter_map(|row| decode_record(&row.kind, &row.payload).ok())
         .filter_map(message_for)
         .collect()
+}
+
+/// The tail of `events` holding at most the last `turns` turns.
+///
+/// A turn begins at a `user-message` row, so the bound is expressed over those
+/// and not over rows. Counting rows would be the obvious thing and the wrong
+/// one: turns are not a fixed number of rows — one tool call adds two — so a
+/// row bound would cut a turn in half and hand the model a conversation that
+/// begins with a tool result answering a call it cannot see.
+///
+/// `turns == 0` is an empty slice. A log with no `user-message` row at all is
+/// returned whole: it is one turn in progress, not zero turns.
+#[must_use]
+pub fn last_turns(events: &[LoggedEvent], turns: u32) -> &[LoggedEvent] {
+    if turns == 0 {
+        return &[];
+    }
+    let starts: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.kind == KIND_USER_MESSAGE)
+        .map(|(index, _)| index)
+        .collect();
+    let keep = turns as usize;
+    if starts.len() <= keep {
+        return events;
+    }
+    &events[starts[starts.len() - keep]..]
 }
 
 /// The message one record contributes, or `None` when it contributes nothing.
@@ -342,6 +370,128 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["second", "first"],
             "given in this order, returned in this order"
+        );
+    }
+}
+
+#[cfg(test)]
+mod bound_tests {
+    use super::*;
+    use crate::conductor::Event;
+    use crate::event_log::{encode, envelope};
+    use crate::intercept::ToolOutcome;
+    use serde_json::json;
+
+    /// `turns` turns, each a user message, a tool result and an answer — so a
+    /// turn is three rows and a row-based bound would visibly cut one open.
+    fn log_of(turns: usize) -> Vec<LoggedEvent> {
+        let mut rows = Vec::new();
+        for turn in 0..turns {
+            let mut push = |kind: &str, payload: String| {
+                rows.push(LoggedEvent {
+                    session: "s".to_owned(),
+                    seq: rows.len() as u64 + 1,
+                    ts: 100,
+                    kind: kind.to_owned(),
+                    payload,
+                });
+            };
+            push(
+                KIND_USER_MESSAGE,
+                envelope(&json!({ "message": format!("q{turn}") })),
+            );
+            let (kind, payload) = encode(&Event::ToolResult(ToolOutcome {
+                tool_call_id: "c".to_owned(),
+                content: format!("t{turn}"),
+            }));
+            push(kind, payload);
+            let (kind, payload) = encode(&Event::Done {
+                text: format!("a{turn}"),
+                agentic: true,
+            });
+            push(kind, payload);
+        }
+        rows
+    }
+
+    #[test]
+    fn a_short_log_is_returned_whole() {
+        let log = log_of(2);
+        assert_eq!(last_turns(&log, 20).len(), log.len());
+    }
+
+    #[test]
+    fn the_bound_keeps_whole_turns_from_the_end() {
+        let log = log_of(5);
+        let kept = last_turns(&log, 2);
+        assert_eq!(kept.len(), 6, "two turns of three rows each");
+        assert_eq!(
+            kept[0].kind, KIND_USER_MESSAGE,
+            "the tail begins at a turn boundary, never mid-turn"
+        );
+        assert_eq!(
+            transcript(kept)
+                .iter()
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>(),
+            vec!["q3", "t3", "a3", "q4", "t4", "a4"],
+            "the last two turns, in order"
+        );
+    }
+
+    /// The failure a row-based bound would cause, asserted directly: the
+    /// conversation handed to the model must not start with a tool result.
+    #[test]
+    fn a_bounded_conversation_never_opens_with_a_tool_result() {
+        let log = log_of(9);
+        for turns in 1..=9 {
+            let messages = transcript(last_turns(&log, turns));
+            assert_eq!(
+                messages.first().map(|m| m.role),
+                Some(Role::User),
+                "bounded to {turns} turns, the conversation opens with a user message"
+            );
+        }
+    }
+
+    #[test]
+    fn a_zero_bound_is_empty_and_an_empty_log_stays_empty() {
+        assert!(last_turns(&log_of(3), 0).is_empty());
+        assert!(last_turns(&[], 20).is_empty());
+    }
+
+    /// A log whose rows are all events — no turn boundary — is one turn in
+    /// progress. Returning nothing would lose it.
+    #[test]
+    fn a_log_with_no_turn_boundary_is_returned_whole() {
+        let (kind, payload) = encode(&Event::Warning("standalone".to_owned()));
+        let log = vec![LoggedEvent {
+            session: "s".to_owned(),
+            seq: 1,
+            ts: 1,
+            kind: kind.to_owned(),
+            payload,
+        }];
+        assert_eq!(last_turns(&log, 20).len(), 1);
+    }
+
+    /// A `follow-up` is a user message but not a turn boundary — steering
+    /// continues a turn rather than starting one, so it must not consume the
+    /// bound.
+    #[test]
+    fn steering_does_not_start_a_new_turn() {
+        let mut log = log_of(1);
+        log.push(LoggedEvent {
+            session: "s".to_owned(),
+            seq: 4,
+            ts: 100,
+            kind: "follow-up".to_owned(),
+            payload: envelope(&json!({ "message": "and also" })),
+        });
+        assert_eq!(
+            last_turns(&log, 1).len(),
+            4,
+            "one turn, and the steering that belongs to it"
         );
     }
 }
