@@ -107,7 +107,7 @@ Extensions are **WASM components** (`.wasm` files) dropped into `ext/`. They are
 
 ### What extensions cannot do
 
-Asserted by `host/tests/sandbox_boundary.rs`, which drives `tool-escape-probe` —
+Asserted by `host/tests/it/sandbox_boundary.rs`, which drives `tool-escape-probe` —
 a component written to attempt each of these with plain `std`, rather than to ask
 politely through a typed import:
 

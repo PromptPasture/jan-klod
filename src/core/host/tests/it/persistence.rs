@@ -10,7 +10,7 @@
 use jan_klod_core::conductor::RunResult;
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 #[test]
 fn transcript_survives_a_runtime_restart() {

@@ -16,7 +16,7 @@ use jan_klod_core::serve::serve_once;
 use jan_klod_core::Runtime;
 use tiny_http::Server;
 
-mod common;
+use crate::common;
 
 #[test]
 fn external_client_drives_the_loop_over_http() {

@@ -26,7 +26,7 @@ use jan_klod_core::serve::serve_once;
 use jan_klod_core::Runtime;
 use tiny_http::Server;
 
-mod common;
+use crate::common;
 
 /// A lost answer must fail fast rather than stall for the three-minute default
 /// and then pass on the prompt's own denial. See `auth.rs` for the run this cost.

@@ -26,7 +26,7 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Result, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-mod common;
+use crate::common;
 
 /// `provider-world`: lifecycle + `llm-provider`, also imports `host-http`.
 mod provider_bind {

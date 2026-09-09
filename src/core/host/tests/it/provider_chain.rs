@@ -17,7 +17,7 @@ use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 /// Each provider instance has its own `base-url`, so one canned client can answer
 /// as whichever provider is calling.

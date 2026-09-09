@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-mod common;
+use crate::common;
 
 const GUESTS: [&str; 3] = [
     "provider-openai.wasm",

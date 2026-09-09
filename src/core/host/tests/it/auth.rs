@@ -15,7 +15,7 @@ use jan_klod_core::serve::serve_once_authed;
 use jan_klod_core::Runtime;
 use tiny_http::Server;
 
-mod common;
+use crate::common;
 
 const TOKEN: &str = "s3cret-token";
 

@@ -15,7 +15,7 @@ use jan_klod_core::tool_host::ToolExtension;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
-mod common;
+use crate::common;
 
 fn probe_component(engine: &Engine) -> Option<Component> {
     let path = common::repo_root().join("ext").join("tool-proc-probe.wasm");

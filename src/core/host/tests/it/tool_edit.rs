@@ -13,7 +13,7 @@ use jan_klod_core::tool_host::ToolExtension;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
-mod common;
+use crate::common;
 
 fn edit_component(engine: &Engine) -> Option<Component> {
     let path = common::repo_root().join("ext").join("tool-edit.wasm");

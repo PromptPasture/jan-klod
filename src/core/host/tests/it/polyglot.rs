@@ -31,7 +31,7 @@ use wasmtime::component::{Component, Linker};
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-mod common;
+use crate::common;
 
 wasmtime::component::bindgen!({
     path: "../../../wit/spike",

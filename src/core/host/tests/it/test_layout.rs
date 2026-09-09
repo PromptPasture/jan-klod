@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-mod common;
+use crate::common;
 
 /// Directories that are not ours to police.
 const IGNORED: [&str; 4] = ["target", ".git", "node_modules", "ext"];

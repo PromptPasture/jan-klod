@@ -35,7 +35,7 @@ use jan_klod_core::serve::serve_once;
 use jan_klod_core::Runtime;
 use tiny_http::Server;
 
-mod common;
+use crate::common;
 
 /// The env vars the shipped config expands. Set to placeholders: the provider's
 /// HTTP is faked, so no key is ever used — but boot must not fail on a missing one.

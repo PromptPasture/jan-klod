@@ -110,7 +110,7 @@ loop. Go (TinyGo) is the non-Rust language we validate at the gate (see
 [Extension Technologies](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md));
 this slice proves its TinyGo CM toolchain (`wkg` deps, `wasi:cli` world quirk) and
 stays as the polyglot canary even though our own extensions are now Rust. It is
-checked by `host/tests/polyglot.rs`: the committed Go-built component is loaded
+checked by `host/tests/it/polyglot.rs`: the committed Go-built component is loaded
 and called on every `make gate` run, and rebuilt from source wherever `tinygo`
 and `wkg` are installed. Until 2026-08-11 this page said `make gate` ran it and
 `make gate` did not — the spike was an example someone had to invoke by hand.

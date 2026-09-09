@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use jan_klod_core::telegram::poll_once;
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 #[test]
 fn telegram_message_drives_a_turn_and_replies() {

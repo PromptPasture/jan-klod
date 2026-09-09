@@ -8,7 +8,7 @@
 
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 #[test]
 fn build_agent_wires_enabled_tools_into_the_fleet() {

@@ -34,7 +34,7 @@ use std::thread;
 
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 /// A loopback server that counts requests and answers every one, so a guest that
 /// got through would see a plausible reply rather than a connection error.

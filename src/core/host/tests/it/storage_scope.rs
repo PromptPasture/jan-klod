@@ -25,7 +25,7 @@
 use jan_klod_core::intercept::{Driver, UserPrompt};
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 const GUESTS: [&str; 3] = [
     "provider-openai.wasm",

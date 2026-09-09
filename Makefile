@@ -147,10 +147,24 @@ supply-chain: deny audit sbom
 #                       tool-* extension (Phase 8 Slice 8a).
 #   tool_wiring       — build_agent instantiates an enabled tool.* into the fleet
 #                       from config + a workspace (Phase 8 Slice 8a).
-# Both run against a canned host-http reply (no network, no api key) and skip any
-# guest not staged, so this target stages them first.
+# All of them run against a canned host-http reply (no network, no api key) and
+# skip any guest not staged, so this target stages them first.
+#
+# These were nine separate test *files*, named here with --test. They are now
+# modules of the single `it` target (src/core/host/tests/it/main.rs), so the
+# selection is a set of libtest name filters instead — libtest matches a test if
+# it contains any of them. What that costs: the build is no longer cheaper than
+# `gate`'s, because it is the same binary; only the run is shorter.
+#
+# JK_REQUIRE_GUESTS for the same reason `gate` sets it — this target stages the
+# guests itself, so a skipped test here can only mean something is wrong. It
+# went without the flag for a long time, which meant its own tests could vanish
+# and it would still print success.
+harness: export JK_REQUIRE_GUESTS = 1
 harness: extensions
-	cd $(CORE) && cargo test -p jan-klod-host --test component_harness --test agent_loop --test persistence --test api_rest --test telegram --test host_fs --test host_process --test tool_fleet --test tool_wiring
+	cd $(CORE) && cargo test -p jan-klod-host --test it -- \
+	  component_harness:: agent_loop:: persistence:: api_rest:: telegram:: \
+	  host_fs:: host_process:: tool_fleet:: tool_wiring::
 
 # Exit gate: the full offline integration surface, with nothing allowed to skip.
 #

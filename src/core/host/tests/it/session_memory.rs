@@ -21,7 +21,7 @@ use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 const GUESTS: [&str; 1] = ["provider-openai.wasm"];
 

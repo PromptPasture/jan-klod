@@ -24,7 +24,7 @@ use jan_klod_core::intercept::{Driver, ToolCall, UserPrompt};
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 // ── Phase 2 helpers ──────────────────────────────────────────────────────────
 

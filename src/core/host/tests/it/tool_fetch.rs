@@ -19,7 +19,7 @@ use jan_klod_core::tool_host::ToolExtension;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
-mod common;
+use crate::common;
 
 /// A canned HTTP client that records how many requests it was actually asked to
 /// make, so a test can prove a refusal happened *before* the network.

@@ -13,7 +13,7 @@
 use jan_klod_core::conductor::RunResult;
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 #[test]
 fn thin_loop_runs_turns_from_config() {

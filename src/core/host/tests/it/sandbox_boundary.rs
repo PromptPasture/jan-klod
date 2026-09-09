@@ -29,7 +29,7 @@ use jan_klod_core::tool_host::ToolExtension;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
-mod common;
+use crate::common;
 
 const PROBE: &str = "tool-escape-probe.wasm";
 
@@ -215,6 +215,8 @@ fn a_guest_cannot_read_the_hosts_environment() {
 const SECRET: &str = "TOPSECRET-USER-KEYSTROKES";
 /// Set on the re-executed child so it runs the probe instead of the parent half.
 const CHILD: &str = "JK_STDIN_PROBE_CHILD";
+/// This test's own function name, for the `--exact` filter it re-executes with.
+const TEST_NAME: &str = "a_guest_gets_no_standard_input";
 
 #[test]
 fn a_guest_gets_no_standard_input() {
@@ -232,8 +234,19 @@ fn a_guest_gets_no_standard_input() {
         return;
     }
 
+    // libtest's `--exact` matches the *full* test path. While each file here was
+    // its own test binary that was the bare function name; now that they are
+    // modules of one `it` target it is module-qualified, and the old literal
+    // matched nothing — the child ran zero tests and this test failed with "the
+    // child reported nothing". Derived rather than rewritten by hand, so a
+    // rename or another move cannot silently desynchronise it: `module_path!()`
+    // is `it::sandbox_boundary`, and libtest's name drops the crate root.
+    let test_path = module_path!().split_once("::").map_or_else(
+        || TEST_NAME.to_owned(),
+        |(_, module)| format!("{module}::{TEST_NAME}"),
+    );
     let mut child = std::process::Command::new(std::env::current_exe().expect("own path"))
-        .args(["--exact", "a_guest_gets_no_standard_input", "--nocapture"])
+        .args(["--exact", test_path.as_str(), "--nocapture"])
         .env(CHILD, "1")
         .env("JK_REQUIRE_GUESTS", "1")
         .stdin(std::process::Stdio::piped())

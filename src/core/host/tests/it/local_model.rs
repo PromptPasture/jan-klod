@@ -35,7 +35,7 @@ use std::thread;
 use jan_klod_core::conductor::RunResult;
 use jan_klod_core::Runtime;
 
-mod common;
+use crate::common;
 
 /// A minimal OpenAI-compatible endpoint: one completion, then it keeps serving.
 struct FakeOllama {

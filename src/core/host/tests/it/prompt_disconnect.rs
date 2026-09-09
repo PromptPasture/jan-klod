@@ -10,7 +10,7 @@
 
 use jan_klod_core::route::HttpFn;
 
-mod common;
+use crate::common;
 
 const GUESTS: [&str; 3] = [
     "provider-openai.wasm",

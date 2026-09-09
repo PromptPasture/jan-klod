@@ -4,7 +4,7 @@
 //! `docs/decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md`; this
 //! example keeps it runnable by hand, with a prompt of your choosing.
 //!
-//! The *automated* check is `tests/polyglot.rs`, which is what `make gate` runs.
+//! The *automated* check is `tests/it/polyglot.rs`, which is what `make gate` runs.
 //! This header used to claim the gate ran this example. It did not.
 //!
 //! Synchronous Wasmtime on purpose — see the async-model decision in that

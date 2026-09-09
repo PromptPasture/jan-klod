@@ -15,7 +15,7 @@
 
 use std::collections::BTreeSet;
 
-mod common;
+use crate::common;
 
 /// The `${VAR}` names the *enabled* providers in the shipped config expand.
 ///

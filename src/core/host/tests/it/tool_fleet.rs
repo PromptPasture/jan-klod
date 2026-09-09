@@ -14,7 +14,7 @@ use jan_klod_core::tool_host::{ToolExtension, ToolFleet};
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
-mod common;
+use crate::common;
 
 fn call(name: &str, arguments: &str) -> ToolCall {
     ToolCall {
