@@ -20,5 +20,14 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # no cross-thread sharing of the session). See docs/concepts/architecture.md#transport.
 tiny_http = "0.12"
 
+# Test-only, and in this direction on purpose. The mapping from `conductor::Event`
+# to a protocol notification has to be asserted somewhere, and the protocol crate
+# may not depend on this one — `jan-klod-protocol` is specified to carry nothing
+# beyond serde (#41), and depending on the core would drag wasmtime into it. Nothing
+# here depends on the protocol at runtime yet; the transports (#42, #43) are what
+# will.
+[dev-dependencies]
+jan-klod-protocol = { path = "../protocol" }
+
 [lints]
 workspace = true

@@ -1346,6 +1346,7 @@ name = "jan-klod-core"
 version = "0.1.0"
 dependencies = [
  "jan-klod-config",
+ "jan-klod-protocol",
  "rusqlite",
  "serde_json",
  "thiserror 2.0.18",

@@ -4,7 +4,7 @@
 //! exactly what a careless `#[serde(rename)]` edit or a variant reshuffle
 //! produces silently. These tests make it loud.
 
-use jan_klod_protocol::{Command, HelloResult, PROTOCOL_VERSION};
+use jan_klod_protocol::{Command, HelloResult, Notification, PROTOCOL_VERSION};
 
 /// The `method` each command must serialize to.
 ///
@@ -104,6 +104,105 @@ fn the_envelope_is_method_plus_params() {
         serde_json::to_string(&Command::SessionCreate).expect("serializes"),
         r#"{"method":"session/create"}"#
     );
+}
+
+/// The `method` each notification must serialize to. Exhaustive for the same
+/// reason [`expected_method`] is.
+const fn expected_notification_method(notification: &Notification) -> &'static str {
+    match notification {
+        Notification::TextDelta { .. } => "text-delta",
+        Notification::ToolInvoked { .. } => "tool-invoked",
+        Notification::ToolResult { .. } => "tool-result",
+        Notification::Warning { .. } => "warning",
+        Notification::Done { .. } => "done",
+        Notification::Ask { .. } => "ask",
+        Notification::SessionUpdated { .. } => "session/updated",
+    }
+}
+
+/// One sample per notification, every field populated.
+fn every_notification() -> Vec<Notification> {
+    vec![
+        Notification::TextDelta {
+            text: "the answer is".to_owned(),
+        },
+        Notification::ToolInvoked {
+            id: "c1".to_owned(),
+            name: "fs.read".to_owned(),
+            arguments: r#"{"path":"README.md"}"#.to_owned(),
+        },
+        Notification::ToolResult {
+            id: "c1".to_owned(),
+            content: "# Jan-Klod".to_owned(),
+        },
+        Notification::Warning {
+            message: "provider fell back".to_owned(),
+        },
+        Notification::Done {
+            answer: "42".to_owned(),
+            agentic: true,
+        },
+        Notification::Ask {
+            question: "Run `rm -rf`?".to_owned(),
+            options: vec!["yes".to_owned(), "no".to_owned()],
+            default: "no".to_owned(),
+        },
+        Notification::SessionUpdated {
+            session: "s1".to_owned(),
+            preview: "hello".to_owned(),
+        },
+    ]
+}
+
+#[test]
+fn every_notification_serializes_to_its_documented_method() {
+    for notification in every_notification() {
+        let json: serde_json::Value =
+            serde_json::to_value(&notification).expect("a notification serializes");
+        assert_eq!(
+            json.get("method").and_then(serde_json::Value::as_str),
+            Some(expected_notification_method(&notification)),
+            "wire name of {notification:?}"
+        );
+    }
+}
+
+#[test]
+fn every_notification_round_trips() {
+    for notification in every_notification() {
+        let text = serde_json::to_string(&notification).expect("serializes");
+        let back: Notification = serde_json::from_str(&text).expect("deserializes");
+        assert_eq!(back, notification, "round-trip of {text}");
+    }
+}
+
+#[test]
+fn each_notification_has_its_own_method() {
+    let mut methods: Vec<&str> = every_notification()
+        .iter()
+        .map(expected_notification_method)
+        .collect();
+    let total = methods.len();
+    methods.sort_unstable();
+    methods.dedup();
+    assert_eq!(
+        methods.len(),
+        total,
+        "two notifications share a method: {methods:?}"
+    );
+}
+
+/// A command and a notification are told apart by their `method`, not by the
+/// envelope, so the two name spaces must not collide — a transport that routes
+/// on `method` alone would otherwise dispatch one as the other.
+#[test]
+fn no_notification_shares_a_method_with_a_command() {
+    for notification in every_notification() {
+        let name = expected_notification_method(&notification);
+        for command in every_command() {
+            assert_ne!(name, expected_method(&command), "{name} is used by both");
+        }
+    }
 }
 
 #[test]
