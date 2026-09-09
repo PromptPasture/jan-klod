@@ -7,6 +7,7 @@
 //!   GET  /session/:id              message list, projected from the event log
 //!   POST /session/:id/message      send a message; SSE or JSON response
 //!   POST /session/:id/answer       answer a pending confirmation
+//!   POST /session/:id/fork         new session from a prefix of this one
 //!
 //! Synchronous/blocking (`tiny_http`) — one request is served at a time on the
 //! thread that owns the `!Send` `AgentSession`.
@@ -146,6 +147,18 @@ pub fn serve_once_authed(
         }
     }
 
+    // POST /session/:id/fork
+    if method == Method::Post {
+        if let Some(rest) = strip_prefix(path, "/session/") {
+            if let Some(id) = rest.strip_suffix("/fork") {
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body)?;
+                let reply = handle_fork_session(agent, id, &body);
+                return respond_json(request, reply);
+            }
+        }
+    }
+
     // POST /session/:id/message
     if method == Method::Post {
         if let Some(rest) = strip_prefix(path, "/session/") {
@@ -209,6 +222,46 @@ fn handle_create_session() -> Reply {
         status: 201,
         body: serde_json::json!({ "id": id }).to_string(),
     }
+}
+
+/// `POST /session/:id/fork` — start a new session from a prefix of this one.
+///
+/// The child's id is generated here, as `POST /sessions` generates one: a
+/// client naming it could collide with a live session, and `fork_events`
+/// refuses to write into a log that already exists, so the failure would be a
+/// confusing 500 rather than an id the client cannot pick wrongly.
+fn handle_fork_session(agent: &AgentSession, id: &str, body: &str) -> Reply {
+    let at_seq = match parse_at_seq(body) {
+        Ok(at_seq) => at_seq,
+        Err(message) => return error_reply(400, &message),
+    };
+    let child = new_session_id();
+    match agent.fork_session(id, at_seq, &child) {
+        // Copying nothing means the fork would start empty, which `POST
+        // /sessions` already does better. Almost always a wrong `at-seq` or a
+        // wrong session id, so it is reported rather than returning a session
+        // that silently is not a fork of anything.
+        Ok(0) => error_reply(
+            404,
+            &format!("session `{id}` has no events at or before seq {at_seq}"),
+        ),
+        Ok(copied) => Reply {
+            status: 201,
+            body: serde_json::json!({ "id": child, "copied": copied }).to_string(),
+        },
+        Err(err) => error_reply(500, &format!("fork failed: {err}")),
+    }
+}
+
+/// Extract `at-seq` from a `POST /session/:id/fork` body (`{"at-seq":3}`).
+fn parse_at_seq(body: &str) -> Result<u64, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("invalid JSON body: {e}"))?;
+    value
+        .get("at-seq")
+        .ok_or("missing field `at-seq`")?
+        .as_u64()
+        .ok_or_else(|| "`at-seq` must be a non-negative whole number".to_owned())
 }
 
 /// `GET /session/:id` — return transcript + metadata.

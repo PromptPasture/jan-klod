@@ -64,6 +64,22 @@ pub enum Command {
         /// Session id.
         session: String,
     },
+    /// `session/fork` — start a new session from a prefix of this one
+    /// (`POST /session/:id/fork`).
+    ///
+    /// Contract only for now: no transport carries a command yet, so the REST
+    /// route is what a client actually calls. It is declared here anyway
+    /// because the schema is what non-Rust clients generate from, and a route
+    /// that exists but is absent from the contract is how the two drift.
+    #[serde(rename = "session/fork")]
+    SessionFork {
+        /// The session to fork from.
+        session: String,
+        /// The last event of the parent's log to copy, inclusive. The child's
+        /// own log is renumbered from 1.
+        #[serde(rename = "at-seq")]
+        at_seq: u64,
+    },
     /// `session/message` — start a turn (`POST /session/:id/message`).
     #[serde(rename = "session/message")]
     SessionMessage {

@@ -45,6 +45,37 @@
           "additionalProperties": false,
           "properties": {
             "method": {
+              "const": "session/fork"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "at-seq": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at-seq",
+                "session"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "session/fork",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
               "const": "session/get"
             },
             "params": {

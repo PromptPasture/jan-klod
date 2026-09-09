@@ -1075,6 +1075,33 @@ impl AgentSession {
         projection::transcript(&events)
     }
 
+    /// Copy `from`'s log up to and including `at_seq` into `into`, so the new
+    /// session continues from that point and then diverges.
+    ///
+    /// Nothing is written to the parent, and nothing links the two: a fork is a
+    /// copy of a prefix, not a branch pointer. That is what makes "then
+    /// independent" true without any bookkeeping to keep true — the parent
+    /// cannot be affected by a session it has no reference to.
+    ///
+    /// # Errors
+    /// Returns the store's error if `into` already has a log, or on a SQL
+    /// failure. Copying **nothing** — `at_seq` of 0, or a parent with no log —
+    /// is reported as `Ok(0)`; whether that is a mistake is the caller's
+    /// question, and the REST surface answers it.
+    pub fn fork_session(
+        &self,
+        from: &str,
+        at_seq: u64,
+        into: &str,
+    ) -> Result<u64, store::StoreError> {
+        self.store
+            .lock()
+            .map_err(|_| store::StoreError::Backend {
+                detail: "the store lock is poisoned".to_owned(),
+            })?
+            .fork_events(from, at_seq, into)
+    }
+
     /// All known session ids, newest first.
     #[must_use]
     pub fn list_sessions(&self) -> Vec<String> {

@@ -182,3 +182,107 @@ fn the_read_surfaces_answer_from_the_log() {
         "and a session that never ran reads as empty rather than failing"
     );
 }
+
+/// Acceptance line 2: a fork at seq *N* runs its own turn without touching the
+/// parent's log.
+///
+/// Independence is asserted in **both** directions. A fork that shares the
+/// parent's history is the easy half; the half that actually breaks is a later
+/// turn in one of them leaking into the other, and a fork implemented as a
+/// branch pointer rather than a copy would pass the first check and fail this.
+#[test]
+fn a_fork_runs_its_own_turn_and_leaves_the_parent_alone() {
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-eventlog-fork-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    let config = config_with_store(&dir);
+
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
+    let factory = || common::canned_http("pong");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+
+    agent.run("parent", "the original question");
+    let parent_before = agent.transcript("parent");
+    let at_seq = {
+        let store = Store::open(dir.join("jan-klod.db")).expect("readable");
+        store.session_events("parent").unwrap().len() as u64
+    };
+
+    let copied = agent
+        .fork_session("parent", at_seq, "child")
+        .expect("the fork succeeds");
+    assert_eq!(copied, at_seq, "the whole prefix was copied");
+
+    // The fork starts as the parent was.
+    assert_eq!(
+        agent
+            .transcript("child")
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>(),
+        parent_before
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>(),
+        "the fork opens with the parent's conversation"
+    );
+
+    // Then each runs a turn of its own.
+    agent.run("child", "only the child asks this");
+    agent.run("parent", "only the parent asks this");
+
+    let child = agent.transcript("child");
+    let parent = agent.transcript("parent");
+    assert!(
+        child
+            .iter()
+            .any(|m| m.content == "only the child asks this"),
+        "the fork's own turn is in its log"
+    );
+    assert!(
+        parent
+            .iter()
+            .all(|m| m.content != "only the child asks this"),
+        "and did not reach the parent: {parent:?}"
+    );
+    assert!(
+        child
+            .iter()
+            .all(|m| m.content != "only the parent asks this"),
+        "nor the parent's the fork: {child:?}"
+    );
+    assert!(
+        agent.list_sessions().contains(&"child".to_string()),
+        "the fork is a session in its own right"
+    );
+}
+
+/// Forking a prefix that holds nothing is refused rather than producing a
+/// session that silently is not a fork of anything.
+#[test]
+fn forking_nothing_is_refused() {
+    if !common::guests_staged(&["provider-openai.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-eventlog-fork0-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    let config = config_with_store(&dir);
+
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
+    let factory = || common::canned_http("pong");
+    let agent = runtime.build_agent(&factory).expect("agent boots");
+
+    assert_eq!(
+        agent.fork_session("never-ran", 5, "child").unwrap(),
+        0,
+        "a session with no log copies nothing, and says so rather than erroring"
+    );
+    assert!(
+        agent.transcript("child").is_empty(),
+        "so no fork was created"
+    );
+}

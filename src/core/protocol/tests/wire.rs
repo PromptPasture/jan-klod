@@ -17,6 +17,7 @@ const fn expected_method(command: &Command) -> &'static str {
         Command::SessionCreate => "session/create",
         Command::SessionList => "session/list",
         Command::SessionGet { .. } => "session/get",
+        Command::SessionFork { .. } => "session/fork",
         Command::SessionMessage { .. } => "session/message",
         Command::TurnAnswer { .. } => "turn/answer",
         Command::TurnCancel { .. } => "turn/cancel",
@@ -35,6 +36,10 @@ fn every_command() -> Vec<Command> {
         Command::SessionList,
         Command::SessionGet {
             session: "s1".to_owned(),
+        },
+        Command::SessionFork {
+            session: "s1".to_owned(),
+            at_seq: 7,
         },
         Command::SessionMessage {
             session: "s1".to_owned(),
@@ -266,6 +271,15 @@ fn field_schema(value: &serde_json::Value) -> serde_json::Value {
                 "extend field_schema: a sample list must be non-empty and all strings, got {value}"
             );
             serde_json::json!({ "type": "array", "items": { "type": "string" } })
+        }
+        // Described as a non-negative integer, not a bare `number`. Every
+        // numeric field this contract has is a count or a position in a
+        // sequence — `at-seq` is the first — so a client generating types from
+        // the schema should get an unsigned integer and reject `-1` and `1.5`
+        // rather than accept them and fail later. The first field that is
+        // genuinely a float will land in the panic below, which is the point.
+        serde_json::Value::Number(number) if number.is_u64() => {
+            serde_json::json!({ "type": "integer", "minimum": 0 })
         }
         other => panic!("extend field_schema for {other}"),
     }
