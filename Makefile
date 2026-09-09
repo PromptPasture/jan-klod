@@ -169,16 +169,28 @@ probe:
 config:
 	cd $(CORE) && cargo run --quiet -p jan-klod-config --features examples --example dump -- $(CONFIG)
 
-# cargo-deny is pinned because its CLI moves: 0.20 removed `--config` from the
-# `check` subcommand and made it global, so 0.19 and 0.20 need different
-# invocations and no spelling satisfies both. CI installed `@latest` while local
-# machines had 0.19, and the supply-chain job failed on main for days. Keep this
-# in step with the pin in .github/workflows/ci.yml.
+# Every tool whose output or CLI these targets depend on is pinned, and each pin
+# has a twin in .github/workflows/ci.yml. Unpinned, CI resolves `@latest` while a
+# developer machine keeps whatever it installed months ago, and the two disagree
+# without either being wrong.
+#
+# cargo-deny is why: 0.20 removed `--config` from the `check` subcommand and made
+# it global, so 0.19 and 0.20 need different invocations and no spelling
+# satisfies both. CI had `@latest` (0.20.2), local machines had 0.19, and the
+# supply-chain job failed on main for days. The other three carry the identical
+# exposure — cargo-nextest most of all, since these Makefiles read its output —
+# so they are pinned to the versions current when this was written, which are
+# also the ones this repository has been verified against.
 CARGO_DENY_VERSION := 0.20.2
+CARGO_AUDIT_VERSION := 0.22.2
+CARGO_CYCLONEDX_VERSION := 0.5.9
+CARGO_NEXTEST_VERSION := 0.9.143
 
 # One-time developer setup: cargo supply-chain plugins + git hooks.
 setup:
-	cargo install cargo-audit cargo-cyclonedx cargo-nextest
+	cargo install cargo-audit --version $(CARGO_AUDIT_VERSION)
+	cargo install cargo-cyclonedx --version $(CARGO_CYCLONEDX_VERSION)
+	cargo install cargo-nextest --version $(CARGO_NEXTEST_VERSION)
 	cargo install cargo-deny --version $(CARGO_DENY_VERSION)
 	$(MAKE) install-hooks
 

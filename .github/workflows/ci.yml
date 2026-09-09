@@ -52,9 +52,13 @@ jobs:
       # and a filter matching nothing exits non-zero instead of reporting green.
       # Prebuilt binary, as with the supply-chain plugins below: `cargo install`
       # from source would rebuild it on every run.
+      #
+      # Pinned, like every other tool here: these Makefiles parse nextest's
+      # output, so a CLI change lands on us the way cargo-deny's did. Keep in
+      # step with CARGO_NEXTEST_VERSION in the root Makefile.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.143
 
       # Two things resolve wit/spike/deps (wasi:cli & co) through bindgen!: the
       # spike_gate example, which `make clippy` compiles by passing the `examples`
@@ -112,10 +116,11 @@ jobs:
         with:
           workspaces: src/core
 
-      # `make gate` runs under cargo-nextest; see the lint-test job for why.
+      # `make gate` runs under cargo-nextest; see the lint-test job for why, and
+      # for why the version is pinned.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.143
 
       # `make gate` builds the `it` test binary, and its polyglot module resolves
       # wit/spike through bindgen!, so this job needs wit/spike/deps too. It died
@@ -171,15 +176,18 @@ jobs:
 
       # Prebuilt binaries — far faster than `cargo install` from source.
       #
-      # cargo-deny is pinned: 0.20 removed `--config` from the `check`
-      # subcommand and made it global, so 0.19 and 0.20 need different
-      # invocations. Unpinned, this resolved to `@latest` (0.20.2) while local
-      # machines still had 0.19, and this job failed on main for days with
-      # "unexpected argument '--config' found". Keep in step with
-      # CARGO_DENY_VERSION in the root Makefile.
+      # All three are pinned, and cargo-deny is why: 0.20 removed `--config` from
+      # the `check` subcommand and made it global, so 0.19 and 0.20 need
+      # different invocations. Unpinned, this resolved to `@latest` (0.20.2)
+      # while local machines still had 0.19, and this job failed on main for days
+      # with "unexpected argument '--config' found". cargo-audit and
+      # cargo-cyclonedx had the identical exposure — `make audit` reads the
+      # former's exit code and `make sbom` the latter's output file — so they no
+      # longer float either. Keep in step with the CARGO_*_VERSION variables in
+      # the root Makefile.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny@0.20.2,cargo-audit,cargo-cyclonedx
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-cyclonedx@0.5.9
 
       - name: cargo-deny (license / advisory / source policy)
         run: make deny
