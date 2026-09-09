@@ -54,6 +54,32 @@ it needs different payloads/headers (e.g. `anthropic` → `provider-anthropic.wa
 id. Several instances can share one component but each keeps its own config
 section and identity.
 
+## What is in `ext/`
+
+The directory the core resolves components against, and it is **build output**:
+`make ext` puts a `.wasm` there per enabled-able guest, plus a
+`<name>.manifest.toml` declaring what that component needs. Neither is tracked
+in git — `make -C src/extensions clean` removes both — so `ext/` is a directory
+one command produces whole rather than a place to keep things.
+
+A manifest is generated from the component's own imports, so it describes the
+`.wasm` beside it and cannot drift from it; the format is in
+[Contracts → The extension manifest](contracts.md#the-extension-manifest).
+Reading one is how you answer "what does this thing want?" without a wasm
+parser:
+
+```console
+$ cat ext/tool-shell.manifest.toml | grep -A2 capabilities
+capabilities = [
+    "host-process",
+]
+```
+
+**Nothing enforces it yet.** A manifest today is a description; refusing a
+component whose imports and declaration disagree is still to come. What decides
+what a component may actually *do* is this file — the grants above, each
+default-deny — and that has not changed.
+
 ## Opaque config and `${VAR}` expansion
 
 Every key in an entry other than `enabled`/`type` is the instance's private

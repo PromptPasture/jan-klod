@@ -259,6 +259,51 @@ a foreign schema costs a veto over every future change. See the
 [vision](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions) and
 the [roadmap](roadmap.md#phase-13--client-protocol).
 
+## The extension manifest
+
+A contract that travels *with* a component, rather than one it implements. The
+WIT interfaces on this page say what a component may be asked to do; the
+manifest says what it needs in order to do it, in a form a registry can read
+before anything is downloaded and a host can check before anything runs.
+
+`ext/<name>.manifest.toml`, beside the `.wasm` — a sidecar rather than a custom
+wasm section, so it is inspectable without a wasm parser:
+
+```toml
+name = "tool-shell"
+version = "0.1.0"
+api-version = "0.1.0"
+kind = "tool"
+description = "run a command through host-process"
+capabilities = [
+    "host-process",
+]
+```
+
+**`capabilities` is read from the component, not written by its author.** The
+generator (`scripts/manifests.sh`, run by `make -C src/extensions manifests`)
+takes the top-level world's `import` lines out of `wasm-tools component wit` and
+keeps the `host-*` interfaces. So a manifest cannot claim less than the artifact
+beside it does, and two things it would be easy to wrongly include are excluded
+deliberately:
+
+- **Exports are not capabilities.** `tool-callable` and `extension-lifecycle`
+  are what a guest *implements*. A reading that took every `jan-klod:interfaces`
+  mention in the WIT output would list them.
+- **Type-only imports are not capabilities.** `llm-types` and `store-types` are
+  shapes; nothing is granted by importing one, and listing them would tell an
+  operator to allow `llm-types`, which means nothing.
+
+An empty list is written as `capabilities = []` rather than omitted: "needs
+nothing" is a claim worth making, and a missing key reads as unfilled.
+
+**Nothing reads a manifest yet.** It is generated, verified against the
+component, and otherwise inert — the boot-time refusal of a component whose
+imports and declaration disagree is
+[slice 16a-2](https://github.com/PromptPasture/jan-klod/issues/87). Until that
+lands, a manifest is a description, not a guarantee, and reading it as one would
+be reading a guarantee that does not exist.
+
 ## Versioning (planned, Phase 16)
 
 The `jan-klod:interfaces` package is free to change until the first public
