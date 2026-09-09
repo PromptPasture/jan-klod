@@ -231,3 +231,178 @@ fn the_protocol_version_is_semver() {
         );
     }
 }
+
+// ─── JSON Schema export ──────────────────────────────────────────────────────
+//
+// The schema under `schema/` is what a non-Rust client generates types from, so
+// it has to describe these types and not a past version of them. It is written
+// by the generator below rather than by hand, and this file is the single source
+// of the samples both the wire tests and the schema are built from — so a new
+// command or notification cannot reach the schema without also reaching the
+// tests above.
+//
+// `schemars` would do this with a derive. It was measured and rejected: it adds
+// seven packages to the audited tree, one of them a second major version of
+// `syn` next to the one already there, and this repository treats build
+// footprint as a real cost (#41). `## Scope` permits either.
+
+/// Where the committed schema lives.
+fn schema_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/protocol.schema.json")
+}
+
+/// The JSON Schema for one field, inferred from a populated sample value.
+///
+/// Panics on a kind it does not handle, rather than guessing: a field whose type
+/// stops being a string, a bool or a list of strings must be described
+/// deliberately, not approximated.
+fn field_schema(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(_) => serde_json::json!({ "type": "string" }),
+        serde_json::Value::Bool(_) => serde_json::json!({ "type": "boolean" }),
+        serde_json::Value::Array(items) => {
+            assert!(
+                !items.is_empty() && items.iter().all(serde_json::Value::is_string),
+                "extend field_schema: a sample list must be non-empty and all strings, got {value}"
+            );
+            serde_json::json!({ "type": "array", "items": { "type": "string" } })
+        }
+        other => panic!("extend field_schema for {other}"),
+    }
+}
+
+/// The schema for one tagged variant, derived from its serialized sample.
+fn variant_schema(envelope: &serde_json::Value) -> serde_json::Value {
+    let object = envelope.as_object().expect("an envelope is an object");
+    let method = object
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .expect("every envelope is tagged");
+    let Some(params) = object.get("params") else {
+        // A variant with no fields: serde omits `params` entirely.
+        return serde_json::json!({
+            "title": method,
+            "type": "object",
+            "properties": { "method": { "const": method } },
+            "required": ["method"],
+            "additionalProperties": false,
+        });
+    };
+    let fields = params.as_object().expect("params is an object");
+    let properties: serde_json::Map<String, serde_json::Value> = fields
+        .iter()
+        .map(|(key, value)| (key.clone(), field_schema(value)))
+        .collect();
+    serde_json::json!({
+        "title": method,
+        "type": "object",
+        "properties": {
+            "method": { "const": method },
+            "params": {
+                "type": "object",
+                "properties": properties,
+                "required": fields.keys().cloned().collect::<Vec<String>>(),
+                "additionalProperties": false,
+            },
+        },
+        "required": ["method", "params"],
+        "additionalProperties": false,
+    })
+}
+
+/// The whole schema, built from the samples above.
+fn generated_schema() -> serde_json::Value {
+    let one_of = |mut variants: Vec<serde_json::Value>| {
+        // Sorted by title, so reordering the samples is not a schema change.
+        variants.sort_by(|a, b| a["title"].as_str().cmp(&b["title"].as_str()));
+        serde_json::json!({ "oneOf": variants })
+    };
+    serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Jan-Klod client protocol",
+        "description": "Commands a client sends and notifications the core reports. \
+                        The transport wraps each in its own envelope; the `method` \
+                        and `params` members here are the contract.",
+        "x-protocol-version": PROTOCOL_VERSION,
+        "$defs": {
+            "Command": one_of(
+                every_command()
+                    .iter()
+                    .map(|c| variant_schema(&serde_json::to_value(c).expect("serializes")))
+                    .collect(),
+            ),
+            "Notification": one_of(
+                every_notification()
+                    .iter()
+                    .map(|n| variant_schema(&serde_json::to_value(n).expect("serializes")))
+                    .collect(),
+            ),
+            "HelloResult": {
+                "type": "object",
+                "properties": { "version": { "type": "string" } },
+                "required": ["version"],
+                "additionalProperties": false,
+            },
+        },
+    })
+}
+
+/// Regenerating the committed schema must be a no-op.
+///
+/// Set `JK_UPDATE_SCHEMA=1` to rewrite it after a deliberate change; the
+/// rewritten file is what gets reviewed and committed.
+#[test]
+fn the_committed_schema_matches_the_types() {
+    let mut expected = serde_json::to_string_pretty(&generated_schema()).expect("serializes");
+    expected.push('\n');
+    let path = schema_path();
+    if std::env::var("JK_UPDATE_SCHEMA").is_ok() {
+        std::fs::create_dir_all(path.parent().expect("has a parent")).expect("creates schema/");
+        std::fs::write(&path, &expected).expect("writes the schema");
+        return;
+    }
+    let committed = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "{}: {e}. Generate it with `JK_UPDATE_SCHEMA=1 cargo test -p jan-klod-protocol`",
+            path.display()
+        )
+    });
+    assert_eq!(
+        committed, expected,
+        "the committed schema no longer describes these types. Regenerate it with \
+         `JK_UPDATE_SCHEMA=1 cargo test -p jan-klod-protocol` and commit the result"
+    );
+}
+
+/// Every wire name reaches the schema. The test above compares whole documents,
+/// which fails loudly but says little; this one names what is missing.
+#[test]
+fn the_schema_covers_every_command_and_notification() {
+    let schema = generated_schema();
+    for (def, names) in [
+        (
+            "Command",
+            every_command()
+                .iter()
+                .map(expected_method)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "Notification",
+            every_notification()
+                .iter()
+                .map(expected_notification_method)
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        let titles: Vec<&str> = schema["$defs"][def]["oneOf"]
+            .as_array()
+            .expect("oneOf is a list")
+            .iter()
+            .map(|v| v["title"].as_str().expect("each has a title"))
+            .collect();
+        for name in names {
+            assert!(titles.contains(&name), "{def} schema is missing `{name}`");
+        }
+    }
+}

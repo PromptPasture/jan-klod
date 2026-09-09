@@ -1,0 +1,465 @@
+{
+  "$defs": {
+    "Command": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "protocol/hello"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "version"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "protocol/hello",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "session/create"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "title": "session/create",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "session/get"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "session"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "session/get",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "session/list"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "title": "session/list",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "session/message"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message",
+                "session"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "session/message",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "turn/answer"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "answer": {
+                  "type": "string"
+                },
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "answer",
+                "session"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "turn/answer",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "turn/cancel"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "session"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "turn/cancel",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "turn/follow-up"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message",
+                "session"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "turn/follow-up",
+          "type": "object"
+        }
+      ]
+    },
+    "HelloResult": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version"
+      ],
+      "type": "object"
+    },
+    "Notification": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "ask"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "default": {
+                  "type": "string"
+                },
+                "options": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "question": {
+                  "type": "string"
+                },
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "default",
+                "options",
+                "question",
+                "session"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ask",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "done"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "agentic": {
+                  "type": "boolean"
+                },
+                "answer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "agentic",
+                "answer"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "done",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "error"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "error",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "session/updated"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "preview": {
+                  "type": "string"
+                },
+                "session": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "preview",
+                "session"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "session/updated",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "text-delta"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "text-delta",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "tool-invoked"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "arguments": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "arguments",
+                "id",
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "tool-invoked",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "tool-result"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "tool-result",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "warning"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "warning",
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Commands a client sends and notifications the core reports. The transport wraps each in its own envelope; the `method` and `params` members here are the contract.",
+  "title": "Jan-Klod client protocol",
+  "x-protocol-version": "0.1.0"
+}
