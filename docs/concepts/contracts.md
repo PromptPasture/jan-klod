@@ -203,10 +203,20 @@ separate `api-rest` guest is closed.
 `jan-klod-protocol` crate (`src/core/protocol`) holds the typed commands and
 notifications, `PROTOCOL_VERSION`, and a JSON Schema export in
 [`schema/protocol.schema.json`](../../src/core/protocol/schema/protocol.schema.json)
-— which is what a non-Rust client generates its types from. The crate carries no
-transport and no request ids: each value serializes to the `method`/`params`
-pair, and the envelope around it belongs to whichever transport carries it
-(13b stdio, 13c WebSocket). Landed in 13a; the transports have not.
+— which is what a non-Rust client generates its types from. Each value
+serializes to the `method`/`params` pair; the `jsonrpc` module wraps that pair
+in the JSON-RPC 2.0 frame the transports send.
+
+**The framing moved into the contract in 13b, and that was a correction.** 13a
+put it in the transport, reasoning that framing is a transport's business. That
+holds for one transport and fails for two parties: the core writes frames and
+every client reads them, and `jan-klod` — the TUI client — deliberately depends
+on neither `jan-klod-core` nor Wasmtime. A frame type reachable only from the
+core would have been hand-rolled a second time in the client, which is the
+divergence this contract exists to prevent. What stayed in the transport is what
+is genuinely its own: the pipes, the sockets, the read loop. The schema export
+describes both — `Command`/`Notification` are the contract, the `jsonrpc.*`
+definitions are what goes over the wire.
 
 **Commands** (client → core):
 
@@ -248,6 +258,17 @@ bumps **minor**. A client sends the version it was built against in
 `protocol/hello` and the core answers with its own, so a mismatch surfaces at
 connect rather than mid-turn. The schema export carries the version too, so a
 bump cannot land without the schema being regenerated.
+
+`jan_klod_protocol::compatible` is what decides, and **while the version is
+`0.x` a differing minor is refused as well** — the same rule the WIT
+`api-version` follows for the same reason (see [Versioning](#versioning)
+below): every version in play is `0.x`, so a major-only check would wave a `0.9`
+client through to a `0.1` core and call that a negotiation. The two predicates
+are deliberately separate. The version lines are independent — a WIT change need
+not touch a command, and a new command need not touch WIT — so one function
+serving both would mean one line dragging the other to a decision it did not
+make. A refused handshake carries the core's own version in the error's `data`,
+because it is the one exchange that returns no `HelloResult` to read it from.
 
 **The open question the vision left — own schema, or ACP wholesale — is settled
 as: own schema.** ACP becomes an *adapter* over this contract in Phase 18, not

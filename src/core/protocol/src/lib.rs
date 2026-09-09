@@ -8,9 +8,12 @@
 //!
 //! Two things are deliberately *not* here:
 //!
-//! * **No transport.** No sockets, no framing, no request ids. A [`Command`]
-//!   carries the `method`/`params` pair and nothing else, so the stdio and
-//!   WebSocket transports can each wrap it in their own envelope.
+//! * **No I/O.** No sockets, no pipes, no read loop. A [`Command`] carries the
+//!   `method`/`params` pair; [`jsonrpc`] wraps it in the frame both transports
+//!   send. Which is a correction: this crate first excluded framing too, on the
+//!   grounds that it belonged to the transport. That holds for one transport and
+//!   fails for two parties — see the [`jsonrpc`] module documentation for what
+//!   changed the answer.
 //! * **No policy.** These are the shapes of what clients say and what the core
 //!   reports back; whether a given command is *allowed* is the core's and its
 //!   interceptors' business.
@@ -23,7 +26,11 @@
 //! removing a field from one bumps **major**; adding a command, or adding an
 //! optional field, bumps **minor**. A client sends the version it was built
 //! against in [`Command::Hello`] and the core answers with [`HelloResult`], so
-//! a mismatch is caught at connect rather than mid-turn.
+//! a mismatch is caught at connect rather than mid-turn. [`compatible`] is what
+//! decides — and while this version is `0.x`, a differing **minor** is a
+//! refusal too.
+
+pub mod jsonrpc;
 
 use serde::{Deserialize, Serialize};
 
@@ -32,11 +39,47 @@ use serde::{Deserialize, Serialize};
 /// See the crate documentation for what a change to each field means.
 pub const PROTOCOL_VERSION: &str = "0.1.0";
 
+/// Whether a client built against `client` can talk to a core speaking `core`.
+///
+/// Same major, and — while the major is `0` — the same minor too. The second
+/// clause is the one that decides anything today, because [`PROTOCOL_VERSION`]
+/// is `0.1.0`: a major-only check would wave a `0.9` client through to a `0.1`
+/// core and call it negotiated. A version that does not parse is incompatible,
+/// since guessing at a malformed version is how a check becomes decoration.
+///
+/// # This rule is deliberately duplicated
+///
+/// `jan_klod_core::manifest::api_compatible` applies the same test to the WIT
+/// `jan-klod:interfaces` version, and this is not a copy waiting to be
+/// deduplicated. The two version *lines* are independent — a WIT change need
+/// not touch a command, and a new command need not touch WIT — so sharing one
+/// predicate would mean one of them dragging the other to a decision it did not
+/// make. What is shared is the reasoning, which is written down in
+/// [Contracts](../../../../docs/concepts/contracts.md).
+#[must_use]
+pub fn compatible(core: &str, client: &str) -> bool {
+    let parts = |v: &str| -> Option<(u64, u64)> {
+        let mut it = v.split('.');
+        let major = it.next()?.parse().ok()?;
+        let minor = it.next()?.parse().ok()?;
+        Some((major, minor))
+    };
+    match (parts(core), parts(client)) {
+        (Some((core_major, core_minor)), Some((their_major, their_minor))) => {
+            core_major == their_major && (core_major != 0 || core_minor == their_minor)
+        }
+        _ => false,
+    }
+}
+
 /// A command a client sends to the core.
 ///
 /// Adjacently tagged, so a value serializes to exactly the `method` and
-/// `params` members of a JSON-RPC request — the envelope around them (`id`,
-/// `jsonrpc`) belongs to the transport, not to this contract.
+/// `params` members of a JSON-RPC request and nothing more. That is not a
+/// stylistic choice: [`jsonrpc::Request`] flattens a command into the frame,
+/// and `#[serde(flatten)]` only works over a value that serializes as a map,
+/// which is what adjacent tagging produces — internal or external tagging would
+/// not.
 ///
 /// Each variant names the surface it comes from. `session/*` and `turn/answer`
 /// are the routes `jan_klod_core::serve` serves today; `turn/cancel` and
@@ -197,10 +240,11 @@ pub enum Notification {
     /// `error` — a command this surface could not serve, or a turn that failed.
     ///
     /// One notification for both, because the SSE `error` frame it has to stay
-    /// compatible with does not distinguish them either. A transport may answer
-    /// the first case with a JSON-RPC error against the command's id instead
-    /// (Slice 13b's call); a failed turn has no command to answer, so it stays a
-    /// notification regardless.
+    /// compatible with does not distinguish them either. **Slice 13b made that
+    /// call:** a command that could not be served is answered with a
+    /// [`jsonrpc::Response::error`] against its id, because a client waiting on
+    /// an id has to be released; a failed turn has no command to answer, so it
+    /// arrives here as a notification.
     #[serde(rename = "error")]
     Error {
         /// What went wrong, as the user should see it.
