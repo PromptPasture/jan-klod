@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["host", "core", "config", "ui"]
+members = ["host", "core", "config", "ui", "protocol"]
 
 [workspace.package]
 edition = "2021"
@@ -13,6 +13,9 @@ publish = false
 [workspace.dependencies]
 wasmtime = "46"
 wasmtime-wasi = "46"
+# `derive` adds no package to the audited tree: serde and serde_derive are both
+# already in Cargo.lock, pulled in by serde_json and serde_yaml_ng.
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 thiserror = "2"
