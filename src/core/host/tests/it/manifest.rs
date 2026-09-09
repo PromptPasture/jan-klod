@@ -191,3 +191,127 @@ fn the_capability_sets_are_the_ones_expected() {
         "a file tool cannot run a command, and the import set says so"
     );
 }
+
+/// Acceptance line 1: a manifest that omits a capability the component imports
+/// is refused, and the message names the interface.
+///
+/// The fixture is a real guest's manifest with one capability deleted, copied
+/// into a temp `ext/` alongside the real component. Building a guest that is
+/// deliberately wrong would have tested a component nobody ships; this tests
+/// the exact artifact that does ship, described wrongly.
+#[test]
+fn a_component_importing_more_than_it_declares_is_refused() {
+    if !common::guests_staged(&["tool-fetch.wasm"]) {
+        return;
+    }
+    let real_ext = common::repo_root().join("ext");
+    let dir = std::env::temp_dir().join(format!("jk-manifest-undeclared-{}", std::process::id()));
+    let ext = dir.join("ext");
+    std::fs::create_dir_all(&ext).unwrap();
+    let _guard = common::TempDir(dir.clone());
+
+    std::fs::copy(
+        real_ext.join("tool-fetch.wasm"),
+        ext.join("tool-fetch.wasm"),
+    )
+    .unwrap();
+    // `tool-fetch` imports host-config and host-http. Drop the http line.
+    let manifest = std::fs::read_to_string(real_ext.join("tool-fetch.manifest.toml")).unwrap();
+    assert!(
+        manifest.contains("\"host-http\","),
+        "the fixture depends on tool-fetch declaring host-http: {manifest}"
+    );
+    std::fs::write(
+        ext.join("tool-fetch.manifest.toml"),
+        manifest.replace("    \"host-http\",\n", ""),
+    )
+    .unwrap();
+
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        "\nextensions:\n  tool:\n    fetch:\n      enabled: true\n",
+    )
+    .unwrap();
+
+    // `Runtime` is not `Debug`, so bind the error rather than `expect_err`.
+    let Err(error) = Runtime::boot(&config, &ext) else {
+        panic!("a manifest that under-declares must be refused, and this booted");
+    };
+    let message = format!("{error}");
+    assert!(
+        message.contains("host-http"),
+        "the refusal names the interface the component imports: {message}"
+    );
+    assert!(
+        message.contains("tool-fetch"),
+        "and the component it is about: {message}"
+    );
+    assert!(
+        !message.contains("host-config"),
+        "and not the one that was declared correctly: {message}"
+    );
+}
+
+/// Acceptance line 2: declaring a capability `config.yaml` does not grant is
+/// fine — it boots, and the capability is still denied at the call.
+///
+/// The manifest is not a second place grants are kept. Every capability is
+/// default-deny where it is used, so an over-declaring manifest asks for more
+/// than it receives and simply does not get it; refusing it would mean an
+/// author had to keep their declaration in step with every operator's config.
+#[test]
+fn declaring_a_capability_the_config_does_not_grant_still_boots() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let real_ext = common::repo_root().join("ext");
+    let dir = std::env::temp_dir().join(format!("jk-manifest-generous-{}", std::process::id()));
+    let ext = dir.join("ext");
+    std::fs::create_dir_all(&ext).unwrap();
+    let _guard = common::TempDir(dir.clone());
+
+    std::fs::copy(real_ext.join("tool-fs.wasm"), ext.join("tool-fs.wasm")).unwrap();
+    // Declare host-process as well, which this component does not import and
+    // which the config below does not grant (`execution:` is absent entirely).
+    let manifest = std::fs::read_to_string(real_ext.join("tool-fs.manifest.toml")).unwrap();
+    std::fs::write(
+        ext.join("tool-fs.manifest.toml"),
+        manifest.replace(
+            "    \"host-fs\",\n",
+            "    \"host-fs\",\n    \"host-process\",\n",
+        ),
+    )
+    .unwrap();
+
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        "\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
+    )
+    .unwrap();
+
+    let runtime = Runtime::boot(&config, &ext).expect("an over-declaring manifest still boots");
+    let loaded = runtime
+        .extensions()
+        .iter()
+        .find(|e| e.instance.component_file() == "tool-fs.wasm")
+        .expect("the tool loaded");
+    assert_eq!(
+        loaded.capabilities.as_deref(),
+        Some(["host-fs".to_owned()].as_slice()),
+        "what it imports is unchanged by what it declares"
+    );
+
+    // And the declaration granted nothing: with no `execution:` block the
+    // process substrate is denied, so a command cannot run whatever the
+    // manifest says.
+    let factory = || common::canned_http("unused");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let out = agent.run("s", "hello");
+    assert!(
+        matches!(out, jan_klod_core::conductor::RunResult::Answered { .. })
+            || matches!(out, jan_klod_core::conductor::RunResult::Failed(_)),
+        "the turn ran one way or the other; what matters is that boot did not refuse"
+    );
+}

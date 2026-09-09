@@ -10,6 +10,7 @@ jan-klod-config = { path = "../config" }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 serde_json.workspace = true
+toml = "0.9"
 thiserror.workspace = true
 ureq = "3"
 # Host-side persistent store (Phase 3 Slice 3a). `bundled` compiles SQLite from

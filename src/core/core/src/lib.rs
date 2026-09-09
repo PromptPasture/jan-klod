@@ -23,6 +23,7 @@ pub mod host_process;
 pub mod http;
 pub mod intercept;
 pub mod interceptor_host;
+pub mod manifest;
 pub mod projection;
 pub mod registry_host;
 pub mod route;
@@ -211,6 +212,25 @@ impl Runtime {
                     })?;
                 // Read once, here, while the component is compiled and in hand.
                 let capabilities = host_capabilities(&component, &engine);
+                // Cross-check against what the component declares. A manifest
+                // that is absent is tolerated for now; one that is *present*
+                // and under-declares is refused, because a component needing
+                // more than it admits to is either mislabelled or lying.
+                let declared =
+                    manifest::Manifest::beside(&path).map_err(|source| CoreError::Manifest {
+                        id: instance.id.clone(),
+                        source,
+                    })?;
+                if let Some(declared) = &declared {
+                    let undeclared = declared.undeclared(&capabilities);
+                    if !undeclared.is_empty() {
+                        return Err(CoreError::Undeclared {
+                            id: instance.id.clone(),
+                            component: instance.component_file(),
+                            interfaces: undeclared.join(", "),
+                        });
+                    }
+                }
                 (LoadState::Compiled(component), Some(capabilities))
             } else {
                 (LoadState::Missing(path), None)
@@ -1420,6 +1440,33 @@ pub enum CoreError {
         /// The underlying compilation error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// A component's manifest could not be read.
+    ///
+    /// Distinct from a manifest that is simply absent: unreadable or malformed
+    /// is refused, because treating a typo as "no manifest" would turn it into
+    /// a silent widening of what the component may ask for.
+    #[error("{id}: its manifest cannot be read")]
+    Manifest {
+        /// Instance id whose manifest is unusable.
+        id: String,
+        /// Why.
+        #[source]
+        source: manifest::ManifestError,
+    },
+    /// A component imports a host capability its manifest does not declare.
+    #[error(
+        "{id}: `{component}` imports {interfaces}, which its manifest does not \
+         declare — regenerate it with `make ext`, or the component is not the one \
+         the manifest describes"
+    )]
+    Undeclared {
+        /// Instance id that was refused.
+        id: String,
+        /// The component file, which is also how its manifest is named.
+        component: String,
+        /// The undeclared interfaces, comma-separated.
+        interfaces: String,
     },
     /// Instantiating a compiled component failed.
     #[error("instantiating {id}")]
