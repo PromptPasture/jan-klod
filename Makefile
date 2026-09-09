@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions supervisor bundle test test-core test-guests test-fast harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
+.PHONY: help wit all core extensions ext supervisor bundle test test-core test-guests test-fast harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
 
 .DEFAULT_GOAL := all
 
@@ -23,7 +23,7 @@ help:
 	@echo "Targets:"
 	@echo "  all         build the host workspace + Rust guests (default)"
 	@echo "  core        build the host workspace"
-	@echo "  extensions  build the Rust guests, staged in ext/"
+	@echo "  extensions  build the Rust guests, staged in ext/ (alias: ext)"
 	@echo "  test        run host-side unit tests (core + guests + supervisor)"
 	@echo "  test-core   run the host workspace's tests only"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
@@ -57,6 +57,15 @@ core:
 
 extensions:
 	$(MAKE) -C $(EXT) all
+
+# `make ext` is what twelve call sites already tell developers to run — every
+# skip notice in core and the tests, bundle.sh's refusal, ci.yml's comment. None
+# of them worked: there was no such target, and because `ext/` is a *directory*,
+# make answered "Nothing to be done for `ext'" and exited 0. So the remedy a
+# failing test handed you looked like it succeeded and staged nothing. Aliased
+# rather than rewriting twelve messages, since `ext` is plainly the name people
+# reach for. .PHONY is the load-bearing half — without it the directory wins.
+ext: extensions
 
 # Host-side unit tests: the core workspace plus the guests' native (host-target)
 # tests (pure logic behind a wasm32 cfg-gate — e.g. the intent router).
