@@ -43,8 +43,14 @@ test:
 	cargo test --doc --workspace
 
 # The repo lint policy, enforced as CI will (-D warnings).
+#
+# `--features examples` because the examples are opt-in (see host/Cargo.toml) and
+# this is where they stay covered. clippy type-checks without linking, so adding
+# them here costs almost nothing — unlike the test targets, which used to *link*
+# each example and left ~500MB in target/debug/examples for binaries no test
+# runs. Lint everything, build only what is needed.
 clippy:
-	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --workspace --all-targets --features examples -- -D warnings
 
 # Supply-chain gates for the host workspace (Slice 1b gate). cargo-audit checks the
 # locked tree against the RUSTSEC database; cargo-deny applies the repo-wide

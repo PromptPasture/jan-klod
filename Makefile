@@ -163,11 +163,11 @@ chat-telegram:
 # Drives a provider's llm-provider.complete path against a live endpoint.
 # Needs the provider's api-key env (e.g. OPENAI_API_KEY) — real, billed call.
 probe:
-	cd $(CORE) && cargo run --quiet -p jan-klod-host --example provider_probe -- $(CONFIG) $(EXT_DIR)
+	cd $(CORE) && cargo run --quiet -p jan-klod-host --features examples --example provider_probe -- $(CONFIG) $(EXT_DIR)
 
 # Resolve config.yaml and print the extension plan (each instance -> wasm).
 config:
-	cd $(CORE) && cargo run --quiet -p jan-klod-config --example dump -- $(CONFIG)
+	cd $(CORE) && cargo run --quiet -p jan-klod-config --features examples --example dump -- $(CONFIG)
 
 # One-time developer setup: cargo supply-chain plugins + git hooks.
 setup:

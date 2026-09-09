@@ -53,8 +53,11 @@ jobs:
 
       # The spike_gate example's bindgen! resolves wit/spike/deps (wasi:cli & co),
       # which are gitignored and fetched on demand from the committed wit/wkg.lock.
-      # `cargo test` and `clippy --all-targets` compile that example, so populate the
-      # deps first — the same `wkg wit fetch` a developer runs locally.
+      # `make clippy` compiles that example — it passes the `examples` feature the
+      # example is gated behind — so populate the deps first, the same `wkg wit
+      # fetch` a developer runs locally. The test targets no longer need this:
+      # since the examples became opt-in they are linted, not built, by anything
+      # on the test path.
       #
       # Prebuilt binary (pinned to the version that produced wit/wkg.lock) — instant,
       # unlike `cargo install wkg`, which recompiles from source every run. wkg ships

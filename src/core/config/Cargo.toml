@@ -10,5 +10,15 @@ serde_json.workspace = true
 serde_yaml_ng.workspace = true
 thiserror.workspace = true
 
+# Off by default so a plain `cargo test` does not build the example. See the
+# same block in ../host/Cargo.toml for why that matters there; here it is only
+# consistency — `dump` is small and links no wasmtime.
+[features]
+examples = []
+
+[[example]]
+name = "dump"
+required-features = ["examples"]
+
 [lints]
 workspace = true

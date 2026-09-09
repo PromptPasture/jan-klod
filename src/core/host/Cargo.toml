@@ -34,5 +34,25 @@ serde_json.workspace = true
 # `jan_klod_client` to keep the two unambiguous.
 jan-klod-client = { package = "jan-klod", path = "../ui" }
 
+# The examples are opt-in, because cargo builds every example during `cargo test`
+# and `cargo nextest run` just to check they compile. Each of these links
+# wasmtime statically, so that was ~500MB in target/debug/examples and two extra
+# wasmtime link steps on every test run, for binaries no test invokes: both are
+# hand-run (`make probe` needs a live api key and network; `spike_gate` is the
+# Slice 1a polyglot canary, whose automated equivalent is tests/it/polyglot.rs).
+#
+# They are still linted: `make clippy` passes the feature, and clippy type-checks
+# without linking, so the check costs nothing it used to cost.
+[features]
+examples = []
+
+[[example]]
+name = "provider_probe"
+required-features = ["examples"]
+
+[[example]]
+name = "spike_gate"
+required-features = ["examples"]
+
 [lints]
 workspace = true
