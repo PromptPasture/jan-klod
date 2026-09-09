@@ -14,6 +14,7 @@
 //! Nothing in this module confines anything. [`SandboxPolicy`] is a value.
 
 use std::path::PathBuf;
+use std::process::Command;
 
 use serde_json::Value;
 
@@ -139,6 +140,107 @@ impl SandboxPolicy {
             network: flag(sandbox, "network"),
             require: flag(sandbox, "require"),
         })
+    }
+}
+
+/// Why a backend could not confine a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SandboxError {
+    /// This build has no backend for the host OS.
+    Unsupported,
+    /// A backend exists but would not apply the policy.
+    Refused(String),
+}
+
+/// An OS mechanism that confines a command's effects.
+///
+/// Implementations are per-platform and land in their own slices — Seatbelt on
+/// macOS, Landlock on Linux. The trait is here now because the policy above is
+/// meaningless without a named place for enforcement to arrive, and because the
+/// boot path has to be able to say that the place is empty.
+pub trait SandboxBackend {
+    /// The mechanism's name, for boot output — "Seatbelt", "Landlock".
+    fn name(&self) -> &'static str;
+
+    /// Confine `command` to `policy` before it is spawned.
+    ///
+    /// # Errors
+    /// [`SandboxError`] when the mechanism is unavailable or rejects the policy.
+    /// A backend must fail rather than apply a weaker policy than asked for:
+    /// partial confinement reported as success is the one outcome worse than
+    /// none, because it is indistinguishable from the real thing.
+    fn confine(&self, command: &mut Command, policy: &SandboxPolicy) -> Result<(), SandboxError>;
+}
+
+/// A backend that confines nothing.
+///
+/// Not a placeholder to be swapped out — it is the honest answer on any platform
+/// whose backend has not been written, and it exists so tests can hold a
+/// backend-shaped thing that refuses.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoBackend;
+
+impl SandboxBackend for NoBackend {
+    fn name(&self) -> &'static str {
+        "none"
+    }
+
+    fn confine(&self, _command: &mut Command, _policy: &SandboxPolicy) -> Result<(), SandboxError> {
+        Err(SandboxError::Unsupported)
+    }
+}
+
+/// The backend this build has for the host OS, if any.
+///
+/// `None` on every platform today; the backends are later slices. `Option`
+/// rather than always handing back a [`NoBackend`], because "there is nothing
+/// here" is then a fact the boot path can state up front instead of one it
+/// discovers by trying to confine a command that is about to run.
+#[must_use]
+pub fn host_backend() -> Option<Box<dyn SandboxBackend>> {
+    None
+}
+
+/// The mode actually in force, and why it is not the one that was asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveSandbox {
+    /// The mode that will apply to commands.
+    pub mode: SandboxMode,
+    /// Why [`Self::mode`] differs from the request — `None` when it does not.
+    ///
+    /// A downgrade always carries its reason, because a downgrade without one is
+    /// precisely the silent weakening this module exists to prevent. Callers
+    /// print it at boot and surface it on every turn that runs a command.
+    pub downgrade: Option<String>,
+}
+
+impl SandboxPolicy {
+    /// What this policy amounts to, given the backend available.
+    ///
+    /// Asking for [`SandboxMode::ApprovalOnly`] and getting it is not a
+    /// downgrade, so it carries no reason. Asking for [`SandboxMode::Os`] where
+    /// nothing can enforce it is, and does.
+    #[must_use]
+    pub fn resolve(&self, backend: Option<&dyn SandboxBackend>) -> EffectiveSandbox {
+        match (self.mode, backend) {
+            (SandboxMode::ApprovalOnly, _) => EffectiveSandbox {
+                mode: SandboxMode::ApprovalOnly,
+                downgrade: None,
+            },
+            (SandboxMode::Os, Some(_)) => EffectiveSandbox {
+                mode: SandboxMode::Os,
+                downgrade: None,
+            },
+            (SandboxMode::Os, None) => EffectiveSandbox {
+                mode: SandboxMode::ApprovalOnly,
+                downgrade: Some(format!(
+                    "`execution.sandbox.mode: os` was requested, but this build has no \
+                     sandbox backend for {} — a command is confined only by the \
+                     confirmation prompt",
+                    std::env::consts::OS
+                )),
+            },
+        }
     }
 }
 
@@ -268,5 +370,78 @@ mod tests {
         let policy = parse(r#"{ "sandbox": { "network": "yes", "require": 1 } }"#).unwrap();
         assert!(!policy.network, "`\"yes\"` must not read as a grant");
         assert!(!policy.require);
+    }
+
+    // ─── Effective mode ─────────────────────────────────────────────────────
+
+    #[test]
+    fn os_mode_with_no_backend_becomes_approval_only_and_says_why() {
+        let policy = parse(r#"{ "sandbox": { "mode": "os" } }"#).unwrap();
+        let effective = policy.resolve(None);
+        assert_eq!(effective.mode, SandboxMode::ApprovalOnly);
+        let reason = effective
+            .downgrade
+            .expect("a downgrade without a reason is the silent downgrade this prevents");
+        assert!(
+            reason.contains(std::env::consts::OS),
+            "the reason names the platform that has no backend: {reason}"
+        );
+        assert!(
+            reason.contains("confirmation"),
+            "and says what is left protecting the user: {reason}"
+        );
+    }
+
+    /// Stands in for a real backend. `resolve` decides on a backend's
+    /// *presence*; whether the mechanism then works is `confine`'s answer, not
+    /// `resolve`'s, so this one need not do anything.
+    struct Stub;
+    impl SandboxBackend for Stub {
+        fn name(&self) -> &'static str {
+            "stub"
+        }
+        fn confine(&self, _: &mut Command, _: &SandboxPolicy) -> Result<(), SandboxError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn os_mode_with_a_backend_stays_os_and_is_not_a_downgrade() {
+        let policy = parse(r#"{ "sandbox": { "mode": "os" } }"#).unwrap();
+        let effective = policy.resolve(Some(&Stub));
+        assert_eq!(effective.mode, SandboxMode::Os);
+        assert_eq!(effective.downgrade, None);
+    }
+
+    /// Getting what you asked for is not a downgrade, so it must not be
+    /// reported as one — an operator who chose approval-only deliberately
+    /// should not be warned about their own choice on every turn.
+    #[test]
+    fn asking_for_approval_only_is_not_a_downgrade() {
+        let policy = parse(r#"{ "sandbox": { "mode": "approval-only" } }"#).unwrap();
+        let effective = policy.resolve(None);
+        assert_eq!(effective.mode, SandboxMode::ApprovalOnly);
+        assert_eq!(effective.downgrade, None);
+    }
+
+    #[test]
+    fn no_backend_refuses_rather_than_confining_nothing_quietly() {
+        let policy = parse("{}").unwrap();
+        let mut command = Command::new("true");
+        assert_eq!(
+            NoBackend.confine(&mut command, &policy),
+            Err(SandboxError::Unsupported)
+        );
+        assert_eq!(NoBackend.name(), "none");
+    }
+
+    /// This is the state of every platform today, and the test says so out loud
+    /// so that the first slice to add a backend has to come here and change it.
+    #[test]
+    fn this_build_has_no_backend_for_any_platform_yet() {
+        assert!(
+            host_backend().is_none(),
+            "a backend landed — update this test and the security-model row"
+        );
     }
 }

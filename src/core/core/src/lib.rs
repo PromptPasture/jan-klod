@@ -663,8 +663,9 @@ impl Runtime {
     }
 
     /// Build the `host-process` runner from the top-level `execution:` config
-    /// (`{ enabled, timeout-secs?, output-cap? }`). Disabled unless enabled *and* a
-    /// workspace is configured (the exec cwd is jailed to it).
+    /// (`{ enabled, timeout-secs?, output-cap?, sandbox? }`). Disabled unless
+    /// enabled *and* a workspace is configured (the exec cwd is jailed to it),
+    /// and also when `sandbox:` cannot be read.
     fn open_process_runner(
         &self,
         workspace: Option<&host_fs::Workspace>,
@@ -697,6 +698,31 @@ impl Runtime {
                             .collect()
                     })
                     .unwrap_or_default();
+                // What a command may do once running, as distinct from what the
+                // runner above bounds. A policy that cannot be read denies
+                // execution outright rather than running unconfined: the
+                // operator asked for something specific about a command's
+                // effects, and guessing at it is the one response that could
+                // silently grant more than they wrote.
+                let policy = match sandbox::SandboxPolicy::from_config(exec, ws) {
+                    Ok(policy) => policy,
+                    Err(err) => {
+                        eprintln!(
+                            "WARN [core] `execution.sandbox` could not be read ({err:?}); \
+                             host-process is denied"
+                        );
+                        return host_process::ProcessRunner::disabled();
+                    }
+                };
+                let effective = policy.resolve(sandbox::host_backend().as_deref());
+                if let Some(reason) = &effective.downgrade {
+                    eprintln!("WARN [core] {reason}");
+                } else {
+                    eprintln!(
+                        "INFO [core] command sandbox: {:?} (as configured)",
+                        effective.mode
+                    );
+                }
                 host_process::ProcessRunner::new(
                     ws.clone(),
                     std::time::Duration::from_secs(timeout),

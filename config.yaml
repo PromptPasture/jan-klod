@@ -297,6 +297,25 @@ execution:
   timeout-secs: 30            # a command that outruns this is killed
   output-cap: 65536           # captured stdout/stderr bytes per run
 
+  # What a command may do once it is running. Everything above bounds the
+  # *caller* — the cwd is jailed to the workspace, the environment is rebuilt,
+  # time and output are capped — and none of it bounds the command itself, which
+  # runs with your privileges and can read or write anywhere you can.
+  #
+  # `mode: os` asks the operating system to confine it. No OS backend exists
+  # yet (macOS Seatbelt and Linux Landlock are separate pieces of work), so
+  # today every platform resolves to `approval-only`: the confirmation prompt is
+  # the only thing between the model and your filesystem. That is printed at
+  # boot with its reason whenever execution is enabled — it is never downgraded
+  # quietly. `writable` and `network` are the policy a backend will enforce;
+  # they have no effect until one exists.
+  sandbox:
+    mode: os                  # `os` or `approval-only`
+    writable: ["."]           # workspace-relative roots a command may write to
+    network: false            # whether a command may reach the network
+    require: false            # `true` refuses to run at all rather than
+                              # falling back to approval-only
+
 # Which provider answers interceptors' model calls (the intent router's
 # simple-vs-agentic classification). Names an instance from
 # `extensions.provider` above; omit to use the head of the chain below.
