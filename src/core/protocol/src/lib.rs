@@ -136,10 +136,10 @@ pub enum Command {
     /// `session/fork` — start a new session from a prefix of this one
     /// (`POST /session/:id/fork`).
     ///
-    /// Contract only for now: no transport carries a command yet, so the REST
-    /// route is what a client actually calls. It is declared here anyway
-    /// because the schema is what non-Rust clients generate from, and a route
-    /// that exists but is absent from the contract is how the two drift.
+    /// Declared here before any transport carried it, because the schema is
+    /// what non-Rust clients generate from and a route that exists but is
+    /// absent from the contract is how the two drift. Slice 13b's stdio
+    /// transport now serves it.
     #[serde(rename = "session/fork")]
     SessionFork {
         /// The session to fork from.
@@ -266,11 +266,14 @@ pub enum Notification {
     /// `error` — a command this surface could not serve, or a turn that failed.
     ///
     /// One notification for both, because the SSE `error` frame it has to stay
-    /// compatible with does not distinguish them either. **Slice 13b made that
-    /// call:** a command that could not be served is answered with a
-    /// [`jsonrpc::Response::error`] against its id, because a client waiting on
-    /// an id has to be released; a failed turn has no command to answer, so it
-    /// arrives here as a notification.
+    /// compatible with does not distinguish them either. **Slice 13b settled
+    /// how a transport uses it:** where there is an id to answer, the failure
+    /// is answered against it with a [`jsonrpc::Response::error`] and this
+    /// notification is not sent — a client waiting on an id has to be released,
+    /// and reporting the same failure twice invites a client to show it twice.
+    /// So over stdio a failed *turn* is the error response to its own
+    /// `session/message`. This notification is for a surface with no id to
+    /// answer, which is what SSE is.
     #[serde(rename = "error")]
     Error {
         /// What went wrong, as the user should see it.

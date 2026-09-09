@@ -60,7 +60,12 @@ const TIMEOUT_ENV: &str = "JK_ANSWER_TIMEOUT_SECS";
 const HEARTBEAT: Duration = Duration::from_secs(5);
 
 /// The configured confirmation timeout.
-fn answer_timeout() -> Duration {
+///
+/// `pub` so the stdio transport parks for the same length of time this one
+/// does: an answer window that depended on which transport a client happened to
+/// use would be a surprise nobody could have read anywhere.
+#[must_use]
+pub fn answer_timeout() -> Duration {
     std::env::var(TIMEOUT_ENV)
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())

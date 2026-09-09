@@ -13,6 +13,20 @@
 //! full exchange is asserted in-process with no subprocess and no model. Slice
 //! 13c's WebSocket transport is the same dispatch over a different pair.
 //!
+//! # How a cancel arrives while a turn is running
+//!
+//! A reader thread owns the input and does nothing but hand lines over a
+//! channel. That division is the whole design: while a turn runs, this thread
+//! is inside the conductor, so a `turn/cancel` could not be *read* at all
+//! without someone else holding the pipe. The main thread picks the queued
+//! frames up between two of the turn's own events — in [`RpcSink::emit`] — and
+//! cancels by returning [`Flow::Stop`], which is the same cancellation an SSE
+//! client gets by disconnecting. No new mechanism, and no change to the
+//! conductor.
+//!
+//! `AgentSession` is `!Send` and never leaves this thread, so nothing here is
+//! locked: the sink and the driver share the writer through `Rc<RefCell<_>>`.
+//!
 //! # The handshake is required, not offered
 //!
 //! `protocol/hello` must be the first frame. A negotiation a client can skip
@@ -21,12 +35,19 @@
 //! to prevent. An incompatible client is told what this core speaks and the
 //! connection closes — there is nothing further to say to it.
 
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::io::{BufRead, Write};
+use std::rc::Rc;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::Instant;
 
 use jan_klod_protocol::{
-    compatible, jsonrpc, Command, HelloResult, COMMAND_METHODS, PROTOCOL_VERSION,
+    compatible, jsonrpc, Command, HelloResult, Notification, COMMAND_METHODS, PROTOCOL_VERSION,
 };
 
+use crate::conductor::{Event, EventSink, Flow, RunResult};
+use crate::intercept::{Driver, UserPrompt};
 use crate::serve::{self, Forked};
 use crate::AgentSession;
 
@@ -37,43 +58,101 @@ use crate::AgentSession;
 /// sending nonsense should not take the session down with it.
 ///
 /// # Errors
-/// Propagates a write failure, and a read failure other than invalid UTF-8 —
-/// both mean the pipe is gone, so there is no one left to answer.
-pub fn serve<R: BufRead, W: Write>(
+/// Propagates a write failure: the pipe is gone, so there is no one left to
+/// answer.
+pub fn serve<R: BufRead + Send + 'static, W: Write>(
     input: R,
-    mut output: W,
-    agent: &AgentSession,
+    output: W,
+    agent: &mut AgentSession,
 ) -> std::io::Result<()> {
+    let (handover, incoming) = mpsc::channel();
+    // The reader thread does one thing: hand lines over. It holds no session —
+    // `AgentSession` is `!Send` and stays on this thread — and that division is
+    // what makes a mid-turn `turn/cancel` readable at all. While a turn runs,
+    // this thread is inside the conductor, so something else has to be holding
+    // the pipe or a cancel would not be seen until the turn it cancels had
+    // already finished. Nothing is locked, because nothing else is shared.
+    std::thread::spawn(move || {
+        for line in input.lines() {
+            let handed = match line {
+                Ok(line) => handover.send(Incoming::Line(line)),
+                // Bytes that are not UTF-8 are that frame's problem, not the
+                // stream's: the line has been consumed, so the loop can answer
+                // and carry on.
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
+                    handover.send(Incoming::NotUtf8)
+                }
+                // The pipe broke. Nothing to say: the receiver learns from the
+                // channel closing as this thread returns.
+                Err(_) => break,
+            };
+            if handed.is_err() {
+                break; // the loop below is gone
+            }
+        }
+    });
+
+    let wire = Wire {
+        writer: Rc::new(RefCell::new(output)),
+        incoming: &incoming,
+    };
     let mut negotiated = false;
-    for line in input.lines() {
-        let line = match line {
-            Ok(line) => line,
-            // Bytes that are not UTF-8 are this frame's problem, not the
-            // stream's: the line has been consumed, so answering and carrying
-            // on is both possible and kinder than hanging up.
-            Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
-                let refusal = refuse(
+    // `recv` ends when the reader thread drops its end, which is EOF.
+    while let Ok(frame) = wire.incoming.recv() {
+        let line = match frame {
+            Incoming::Line(line) => line,
+            Incoming::NotUtf8 => {
+                wire.write(&refuse(
                     jsonrpc::Id::Null,
                     jsonrpc::PARSE_ERROR,
                     "a frame must be UTF-8".to_owned(),
-                );
-                write_frame(&mut output, &refusal)?;
+                ))?;
                 continue;
             }
-            Err(err) => return Err(err),
         };
         if line.trim().is_empty() {
             continue;
         }
-        match dispatch(&line, &mut negotiated, agent) {
-            Served::Answer(response) => write_frame(&mut output, &response)?,
+        let served = match parse(&line) {
+            Ok(request) => command(request.command, request.id, &mut negotiated, agent, &wire),
+            Err(refusal) => Served::Answer(refusal),
+        };
+        match served {
+            Served::Answer(response) => wire.write(&response)?,
             Served::Close(response) => {
-                write_frame(&mut output, &response)?;
+                wire.write(&response)?;
                 return Ok(());
             }
         }
     }
+    // The reader thread is left to end on its own. Joining it would block on a
+    // read that has no reason to return — a refused handshake hangs up while
+    // the client may still be mid-write — and the process is exiting anyway.
     Ok(())
+}
+
+/// One line, as the reader thread hands it over.
+enum Incoming {
+    /// A line of text, not yet known to be a frame.
+    Line(String),
+    /// Bytes that were not UTF-8.
+    NotUtf8,
+}
+
+/// The two ends of the connection: where answers go, and where frames arrive.
+struct Wire<'a, W: Write> {
+    /// Shared with a running turn's sink and driver, which both write to it.
+    /// `Rc<RefCell<_>>` rather than a lock, because every writer is this
+    /// thread.
+    writer: Rc<RefCell<W>>,
+    incoming: &'a Receiver<Incoming>,
+}
+
+impl<W: Write> Wire<'_, W> {
+    /// Answer one request.
+    fn write(&self, response: &jsonrpc::Response) -> std::io::Result<()> {
+        write_frame(&mut *self.writer.borrow_mut(), response)
+    }
 }
 
 /// What serving one frame decided.
@@ -82,14 +161,6 @@ enum Served {
     Answer(jsonrpc::Response),
     /// Answer it and hang up. Only a refused handshake does this.
     Close(jsonrpc::Response),
-}
-
-/// Parse one line and serve whatever it turned out to be.
-fn dispatch(line: &str, negotiated: &mut bool, agent: &AgentSession) -> Served {
-    match parse(line) {
-        Ok(request) => command(request.command, request.id, negotiated, agent),
-        Err(refusal) => Served::Answer(refusal),
-    }
 }
 
 /// One line to a request, or to the refusal it earns.
@@ -203,11 +274,12 @@ fn diagnose(value: &serde_json::Value, err: &serde_json::Error) -> jsonrpc::Resp
 /// with it. (A guarded arm does not count towards exhaustiveness, which is what
 /// lets the handshake gate sit in the middle of the match instead of being an
 /// early return that has to repeat itself.)
-fn command(
+fn command<W: Write>(
     command: Command,
     id: jsonrpc::Id,
     negotiated: &mut bool,
-    agent: &AgentSession,
+    agent: &mut AgentSession,
+    wire: &Wire<W>,
 ) -> Served {
     match command {
         Command::Hello { version } => {
@@ -242,19 +314,305 @@ fn command(
             Forked::Empty(message) => Served::Answer(refuse(id, jsonrpc::INVALID_PARAMS, message)),
             Forked::Failed(message) => Served::Answer(refuse(id, jsonrpc::INTERNAL_ERROR, message)),
         },
-        // Turns are the next step of Slice 13b. Refused rather than accepted
-        // and dropped: `method not found` is the spec's code for a method that
-        // exists but "is not available", and a client that is told so can fall
-        // back to REST, while one whose turn silently never starts cannot.
-        Command::SessionMessage { .. }
-        | Command::TurnAnswer { .. }
-        | Command::TurnCancel { .. }
-        | Command::TurnFollowUp { .. } => Served::Answer(refuse(
+        Command::SessionMessage { session, message } => turn(&session, &message, id, agent, wire),
+        // These three steer a turn that is *running*, and a running turn is
+        // served inside `turn` above — this thread is in the conductor, not
+        // here. Reaching this arm means there is no turn, so there is nothing
+        // to answer, cancel or steer.
+        Command::TurnAnswer { .. } => Served::Answer(refuse(
             id,
-            jsonrpc::METHOD_NOT_FOUND,
-            "this transport does not run turns yet".to_owned(),
+            jsonrpc::INVALID_REQUEST,
+            "no confirmation is pending".to_owned(),
+        )),
+        Command::TurnCancel { .. } => Served::Answer(refuse(
+            id,
+            jsonrpc::INVALID_REQUEST,
+            "no turn is running".to_owned(),
+        )),
+        Command::TurnFollowUp { .. } => Served::Answer(refuse(
+            id,
+            jsonrpc::INVALID_REQUEST,
+            "no turn is running to steer: send `session/message` to start one".to_owned(),
         )),
     }
+}
+
+/// Run one turn, streaming its events as notifications.
+///
+/// The request is answered when the turn ends, with the same
+/// `{answer, agentic}` the blocking REST route returns. That is deliberate
+/// duplication of the `done` notification: a client that only wants the answer
+/// can await the response and ignore the stream, and a client that renders the
+/// stream can ignore the response. Neither has to implement both.
+fn turn<W: Write>(
+    session: &str,
+    message: &str,
+    id: jsonrpc::Id,
+    agent: &mut AgentSession,
+    wire: &Wire<W>,
+) -> Served {
+    let state = Rc::new(TurnState {
+        session: session.to_owned(),
+        cancelled: Cell::new(false),
+        follow_ups: RefCell::new(VecDeque::new()),
+        asking: Cell::new(false),
+    });
+    let mut sink = RpcSink {
+        writer: Rc::clone(&wire.writer),
+        incoming: wire.incoming,
+        state: Rc::clone(&state),
+    };
+    let mut driver = RpcDriver {
+        writer: Rc::clone(&wire.writer),
+        incoming: wire.incoming,
+        state: Rc::clone(&state),
+    };
+    match agent.run_streaming_with_driver(&mut driver, &mut sink, session, message) {
+        RunResult::Answered { text, agentic } => answer(
+            id,
+            serde_json::json!({ "answer": text, "agentic": agentic }),
+        ),
+        // A failed turn is reported once, here, against the id that asked for
+        // it. The `error` notification exists for SSE, which has no id to
+        // answer and therefore nothing else to report through.
+        RunResult::Failed(reason) => Served::Answer(refuse(id, jsonrpc::INTERNAL_ERROR, reason)),
+    }
+}
+
+/// What the sink and the driver both need to know about the running turn.
+struct TurnState {
+    /// The session this turn belongs to. A `turn/cancel` naming another one is
+    /// refused rather than applied — the client has lost track of which turn is
+    /// running, and cancelling the wrong one silently would be worse.
+    session: String,
+    cancelled: Cell<bool>,
+    follow_ups: RefCell<VecDeque<String>>,
+    /// Whether a question is on the wire waiting to be answered.
+    ///
+    /// An answer that arrives when nothing asked is refused, not stashed. REST
+    /// refuses it too (`409 no confirmation is pending`), and for a permission
+    /// prompt the reason is worth stating: a stashed answer would sit there
+    /// until the *next* question and approve it, which is how "yes" to reading
+    /// a file becomes "yes" to running a command.
+    asking: Cell<bool>,
+}
+
+/// Streams a turn's events, and notices a cancel between them.
+struct RpcSink<'a, W: Write> {
+    writer: Rc<RefCell<W>>,
+    incoming: &'a Receiver<Incoming>,
+    state: Rc<TurnState>,
+}
+
+impl<W: Write> EventSink for RpcSink<'_, W> {
+    fn emit(&mut self, event: &Event) -> Flow {
+        if write_notification(&mut *self.writer.borrow_mut(), &notification_for(event)).is_err() {
+            // Nobody is reading, so there is nothing left to stream.
+            return Flow::Stop;
+        }
+        // Between two events is where a cancel gets read. The conductor checks
+        // the returned `Flow` at its own loop boundaries, so `Stop` here is the
+        // same cancellation an SSE client gets by disconnecting — no new
+        // mechanism, and no conductor change.
+        serve_queued(self.incoming, &self.state, &self.writer);
+        if self.state.cancelled.get() {
+            Flow::Stop
+        } else {
+            Flow::Continue
+        }
+    }
+}
+
+/// Puts a question to the client and waits, on this thread, for the answer to
+/// arrive as its own frame.
+struct RpcDriver<'a, W: Write> {
+    writer: Rc<RefCell<W>>,
+    incoming: &'a Receiver<Incoming>,
+    state: Rc<TurnState>,
+}
+
+impl<W: Write> Driver for RpcDriver<'_, W> {
+    fn ask(&mut self, prompt: &UserPrompt) -> String {
+        let question = Notification::Ask {
+            session: self.state.session.clone(),
+            question: prompt.question.clone(),
+            options: prompt.options.clone(),
+            default: prompt.default_answer.clone(),
+        };
+        if write_notification(&mut *self.writer.borrow_mut(), &question).is_err() {
+            // The client is gone; nobody can answer, so take the safe default.
+            return prompt.default_answer.clone();
+        }
+        self.wait_for_answer()
+            .unwrap_or_else(|| prompt.default_answer.clone())
+    }
+
+    fn follow_up(&mut self) -> Option<String> {
+        // The turn is about to end, so this is the last chance to notice a
+        // steering message that arrived while it was running.
+        serve_queued(self.incoming, &self.state, &self.writer);
+        self.state.follow_ups.borrow_mut().pop_front()
+    }
+}
+
+impl<W: Write> RpcDriver<'_, W> {
+    /// Read frames until this session's answer arrives, or the wait expires.
+    ///
+    /// Simpler than the REST equivalent by one whole mechanism: there, a client
+    /// that vanished leaves a socket that looks fine, so the wait has to poke it
+    /// with a heartbeat to find out. Here the pipe closing closes the channel,
+    /// and `recv_timeout` reports that as `Disconnected` — a real signal
+    /// instead of a probe.
+    fn wait_for_answer(&self) -> Option<String> {
+        let deadline = Instant::now() + serve::answer_timeout();
+        // Only while parked here is an answer something to take.
+        self.state.asking.set(true);
+        let answer = self.wait_until(deadline);
+        self.state.asking.set(false);
+        answer
+    }
+
+    /// The wait itself, so the `asking` flag is cleared on every path out.
+    fn wait_until(&self, deadline: Instant) -> Option<String> {
+        loop {
+            let remaining = deadline.checked_duration_since(Instant::now())?;
+            match self.incoming.recv_timeout(remaining) {
+                Ok(frame) => {
+                    if let Some(answer) = serve_frame(frame, &self.state, &self.writer) {
+                        return Some(answer);
+                    }
+                    // A cancel while parked: stop waiting and let the turn end
+                    // at the next boundary, taking the prompt's own default —
+                    // which for the permission gate is a denial.
+                    if self.state.cancelled.get() {
+                        return None;
+                    }
+                }
+                // Timed out, or the client went away mid-question.
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return None,
+            }
+        }
+    }
+}
+
+/// Serve every frame already queued, without waiting for more.
+fn serve_queued<W: Write>(
+    incoming: &Receiver<Incoming>,
+    state: &TurnState,
+    writer: &Rc<RefCell<W>>,
+) {
+    while let Ok(frame) = incoming.try_recv() {
+        // An answer arriving when nothing asked is refused inside `serve_frame`
+        // and returns `None`, so nothing is stashed for a question that never
+        // came.
+        drop(serve_frame(frame, state, writer));
+    }
+}
+
+/// Serve one frame that arrived while a turn is running.
+///
+/// Returns the text of a `turn/answer` for this session, if that is what it
+/// was. Everything else is answered in place: the core is mid-turn and
+/// single-threaded, and a client told "busy" can retry, while one left hanging
+/// cannot.
+fn serve_frame<W: Write>(
+    frame: Incoming,
+    state: &TurnState,
+    writer: &Rc<RefCell<W>>,
+) -> Option<String> {
+    let mut answer_text = None;
+    let response = match frame {
+        Incoming::NotUtf8 => refuse(
+            jsonrpc::Id::Null,
+            jsonrpc::PARSE_ERROR,
+            "a frame must be UTF-8".to_owned(),
+        ),
+        Incoming::Line(line) if line.trim().is_empty() => return None,
+        Incoming::Line(line) => match parse(&line) {
+            Err(refusal) => refusal,
+            Ok(request) => {
+                let id = request.id;
+                match request.command {
+                    Command::TurnAnswer { session, answer }
+                        if session == state.session && state.asking.get() =>
+                    {
+                        answer_text = Some(answer);
+                        jsonrpc::Response::result(id, serde_json::json!({ "accepted": true }))
+                    }
+                    Command::TurnAnswer { session, .. } if session == state.session => refuse(
+                        id,
+                        jsonrpc::INVALID_REQUEST,
+                        "no confirmation is pending".to_owned(),
+                    ),
+                    Command::TurnCancel { session } if session == state.session => {
+                        state.cancelled.set(true);
+                        jsonrpc::Response::result(id, serde_json::json!({ "cancelling": true }))
+                    }
+                    Command::TurnFollowUp { session, message } if session == state.session => {
+                        state.follow_ups.borrow_mut().push_back(message);
+                        jsonrpc::Response::result(id, serde_json::json!({ "queued": true }))
+                    }
+                    // Named the wrong session, or is not a mid-turn command at
+                    // all. Distinguishing the two would not help the client:
+                    // either way this turn is what is running.
+                    _ => refuse(
+                        id,
+                        jsonrpc::INVALID_REQUEST,
+                        format!(
+                            "session `{}` is mid-turn: answer, cancel or steer it, or retry \
+                             when it finishes",
+                            state.session
+                        ),
+                    ),
+                }
+            }
+        },
+    };
+    let _ = write_frame(&mut *writer.borrow_mut(), &response);
+    answer_text
+}
+
+/// The notification each turn event becomes.
+///
+/// Exhaustive by construction — no `_ =>` arm — so a new `Event` variant stops
+/// this from compiling until it has somewhere to go. It lived in
+/// `core/tests/protocol_events.rs` while no transport existed; that test now
+/// asserts *this* function rather than a copy of it, which is the only version
+/// of the assertion worth having.
+#[must_use]
+pub fn notification_for(event: &Event) -> Notification {
+    match event {
+        Event::TextDelta(text) => Notification::TextDelta { text: text.clone() },
+        Event::ToolInvoked(call) => Notification::ToolInvoked {
+            id: call.id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.clone(),
+        },
+        Event::ToolResult(outcome) => Notification::ToolResult {
+            id: outcome.tool_call_id.clone(),
+            content: outcome.content.clone(),
+        },
+        Event::Warning(message) => Notification::Warning {
+            message: message.clone(),
+        },
+        Event::Done { text, agentic } => Notification::Done {
+            answer: text.clone(),
+            agentic: *agentic,
+        },
+    }
+}
+
+/// Write one notification: the same line discipline as a response, and no id,
+/// because nothing answers it.
+fn write_notification<W: Write>(
+    output: &mut W,
+    notification: &Notification,
+) -> std::io::Result<()> {
+    let framed = jsonrpc::Notification::new(notification.clone());
+    let text = serde_json::to_string(&framed).expect("a notification serializes");
+    output.write_all(text.as_bytes())?;
+    output.write_all(b"\n")?;
+    output.flush()
 }
 
 /// A successful answer.

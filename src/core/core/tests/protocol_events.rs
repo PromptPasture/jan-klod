@@ -5,41 +5,17 @@
 //! fails. The mapping below has no wildcard arm, so a new variant stops this
 //! file from compiling — which is the whole point of it existing.
 //!
-//! The mapping lives in the test rather than in either crate because this
-//! slice adds no transport: `serve.rs` is not rewired, so the core has no
-//! runtime reason to hold a protocol type yet (#41, "No transport in this
-//! slice"). Slice 13b is where a real `From` impl belongs, and it can lift this
-//! function verbatim.
+//! The mapping used to live here, because #41 added no transport and the core
+//! had no runtime reason to hold a protocol type. Slice 13b gave it one, so the
+//! function moved to `jan_klod_core::rpc::notification_for` and this file
+//! asserts *that* — a test that validated its own copy of a mapping would pass
+//! while the copy the stdio transport actually sends drifted away from it.
 
 use jan_klod_core::conductor::Event;
 use jan_klod_core::intercept::{ToolCall, ToolOutcome, UserPrompt};
+use jan_klod_core::rpc::notification_for;
 use jan_klod_core::serve;
 use jan_klod_protocol::Notification;
-
-/// The notification each event becomes.
-///
-/// Exhaustive by construction — no `_ =>` arm.
-fn notification_for(event: &Event) -> Notification {
-    match event {
-        Event::TextDelta(text) => Notification::TextDelta { text: text.clone() },
-        Event::ToolInvoked(call) => Notification::ToolInvoked {
-            id: call.id.clone(),
-            name: call.name.clone(),
-            arguments: call.arguments.clone(),
-        },
-        Event::ToolResult(outcome) => Notification::ToolResult {
-            id: outcome.tool_call_id.clone(),
-            content: outcome.content.clone(),
-        },
-        Event::Warning(message) => Notification::Warning {
-            message: message.clone(),
-        },
-        Event::Done { text, agentic } => Notification::Done {
-            answer: text.clone(),
-            agentic: *agentic,
-        },
-    }
-}
 
 /// One event of each variant, every field distinguishable, so a field mapped to
 /// the wrong place shows up as a mismatch rather than as two equal strings.
