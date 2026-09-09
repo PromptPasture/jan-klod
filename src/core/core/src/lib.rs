@@ -715,6 +715,13 @@ impl Runtime {
                     }
                 };
                 let effective = policy.resolve(sandbox::host_backend().as_deref());
+                // `require: true` asked for no command rather than an unconfined
+                // one, so a refusal here is the configuration working, not
+                // failing.
+                if let Some(refusal) = policy.refusal(&effective) {
+                    eprintln!("WARN [core] {refusal}");
+                    return host_process::ProcessRunner::disabled();
+                }
                 if let Some(reason) = &effective.downgrade {
                     eprintln!("WARN [core] {reason}");
                 } else {

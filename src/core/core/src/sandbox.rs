@@ -242,6 +242,50 @@ impl SandboxPolicy {
             },
         }
     }
+
+    /// Whether any command may run at all, given what [`Self::resolve`] concluded.
+    ///
+    /// `require: true` is an operator saying they would rather no command ran
+    /// than one ran unconfined, so an approval-only outcome refuses instead of
+    /// warning. Decided here, at boot, rather than per-exec: the guest-facing
+    /// `proc-error` is a bare enum with no room for a reason, so a refusal
+    /// discovered at exec time would reach the caller as an ordinary "denied"
+    /// and tell nobody why. Boot can print the reason; `exec` cannot.
+    ///
+    /// `mode: approval-only` together with `require: true` is contradictory —
+    /// requiring an OS sandbox while asking for none — and resolves to a
+    /// refusal, which is the reading that cannot grant more than was asked for.
+    #[must_use]
+    pub fn permits_execution(&self, effective: &EffectiveSandbox) -> bool {
+        !(self.require && effective.mode != SandboxMode::Os)
+    }
+
+    /// Why execution is refused, or `None` when it is not.
+    ///
+    /// Kept beside [`Self::permits_execution`] rather than composed by the
+    /// caller, and deliberately *not* built from [`EffectiveSandbox::downgrade`]:
+    /// that sentence ends by saying a command is confined only by the
+    /// confirmation prompt, which is true of a downgrade and false of a
+    /// refusal, where no command runs at all. Reusing it produced a notice that
+    /// contradicted itself within one line.
+    #[must_use]
+    pub fn refusal(&self, effective: &EffectiveSandbox) -> Option<String> {
+        if self.permits_execution(effective) {
+            return None;
+        }
+        Some(match self.mode {
+            SandboxMode::Os => format!(
+                "`execution.sandbox.require: true` demands an OS sandbox and this build has \
+                 none for {} — host-process is denied and no command will run. Set \
+                 `require: false` to accept approval-only instead.",
+                std::env::consts::OS
+            ),
+            SandboxMode::ApprovalOnly => "`execution.sandbox.require: true` cannot be \
+                 satisfied by `mode: approval-only` — the two ask for opposite things. \
+                 host-process is denied and no command will run."
+                .to_owned(),
+        })
+    }
 }
 
 /// A boolean that defaults to `false`, so anything unreadable tightens.
@@ -433,6 +477,80 @@ mod tests {
             Err(SandboxError::Unsupported)
         );
         assert_eq!(NoBackend.name(), "none");
+    }
+
+    // ─── require ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn require_refuses_execution_when_nothing_can_confine() {
+        let policy = parse(r#"{ "sandbox": { "mode": "os", "require": true } }"#).unwrap();
+        let effective = policy.resolve(None);
+        assert!(
+            !policy.permits_execution(&effective),
+            "an operator who required a sandbox gets no command, not an unconfined one"
+        );
+    }
+
+    #[test]
+    fn require_permits_execution_once_a_backend_exists() {
+        let policy = parse(r#"{ "sandbox": { "mode": "os", "require": true } }"#).unwrap();
+        assert!(policy.permits_execution(&policy.resolve(Some(&Stub))));
+    }
+
+    /// Without `require`, the same unbackable request degrades instead — that is
+    /// the whole difference between the two settings, so it is asserted rather
+    /// than left to the reader of `permits_execution`.
+    #[test]
+    fn without_require_an_unbackable_request_still_runs() {
+        let policy = parse(r#"{ "sandbox": { "mode": "os" } }"#).unwrap();
+        let effective = policy.resolve(None);
+        assert_eq!(effective.mode, SandboxMode::ApprovalOnly);
+        assert!(policy.permits_execution(&effective));
+    }
+
+    /// A contradictory pair: requiring an OS sandbox while asking for none.
+    /// Refusing is the reading that cannot grant more than was written.
+    #[test]
+    fn requiring_os_while_asking_for_approval_only_refuses() {
+        let policy =
+            parse(r#"{ "sandbox": { "mode": "approval-only", "require": true } }"#).unwrap();
+        let effective = policy.resolve(None);
+        assert_eq!(effective.downgrade, None, "it is not a downgrade");
+        assert!(
+            !policy.permits_execution(&effective),
+            "but it is still a refusal"
+        );
+    }
+
+    /// The refusal notice must not borrow the downgrade's wording, which ends by
+    /// saying a command is confined only by the confirmation prompt. Under a
+    /// refusal there is no command, so that sentence would be false — and it
+    /// was, in the first version of this.
+    #[test]
+    fn a_refusal_does_not_claim_a_command_still_runs() {
+        for config in [
+            r#"{ "sandbox": { "mode": "os", "require": true } }"#,
+            r#"{ "sandbox": { "mode": "approval-only", "require": true } }"#,
+        ] {
+            let policy = parse(config).unwrap();
+            let refusal = policy
+                .refusal(&policy.resolve(None))
+                .expect("a refusal has a reason");
+            assert!(
+                refusal.contains("no command will run"),
+                "says nothing runs: {refusal}"
+            );
+            assert!(
+                !refusal.contains("confirmation prompt"),
+                "and does not describe what protects a command that will not run: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_permitted_policy_has_no_refusal() {
+        let policy = parse(r#"{ "sandbox": { "mode": "os" } }"#).unwrap();
+        assert_eq!(policy.refusal(&policy.resolve(None)), None);
     }
 
     /// This is the state of every platform today, and the test says so out loud

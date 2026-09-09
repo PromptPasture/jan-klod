@@ -313,8 +313,10 @@ execution:
     mode: os                  # `os` or `approval-only`
     writable: ["."]           # workspace-relative roots a command may write to
     network: false            # whether a command may reach the network
-    require: false            # `true` refuses to run at all rather than
-                              # falling back to approval-only
+    require: false            # `true` denies host-process entirely rather than
+                              # falling back to approval-only — no command at
+                              # all, in preference to an unconfined one. With no
+                              # backend yet, `true` today means nothing runs.
 
 # Which provider answers interceptors' model calls (the intent router's
 # simple-vs-agentic classification). Names an instance from
