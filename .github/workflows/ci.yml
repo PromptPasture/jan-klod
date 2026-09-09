@@ -30,9 +30,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # wasm32-wasip2 because this job stages the guests below, and without the
+      # target `cargo build --target wasm32-wasip2` dies on the first dependency
+      # (`can't find crate for core`) before any test runs. It was missing, so
+      # every run of this job failed at that step from the moment it was added.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: wasm32-wasip2
 
       # `make test` also runs the Go supervisor's `go vet` + `go test`.
       - uses: actions/setup-go@v5
@@ -146,9 +151,16 @@ jobs:
           done
 
       # Prebuilt binaries — far faster than `cargo install` from source.
+      #
+      # cargo-deny is pinned: 0.20 removed `--config` from the `check`
+      # subcommand and made it global, so 0.19 and 0.20 need different
+      # invocations. Unpinned, this resolved to `@latest` (0.20.2) while local
+      # machines still had 0.19, and this job failed on main for days with
+      # "unexpected argument '--config' found". Keep in step with
+      # CARGO_DENY_VERSION in the root Makefile.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny,cargo-audit,cargo-cyclonedx
+          tool: cargo-deny@0.20.2,cargo-audit,cargo-cyclonedx
 
       - name: cargo-deny (license / advisory / source policy)
         run: make deny

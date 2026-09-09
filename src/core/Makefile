@@ -59,7 +59,7 @@ audit:
 	cargo audit
 
 deny:
-	cargo deny -L error check --config $(DENY_CONFIG)
+	cargo deny -L error --config $(DENY_CONFIG) check
 
 clean:
 	cargo clean

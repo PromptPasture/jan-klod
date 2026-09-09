@@ -169,9 +169,17 @@ probe:
 config:
 	cd $(CORE) && cargo run --quiet -p jan-klod-config --features examples --example dump -- $(CONFIG)
 
+# cargo-deny is pinned because its CLI moves: 0.20 removed `--config` from the
+# `check` subcommand and made it global, so 0.19 and 0.20 need different
+# invocations and no spelling satisfies both. CI installed `@latest` while local
+# machines had 0.19, and the supply-chain job failed on main for days. Keep this
+# in step with the pin in .github/workflows/ci.yml.
+CARGO_DENY_VERSION := 0.20.2
+
 # One-time developer setup: cargo supply-chain plugins + git hooks.
 setup:
-	cargo install cargo-audit cargo-deny cargo-cyclonedx cargo-nextest
+	cargo install cargo-audit cargo-cyclonedx cargo-nextest
+	cargo install cargo-deny --version $(CARGO_DENY_VERSION)
 	$(MAKE) install-hooks
 
 install-hooks:
