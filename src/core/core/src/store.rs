@@ -7,8 +7,10 @@
 //! the storage contracts. `SQLite` is embedded via `rusqlite`'s `bundled` feature,
 //! so there is no system-library dependency.
 //!
-//! The schema is one table keyed by `(namespace, key)`; values are opaque JSON
-//! strings (the core never interprets them). Timestamps are Unix seconds.
+//! Two tables. `entries` is the key/value store, keyed by `(namespace, key)`;
+//! values are opaque JSON strings (the core never interprets them). `events` is
+//! the append-only turn log, keyed by `(session, seq)` — see
+//! [`Store::append_event`]. Timestamps are Unix seconds.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,6 +32,25 @@ pub struct Entry {
     pub created_at: u64,
     /// Unix timestamp (seconds) of the last update.
     pub updated_at: u64,
+}
+
+/// One row of a session's append-only turn log.
+///
+/// Not an [`Entry`]: an entry is current state addressed by a key and updated in
+/// place, while this is a fact addressed by its position and never changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoggedEvent {
+    /// The session whose log this belongs to.
+    pub session: String,
+    /// Position in that log, starting at 1 and increasing by one per append.
+    pub seq: u64,
+    /// Unix timestamp (seconds) of the append.
+    pub ts: u64,
+    /// Which kind of event this is — the payload's discriminator.
+    pub kind: String,
+    /// Opaque JSON payload. The store never interprets it; the envelope and its
+    /// version are the caller's business.
+    pub payload: String,
 }
 
 /// Errors the store can surface. Mirrors `store-types.store-error`.
@@ -85,6 +106,14 @@ impl Store {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (namespace, key)
+            );
+            CREATE TABLE IF NOT EXISTS events (
+                session TEXT    NOT NULL,
+                seq     INTEGER NOT NULL,
+                ts      INTEGER NOT NULL,
+                kind    TEXT    NOT NULL,
+                payload TEXT    NOT NULL,
+                PRIMARY KEY (session, seq)
             );",
         )
         .map_err(|e| StoreError::Backend {
@@ -248,6 +277,111 @@ impl Store {
                 "DELETE FROM entries WHERE namespace = ?1",
                 params![namespace],
             )
+            .map(|_| ())
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })
+    }
+
+    // ─── The append-only turn log ────────────────────────────────────────────
+
+    /// Append one event to `session`'s log, returning the row.
+    ///
+    /// `seq` is allocated inside the same statement as the insert
+    /// (`SELECT COALESCE(MAX(seq), 0) + 1 … RETURNING seq`), so it cannot read a
+    /// maximum that another append has already claimed. The core serialises
+    /// callers through `Arc<Mutex<Store>>` anyway, so this is not what stands
+    /// between the log and a duplicate key today — it is that the alternative,
+    /// reading the maximum and then inserting, would need a transaction wrapped
+    /// around it to be equally safe and would still be two round trips.
+    ///
+    /// There is deliberately no update and no single-row delete: the log's value
+    /// is that it records what happened, and an API that could rewrite it would
+    /// make every replay a claim about the present rather than the past.
+    /// [`Self::purge_session_events`] is the one exception, for forgetting a
+    /// whole session.
+    ///
+    /// # Errors
+    /// [`StoreError::Backend`] on a SQL failure.
+    pub fn append_event(
+        &self,
+        session: &str,
+        kind: &str,
+        payload: &str,
+    ) -> Result<LoggedEvent, StoreError> {
+        let ts = now_secs();
+        let seq: i64 = self
+            .conn
+            .query_row(
+                "INSERT INTO events (session, seq, ts, kind, payload)
+                 SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2, ?3, ?4
+                 FROM events WHERE session = ?1
+                 RETURNING seq",
+                params![
+                    session,
+                    i64::try_from(ts).unwrap_or(i64::MAX),
+                    kind,
+                    payload
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        Ok(LoggedEvent {
+            session: session.to_string(),
+            seq: to_u64(seq),
+            ts,
+            kind: kind.to_string(),
+            payload: payload.to_string(),
+        })
+    }
+
+    /// Every event logged for `session`, in the order it happened.
+    ///
+    /// Unbounded on purpose: the callers are a replay and a test, and both want
+    /// the whole log. A `limit` would have to be a *tail* to be useful, and a
+    /// tail of an event log is not a projection of anything.
+    ///
+    /// # Errors
+    /// [`StoreError::Backend`] on a SQL failure.
+    pub fn session_events(&self, session: &str) -> Result<Vec<LoggedEvent>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, ts, kind, payload FROM events
+                 WHERE session = ?1 ORDER BY seq",
+            )
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        let rows = stmt
+            .query_map(params![session], |row| {
+                Ok(LoggedEvent {
+                    session: session.to_string(),
+                    seq: to_u64(row.get::<_, i64>(0)?),
+                    ts: to_u64(row.get::<_, i64>(1)?),
+                    kind: row.get::<_, String>(2)?,
+                    payload: row.get::<_, String>(3)?,
+                })
+            })
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })
+    }
+
+    /// Delete every event logged for `session` — the log's only removal path,
+    /// matching [`Self::purge_namespace`]'s shape for entries.
+    ///
+    /// # Errors
+    /// [`StoreError::Backend`] on a SQL failure.
+    pub fn purge_session_events(&self, session: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM events WHERE session = ?1", params![session])
             .map(|_| ())
             .map_err(|e| StoreError::Backend {
                 detail: e.to_string(),
