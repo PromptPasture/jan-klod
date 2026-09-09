@@ -262,11 +262,8 @@ fn serve_message_sse(
     let message = match parse_message_body(body) {
         Ok(m) => m,
         Err(err) => {
-            let _ = write_frame(
-                &mut *writer.borrow_mut(),
-                "error",
-                &serde_json::json!({ "error": err }).to_string(),
-            );
+            let (kind, data) = error_frame(&err);
+            let _ = write_frame(&mut *writer.borrow_mut(), kind, &data.to_string());
             return Ok(());
         }
     };
@@ -284,11 +281,8 @@ fn serve_message_sse(
     if let RunResult::Failed(reason) =
         agent.run_streaming_with_driver(&mut driver, &mut sink, session, &message)
     {
-        let _ = write_frame(
-            &mut *writer.borrow_mut(),
-            "error",
-            &serde_json::json!({ "error": reason }).to_string(),
-        );
+        let (kind, data) = error_frame(&reason);
+        let _ = write_frame(&mut *writer.borrow_mut(), kind, &data.to_string());
     }
     Ok(())
 }
@@ -307,19 +301,8 @@ struct PromptDriver<'a> {
 
 impl Driver for PromptDriver<'_> {
     fn ask(&mut self, prompt: &UserPrompt) -> String {
-        let payload = serde_json::json!({
-            "question": prompt.question,
-            "options": prompt.options,
-            "default": prompt.default_answer,
-            "session": self.session,
-        });
-        if write_frame(
-            &mut *self.writer.borrow_mut(),
-            "prompt",
-            &payload.to_string(),
-        )
-        .is_err()
-        {
+        let (kind, payload) = prompt_frame(prompt, &self.session);
+        if write_frame(&mut *self.writer.borrow_mut(), kind, &payload.to_string()).is_err() {
             // The client is gone; nobody can answer, so take the safe default.
             return prompt.default_answer.clone();
         }
@@ -452,27 +435,64 @@ struct SseSink {
     live: bool,
 }
 
+/// The SSE frame one turn event projects to: its `event:` kind and `data` JSON.
+///
+/// Separate from [`SseSink::emit`], which owns the socket and the liveness
+/// tracking, so the projection itself can be asserted without one. The client
+/// protocol's notifications are the other projection of the same events, and
+/// `core/tests/protocol_events.rs` checks this one loses nothing they keep.
+#[must_use]
+pub fn sse_frame(event: &Event) -> (&'static str, serde_json::Value) {
+    match event {
+        Event::TextDelta(text) => ("delta", serde_json::json!({ "text": text })),
+        Event::ToolInvoked(call) => (
+            "tool",
+            serde_json::json!({ "id": call.id, "name": call.name }),
+        ),
+        Event::ToolResult(outcome) => (
+            "tool-result",
+            serde_json::json!({ "id": outcome.tool_call_id, "content": outcome.content }),
+        ),
+        Event::Warning(message) => ("warning", serde_json::json!({ "message": message })),
+        Event::Done { text, agentic } => (
+            "done",
+            serde_json::json!({ "answer": text, "agentic": agentic }),
+        ),
+    }
+}
+
+/// The `prompt` frame: an interceptor's question, put to the client.
+///
+/// Extracted alongside [`sse_frame`] for the same reason — [`PromptDriver::ask`]
+/// needs a live `Server` to run, this needs nothing.
+#[must_use]
+pub fn prompt_frame(prompt: &UserPrompt, session: &str) -> (&'static str, serde_json::Value) {
+    (
+        "prompt",
+        serde_json::json!({
+            "question": prompt.question,
+            "options": prompt.options,
+            "default": prompt.default_answer,
+            "session": session,
+        }),
+    )
+}
+
+/// The `error` frame: an unservable request, or a turn that failed.
+///
+/// Both call sites went through the same inline `json!`; naming it keeps them
+/// from drifting apart and lets the compatibility test see the shape.
+#[must_use]
+pub fn error_frame(message: &str) -> (&'static str, serde_json::Value) {
+    ("error", serde_json::json!({ "error": message }))
+}
+
 impl EventSink for SseSink {
     fn emit(&mut self, event: &Event) -> Flow {
         if !self.live {
             return Flow::Stop;
         }
-        let (kind, data) = match event {
-            Event::TextDelta(text) => ("delta", serde_json::json!({ "text": text })),
-            Event::ToolInvoked(call) => (
-                "tool",
-                serde_json::json!({ "id": call.id, "name": call.name }),
-            ),
-            Event::ToolResult(outcome) => (
-                "tool-result",
-                serde_json::json!({ "id": outcome.tool_call_id, "content": outcome.content }),
-            ),
-            Event::Warning(message) => ("warning", serde_json::json!({ "message": message })),
-            Event::Done { text, agentic } => (
-                "done",
-                serde_json::json!({ "answer": text, "agentic": agentic }),
-            ),
-        };
+        let (kind, data) = sse_frame(event);
         if write_frame(&mut *self.writer.borrow_mut(), kind, &data.to_string()).is_err() {
             self.live = false;
             return Flow::Stop;

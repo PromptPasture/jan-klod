@@ -104,16 +104,18 @@ pub enum Command {
 /// notification is a JSON-RPC request with no `id`, which is exactly what
 /// "no reply expected" means there.
 ///
-/// The first five mirror `jan_klod_core::conductor::Event` one for one; `Ask`
-/// is the pending prompt an interceptor blocks a turn on, answered by
-/// [`Command::TurnAnswer`]; `SessionUpdated` reports a session whose transcript
-/// moved, so a client listing sessions does not have to poll.
+/// The first five mirror `jan_klod_core::conductor::Event` one for one. The
+/// rest do not come from an event at all: `Ask` is the pending prompt an
+/// interceptor blocks a turn on, answered by [`Command::TurnAnswer`]; `Error`
+/// is a turn that failed or a command that could not be served;
+/// `SessionUpdated` reports a session whose transcript moved, so a client
+/// listing sessions does not have to poll.
 ///
 /// # These are not the SSE event names
 ///
 /// The SSE projection in `jan_klod_core::serve` predates this contract and
 /// keeps its own names: `delta` for `text-delta`, `tool` for `tool-invoked`,
-/// and `prompt` for `ask`. `tool-result`, `warning` and `done` happen to match.
+/// and `prompt` for `ask`. `tool-result`, `warning`, `done` and `error` match.
 /// Do not "fix" either side to agree with the other — the projection is allowed
 /// its own spelling, and the compatibility test is what holds them together.
 /// `ToolInvoked` is also a strict superset: the SSE `tool` frame carries only
@@ -165,12 +167,28 @@ pub enum Notification {
     /// [`Command::TurnAnswer`]; leaving it unanswered takes `default`.
     #[serde(rename = "ask")]
     Ask {
+        /// Which session is blocked. The SSE `prompt` frame carries this too:
+        /// the client answers over a separate request, so the answer has to say
+        /// what it is answering.
+        session: String,
         /// The question to surface.
         question: String,
         /// Empty means free text; non-empty means choose one.
         options: Vec<String>,
         /// Used when the client cannot prompt, or does not answer in time.
         default: String,
+    },
+    /// `error` — a command this surface could not serve, or a turn that failed.
+    ///
+    /// One notification for both, because the SSE `error` frame it has to stay
+    /// compatible with does not distinguish them either. A transport may answer
+    /// the first case with a JSON-RPC error against the command's id instead
+    /// (Slice 13b's call); a failed turn has no command to answer, so it stays a
+    /// notification regardless.
+    #[serde(rename = "error")]
+    Error {
+        /// What went wrong, as the user should see it.
+        message: String,
     },
     /// `session/updated` — this session's transcript changed.
     #[serde(rename = "session/updated")]

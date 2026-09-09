@@ -116,6 +116,7 @@ const fn expected_notification_method(notification: &Notification) -> &'static s
         Notification::Warning { .. } => "warning",
         Notification::Done { .. } => "done",
         Notification::Ask { .. } => "ask",
+        Notification::Error { .. } => "error",
         Notification::SessionUpdated { .. } => "session/updated",
     }
 }
@@ -143,9 +144,13 @@ fn every_notification() -> Vec<Notification> {
             agentic: true,
         },
         Notification::Ask {
+            session: "s1".to_owned(),
             question: "Run `rm -rf`?".to_owned(),
             options: vec!["yes".to_owned(), "no".to_owned()],
             default: "no".to_owned(),
+        },
+        Notification::Error {
+            message: "the provider could not be reached".to_owned(),
         },
         Notification::SessionUpdated {
             session: "s1".to_owned(),

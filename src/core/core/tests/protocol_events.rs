@@ -12,7 +12,8 @@
 //! function verbatim.
 
 use jan_klod_core::conductor::Event;
-use jan_klod_core::intercept::{ToolCall, ToolOutcome};
+use jan_klod_core::intercept::{ToolCall, ToolOutcome, UserPrompt};
+use jan_klod_core::serve;
 use jan_klod_protocol::Notification;
 
 /// The notification each event becomes.
@@ -82,6 +83,7 @@ fn every_event_maps_to_a_notification() {
             Notification::Warning { .. } => "Warning",
             Notification::Done { .. } => "Done",
             Notification::Ask { .. } => "Ask",
+            Notification::Error { .. } => "Error",
             Notification::SessionUpdated { .. } => "SessionUpdated",
         };
         assert_eq!(name, expected, "mapping of {event:?}");
@@ -141,23 +143,143 @@ fn nothing_an_event_carries_is_dropped() {
     );
 }
 
-/// Two notifications answer to no event, and that is not an oversight: `ask`
-/// comes from `intercept::Driver::ask` blocking a turn, and `session/updated`
-/// from the store, neither of which passes through `EventSink`.
+/// Three notifications answer to no event, and that is not an oversight: `ask`
+/// comes from `intercept::Driver::ask` blocking a turn, `error` from a failed
+/// turn or an unservable request, and `session/updated` from the store — none
+/// of which passes through `EventSink`.
 #[test]
-fn the_two_notifications_without_an_event_are_accounted_for() {
+fn the_notifications_without_an_event_are_accounted_for() {
     let without_events = every_event()
         .iter()
         .map(notification_for)
         .filter(|n| {
             matches!(
                 n,
-                Notification::Ask { .. } | Notification::SessionUpdated { .. }
+                Notification::Ask { .. }
+                    | Notification::Error { .. }
+                    | Notification::SessionUpdated { .. }
             )
         })
         .count();
     assert_eq!(
         without_events, 0,
-        "no conductor event may map to `ask` or `session/updated`"
+        "no conductor event may map to `ask`, `error` or `session/updated`"
+    );
+}
+
+// ─── SSE compatibility ───────────────────────────────────────────────────────
+//
+// REST + SSE becomes one projection of the protocol rather than a second
+// contract, which only holds if the projection says nothing the protocol cannot
+// say. So: every key an SSE frame carries must reach the notification with an
+// equal value. The reverse is deliberately not asserted — a notification may
+// carry more, and `tool-invoked` does, since the SSE `tool` frame drops the
+// call's arguments.
+
+/// A frame's payload keys the protocol spells differently.
+///
+/// One today: the `error` frame's key is `error`, which the protocol calls
+/// `message` to match `warning`. Consistency inside the contract is worth more
+/// than agreeing with one legacy key, and the rename is recorded here rather
+/// than tolerated by a loose assertion.
+const RENAMES: &[(&str, &str)] = &[("error", "message")];
+
+/// Assert every key `data` carries survives into `notification`.
+fn assert_frame_fits(kind: &str, data: &serde_json::Value, notification: &Notification) {
+    let envelope = serde_json::to_value(notification).expect("a notification serializes");
+    let params = envelope
+        .get("params")
+        .expect("every notification carries params");
+    let frame = data.as_object().expect("frame data is a JSON object");
+    assert!(!frame.is_empty(), "the `{kind}` frame carries nothing");
+    for (key, value) in frame {
+        let target = RENAMES
+            .iter()
+            .find_map(|(from, to)| (from == key).then_some(*to))
+            .unwrap_or(key.as_str());
+        assert_eq!(
+            params.get(target),
+            Some(value),
+            "the SSE `{kind}` frame's `{key}` does not reach the notification as `{target}`"
+        );
+    }
+}
+
+#[test]
+fn every_turn_event_frame_fits_its_notification() {
+    for event in every_event() {
+        let (kind, data) = serve::sse_frame(&event);
+        assert_frame_fits(kind, &data, &notification_for(&event));
+    }
+}
+
+/// The `prompt` frame carries `session`, because the client answers it over a
+/// separate request. The notification has to carry it too or the answer has
+/// nothing to name — this is what the test caught.
+#[test]
+fn the_prompt_frame_fits_the_ask_notification() {
+    let prompt = UserPrompt {
+        question: "Run `rm -rf /`?".to_owned(),
+        options: vec!["yes".to_owned(), "no".to_owned()],
+        default_answer: "no".to_owned(),
+    };
+    let (kind, data) = serve::prompt_frame(&prompt, "s1");
+    assert_frame_fits(
+        kind,
+        &data,
+        &Notification::Ask {
+            session: "s1".to_owned(),
+            question: prompt.question.clone(),
+            options: prompt.options.clone(),
+            default: prompt.default_answer.clone(),
+        },
+    );
+}
+
+#[test]
+fn the_error_frame_fits_the_error_notification() {
+    let (kind, data) = serve::error_frame("the provider could not be reached");
+    assert_frame_fits(
+        kind,
+        &data,
+        &Notification::Error {
+            message: "the provider could not be reached".to_owned(),
+        },
+    );
+}
+
+/// The frames above are the whole SSE surface. If a new one appears, this list
+/// is what a later reader checks against `serve.rs` — and the keepalive is a
+/// `:` comment rather than a frame precisely so it needs no notification.
+#[test]
+fn the_projected_frame_kinds_are_the_ones_the_protocol_covers() {
+    let mut kinds: Vec<&str> = every_event()
+        .iter()
+        .map(|event| serve::sse_frame(event).0)
+        .collect();
+    kinds.push(
+        serve::prompt_frame(
+            &UserPrompt {
+                question: String::new(),
+                options: Vec::new(),
+                default_answer: String::new(),
+            },
+            "s",
+        )
+        .0,
+    );
+    kinds.push(serve::error_frame("").0);
+    kinds.sort_unstable();
+    assert_eq!(
+        kinds,
+        vec![
+            "delta",
+            "done",
+            "error",
+            "prompt",
+            "tool",
+            "tool-result",
+            "warning"
+        ]
     );
 }
