@@ -86,7 +86,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 12 — Release: GitHub + web | `done` | **Done 2026-07-03.** GitHub Actions release workflow (`.github/workflows/release.yml`; tag `v*` → matrix linux/darwin × x86_64/arm64 bundles + SHA256SUMS, `gh release create`); `scripts/install.sh` (OS/arch detect, checksum verify, installs to `~/.local/bin`); `pages/index.html` (GitHub Pages landing); `docs/quickstart.md`; README rewrite. |
 | 13 — Client protocol | `in-progress` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. No transport yet, so `serve.rs` is unchanged. Gate: `jan-klod-ui` drives a full turn — streaming, `ask`, cancel — over stdio JSON-RPC; REST + SSE tests still pass as a projection; protocol version negotiated at connect. |
 | 14 — Event-sourced session log | `not-started` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
-| 15 — OS-level effect sandbox | `not-started` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot and in the turn; the security-model row cites the tests. |
+| 15 — OS-level effect sandbox | `in-progress` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, the `SandboxBackend` seam, boot-time resolution that never downgrades quietly, and `require: true` denying execution rather than degrading. No backend yet, so every platform is approval-only; the per-turn warning is deferred to 16a. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot and in the turn; the security-model row cites the tests. |
 | 16 — Capability manifest + signed registry | `not-started` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
 | 17 — Web client + GUI shell | `not-started` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. Needs 13. Gate: a browser and a Tauri window drive a turn with `ask` + cancel from one front-end codebase served by the core. |
 | 18 — Ecosystem ports | `not-started` | [#40](https://github.com/PromptPasture/jan-klod/issues/40). Vision decision 6. Needs 13. Gate: an ACP client fixture runs a turn against the core; an MCP client lists and calls a core-exposed tool — both offline. |
@@ -397,11 +397,17 @@ equals the pre-restart transcript; a fork from event *N* runs independently.
 Closes the Phase 7 "OS isolation" carry-forward and the
 [security-model gap](security-model.md#known-gaps).
 
-- **15a — Policy object + approval-only mode.** `execution.sandbox` in
-  `config.yaml`: `mode: os | approval-only`, `writable: [paths]`, `network: bool`.
-  Platform detection at boot; where no backend exists the run is
-  **approval-only** and says so at boot and in the turn. Tests for the policy
-  parsing and the reporting; no backend yet.
+- **15a — Policy object + approval-only mode. Done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)).
+  `execution.sandbox` in `config.yaml`: `mode: os | approval-only`,
+  `writable: [paths]`, `network: bool`, plus `require: bool` — which denies
+  `host-process` outright rather than degrading, for an operator who would rather
+  run no command than an unconfined one. `core::sandbox` holds the policy, the
+  `SandboxBackend` trait and `NoBackend`; boot resolves the effective mode and
+  prints the reason whenever it is not the one requested. No backend on any
+  platform yet, so every platform is approval-only.
+  **The per-turn warning is deferred to 16a**: nothing distinguishes a tool that
+  uses `host-process` from one that only reads files, so it would fire on every
+  tool-using turn. 16a's component-import introspection answers that exactly.
 - **15b — macOS Seatbelt backend.** A generated `sandbox-exec` profile: workspace
   read/write, everything else read-only or denied, network per policy.
 - **15c — Linux Landlock backend.** Landlock filesystem rules (+ seccomp for

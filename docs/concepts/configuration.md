@@ -4,7 +4,7 @@ title: Configuration
 description: The config.yaml format and how the core loads it into extension instances
 tags: [config, yaml, extensions, host-config, loader]
 created: 2026-06-29T00:00:00Z
-updated: 2026-07-01T00:00:00Z
+updated: 2026-09-09T00:00:00Z
 ---
 
 A single `config.yaml` declares which extensions run and how they are
@@ -78,6 +78,54 @@ that consume them.
 their references — routing is interceptor domain logic, not a core concern. See
 [Architecture → Provider fallback](architecture.md#provider-fallback) and
 [Task routing](architecture.md#task-routing).
+
+## Command execution (`execution:`)
+
+A top-level block, not under `extensions` — it is a substrate the core hands to
+whichever tools are enabled, the same way `workspace:` backs `host-fs`.
+Default-deny: with no `execution:` block, `host-process` refuses every call, and
+`tool.shell` / `tool.git` load but cannot run anything.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `enabled` | Whether `host-process` runs commands at all. Also requires a workspace, since the cwd is jailed to it | `false` |
+| `timeout-secs` | A command outrunning this is killed | `30` |
+| `output-cap` | Captured bytes per stream, stdout and stderr each | `65536` |
+| `env-passthrough` | Extra environment names a child inherits, one at a time. Everything else is stripped — the gateway's own environment holds your API keys | none |
+| `sandbox` | What a command may do once running (below) | see below |
+
+### `execution.sandbox`
+
+Everything above bounds the **caller**: a jailed cwd, a rebuilt environment,
+time and output caps. None of it bounds the **command**, which runs with your
+privileges and can read or write anywhere you can. `sandbox` is the policy for
+that, and the mode is how the runtime tells you whether anything is enforcing
+it.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `mode` | `os` asks the operating system to confine the command; `approval-only` says nothing does | `os` |
+| `writable` | Workspace-relative roots a command may write to. An entry outside the workspace is refused | `["."]` |
+| `network` | Whether a command may reach the network | `false` |
+| `require` | `true` denies `host-process` entirely rather than falling back to `approval-only` — no command at all, in preference to an unconfined one | `false` |
+
+**No OS backend exists yet** (macOS Seatbelt and Linux Landlock are
+[Phase 15b/15c](roadmap.md#phase-15--os-level-effect-sandbox)), so every
+platform resolves to `approval-only` today: the confirmation prompt is the only
+barrier, and `writable`/`network` have no effect until a backend lands. This is
+never quiet about itself — with execution enabled, boot prints the effective
+mode and, when it is not the one you asked for, why:
+
+```console
+WARN [core] `execution.sandbox.mode: os` was requested, but this build has no
+sandbox backend for macos — a command is confined only by the confirmation prompt
+```
+
+Two configurations refuse rather than degrade, and both say so at boot:
+`require: true` while no backend exists, and a `sandbox` block that cannot be
+read at all (an unrecognised `mode`, or a `writable` entry leaving the
+workspace). In both cases `host-process` is denied — a policy the runtime cannot
+honour must not read as a grant.
 
 ## Interceptors
 

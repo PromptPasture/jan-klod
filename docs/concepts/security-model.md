@@ -26,6 +26,7 @@ exist.
 | Ambient filesystem (`wasi:filesystem`) | Denied — the linker wires it, no preopens are configured | none | `WasiCtxBuilder` (no preopens) | `host/tests/it/sandbox_boundary.rs::a_guest_cannot_read_the_hosts_filesystem` |
 | Subprocesses (`host-process`) | Denied | `execution.enabled` **and** a workspace | `core::host_process::ProcessRunner::exec` — cwd jail, timeout, output cap | `core/src/host_process.rs::a_cwd_escape_is_denied`, `::a_slow_command_times_out`, `::output_is_capped` |
 | A subprocess's environment | `PATH`, `HOME`, `CARGO_HOME`, `RUSTUP_HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE` — the gateway's own environment holds `OPENAI_API_KEY` and `JAN_KLOD_TOKEN` | `execution.env-passthrough: [NAME]` | `core::host_process::ProcessRunner::environment` | `core/src/host_process.rs::a_command_does_not_inherit_the_hosts_secrets`, `host/tests/it/host_process.rs::a_guest_run_command_does_not_receive_the_hosts_credentials` |
+| Command effects (`execution.sandbox`) | **Approval-only on every platform**, because no OS backend exists yet: a command runs with the user's privileges and the confirmation prompt is the only barrier. The requested default is `mode: os`, `writable: ["."]`, `network: false` | `execution.sandbox.mode`; `require: true` denies `host-process` outright rather than degrading | `core::sandbox::SandboxPolicy::resolve` and `core::sandbox::SandboxPolicy::permits_execution`, both applied at boot in `Runtime::open_process_runner` | `core/src/sandbox.rs::os_mode_with_no_backend_becomes_approval_only_and_says_why`, `::require_refuses_execution_when_nothing_can_confine`, `::a_refusal_does_not_claim_a_command_still_runs` |
 | Outbound HTTP (`host-http`) | Public destinations only; loopback, private, link-local and unique-local refused. Hostnames are resolved before the decision | Any origin `config.yaml` already names (`base-url`, `endpoint`), plus `network.allow` | `core::egress::EgressPolicy::check`, via `http::fetch_within` | `core/src/egress.rs::loopback_and_private_addresses_are_refused`, `host/tests/it/egress_boundary.rs::a_live_local_service_is_not_reachable`, `::every_guest_facing_backend_goes_through_the_policy` |
 | Raw sockets (`wasi:sockets`) | Denied — the linker wires TCP and UDP, every address is refused | none | `WasiCtx`'s `SocketAddrCheck` (deny-all default) | `host/tests/it/sandbox_boundary.rs::a_guest_cannot_open_its_own_socket`, `::a_guest_cannot_open_a_socket_to_a_public_address` |
 | The host's environment | None. It holds `OPENAI_API_KEY` (config expands it) and `JAN_KLOD_TOKEN`, so a guest reading it directly is the shortest path to the operator's credentials | none | `WasiCtxBuilder` (`inherit_env` is never called) | `host/tests/it/sandbox_boundary.rs::a_guest_cannot_read_the_hosts_environment` |
@@ -69,11 +70,23 @@ Stated because a security page that lists only its wins is marketing.
   scrubbed environment — but the command itself runs with the user's privileges
   and can read or write anywhere the user can. The path jail belongs to
   `host-fs`; nothing here confines what `sh -c` does once it is running. Closing
-  it needs an OS-level sandbox (Seatbelt on macOS, Landlock + seccomp on Linux;
-  an explicit approval-only mode where neither exists) — vision
-  [decision 2](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions),
+  it needs an OS-level sandbox (Seatbelt on macOS, Landlock + seccomp on Linux) —
+  vision [decision 2](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions),
   planned as [roadmap Phase 15](roadmap.md#phase-15--os-level-effect-sandbox).
-  When it lands, this bullet becomes a row in the table above with its tests.
+  **The gap is unchanged; what changed is that it is now named rather than
+  implied.** Phase 15a added `execution.sandbox` and the row above: the policy an
+  OS backend will enforce exists, `approval-only` is a state the runtime reports
+  at boot with its reason instead of a silence, and `require: true` refuses to
+  run commands at all for an operator who would rather have none than an
+  unconfined one. No command is any more confined than it was — 15b and 15c are
+  what confine one.
+  - One piece of 15a is **deferred**: a per-turn `Warning` telling the user, on
+    every turn that runs a command, that the command is not isolated. Nothing
+    currently distinguishes a tool that uses `host-process` from one that only
+    reads files — every tool is handed the same runner — so the warning could
+    only fire on *every* tool-using turn, which teaches people to ignore it. It
+    waits for [Phase 16a](roadmap.md#phase-16--capability-manifest--signed-registry)'s
+    component-import introspection, which can answer the question exactly.
 - **DNS rebinding.** The egress policy resolves a hostname and checks every
   address it answers with, then hands the URL to the HTTP client, which resolves
   again. A name that answers differently the second time slips through. Closing it
