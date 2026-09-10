@@ -27,6 +27,11 @@ OUT="$2"
 WIT="$3"
 shift 3
 
+# Sibling scripts are found relative to this one, not to the caller's cwd —
+# every invocation here comes through an absolute path from a Makefile or the
+# selftest, and both run from different directories.
+HERE="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+
 command -v wasm-tools >/dev/null 2>&1 || {
     echo "manifests.sh: wasm-tools is required (cargo install wasm-tools)" >&2
     exit 1
@@ -38,20 +43,10 @@ command -v jq >/dev/null 2>&1 || {
 
 # One `jan-klod:interfaces` version, or none: once two WIT files disagree there
 # is no answer to "which is the api-version", so refuse rather than pick.
-API_VERSION="$(sed -n 's/^package jan-klod:interfaces@\([^;]*\);.*/\1/p' "$WIT"/*.wit \
-    | sort -u)"
-case "$API_VERSION" in
-    *"
-"*)
-        echo "manifests.sh: $WIT/*.wit declare more than one package version:" >&2
-        echo "$API_VERSION" >&2
-        exit 1
-        ;;
-    "")
-        echo "manifests.sh: no 'package jan-klod:interfaces@…' found in $WIT" >&2
-        exit 1
-        ;;
-esac
+# `wit-version.sh` is that reader, and it is a separate script because the
+# version is read from two places now — here, and the check that a `wit/` edit
+# bumped it. Two copies of this parser would be two answers.
+API_VERSION="$(sh "$HERE/wit-version.sh" "$WIT")" || exit 1
 
 METADATA="$(cargo metadata --no-deps --format-version 1 \
     --manifest-path "$EXT_SRC/Cargo.toml")"

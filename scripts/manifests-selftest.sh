@@ -78,6 +78,15 @@ if sh "$ROOT/scripts/manifests.sh" "$ROOT/src/extensions" "$EXT" "$WORK/wit" too
     echo "manifests-selftest: disagreeing WIT versions were ACCEPTED" >&2
     exit 1
 fi
+# A non-zero exit is not enough on its own. The version is read by a separate
+# script now, so a missing `wit-version.sh` — or a typo in the path to it —
+# fails non-zero too, and this case would report "refused" while the generator
+# was merely broken. Require the refusal to be *about* the version.
+grep -q 'more than one package version' "$WORK/gen" || {
+    echo "manifests-selftest: the generator refused, but not over the version:" >&2
+    cat "$WORK/gen" >&2
+    exit 1
+}
 printf '  refused: %s\n' "disagreeing jan-klod:interfaces versions in wit/"
 
 # The tampering above never touched $EXT, but a generator run just did — leave
