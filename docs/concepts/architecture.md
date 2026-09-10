@@ -77,7 +77,7 @@ L4 Clients        TUI (ratatui, built) | Web client + Tauri shell (Phase 17) | I
 L3 Protocol       one versioned command/event schema (built) over stdio JSON-RPC (built) | REST + SSE (built, a projection) | WebSocket (Phase 13c)
 L2 Extensions     provider | tool | interceptor | registry | agent | chat        (WASM Components, polyglot — built)
 L1 Capabilities   host-fs | host-process | host-http | host-storage | host-config | host-log | host-event   (default-deny, built)
-                  + OS-level effect sandbox behind host-process (Phase 15); manifest-declared grants (Phase 16)
+                  + effect sandbox behind host-process: Seatbelt on macOS (built) | Landlock on Linux (Phase 15c); manifest-declared grants (Phase 16)
 L0 Kernel         lifecycle | capability broker | loop conductor | SQLite store (built) | session event log (Phase 14) | protocol server (Phase 13)
 ```
 
@@ -351,6 +351,39 @@ and that client is not started. REST + SSE stays as one projection of the same
 contract, not a second contract. Vision
 [decision 1](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions);
 plan in the [roadmap](roadmap.md#phase-13--client-protocol).
+
+## Command sandbox
+
+`host-process` bounds the *caller* — default-deny, a cwd jailed to the
+workspace, a timeout, an output cap, a scrubbed environment. Confining what the
+command itself *does* is a separate mechanism, and it is per-OS.
+
+**macOS: Seatbelt, and it is deprecated.** `man sandbox-exec` opens with
+"execute within a sandbox (DEPRECATED)", and its description repeats it. It is
+used anyway, because it is what macOS gives an unprivileged process: no
+entitlement, no helper, no root. There is no unprivileged replacement, and the
+alternatives are this or nothing — which is the same conclusion Codex and Claude
+Code reached. Every command is rebuilt as
+`sandbox-exec -p <profile> -- <command>` with a profile generated from
+`execution.sandbox`: `(deny default)`, reads allowed, writes only under the
+paths `writable` names, network only if the policy says so.
+
+**Linux: nothing yet.** Landlock is [Slice 15c](roadmap.md#phase-15--os-level-effect-sandbox).
+
+**The fallback, on any platform and for any reason, is `approval-only`, and it
+is stated rather than assumed.** A platform with no backend, or a macOS without
+`/usr/bin/sandbox-exec`, resolves to approval-only and the boot line says which
+of those it is — the runtime does not claim confinement it does not have. An
+operator who would rather have *no* command than an unconfined one sets
+`require: true`, which denies `host-process` outright instead of degrading. The
+grants and the tests behind each of these are the "Command effects" row in the
+[security model](security-model.md#capabilities).
+
+Two things Seatbelt here does not do, both deliberate: **reads are not confined**
+(the gap being closed is over effects, and a command that cannot read its
+toolchain does not run), and a command needing a **Mach service** fails rather
+than running unconfined — visible in the command's own error, and the right
+direction to fail in.
 
 ## Storage
 

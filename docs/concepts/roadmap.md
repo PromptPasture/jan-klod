@@ -86,7 +86,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 12 — Release: GitHub + web | `done` | **Done 2026-07-03.** GitHub Actions release workflow (`.github/workflows/release.yml`; tag `v*` → matrix linux/darwin × x86_64/arm64 bundles + SHA256SUMS, `gh release create`); `scripts/install.sh` (OS/arch detect, checksum verify, installs to `~/.local/bin`); `pages/index.html` (GitHub Pages landing); `docs/quickstart.md`; README rewrite. |
 | 13 — Client protocol | `done` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. **13b done 2026-09-10** ([#42](https://github.com/PromptPasture/jan-klod/issues/42)): `jan-klod-gateway rpc` on stdin/stdout, and `jan-klod` uses it by default — no port, no token, nothing left running. The framing moved into the contract crate (the core writes frames and every client reads them); `turn/follow-up` works over stdio and cannot over REST. **The exit gate is met** — a full turn streams, an `ask` is answered on the same pipe, a `turn/cancel` stops a turn (proven by the completion it never asks for), and REST + SSE still pass. **13c (WebSocket) is deferred until Phase 17 needs it** ([#43](https://github.com/PromptPasture/jan-klod/issues/43)) — `tiny_http` cannot hand back a socket that both times out a read and reads while writing, and the client that wants one is not started, so the socket decision belongs to whoever will use it. |
 | 14 — Event-sourced session log | `done` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. **Exit gate passed 2026-09-09** (`make gate`): the append-only `events` table with a versioned envelope (#44), and transcript/resume/fork as projections of it (#45) — a session resumed after a restart rebuilds from the log, and a fork at seq *N* runs independently. Nothing writes a transcript except through events; a pre-log database is converted at boot. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
-| 15 — OS-level effect sandbox | `in-progress` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, the `SandboxBackend` seam, boot-time resolution that never downgrades quietly, and `require: true` denying execution rather than degrading. No backend yet, so every platform is approval-only; the per-turn warning is deferred to 16a. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot and in the turn; the security-model row cites the tests. |
+| 15 — OS-level effect sandbox | `in-progress` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, the `SandboxBackend` seam, boot-time resolution that never downgrades quietly, and `require: true` denying execution rather than degrading. **15b done 2026-09-10** ([#47](https://github.com/PromptPasture/jan-klod/issues/47)): macOS commands run under a generated Seatbelt profile, so a write outside `writable` is refused by the kernel rather than by a prompt — and `require: true` now permits commands there instead of denying them. Linux is still approval-only until 15c. The per-turn warning is deferred to 16a. Half the gate is met: the macOS half is tested (with an unconfined control for every case, since a command that failed for another reason looks identical to a denial) and the Linux half needs Landlock. **Nothing here is CI-verified** — these tests are macOS-only and CI is Linux ([#95](https://github.com/PromptPasture/jan-klod/issues/95)). Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot and in the turn; the security-model row cites the tests. |
 | 16 — Capability manifest + signed registry | `in-progress` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. **16a done 2026-09-10** (#86, #87): every guest ships a manifest generated from its own imports, and the host refuses a component whose manifest is absent, under-declares what it imports, or names an incompatible interface version — cross-validated by two independent readers of the same artifacts. Remaining: 16b (versioning policy), 16c (`ext install` provenance), 16d (registry index). Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
 | 17 — Web client + GUI shell | `not-started` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. Needs 13. Gate: a browser and a Tauri window drive a turn with `ask` + cancel from one front-end codebase served by the core. |
 | 18 — Ecosystem ports | `not-started` | [#40](https://github.com/PromptPasture/jan-klod/issues/40). Vision decision 6. Needs 13. Gate: an ACP client fixture runs a turn against the core; an MCP client lists and calls a core-exposed tool — both offline. |
@@ -445,12 +445,34 @@ Closes the Phase 7 "OS isolation" carry-forward and the
   run no command than an unconfined one. `core::sandbox` holds the policy, the
   `SandboxBackend` trait and `NoBackend`; boot resolves the effective mode and
   prints the reason whenever it is not the one requested. No backend on any
-  platform yet, so every platform is approval-only.
+  platform yet, so every platform is approval-only (15b changed that for macOS).
   **The per-turn warning is deferred to 16a**: nothing distinguishes a tool that
   uses `host-process` from one that only reads files, so it would fire on every
   tool-using turn. 16a's component-import introspection answers that exactly.
-- **15b — macOS Seatbelt backend.** A generated `sandbox-exec` profile: workspace
-  read/write, everything else read-only or denied, network per policy.
+- **15b — macOS Seatbelt backend. Done 2026-09-10** ([#47](https://github.com/PromptPasture/jan-klod/issues/47)).
+  A generated `sandbox-exec` profile — `(deny default)`, reads allowed, writes
+  only under `writable`, network per policy — applied by rebuilding every command
+  as `sandbox-exec -p <profile> -- <command>`. Three things this bullet did not
+  anticipate:
+  - **Seatbelt matches the *resolved* path**, and getting that wrong looks
+    exactly like the sandbox working. A profile granting `/tmp/x` denies a write
+    to `/tmp/x/ok`, because `/tmp` is a symlink to `/private/tmp` — with
+    "Operation not permitted". Every test's temp directory is under a symlink, so
+    an uncanonicalized profile would have passed a suite asserting escapes are
+    denied *while denying every grant too*. The in-workspace-write test is what
+    catches that class, and it is the one test that a missing sandbox does not
+    trip.
+  - **15a's `SandboxBackend` could not express a wrapping mechanism.** It took
+    `&mut Command`, and a `Command`'s program cannot be changed — only read. It
+    now takes and returns an owned command, which fits both a wrapper (Seatbelt)
+    and an in-process mechanism (Landlock).
+  - **A path that cannot be written into a profile literally is refused, not
+    escaped.** SBPL is s-expressions, so a directory name containing `"` could
+    close the literal and have the rest read as policy.
+  On macOS `require: true` now *permits* commands rather than denying them, since
+  there is finally something to require. **Not verified by CI** — the tests are
+  macOS-only and CI is Linux
+  ([#95](https://github.com/PromptPasture/jan-klod/issues/95)).
 - **15c — Linux Landlock backend.** Landlock filesystem rules (+ seccomp for
   network where Landlock cannot express it); graceful fallback to approval-only on
   kernels without Landlock.
