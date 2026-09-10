@@ -442,6 +442,141 @@ version-bump check ([16b-2](https://github.com/PromptPasture/jan-klod/issues/89)
 becomes a failure rather than a warning. See the
 [roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).
 
+## Signed artefacts and the registry index
+
+**Planned, Phase 16.** Written before the slices that implement it —
+[16c-1](https://github.com/PromptPasture/jan-klod/issues/91) verifies,
+[16c-2](https://github.com/PromptPasture/jan-klod/issues/92) fetches,
+[16c-3](https://github.com/PromptPasture/jan-klod/issues/93) signs,
+[16d](https://github.com/PromptPasture/jan-klod/issues/53) indexes — because
+four slices reading one layout drift on the second unless the layout is written
+down first. Where a slice finds this page wrong, the slice changes the page in
+the same commit; nothing here is a promise until the first release.
+
+### What travels together
+
+A component is three files with one stem, beside each other wherever they are —
+a registry directory, a release archive, or `ext/`:
+
+| File | What it is | Who produces it |
+|---|---|---|
+| `<name>.wasm` | the component | the build |
+| `<name>.manifest.toml` | the [manifest](#the-extension-manifest), plus `sha256 = "<hex>"` of the `.wasm` beside it | `scripts/manifests.sh` |
+| `<name>.manifest.toml.minisig` | a [minisign](https://jedisct1.github.io/minisign/) signature **over the manifest** | the release workflow |
+
+**The signature is over the manifest, and the manifest carries the hash of the
+component.** That is one signature covering both files without inventing a
+container format: the signature proves who wrote the manifest, the manifest's
+`sha256` proves which bytes it describes. Signing the `.wasm` alone would verify
+the artefact while trusting an unsigned declaration of what it may do, which is
+worse than no check because it looks like one. Signing a concatenation would
+verify both and be checkable by nothing but our own tooling; this layout is
+checkable by hand with the stock `minisign` binary and `sha256sum`, which is the
+test a signature format has to pass.
+
+`sha256` is a generated field like `capabilities`: the generator computes it from
+the staged `.wasm`, so a manifest cannot describe a component other than the one
+beside it. The host does not check it at boot — `Runtime::boot` checks the
+manifest against the component's *imports*, and a file already in `ext/` is
+trusted the way `config.yaml` is. It is checked at **install**, which is the
+moment bytes cross from untrusted to trusted.
+
+### Keys
+
+Minisign keys. The public key is the one-line format `minisign` itself writes
+(`untrusted comment:` line, then base64) and is named in `config.yaml` as a
+grant, per the repo's rule that a widening is a named thing and never a mode
+flag:
+
+```yaml
+registry:
+  trusted-keys:
+    - name: jan-klod-release
+      key: "RWQ…"        # the base64 line of the .pub file, inline
+```
+
+The key is inline rather than a path so a config is self-contained and a
+`${VAR}` cannot swap it. **With no `trusted-keys`, every install is refused as
+unsigned** unless the installer is told, per install, to allow it; that flag is
+the narrow widening and prints that it was used. The first-party release key is
+published in the repository and on the landing page, since a key nobody can find
+is a signature nobody can check. Rotation and revocation are not designed here —
+they need a registry with more than one publisher to be worth designing
+([#53](https://github.com/PromptPasture/jan-klod/issues/53) and beyond).
+
+### What install verifies, in order
+
+Nothing half-verified is ever visible in `ext/`: everything below happens in a
+staging directory, and the last step is one atomic rename. Each refusal has its
+**own** message naming what is wrong, because four refusals that all say
+"install failed" make the check useless for finding out what is.
+
+1. **Checksum**, when the caller supplied one, against the `.wasm`. Optional for
+   a local path — the bytes are already on the machine and hashing them with a
+   value computed from the same file checks nothing. **Required for a URL**,
+   with no flag to skip it: a signature proves the publisher, not that this is
+   the version the user meant, and the value pasted from a release page is the
+   only thing tying the download to the intent. The registry index carries it,
+   so an install *by name* fills it in.
+2. **Signature** of `<name>.manifest.toml` against `registry.trusted-keys`,
+   then the manifest's `sha256` against the `.wasm`. Refused when the key is
+   valid but not trusted, when the signature is valid but the hash is not, and
+   when there is no signature — the last one unless explicitly allowed.
+3. **It is a component.** `Component::from_file` succeeds; a core module or
+   arbitrary bytes are refused here, not later at boot.
+4. **The manifest agrees with the component**: the same import cross-check boot
+   performs (`core::manifest`), run once more on the staged copy, so a signed
+   manifest that lies about its own component is refused before it lands.
+5. **Rename into `ext/`.** A failure at any earlier step removes the staging
+   directory and leaves `ext/` byte-identical.
+
+### The index
+
+A registry is a directory served over HTTPS with an `index.toml` at its root —
+TOML like the manifests, so the one parser already in the tree reads both, and
+a file a person can read without tooling:
+
+```toml
+# index.toml
+format = 1
+
+[[extension]]
+name = "tool-shell"
+version = "0.1.0"
+api-version = "0.1.0"
+kind = "tool"
+description = "run a command through host-process"
+capabilities = ["host-process"]
+sha256 = "9f2c…"                         # of tool-shell.wasm; equals the manifest's
+path = "tool-shell/0.1.0/tool-shell.wasm" # relative to the index; siblings by stem
+signed-by = "jan-klod-release"           # a key name a config can be expected to hold
+```
+
+- **Every per-extension field is copied from the manifest**, so an index entry
+  can be checked against the manifest it points at, and `ext search` can show
+  requested capabilities *before* a byte is downloaded — which is the reason the
+  index has them. `format` is the index's own version, bumped when the shape
+  changes; a reader refuses a `format` it does not know rather than guessing.
+- **`path` names the `.wasm`; the manifest and signature are its siblings by
+  stem.** One field, not three, so the three files cannot be listed in three
+  places and disagree. Relative to the index URL, so a registry can be moved or
+  mirrored by copying a directory.
+- **The index is signed too**: `index.toml.minisig`, by the same key, verified
+  on fetch when a trusted key exists. It is served over TLS regardless; the
+  signature is what stops a substituted index from pointing every entry at an
+  older, still-signed version. The artefacts are verified on their own terms
+  either way — the index signature is a check on the *listing*, not a shortcut
+  past steps 1–4.
+- **One index, one publisher.** A `signed-by` other than a configured key is an
+  entry the installer cannot use and says so; federating indexes is not designed
+  here.
+
+What this is not: a package manager. No dependency resolution, no version
+ranges, no update channel — an entry is an exact artefact, and installing it is
+the five steps above. See the
+[roadmap](roadmap.md#phase-16--capability-manifest--signed-registry) and
+[Configurator → Extension registry](configurator.md#extension-registry).
+
 ## Storage is not a contract extensions implement
 
 There was a `memory-store.wit` here, and a `store-*` component family in the
