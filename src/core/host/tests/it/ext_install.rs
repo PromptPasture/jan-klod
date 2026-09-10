@@ -54,6 +54,42 @@ fn offer(scratch: &Scratch, guest: &str) -> PathBuf {
     component
 }
 
+/// The SHA-256 of a file, **computed by something other than the code under
+/// test**.
+///
+/// `install` hashes with `sha2` and renders the digest with a hand-written hex
+/// helper. A test that produced its expected value the same way would agree
+/// with itself no matter how wrong that helper was — a mis-ordered or
+/// zero-padded encoding would be wrong *consistently*, so every comparison
+/// would still pass. So the expectation comes from the system's own tool, which
+/// shares no code with the host: `sha256sum` on Linux, `shasum -a 256` on
+/// macOS.
+///
+/// Returns `None` when neither exists, and the caller skips — a missing tool
+/// must not be reported as a digest failure.
+fn sha256_of(path: &Path) -> Option<String> {
+    let candidates: [(&str, &[&str]); 2] = [("sha256sum", &[]), ("shasum", &["-a", "256"])];
+    for (program, flags) in candidates {
+        if !common::tool_available(program) {
+            continue;
+        }
+        let output = std::process::Command::new(program)
+            .args(flags)
+            .arg(path)
+            .output()
+            .expect("the digest tool runs");
+        assert!(
+            output.status.success(),
+            "{program} failed on {}",
+            path.display()
+        );
+        let text = String::from_utf8(output.stdout).expect("a digest is ASCII");
+        // Both tools print `<hex>  <path>`.
+        return text.split_whitespace().next().map(str::to_ascii_lowercase);
+    }
+    None
+}
+
 /// Every name in a directory, sorted — enough to assert "nothing landed".
 fn names(dir: &Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(dir)
@@ -77,7 +113,8 @@ fn a_valid_component_lands_with_its_manifest_and_is_then_loadable() {
     let scratch = scratch("valid");
     let source = offer(&scratch, "tool-fs");
 
-    let installed = ext::install(&scratch.ext, &source).expect("a real component installs");
+    let installed = ext::install(&scratch.ext, &source, &ext::Checks::default())
+        .expect("a real component installs");
     assert_eq!(installed.name, "tool-fs");
 
     // Both files, and nothing else — no staging directory left over.
@@ -131,7 +168,8 @@ fn a_manifest_that_under_declares_is_refused_and_nothing_lands() {
     )
     .expect("rewrites the manifest");
 
-    let err = ext::install(&scratch.ext, &source).expect_err("must refuse");
+    let err =
+        ext::install(&scratch.ext, &source, &ext::Checks::default()).expect_err("must refuse");
     let ExtError::UnderDeclared { interfaces, .. } = &err else {
         panic!("an under-declaring manifest is refused as such: {err:?}")
     };
@@ -143,6 +181,81 @@ fn a_manifest_that_under_declares_is_refused_and_nothing_lands() {
         names(&scratch.ext),
         Vec::<String>::new(),
         "nothing landed, and no staging directory survived"
+    );
+}
+
+/// The digest check, against a real component: the right digest installs, and
+/// one tampered byte is refused with **both** digests named.
+///
+/// Tampering by flipping a byte rather than by writing junk, because junk would
+/// also fail to compile — and then the test would pass whether the digest was
+/// checked or not. A component that is still perfectly valid wasm, with one
+/// byte changed, can only be caught by the digest.
+#[test]
+fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let scratch = scratch("digest");
+    let source = offer(&scratch, "tool-fs");
+    let Some(digest) = sha256_of(&source) else {
+        // No independent hasher on this machine; asserting against our own
+        // would prove only that the code agrees with itself.
+        return;
+    };
+
+    // The right digest is accepted.
+    ext::install(
+        &scratch.ext,
+        &source,
+        &ext::Checks {
+            sha256: Some(digest.clone()),
+        },
+    )
+    .expect("the component matches its own digest");
+    ext::remove(&scratch.ext, "tool-fs").expect("removes it again");
+
+    // Uppercase is the same digest — release notes are not consistent about it.
+    ext::install(
+        &scratch.ext,
+        &source,
+        &ext::Checks {
+            sha256: Some(digest.to_uppercase()),
+        },
+    )
+    .expect("a digest is hex, and hex is case-insensitive");
+    ext::remove(&scratch.ext, "tool-fs").expect("removes it again");
+
+    // Now flip one byte in the middle of the file. Still a component; not the
+    // component the digest describes.
+    let mut bytes = std::fs::read(&source).expect("reads the component");
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0xff;
+    std::fs::write(&source, &bytes).expect("writes the tampered component");
+
+    let err = ext::install(
+        &scratch.ext,
+        &source,
+        &ext::Checks {
+            sha256: Some(digest.clone()),
+        },
+    )
+    .expect_err("tampered bytes must be refused");
+    let ExtError::DigestMismatch {
+        expected, actual, ..
+    } = &err
+    else {
+        panic!("a byte-level change is a digest mismatch: {err:?}")
+    };
+    assert_eq!(expected, &digest, "the refusal names what was asked for");
+    assert_ne!(
+        actual, &digest,
+        "and what the bytes actually are: {actual} vs {digest}"
+    );
+    assert_eq!(
+        names(&scratch.ext),
+        Vec::<String>::new(),
+        "nothing landed and no staging directory survived"
     );
 }
 
@@ -167,7 +280,8 @@ fn a_manifest_from_another_api_version_is_refused() {
     )
     .expect("rewrites the manifest");
 
-    let err = ext::install(&scratch.ext, &source).expect_err("must refuse");
+    let err =
+        ext::install(&scratch.ext, &source, &ext::Checks::default()).expect_err("must refuse");
     let ExtError::ApiMismatch { theirs, ours, .. } = &err else {
         panic!("an incompatible package version is refused as such: {err:?}")
     };

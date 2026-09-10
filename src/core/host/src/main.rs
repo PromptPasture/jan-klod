@@ -78,7 +78,7 @@ fn ext(args: &[String]) -> ExitCode {
         Some("install") => ext_install(&args[1..]),
         _ => {
             eprintln!("usage: jan-klod-gateway ext list [ext-dir]");
-            eprintln!("       jan-klod-gateway ext install <path.wasm> [ext-dir]");
+            eprintln!("       jan-klod-gateway ext install <path.wasm> [ext-dir] [--sha256 <hex>]");
             eprintln!("       jan-klod-gateway ext remove <name> [ext-dir]");
             ExitCode::FAILURE
         }
@@ -87,14 +87,43 @@ fn ext(args: &[String]) -> ExitCode {
 
 /// Install a component after checking it, or refuse and change nothing.
 fn ext_install(args: &[String]) -> ExitCode {
-    let Some(source) = args.first() else {
-        eprintln!("usage: jan-klod-gateway ext install <path.wasm> [ext-dir]");
+    // `--sha256 <hex>`, pulled out before the positionals so a digest cannot be
+    // mistaken for the extension directory.
+    let mut sha256: Option<String> = None;
+    let mut positional: Vec<String> = Vec::new();
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        // `--sha256=<hex>` and `--sha256 <hex>` both: a digest is pasted, and
+        // whichever form the paste came with should work.
+        if let Some(inline) = arg.strip_prefix("--sha256=") {
+            sha256 = Some(inline.to_owned());
+        } else if arg == "--sha256" {
+            let Some(value) = rest.next() else {
+                eprintln!("jan-klod: --sha256 needs a digest");
+                return ExitCode::FAILURE;
+            };
+            sha256 = Some(value.clone());
+        } else if arg.starts_with("--") {
+            // Refused rather than ignored: a mistyped `--sha265` that were
+            // silently dropped would install without the check the operator
+            // believed they had asked for.
+            eprintln!("jan-klod: unknown flag {arg}");
+            return ExitCode::FAILURE;
+        } else {
+            positional.push(arg.clone());
+        }
+    }
+
+    let Some(source) = positional.first() else {
+        eprintln!("usage: jan-klod-gateway ext install <path.wasm> [ext-dir] [--sha256 <hex>]");
         return ExitCode::FAILURE;
     };
-    let dir = resolve_default(&arg_or(args, 1, "ext"));
+    let dir = resolve_default(&arg_or(&positional, 1, "ext"));
+    let checks = jan_klod_core::ext::Checks { sha256 };
     match jan_klod_core::ext::install(
         std::path::Path::new(&dir),
         std::path::Path::new(source.as_str()),
+        &checks,
     ) {
         Ok(installed) => {
             // What it may ask the host for, at the moment it is installed —

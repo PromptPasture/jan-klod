@@ -7,11 +7,15 @@
 //! by the same [`crate::inspect`] the boot path uses, so an install cannot
 //! accept what boot would refuse.
 //!
-//! **Provenance is not checked yet.** The checksum and the signature are later
-//! boxes of [#91](https://github.com/PromptPasture/jan-klod/issues/91). Until
-//! they land this proves a component is well-formed and honest *about itself*,
-//! not that it came from anyone in particular — so it is a real improvement on
-//! `cp`, and not yet the whole guarantee the slice is for.
+//! Integrity, when the caller supplies a digest to check against — see
+//! [`Checks`] for why that is optional for a local path and what makes it
+//! stop being optional.
+//!
+//! **Provenance is still not checked.** The signature is a later box of
+//! [#91](https://github.com/PromptPasture/jan-klod/issues/91). Until it lands,
+//! this proves a component is well-formed, honest *about itself*, and — given a
+//! digest — the bytes someone meant to publish. It does not prove who published
+//! them. A real improvement on `cp`, and not yet the whole guarantee.
 //!
 //! # Why `list` reads manifests rather than filenames
 //!
@@ -30,6 +34,60 @@ use crate::{inspect, Verdict};
 
 /// The extension of a staged component.
 const COMPONENT_EXT: &str = "wasm";
+
+/// What `install` should verify beyond the component being well-formed.
+///
+/// # Why the checksum is optional here, and when it stops being
+///
+/// A digest is only evidence if it reached you by a **different route than the
+/// bytes did** — a release note, a repository page, a message from whoever
+/// built it. Requiring one for a local path would mostly produce the opposite:
+/// an operator computing the digest of the very file they are installing, which
+/// proves the file equals itself. That is a check that reads green while
+/// proving nothing, and worse, it trains people to paste digests they just
+/// generated.
+///
+/// So: **supplied is enforced, absent is allowed** — for now. The policy this
+/// slice commits to, and which #92 therefore does not have to invent, is that
+/// a component must never land with *no* integrity evidence at all. Once box 4
+/// adds signature checking, a digest becomes **required** wherever the
+/// signature is waived (`--allow-unsigned`), which is the case a URL install
+/// falls into when no key covers it. Until signatures exist, every install is
+/// unsigned, so enforcing that rule now would mean requiring a digest for
+/// everything — including the local, operator-chosen file where it means
+/// least.
+#[derive(Debug, Clone, Default)]
+pub struct Checks {
+    /// Expected SHA-256 of the **component**, as hex. Case-insensitive.
+    ///
+    /// The component only, not the manifest. The signature covers both
+    /// (box 4), and it is the signature that establishes provenance; what a
+    /// tampered manifest could do here is already bounded by
+    /// [`crate::inspect`], which refuses a manifest that *hides* an import.
+    /// The remaining direction — a manifest claiming more than the component
+    /// uses — makes an operator grant more than necessary but cannot let the
+    /// component reach it, since a capability it does not import is one it
+    /// cannot call.
+    pub sha256: Option<String>,
+}
+
+/// A SHA-256 digest as lowercase hex.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
+/// Whether `text` could be a SHA-256 digest at all.
+///
+/// Checked before comparing, so a truncated or mistyped digest is reported as
+/// malformed rather than as a mismatch: those are different mistakes, and
+/// "your digest is 63 characters" is the more useful of the two messages.
+fn looks_like_a_digest(text: &str) -> bool {
+    text.len() == 64 && text.chars().all(|c| c.is_ascii_hexdigit())
+}
 
 /// Where an install is assembled and checked before anything lands in `ext/`.
 ///
@@ -112,6 +170,26 @@ pub enum ExtError {
         name: String,
         /// Where it collided.
         dir: String,
+    },
+    /// The expected digest is not a SHA-256 digest.
+    #[error("{given:?} is not a SHA-256 digest (expected 64 hex characters, got {length})")]
+    MalformedDigest {
+        /// What was passed.
+        given: String,
+        /// Its length, since a truncated paste is the usual cause.
+        length: usize,
+    },
+    /// The component's bytes are not the ones the digest describes.
+    #[error(
+        "{path} does not match the expected digest\n  expected {expected}\n  actual   {actual}"
+    )]
+    DigestMismatch {
+        /// The component that was rejected.
+        path: String,
+        /// The digest that was asked for.
+        expected: String,
+        /// The digest the bytes actually have.
+        actual: String,
     },
     /// The file is not a WebAssembly component (a core module, or not wasm).
     #[error("{path} is not a WebAssembly component")]
@@ -314,7 +392,7 @@ pub fn remove(dir: &Path, name: &str) -> Result<Removed, ExtError> {
 /// that all said "install failed" would leave the operator no better off than
 /// `cp` did. In every case `dir` is left exactly as it was and the staging
 /// directory is removed.
-pub fn install(dir: &Path, source: &Path) -> Result<Installed, ExtError> {
+pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, ExtError> {
     if !source.exists() {
         return Err(ExtError::SourceMissing {
             path: source.display().to_string(),
@@ -354,7 +432,7 @@ pub fn install(dir: &Path, source: &Path) -> Result<Installed, ExtError> {
     // From here on every exit goes through `staged`, which removes the staging
     // directory whatever the outcome — an install that refuses must not leave
     // its workings behind for the next one to trip over.
-    let outcome = stage_and_check(&staging, source, &name);
+    let outcome = stage_and_check(&staging, source, &name, checks);
     let _ = std::fs::remove_dir_all(&staging);
     // Prune `.staging` itself when this was the only occupant; it is an
     // implementation detail and `list` should not have to know to skip it.
@@ -363,7 +441,12 @@ pub fn install(dir: &Path, source: &Path) -> Result<Installed, ExtError> {
 }
 
 /// Copy into `staging`, check, and move into place on success.
-fn stage_and_check(staging: &Path, source: &Path, name: &str) -> Result<Installed, ExtError> {
+fn stage_and_check(
+    staging: &Path,
+    source: &Path,
+    name: &str,
+    checks: &Checks,
+) -> Result<Installed, ExtError> {
     let dir = staging
         .parent()
         .and_then(Path::parent)
@@ -377,6 +460,31 @@ fn stage_and_check(staging: &Path, source: &Path, name: &str) -> Result<Installe
         path: staged_component.display().to_string(),
         source: err,
     })?;
+
+    // Integrity before anything else, and against the **staged copy** rather
+    // than the source: those bytes are the ones that would land, so a copy that
+    // went wrong is caught here too. Cheapest check first, and there is no
+    // reason to compile bytes already known to be the wrong ones.
+    if let Some(expected) = checks.sha256.as_deref() {
+        if !looks_like_a_digest(expected) {
+            return Err(ExtError::MalformedDigest {
+                given: expected.to_owned(),
+                length: expected.len(),
+            });
+        }
+        let bytes = std::fs::read(&staged_component).map_err(|err| ExtError::Staging {
+            path: staged_component.display().to_string(),
+            source: err,
+        })?;
+        let actual = hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes));
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(ExtError::DigestMismatch {
+                path: source.display().to_string(),
+                expected: expected.to_ascii_lowercase(),
+                actual,
+            });
+        }
+    }
 
     // The manifest travels with the component, and its absence is refused
     // rather than tolerated: `allow-unmanifested` exists for a component
@@ -469,7 +577,7 @@ fn stage_and_check(staging: &Path, source: &Path, name: &str) -> Result<Installe
 
 #[cfg(test)]
 mod tests {
-    use super::{install, list, remove, Declaration, ExtError, Removed};
+    use super::{install, list, remove, Checks, Declaration, ExtError, Removed};
     use std::path::{Path, PathBuf};
 
     /// Removes the directory on drop, panic or not.
@@ -642,7 +750,7 @@ mod tests {
         let before = snapshot(&ext);
 
         let source = prepare(&dir.0);
-        let err = install(&ext, &source).expect_err("must refuse");
+        let err = install(&ext, &source, &Checks::default()).expect_err("must refuse");
 
         assert_eq!(
             snapshot(&ext),
@@ -696,16 +804,17 @@ mod tests {
         let ext = dir.0.join("ext");
         std::fs::create_dir_all(&ext).expect("creates ext/");
 
-        let absent = install(&ext, &dir.0.join("nowhere.wasm")).expect_err("refuses");
+        let absent =
+            install(&ext, &dir.0.join("nowhere.wasm"), &Checks::default()).expect_err("refuses");
         let not_wasm = {
             let path = dir.0.join("notes.txt");
             std::fs::write(&path, b"x").expect("writes");
-            install(&ext, &path).expect_err("refuses")
+            install(&ext, &path, &Checks::default()).expect_err("refuses")
         };
         let alone = {
             let path = dir.0.join("tool-alone.wasm");
             std::fs::write(&path, b"\0asm").expect("writes");
-            install(&ext, &path).expect_err("refuses")
+            install(&ext, &path, &Checks::default()).expect_err("refuses")
         };
         let junk = {
             let path = dir.0.join("tool-junk.wasm");
@@ -715,7 +824,7 @@ mod tests {
                 manifest_for("tool-junk", ""),
             )
             .expect("writes");
-            install(&ext, &path).expect_err("refuses")
+            install(&ext, &path, &Checks::default()).expect_err("refuses")
         };
 
         let messages = [
@@ -734,6 +843,43 @@ mod tests {
         );
     }
 
+    /// A digest that cannot be a digest is its own refusal, not a mismatch —
+    /// a truncated paste is the usual cause, and "your digest is 63 characters"
+    /// is more useful than showing two strings that differ.
+    #[test]
+    fn a_digest_that_is_not_a_digest_is_refused_as_malformed() {
+        let dir = temp_dir("malformed-digest");
+        let ext = dir.0.join("ext");
+        std::fs::create_dir_all(&ext).expect("creates ext/");
+        let source = dir.0.join("tool-x.wasm");
+        std::fs::write(&source, b"\0asm").expect("writes a component");
+
+        for bad in [
+            // 63 characters: one short, the classic truncated paste.
+            "016481a6eb79d32a82af4a1f7d49af56b11af9431870a857016e4696e62aca2",
+            // 64 characters, one of them not hex.
+            "z16481a6eb79d32a82af4a1f7d49af56b11af9431870a857016e4696e62aca26",
+            "",
+            "sha256:016481a6",
+        ] {
+            let err = install(
+                &ext,
+                &source,
+                &Checks {
+                    sha256: Some(bad.to_owned()),
+                },
+            )
+            .expect_err("must refuse");
+            assert!(
+                matches!(err, ExtError::MalformedDigest { .. }),
+                "{bad:?} is malformed, not a mismatch: {err:?}"
+            );
+        }
+        // And none of those attempts left anything behind.
+        assert!(!ext.join(super::STAGING).exists());
+        assert_eq!(list(&ext).expect("lists"), []);
+    }
+
     #[test]
     fn installing_over_something_already_there_is_refused() {
         let dir = temp_dir("collide");
@@ -744,7 +890,7 @@ mod tests {
 
         let source = dir.0.join("tool-fs.wasm");
         std::fs::write(&source, b"\0asm").expect("writes a component");
-        let err = install(&ext, &source).expect_err("must refuse");
+        let err = install(&ext, &source, &Checks::default()).expect_err("must refuse");
         assert!(
             matches!(err, ExtError::AlreadyInstalled { .. }),
             "replacing silently would discard the component the config was verified against: {err:?}"
