@@ -58,7 +58,104 @@ fn main() -> ExitCode {
         Some("telegram") => telegram(&args[1..]),
         Some("verify") => verify(&args[1..]),
         Some("ask") => ask(&args[1..]),
+        Some("ext") => ext(&args[1..]),
         _ => boot_plan(&args),
+    }
+}
+
+/// What is staged in `ext/`, and unmaking it.
+///
+/// `install` is **not** here yet, and its absence is the point: it arrives with
+/// the verification that makes it worth having (checksum, signature, component
+/// validity, manifest consistency). A subcommand that copied a file into `ext/`
+/// and called that installing would be `cp` with a longer name — and the
+/// build pipeline is not behind the runtime sandbox, so whatever lands there
+/// decides what runs with the host's privileges.
+fn ext(args: &[String]) -> ExitCode {
+    match args.first().map(String::as_str) {
+        Some("list") => ext_list(&args[1..]),
+        Some("remove") => ext_remove(&args[1..]),
+        _ => {
+            eprintln!("usage: jan-klod-gateway ext list [ext-dir]");
+            eprintln!("       jan-klod-gateway ext remove <name> [ext-dir]");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Each staged component with the capabilities its manifest declares.
+fn ext_list(args: &[String]) -> ExitCode {
+    let dir = resolve_default(&arg_or(args, 0, "ext"));
+    let staged = match jan_klod_core::ext::list(std::path::Path::new(&dir)) {
+        Ok(staged) => staged,
+        Err(err) => {
+            eprintln!("jan-klod: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if staged.is_empty() {
+        println!("nothing staged in {dir}/");
+        return ExitCode::SUCCESS;
+    }
+    let width = staged.iter().map(|s| s.name.len()).max().unwrap_or(0);
+    for component in &staged {
+        match &component.declaration {
+            jan_klod_core::ext::Declaration::Present(manifest) => {
+                let capabilities = if manifest.capabilities.is_empty() {
+                    // "needs nothing" is a claim the manifest makes, so it is
+                    // printed as one rather than as a blank column.
+                    "needs nothing".to_owned()
+                } else {
+                    manifest.capabilities.join(", ")
+                };
+                println!(
+                    "{:<width$}  {}  api {}  {}",
+                    component.name, manifest.version, manifest.api_version, capabilities
+                );
+            }
+            jan_klod_core::ext::Declaration::Absent => {
+                println!(
+                    "{:<width$}  no manifest — the next boot will refuse it",
+                    component.name
+                );
+            }
+            jan_klod_core::ext::Declaration::Broken(reason) => {
+                println!("{:<width$}  unusable manifest: {reason}", component.name);
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Delete a component and its manifest together.
+fn ext_remove(args: &[String]) -> ExitCode {
+    let Some(name) = args.first() else {
+        eprintln!("usage: jan-klod-gateway ext remove <name> [ext-dir]");
+        return ExitCode::FAILURE;
+    };
+    let dir = resolve_default(&arg_or(args, 1, "ext"));
+    match jan_klod_core::ext::remove(std::path::Path::new(&dir), name) {
+        Ok(removed) => {
+            // Which files went, not just "done": removing a manifest with no
+            // component beside it is worth saying out loud, because it means
+            // `ext/` had an orphan declaration.
+            match removed {
+                jan_klod_core::ext::Removed::Both => {
+                    println!("removed {name} and its manifest from {dir}/");
+                }
+                jan_klod_core::ext::Removed::ComponentOnly => {
+                    println!("removed {name} from {dir}/ — it had no manifest");
+                }
+                jan_klod_core::ext::Removed::ManifestOnly => {
+                    println!("removed an orphan manifest for {name} from {dir}/");
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("jan-klod: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

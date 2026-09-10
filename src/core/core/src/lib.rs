@@ -17,6 +17,7 @@ pub mod conductor;
 pub mod delegate;
 pub mod egress;
 pub mod event_log;
+pub mod ext;
 mod host;
 pub mod host_fs;
 pub mod host_process;

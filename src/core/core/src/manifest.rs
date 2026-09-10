@@ -195,7 +195,12 @@ impl Manifest {
 }
 
 /// Where a component's manifest lives: beside it, same stem.
-fn manifest_path(component: &Path) -> PathBuf {
+///
+/// Public so `ext remove` deletes the same file `beside` reads. The naming rule
+/// belongs in one place — a second copy of it is how a component and its
+/// manifest come to disagree about where the manifest is.
+#[must_use]
+pub fn manifest_path(component: &Path) -> PathBuf {
     let stem = component.file_stem().map_or_else(
         || component.to_string_lossy().into_owned(),
         |s| s.to_string_lossy().into_owned(),
