@@ -28,7 +28,14 @@ jobs:
     name: Lint + test (host workspace)
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 2 for `make wit`'s version check, which compares `wit/`
+      # against a baseline. The default depth-1 checkout has no parent commit
+      # and no usable `origin/main`, so the check would report "no baseline"
+      # on every run and the job would still be green — a check that never
+      # runs, which is the thing it exists to prevent.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       # wasm32-wasip2 because this job stages the guests below, and without the
       # target `cargo build --target wasm32-wasip2` dies on the first dependency
@@ -92,6 +99,13 @@ jobs:
 
       - name: Fetch spike WIT deps
         run: make -C src/extensions spike-deps
+
+      # Validate the WIT contracts, and warn if an edit to them did not bump the
+      # package version. No job ran `make wit` before this: `make test` and
+      # `make gate` reach `wit/` only through the guests that bind it, so a
+      # malformed contract or an unbumped version was caught by neither. Runs
+      # before the guests are staged, since they are built against these files.
+      - run: make wit
 
       # Stage the guests before testing. Without this the integration tests do not
       # fail — they *skip*, because an absent component is a legitimate state for a

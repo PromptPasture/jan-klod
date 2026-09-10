@@ -39,8 +39,14 @@ help:
 	@echo "  clean       remove build artifacts"
 
 # Root-level WIT contracts are language-neutral, so they stay a root concern.
+#
+# Two checks, and the order matters: validate the contracts first, then ask
+# whether an edit to them bumped the package version. A warning about the
+# version of a file that does not parse would be noise on top of a real error.
+# The version check is advisory (always exits 0) until the interface freeze.
 wit:
 	wasm-tools component wit wit/
+	sh scripts/wit-version-check.sh
 
 all: core extensions
 
