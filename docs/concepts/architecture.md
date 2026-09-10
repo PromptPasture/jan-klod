@@ -74,7 +74,7 @@ the current state:
 
 ```
 L4 Clients        TUI (ratatui, built) | Web client + Tauri shell (Phase 17) | IDE via ACP (Phase 18) | chat channels (Telegram, built)
-L3 Protocol       REST + SSE (built) → one versioned command/event schema over stdio JSON-RPC / WebSocket / SSE (Phase 13)
+L3 Protocol       one versioned command/event schema (built) over stdio JSON-RPC (built) | REST + SSE (built, a projection) | WebSocket (Phase 13c)
 L2 Extensions     provider | tool | interceptor | registry | agent | chat        (WASM Components, polyglot — built)
 L1 Capabilities   host-fs | host-process | host-http | host-storage | host-config | host-log | host-event   (default-deny, built)
                   + OS-level effect sandbox behind host-process (Phase 15); manifest-declared grants (Phase 16)
@@ -88,8 +88,10 @@ L0 Kernel         lifecycle | capability broker | loop conductor | SQLite store 
   component (today in `config.yaml`; from Phase 16 also declared in a manifest the
   host cross-checks against the component's real imports).
 - **L2 keeps the taxonomy below.** Nothing "smart" lives anywhere else.
-- **L3 is the ABI for clients.** Today REST + SSE; Phase 13 makes it a versioned
-  contract of the same rank as WIT, with REST + SSE kept as one projection.
+- **L3 is the ABI for clients**, and since Phase 13 a versioned contract of the
+  same rank as WIT, negotiated at connect. Two transports carry it — stdio
+  JSON-RPC and REST + SSE — and REST + SSE is one projection of it rather than a
+  second contract.
 - **L4 holds no state the core does not.** Every client is a projection of the
   session over L3.
 
@@ -206,16 +208,17 @@ chat-whatsapp         drives the core loop; uses host-socket
 ### User interfaces (separate clients)
 
 UIs are **not extensions and are not part of core.** They are optional, separate
-**client processes** that connect to a running core over its host-side client
-surface (see [Transport](#transport)) — the same way an editor talks to a language
-server. Core never embeds a UI; a headless deployment (Raspberry Pi, container,
-Telegram-only) runs no UI client at all. Since Phase 3 the surface is built into
+**client processes** that reach a core over its client surface (see
+[Transport](#transport)) — the same way an editor talks to a language server,
+either by spawning one or by connecting to one already running. Core never
+embeds a UI; a headless deployment (Raspberry Pi, container, Telegram-only) runs
+no UI client at all. Since Phase 3 the surface is built into
 the core binary, so a UI client attaches to any running core; the earlier open
 question (a separate `api-rest` guest vs. a built-in endpoint) is closed.
 
 | Launch | Surface | Technology | Status |
 |---|---|---|---|
-| `jan-klod-ui` (default) | Terminal UI | `ratatui`, over REST + SSE today; over stdio JSON-RPC from Phase 13 | built |
+| `jan-klod` (default) | Terminal UI | `ratatui`, over stdio JSON-RPC — it spawns the gateway; `--addr` drives a running one over REST + SSE instead | built |
 | browser → core `/` | Web UI | a static, dependency-light TypeScript front-end served by the core, speaking the protocol over WebSocket | planned, Phase 17 |
 | `jan-klod-ui --gui` | Native window | a **Tauri shell around the same web front-end** — system webview, not a third client codebase | planned, Phase 17 |
 | editor | IDE integration | ACP server side mapped onto the protocol | planned, Phase 18 |
@@ -314,11 +317,28 @@ surface. Curl-debuggable, browser-compatible, no stub generation. Endpoints:
 `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`,
 `POST /session/:id/message` (SSE or JSON).
 
-**Planned, Phase 13:** this surface becomes a versioned **client protocol** of the
-same rank as the WIT contracts — a `protocol` crate with typed commands and
-notifications, a protocol version negotiated at connect, and three transports:
-stdio JSON-RPC (a gateway `rpc` subcommand, for the TUI and editors), WebSocket (for
-the web client), and the existing REST + SSE kept as one projection. Vision
+**It is no longer the only surface.** Phase 13 made the client surface a
+versioned contract of the same rank as the WIT package — `jan-klod-protocol`,
+with typed commands and notifications and a version negotiated at connect (see
+[Contracts](contracts.md#ui--core-client-surface)) — and gave it a second
+transport:
+
+**stdio JSON-RPC** (`jan-klod-gateway rpc`, `jan_klod_core::rpc`) is what the TUI
+now uses by default and what editors will use. Newline-delimited JSON-RPC 2.0 on
+the process's own stdin and stdout: **no port, no token, nothing left running**,
+because the client spawns the gateway and owns it. Stdout carries frames and
+nothing else; every log line goes to stderr.
+
+The two differ in one structural way worth knowing. Over REST, a mid-turn
+confirmation is answered on a *second connection* and a cancel is the client
+disconnecting. Over stdio there is one pipe, so a reader thread holds it while
+the turn runs and hands frames to the loop between the turn's own events — which
+is how `turn/cancel` gets read at all, and how `turn/follow-up` (steering a
+running turn) becomes possible for the first time, REST having no way to deliver
+one.
+
+**Still planned, Phase 13c:** WebSocket, for the web client. REST + SSE stays as
+one projection of the same contract, not a second contract. Vision
 [decision 1](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions);
 plan in the [roadmap](roadmap.md#phase-13--client-protocol).
 

@@ -32,10 +32,13 @@ to set. For native Claude, export `ANTHROPIC_API_KEY` instead and flip
 `extensions.provider.anthropic.enabled: true` (and `openai` to `false`) — the
 provider is a component swap, not a code change.
 
-`jan-klod` starts the gateway automatically. To run it yourself:
+The argument is a session id. `jan-klod` starts its own gateway and talks to it
+over a pipe — no port, nothing left running. To run one yourself and share it
+between clients:
 
 ```sh
 jan-klod-gateway serve --bind 127.0.0.1:8787
+jan-klod --addr 127.0.0.1:8787 my-session
 ```
 
 No paths: the gateway finds `config.yaml` and `ext/` in the current directory, or

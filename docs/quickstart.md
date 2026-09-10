@@ -46,15 +46,37 @@ cd ~/my-project
 jan-klod my-session
 ```
 
-`jan-klod` automatically starts `jan-klod-gateway` in the background if it isn't
-already running. The gateway listens on `127.0.0.1:8787` and uses the current
-directory as the workspace — file tools are jailed to it.
+`jan-klod` starts its own `jan-klod-gateway rpc` and talks to it over that
+process's stdin and stdout — no port, no token, and nothing left running when
+you quit. The gateway uses the current directory as the workspace, so file tools
+are jailed to it.
 
-To start the gateway manually (e.g. as a background service):
+The single argument is the **session id**. To drive a gateway that is already
+listening somewhere, name it with `--addr`:
+
+```sh
+jan-klod --addr 127.0.0.1:8787 my-session
+```
+
+That path uses the REST + SSE surface instead, and starts a gateway with
+`serve --bind` if nothing answers there.
+
+To run the gateway yourself — as a background service, or to share one between
+clients:
 
 ```sh
 jan-klod-gateway serve --bind 127.0.0.1:8787
 ```
+
+Or to speak the client protocol on a pipe, which is what `jan-klod` does for you
+and what an editor would do:
+
+```sh
+jan-klod-gateway rpc
+```
+
+It reads newline-delimited JSON-RPC 2.0 on stdin and writes it on stdout;
+**stdout carries nothing else**, so logs and errors go to stderr.
 
 Naming `config.yaml` and `ext` explicitly also works, but is only right inside a
 checkout: without them the gateway uses the current directory when it holds them
@@ -165,8 +187,14 @@ curl -X POST http://127.0.0.1:8787/session/my-session/message \
   -d '{"message": "hello"}'
 
 # Resume in the TUI (session id from the list above)
-jan-klod 127.0.0.1:8787 <session-id>
+jan-klod --addr 127.0.0.1:8787 <session-id>
 ```
+
+The `--addr` is what makes this the REST path: it says *this* gateway, the one
+serving the requests above, rather than a fresh one on a pipe. Without it,
+`jan-klod <session-id>` resumes the same session over stdio — the store is the
+same either way.
+
 
 ## Next steps
 

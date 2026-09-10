@@ -84,7 +84,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 10 — Skills + MCP registry | `done` | **Done 2026-07-03.** `registry-skills` (scans `.agents/skills/*.md`, parses YAML frontmatter `name:`/`description:`, exposes via `skill-registry` WIT, `invoke` renders template); `registry-mcp` (SSE/streamable-HTTP MCP gateway, JSON-RPC `tools/list` + `tools/call`). `registry_host.rs` binds both worlds; `CombinedFleet` dispatches tool calls to `ToolFleet` then `RegistryFleet`. `host-fs` added to `skill-registry-world`. |
 | 11 — UX polish | `done` | **Done 2026-07-03.** REST surface migrated to resource model (`POST /turn` retired; `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message` added); `store::list_namespaces` + `AgentSession::list_sessions`; workspace auto-detection (defaults to `$PWD` when `workspace:` key absent); per-token streaming in TUI via mpsc channel + `apply_delta`/`finish_turn`. UI client and integration tests updated. |
 | 12 — Release: GitHub + web | `done` | **Done 2026-07-03.** GitHub Actions release workflow (`.github/workflows/release.yml`; tag `v*` → matrix linux/darwin × x86_64/arm64 bundles + SHA256SUMS, `gh release create`); `scripts/install.sh` (OS/arch detect, checksum verify, installs to `~/.local/bin`); `pages/index.html` (GitHub Pages landing); `docs/quickstart.md`; README rewrite. |
-| 13 — Client protocol | `in-progress` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. No transport yet, so `serve.rs` is unchanged. Gate: `jan-klod-ui` drives a full turn — streaming, `ask`, cancel — over stdio JSON-RPC; REST + SSE tests still pass as a projection; protocol version negotiated at connect. |
+| 13 — Client protocol | `in-progress` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. **13b done 2026-09-10** ([#42](https://github.com/PromptPasture/jan-klod/issues/42)): `jan-klod-gateway rpc` on stdin/stdout, and `jan-klod` uses it by default — no port, no token, nothing left running. The framing moved into the contract crate (the core writes frames and every client reads them); `turn/follow-up` works over stdio and cannot over REST. **The exit gate is met** — a full turn streams, an `ask` is answered on the same pipe, a `turn/cancel` stops a turn (proven by the completion it never asks for), and REST + SSE still pass. 13c is what is left. |
 | 14 — Event-sourced session log | `done` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. **Exit gate passed 2026-09-09** (`make gate`): the append-only `events` table with a versioned envelope (#44), and transcript/resume/fork as projections of it (#45) — a session resumed after a restart rebuilds from the log, and a fork at seq *N* runs independently. Nothing writes a transcript except through events; a pre-log database is converted at boot. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
 | 15 — OS-level effect sandbox | `in-progress` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, the `SandboxBackend` seam, boot-time resolution that never downgrades quietly, and `require: true` denying execution rather than degrading. No backend yet, so every platform is approval-only; the per-turn warning is deferred to 16a. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot and in the turn; the security-model row cites the tests. |
 | 16 — Capability manifest + signed registry | `in-progress` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. **16a done 2026-09-10** (#86, #87): every guest ships a manifest generated from its own imports, and the host refuses a component whose manifest is absent, under-declares what it imports, or names an incompatible interface version — cross-validated by two independent readers of the same artifacts. Remaining: 16b (versioning policy), 16c (`ext install` provenance), 16d (registry index). Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
@@ -362,10 +362,26 @@ REST"; REST + SSE stay as one *projection* of the protocol.
   reaches a notification unchanged. The full list is in
   [Contracts → UI ↔ core](contracts.md#ui--core-client-surface). Resolves the open
   question "own schema vs. ACP wholesale": own schema, ACP as an adapter (Phase 18).
-- **13b — stdio JSON-RPC transport.** a gateway `rpc` subcommand speaks the protocol
-  over stdin/stdout (the Codex `app-server` / LSP shape); `jan-klod-ui` moves onto
-  it, spawning the gateway on demand when no server is running. The REST/SSE
-  driver's `ask`/answer round-trip is reused, not duplicated.
+- **13b — stdio JSON-RPC transport. Done 2026-09-10** ([#42](https://github.com/PromptPasture/jan-klod/issues/42)).
+  `jan-klod-gateway rpc` speaks the protocol on stdin/stdout (the Codex
+  `app-server` / LSP shape) and `jan-klod` uses it **by default**, spawning the
+  gateway rather than connecting to one: no port, no token, nothing left running.
+  Three things this bullet did not anticipate:
+  - **The framing moved into the contract crate**, where the bullet assumed each
+    transport would own its own. It has to: the core writes frames and every
+    client reads them, and the TUI client depends on neither the core nor
+    Wasmtime by design, so a frame type reachable only from the core would have
+    been hand-rolled twice. See
+    [Contracts](contracts.md#ui--core-client-surface).
+  - **`turn/follow-up` works here first.** `Driver::follow_up` has existed since
+    the conductor did and REST has no way to deliver a message into a running
+    turn; a pipe does.
+  - **The handshake is mandatory**, not offered. A negotiation a client can skip
+    negotiates nothing.
+  The `ask`/answer round-trip is reused rather than duplicated — and came out
+  simpler, because a closed pipe is a real signal where a dead socket needs a
+  heartbeat to discover. `--addr <host:port>` still drives a running gateway over
+  REST + SSE.
 - **13c — WebSocket transport.** The same protocol over WebSocket on the existing
   listener, for browser clients (Phase 17). Token auth as for REST.
 

@@ -218,6 +218,37 @@ is genuinely its own: the pipes, the sockets, the read loop. The schema export
 describes both — `Command`/`Notification` are the contract, the `jsonrpc.*`
 definitions are what goes over the wire.
 
+### Transports
+
+| Transport | How a client reaches it | Built |
+|---|---|---|
+| stdio JSON-RPC | spawn `jan-klod-gateway rpc`; newline-delimited frames on its stdin/stdout | 13b |
+| REST + SSE | `POST /session/:id/message` against a running `serve`, streamed back as `event:`/`data:` | since Phase 3, now a projection |
+| WebSocket | — | 13c |
+
+**stdio is the default for `jan-klod`.** No port, no token, nothing left
+running: the client spawns the gateway and owns the process. **Stdout carries
+frames and nothing else** — every log line, the gateway's own and its guests',
+goes to stderr, because a client splitting the stream on newlines would read a
+stray `println!` as a frame.
+
+Three things differ between the two, and they are consequences of the shape
+rather than choices:
+
+- **A confirmation** is answered on a second connection over REST; over stdio
+  there is one pipe, so a reader thread holds it while the turn runs and hands
+  frames to the loop between the turn's own events.
+- **A cancel** over REST is the client disconnecting — there is no route for it.
+  Over stdio `turn/cancel` is a frame, read at the same seam, and it cancels by
+  the same mechanism a disconnect does (the event sink returning `Stop`).
+- **Steering** (`turn/follow-up`) works over stdio and cannot over REST, which
+  has no way to deliver a message into a turn already running.
+
+An answer that arrives when nothing asked is refused on both — `409` over REST,
+`invalid request` over stdio. Not stashed: a held answer would sit until the
+*next* question and approve it, which is how "yes" to reading a file becomes
+"yes" to running a command.
+
 **Commands** (client → core):
 
 | Command | Params | REST route today |
