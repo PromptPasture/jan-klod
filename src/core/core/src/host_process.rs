@@ -14,6 +14,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::host_fs::Workspace;
+use crate::sandbox::{SandboxBackend, SandboxPolicy};
 
 /// The only environment variables a child process inherits by default.
 ///
@@ -73,6 +74,24 @@ pub struct ProcessRunner {
     output_cap: usize,
     /// Extra environment names the operator granted (see [`BASE_ENV`]).
     env_passthrough: Vec<String>,
+    /// What confines the command itself, when anything does.
+    ///
+    /// `None` is approval-only: the bounds above still apply — they bound the
+    /// *caller* — and the command runs with the user's privileges. The boot path
+    /// only fills this in when it has already reported the mode as `Os`, so that
+    /// what the runtime says about confinement and what it does cannot diverge.
+    confinement: Option<Confinement>,
+}
+
+/// A backend and the policy to hand it, paired because neither confines
+/// anything alone.
+///
+/// `Arc` rather than `Box` because [`ProcessRunner`] is `Clone` and a backend is
+/// stateless — there is nothing to copy per clone.
+#[derive(Clone)]
+struct Confinement {
+    backend: std::sync::Arc<dyn SandboxBackend>,
+    policy: SandboxPolicy,
 }
 
 impl ProcessRunner {
@@ -84,6 +103,7 @@ impl ProcessRunner {
             timeout: Duration::from_secs(0),
             output_cap: 0,
             env_passthrough: Vec::new(),
+            confinement: None,
         }
     }
 
@@ -96,7 +116,26 @@ impl ProcessRunner {
             timeout,
             output_cap,
             env_passthrough: Vec::new(),
+            // Nothing confines a command until the boot path says so, and it
+            // says so only when it has reported the mode as `Os`.
+            confinement: None,
         }
+    }
+
+    /// Confine every command with `backend` under `policy`.
+    ///
+    /// Called by the boot path only when the effective mode is
+    /// [`SandboxMode::Os`](crate::sandbox::SandboxMode::Os), which is also what
+    /// it printed — the two are set from the same decision so the boot line
+    /// cannot claim confinement that is not wired up.
+    #[must_use]
+    pub fn with_sandbox(
+        mut self,
+        backend: std::sync::Arc<dyn SandboxBackend>,
+        policy: SandboxPolicy,
+    ) -> Self {
+        self.confinement = Some(Confinement { backend, policy });
+        self
     }
 
     /// Additionally pass these environment variables through to child processes.
@@ -153,8 +192,33 @@ impl ProcessRunner {
             None => workspace.root().to_path_buf(),
         };
 
-        let mut child = Command::new(command)
-            .args(args)
+        let mut base = Command::new(command);
+        base.args(args);
+        // Confined *before* being configured: a backend can only carry the
+        // program and its arguments across (there is no getter for stdio, and
+        // `get_envs` cannot say whether `env_clear` was called), so cwd, the
+        // scrubbed environment and the pipes are applied to whatever it hands
+        // back — which for a wrapping mechanism is a different process.
+        let mut spawnable = match &self.confinement {
+            None => base,
+            Some(confinement) => confinement
+                .backend
+                .confine(base, &confinement.policy)
+                .map_err(|err| {
+                    // The guest-facing `proc-error` is a bare enum with no room
+                    // for a reason, so the reason goes to the host's log and the
+                    // guest gets a denial. Denied rather than run unconfined:
+                    // the operator asked for confinement and the runtime said it
+                    // had it.
+                    eprintln!(
+                        "WARN [core] {} refused to confine `{command}` ({err:?}); the command \
+                         is denied rather than run unconfined",
+                        confinement.backend.name()
+                    );
+                    ProcError::Denied
+                })?,
+        };
+        let mut child = spawnable
             .current_dir(&dir)
             .env_clear()
             .envs(self.environment())

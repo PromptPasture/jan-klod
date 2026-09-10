@@ -817,7 +817,12 @@ impl Runtime {
                         return host_process::ProcessRunner::disabled();
                     }
                 };
-                let effective = policy.resolve(sandbox::host_backend().as_deref());
+                // One `host_backend()` for both the report and the wiring: two
+                // calls could disagree (the mechanism could vanish between
+                // them), and then the boot line would describe a confinement
+                // the runner does not have.
+                let backend = sandbox::host_backend();
+                let effective = policy.resolve(backend.as_deref());
                 // `require: true` asked for no command rather than an unconfined
                 // one, so a refusal here is the configuration working, not
                 // failing.
@@ -833,12 +838,21 @@ impl Runtime {
                         effective.mode
                     );
                 }
-                host_process::ProcessRunner::new(
+                let runner = host_process::ProcessRunner::new(
                     ws.clone(),
                     std::time::Duration::from_secs(timeout),
                     usize::try_from(cap).unwrap_or(64 * 1024),
                 )
-                .with_env_passthrough(passthrough)
+                .with_env_passthrough(passthrough);
+                // The mode just printed and the confinement just wired come from
+                // the same pair, so the runtime cannot report `Os` while running
+                // commands unconfined.
+                match (effective.mode, backend) {
+                    (sandbox::SandboxMode::Os, Some(backend)) => {
+                        runner.with_sandbox(std::sync::Arc::from(backend), policy)
+                    }
+                    _ => runner,
+                }
             }
             _ => host_process::ProcessRunner::disabled(),
         }

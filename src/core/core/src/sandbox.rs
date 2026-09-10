@@ -158,7 +158,11 @@ pub enum SandboxError {
 /// macOS, Landlock on Linux. The trait is here now because the policy above is
 /// meaningless without a named place for enforcement to arrive, and because the
 /// boot path has to be able to say that the place is empty.
-pub trait SandboxBackend {
+/// `Send + Sync` because the runner that holds one is shared across the
+/// component host, which requires it — and because a backend has no per-command
+/// state to make that awkward: it turns a policy into a confined command and
+/// keeps nothing.
+pub trait SandboxBackend: Send + Sync {
     /// The mechanism's name, for boot output — "Seatbelt", "Landlock".
     fn name(&self) -> &'static str;
 
@@ -214,13 +218,61 @@ impl SandboxBackend for NoBackend {
 
 /// The backend this build has for the host OS, if any.
 ///
-/// `None` on every platform today; the backends are later slices. `Option`
-/// rather than always handing back a [`NoBackend`], because "there is nothing
-/// here" is then a fact the boot path can state up front instead of one it
-/// discovers by trying to confine a command that is about to run.
+/// `Option` rather than always handing back a [`NoBackend`], because "there is
+/// nothing here" is then a fact the boot path can state up front instead of one
+/// it discovers by trying to confine a command that is about to run.
+///
+/// On macOS that up-front answer includes whether the *mechanism* is present:
+/// Seatbelt is applied by `sandbox-exec`, and a build that has the backend on a
+/// system missing the tool has nothing either. Discovering that at the first
+/// command is exactly what this returning `Option` exists to avoid.
 #[must_use]
+#[cfg(target_os = "macos")]
+pub fn host_backend() -> Option<Box<dyn SandboxBackend>> {
+    backend_at(std::path::Path::new(crate::sandbox_seatbelt::SANDBOX_EXEC))
+}
+
+/// [`host_backend`] with the mechanism's path as an argument, so the "it is not
+/// there" branch is reachable from a test. It cannot be reached by deleting
+/// `/usr/bin/sandbox-exec`.
+#[cfg(target_os = "macos")]
+fn backend_at(sandbox_exec: &std::path::Path) -> Option<Box<dyn SandboxBackend>> {
+    sandbox_exec
+        .exists()
+        .then(|| Box::new(crate::sandbox_seatbelt::SeatbeltBackend) as Box<dyn SandboxBackend>)
+}
+
+/// No backend: this build has one for macOS only, and the Linux mechanism
+/// (Landlock) is its own slice.
+#[must_use]
+#[cfg(not(target_os = "macos"))]
 pub fn host_backend() -> Option<Box<dyn SandboxBackend>> {
     None
+}
+
+/// Why there is no backend, phrased for the operator reading a boot warning.
+///
+/// One function rather than a message built where it is used, so it cannot
+/// contradict [`host_backend`]: on macOS the *only* way to have no backend is
+/// for `sandbox-exec` to be missing, so that is what this says, and elsewhere
+/// the build simply has none. Both spellings name the platform, because the
+/// operator's next question is "on this machine, or at all?".
+fn absence() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        format!(
+            "this build's sandbox backend for {} is unavailable: {} is not present",
+            std::env::consts::OS,
+            crate::sandbox_seatbelt::SANDBOX_EXEC
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        format!(
+            "this build has no sandbox backend for {}",
+            std::env::consts::OS
+        )
+    }
 }
 
 /// The mode actually in force, and why it is not the one that was asked for.
@@ -256,10 +308,9 @@ impl SandboxPolicy {
             (SandboxMode::Os, None) => EffectiveSandbox {
                 mode: SandboxMode::ApprovalOnly,
                 downgrade: Some(format!(
-                    "`execution.sandbox.mode: os` was requested, but this build has no \
-                     sandbox backend for {} — a command is confined only by the \
-                     confirmation prompt",
-                    std::env::consts::OS
+                    "`execution.sandbox.mode: os` was requested, but {} — a command is \
+                     confined only by the confirmation prompt",
+                    absence()
                 )),
             },
         }
@@ -579,11 +630,45 @@ mod tests {
 
     /// This is the state of every platform today, and the test says so out loud
     /// so that the first slice to add a backend has to come here and change it.
+    /// 15b landed the macOS backend, so the old "no platform has one yet" is
+    /// retired in favour of one assertion per platform — each true where it
+    /// runs, rather than one that is vacuous on both.
+    #[cfg(target_os = "macos")]
     #[test]
-    fn this_build_has_no_backend_for_any_platform_yet() {
+    fn macos_has_the_seatbelt_backend() {
+        let backend = host_backend()
+            .expect("/usr/bin/sandbox-exec ships with macOS; see the sibling test for its absence");
+        assert_eq!(backend.name(), "Seatbelt");
+    }
+
+    /// Everywhere else there is still nothing, and the reason still names the
+    /// platform — which is what an operator reading the boot warning needs.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_platform_with_no_backend_says_which_platform() {
         assert!(
             host_backend().is_none(),
-            "a backend landed — update this test and the security-model row"
+            "this build has a backend for macOS only — Landlock is Slice 15c"
         );
+        let reason = super::absence();
+        assert!(reason.contains(std::env::consts::OS), "{reason}");
+    }
+
+    /// The branch that cannot be reached by deleting `/usr/bin/sandbox-exec`:
+    /// macOS with the mechanism missing has no backend, and the reason says so
+    /// rather than claiming the build has none.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_without_sandbox_exec_has_no_backend_and_blames_the_tool() {
+        assert!(
+            super::backend_at(std::path::Path::new("/nonexistent/sandbox-exec")).is_none(),
+            "no mechanism, no backend"
+        );
+        let reason = super::absence();
+        assert!(
+            reason.contains("/usr/bin/sandbox-exec"),
+            "the reason names the missing tool rather than blaming the build: {reason}"
+        );
+        assert!(reason.contains(std::env::consts::OS), "{reason}");
     }
 }

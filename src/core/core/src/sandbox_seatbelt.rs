@@ -30,7 +30,7 @@ use crate::sandbox::{SandboxBackend, SandboxError, SandboxPolicy};
 
 /// The profile applier. An absolute path on purpose: resolving `sandbox-exec`
 /// through `PATH` would let a `PATH` entry decide what confines a command.
-const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+pub(crate) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
 /// Confines a command with a Seatbelt profile.
 #[derive(Debug, Clone, Copy, Default)]
