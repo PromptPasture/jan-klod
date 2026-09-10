@@ -77,7 +77,7 @@ L4 Clients        TUI (ratatui, built) | Web client + Tauri shell (Phase 17) | I
 L3 Protocol       one versioned command/event schema (built) over stdio JSON-RPC (built) | REST + SSE (built, a projection) | WebSocket (Phase 13c)
 L2 Extensions     provider | tool | interceptor | registry | agent | chat        (WASM Components, polyglot — built)
 L1 Capabilities   host-fs | host-process | host-http | host-storage | host-config | host-log | host-event   (default-deny, built)
-                  + effect sandbox behind host-process: Seatbelt on macOS (built) | Landlock on Linux (Phase 15c); manifest-declared grants (Phase 16)
+                  + effect sandbox behind host-process: Seatbelt on macOS (built) | Landlock on Linux (built) | Windows a spike (15d); manifest-declared grants (Phase 16)
 L0 Kernel         lifecycle | capability broker | loop conductor | SQLite store (built) | session event log (Phase 14) | protocol server (Phase 13)
 ```
 
@@ -368,7 +368,22 @@ Code reached. Every command is rebuilt as
 `execution.sandbox`: `(deny default)`, reads allowed, writes only under the
 paths `writable` names, network only if the policy says so.
 
-**Linux: nothing yet.** Landlock is [Slice 15c](roadmap.md#phase-15--os-level-effect-sandbox).
+**Linux: Landlock, and no `unsafe` to get it.** Landlock restricts *the calling
+process*, so the obvious shape is to apply it between `fork` and `exec` —
+`pre_exec`, which is an `unsafe fn` this workspace's lints forbid. Instead the
+command is rewritten as `<gateway> confine --writable <dir> [--network] --
+<command>`, and that child applies the ruleset **to itself** and then `exec`s
+the command, becoming it. `exec` is safe, so the whole path is. The ruleset asks
+for Landlock ABI 1's filesystem rights as a hard requirement — without them
+there is no confinement to speak of — and newer rights best-effort; denying the
+network is a hard requirement again, because it needs ABI 4 (kernel 6.7) and a
+kernel that cannot do it must not be reported as having done it. Anything short
+of `FullyEnforced` refuses the command.
+
+The two backends therefore share a shape: **both replace the program with a
+wrapper that confines and then becomes the command.** That is why
+`SandboxBackend::confine` takes and returns an owned `Command` rather than
+borrowing one — a `Command`'s program can be read but not changed.
 
 **The fallback, on any platform and for any reason, is `approval-only`, and it
 is stated rather than assumed.** A platform with no backend, or a macOS without

@@ -27,7 +27,7 @@ exist.
 | Subprocesses (`host-process`) | Denied | `execution.enabled` **and** a workspace | `core::host_process::ProcessRunner::exec` — cwd jail, timeout, output cap | `core/src/host_process.rs::a_cwd_escape_is_denied`, `::a_slow_command_times_out`, `::output_is_capped` |
 | A subprocess's environment | `PATH`, `HOME`, `CARGO_HOME`, `RUSTUP_HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE` — the gateway's own environment holds `OPENAI_API_KEY` and `JAN_KLOD_TOKEN` | `execution.env-passthrough: [NAME]` | `core::host_process::ProcessRunner::environment` | `core/src/host_process.rs::a_command_does_not_inherit_the_hosts_secrets`, `host/tests/it/host_process.rs::a_guest_run_command_does_not_receive_the_hosts_credentials` |
 | Extension manifest | Refused: a component with no manifest, one that imports a `host-*` interface it does not declare, or one built against an incompatible `jan-klod:interfaces` version. Declaring *more* than `config.yaml` grants is allowed and grants nothing | `allow-unmanifested: true` (top-level) loads a component that declares nothing | `core::manifest::Manifest::beside` and `core::manifest::Manifest::undeclared`, compared against `core::host_capabilities`, both at `Runtime::boot` | `host/tests/it/manifest.rs::a_component_importing_more_than_it_declares_is_refused`, `::a_component_with_no_manifest_is_refused`, `::the_grant_is_off_by_default`, `::a_component_built_against_another_api_version_is_refused`, `::what_a_component_imports_matches_what_its_manifest_declares` |
-| Command effects (`execution.sandbox`) | **macOS: the command is confined** — Seatbelt, `(deny default)` plus reads, writes only under `writable`, no network. **Everywhere else: approval-only**, because the backend is not written yet (Landlock is Slice 15c), and then the confirmation prompt is the only barrier. Default `mode: os`, `writable: ["."]`, `network: false` | `execution.sandbox.mode`; `require: true` denies `host-process` outright rather than degrading — on macOS it now *permits* commands, since there is something to require | `core::sandbox::SandboxPolicy::resolve` picks the mode and `core::host_process::ProcessRunner::exec` applies the backend, both from the one decision `Runtime::open_process_runner` reports at boot | `host/tests/it/sandbox_seatbelt.rs::a_confined_command_cannot_write_outside_the_workspace`, `host/tests/it/sandbox_seatbelt.rs::a_confined_command_can_still_write_inside_the_workspace`, `host/tests/it/sandbox_seatbelt.rs::a_confined_command_cannot_reach_the_network`, `host/tests/it/sandbox_seatbelt.rs::a_guest_running_a_command_is_confined_too`, `core/src/sandbox_seatbelt.rs::a_writable_path_reaches_the_profile_symlink_resolved`, `core/src/sandbox_seatbelt.rs::a_path_that_would_inject_sbpl_is_refused_rather_than_escaped`, `core/src/sandbox.rs::os_mode_with_no_backend_becomes_approval_only_and_says_why` |
+| Command effects (`execution.sandbox`) | **macOS and Linux: the command is confined.** Seatbelt via a generated `sandbox-exec` profile; Landlock via a ruleset the gateway applies to itself before becoming the command. Both: reads allowed, writes only under `writable`, no network. **Elsewhere: approval-only**, and then the confirmation prompt is the only barrier. Default `mode: os`, `writable: ["."]`, `network: false` | `execution.sandbox.mode`; `require: true` denies `host-process` outright rather than degrading — on macOS and Linux it now *permits* commands, since there is something to require | `core::sandbox::SandboxPolicy::resolve` picks the mode and `core::host_process::ProcessRunner::exec` applies the backend, both from the one decision `Runtime::open_process_runner` reports at boot | macOS: `host/tests/it/sandbox_seatbelt.rs::a_confined_command_cannot_write_outside_the_workspace`, `host/tests/it/sandbox_seatbelt.rs::a_confined_command_can_still_write_inside_the_workspace`, `host/tests/it/sandbox_seatbelt.rs::a_confined_command_cannot_reach_the_network`, `host/tests/it/sandbox_seatbelt.rs::a_guest_running_a_command_is_confined_too`, `core/src/sandbox_seatbelt.rs::a_writable_path_reaches_the_profile_symlink_resolved`, `core/src/sandbox_seatbelt.rs::a_path_that_would_inject_sbpl_is_refused_rather_than_escaped`. Linux: `host/tests/it/sandbox_landlock.rs::a_confined_command_cannot_write_outside_the_workspace`, `host/tests/it/sandbox_landlock.rs::a_confined_command_can_still_write_inside_the_workspace`, `host/tests/it/sandbox_landlock.rs::a_confined_command_cannot_reach_the_network`, `host/tests/it/sandbox_landlock.rs::a_guest_running_a_command_is_confined_too`, `core/src/sandbox_landlock.rs::what_the_backend_writes_is_what_the_wrapper_reads`, `core/src/sandbox_landlock.rs::a_confine_that_cannot_read_its_policy_refuses_rather_than_running`. Both: `core/src/sandbox.rs::os_mode_with_no_backend_becomes_approval_only_and_says_why` |
 | Outbound HTTP (`host-http`) | Public destinations only; loopback, private, link-local and unique-local refused. Hostnames are resolved before the decision | Any origin `config.yaml` already names (`base-url`, `endpoint`), plus `network.allow` | `core::egress::EgressPolicy::check`, via `http::fetch_within` | `core/src/egress.rs::loopback_and_private_addresses_are_refused`, `host/tests/it/egress_boundary.rs::a_live_local_service_is_not_reachable`, `::every_guest_facing_backend_goes_through_the_policy` |
 | Raw sockets (`wasi:sockets`) | Denied — the linker wires TCP and UDP, every address is refused | none | `WasiCtx`'s `SocketAddrCheck` (deny-all default) | `host/tests/it/sandbox_boundary.rs::a_guest_cannot_open_its_own_socket`, `::a_guest_cannot_open_a_socket_to_a_public_address` |
 | The host's environment | None. It holds `OPENAI_API_KEY` (config expands it) and `JAN_KLOD_TOKEN`, so a guest reading it directly is the shortest path to the operator's credentials | none | `WasiCtxBuilder` (`inherit_env` is never called) | `host/tests/it/sandbox_boundary.rs::a_guest_cannot_read_the_hosts_environment` |
@@ -74,14 +74,15 @@ Stated because a security page that lists only its wins is marketing.
   it needs an OS-level sandbox (Seatbelt on macOS, Landlock + seccomp on Linux) —
   vision [decision 2](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions),
   planned as [roadmap Phase 15](roadmap.md#phase-15--os-level-effect-sandbox).
-  **Closed on macOS by Phase 15b, and open everywhere else.** Seatbelt now wraps
-  every command in `sandbox-exec` with a generated profile, so a write outside
-  `writable` is refused by the kernel rather than by a prompt — proven by the
-  tests in the row above, each of which runs the same command unconfined first,
-  because a command that failed for an unrelated reason looks exactly like a
-  denial. On Linux and Windows nothing has changed: the policy is read, the mode
-  resolves to `approval-only`, and the boot warning says which platform has no
-  backend. Landlock is [Slice 15c](roadmap.md#phase-15--os-level-effect-sandbox).
+  **Closed on macOS (15b) and Linux (15c); open on Windows.** A command's writes
+  are refused by the kernel rather than by a prompt — Seatbelt wraps it in
+  `sandbox-exec`, Landlock has the gateway restrict *itself* and then become the
+  command. Proven by the tests in the row above, each of which runs the same
+  command unconfined first, because a command that failed for an unrelated reason
+  looks exactly like a denial. On Windows nothing has changed: the policy is read,
+  the mode resolves to `approval-only`, and the boot warning says so. A Windows
+  backend is a *spike* rather than an implementation
+  ([Slice 15d](roadmap.md#phase-15--os-level-effect-sandbox)).
 
   Two limits of the macOS half, because "confined" invites more confidence than
   it should:
@@ -89,15 +90,20 @@ Stated because a security page that lists only its wins is marketing.
   - **Reads are not confined**, only writes and the network. A confined command
     can still read anything the user can. Narrowing that is a separate argument
     with a real cost — a command that cannot read its own toolchain does not run.
-  - **A command needing a Mach service fails** rather than running unconfined —
-    some of what `git` and `cargo` reach for. That is the right direction to fail
-    in and it is visible in the command's own error, but it is a rough edge, not
-    a polished sandbox.
-  - **Nothing here is verified by CI.** These tests are macOS-only and CI runs on
-    Linux ([#95](https://github.com/PromptPasture/jan-klod/issues/95)), so a
-    regression in Seatbelt confinement would land green. They are verified
-    locally, which is where this repository is developed — but that is a
-    developer's diligence, not a gate.
+  - **A command needing a Mach service fails** on macOS rather than running
+    unconfined — some of what `git` and `cargo` reach for. That is the right
+    direction to fail in and it is visible in the command's own error, but it is a
+    rough edge, not a polished sandbox.
+  - **Denying the network on Linux needs a 6.7 kernel** (Landlock ABI 4). Below
+    that the runtime refuses to run the command rather than reporting a
+    restriction it cannot apply, and the error says both ways out.
+  - **Only the Linux half is verified by CI.** CI runs on `ubuntu-latest`, which
+    has Landlock, so a regression there cannot land green. The Seatbelt tests are
+    macOS-only and CI has no macOS runner
+    ([#95](https://github.com/PromptPasture/jan-klod/issues/95)), so that half is
+    verified locally — where this repository is developed, but that is a
+    developer's diligence rather than a gate. The two backends are equally
+    tested and unequally *guarded*.
   - One piece of 15a is **deferred**: a per-turn `Warning` telling the user, on
     every turn that runs a command, that the command is not isolated. Nothing
     currently distinguishes a tool that uses `host-process` from one that only
