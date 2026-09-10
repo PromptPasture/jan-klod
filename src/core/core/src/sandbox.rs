@@ -688,19 +688,27 @@ mod tests {
     /// Linux has one too since 15c, and it can be absent for two different
     /// reasons — so what is asserted is that the platform gets an answer, and
     /// that an absent one still names the platform.
+    ///
+    /// `if let … else` rather than a two-arm `match`, which trips
+    /// `clippy::single_match_else`. Noted because the mistake is invisible from
+    /// where this repository is developed: macOS `cargo clippy` never compiles
+    /// a `#[cfg(target_os = "linux")]` function, so the `match` form linted
+    /// clean locally and turned CI red. Reproducing it meant pointing this
+    /// `cfg` at macOS for one run, which is the cheap way to lint per-OS code
+    /// here: no Linux target is installed, and adding one to lint from macOS
+    /// would build this workspace's dependency graph a second time.
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_either_has_landlock_or_says_what_is_missing() {
-        match host_backend() {
-            Some(backend) => assert_eq!(backend.name(), "Landlock"),
-            None => {
-                let reason = super::absence();
-                assert!(reason.contains(std::env::consts::OS), "{reason}");
-                assert!(
-                    reason.contains("Landlock") || reason.contains("re-execut"),
-                    "the reason says which of the two things is missing: {reason}"
-                );
-            }
+        if let Some(backend) = host_backend() {
+            assert_eq!(backend.name(), "Landlock");
+        } else {
+            let reason = super::absence();
+            assert!(reason.contains(std::env::consts::OS), "{reason}");
+            assert!(
+                reason.contains("Landlock") || reason.contains("re-execut"),
+                "the reason says which of the two things is missing: {reason}"
+            );
         }
     }
 
