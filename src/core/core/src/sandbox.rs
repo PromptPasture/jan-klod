@@ -242,10 +242,33 @@ fn backend_at(sandbox_exec: &std::path::Path) -> Option<Box<dyn SandboxBackend>>
         .then(|| Box::new(crate::sandbox_seatbelt::SeatbeltBackend) as Box<dyn SandboxBackend>)
 }
 
-/// No backend: this build has one for macOS only, and the Linux mechanism
-/// (Landlock) is its own slice.
+/// Landlock, when the kernel has it and this executable can be re-executed.
 #[must_use]
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn host_backend() -> Option<Box<dyn SandboxBackend>> {
+    linux_backend().ok()
+}
+
+/// The Linux backend, or the reason there is none.
+///
+/// One function for both answers, so [`host_backend`] and [`absence`] cannot
+/// disagree about *why* — the same mistake the macOS pair avoids the same way.
+/// Two things can be missing: the kernel's Landlock, and this executable (which
+/// Landlock confines a command by re-executing).
+#[cfg(target_os = "linux")]
+fn linux_backend() -> Result<Box<dyn SandboxBackend>, String> {
+    crate::sandbox_landlock::available()?;
+    let backend = crate::sandbox_landlock::LandlockBackend::here().map_err(|err| match err {
+        SandboxError::Refused(reason) => reason,
+        SandboxError::Unsupported => "no Landlock backend in this build".to_owned(),
+    })?;
+    Ok(Box::new(backend))
+}
+
+/// No backend: this build has one for macOS and Linux, and Windows is a spike
+/// (Slice 15d) rather than an implementation.
+#[must_use]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn host_backend() -> Option<Box<dyn SandboxBackend>> {
     None
 }
@@ -266,7 +289,28 @@ fn absence() -> String {
             crate::sandbox_seatbelt::SANDBOX_EXEC
         )
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        // Recomputed rather than remembered, and from the same function that
+        // decided: either the kernel has no Landlock or this executable cannot
+        // be re-executed, and the operator needs to know which.
+        linux_backend().err().map_or_else(
+            || {
+                format!(
+                    "this build's sandbox backend for {} was unavailable and now is not — \
+                     nothing to report, which should not happen",
+                    std::env::consts::OS
+                )
+            },
+            |detail| {
+                format!(
+                    "this build's sandbox backend for {} is unavailable: {detail}",
+                    std::env::consts::OS
+                )
+            },
+        )
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         format!(
             "this build has no sandbox backend for {}",
@@ -641,14 +685,33 @@ mod tests {
         assert_eq!(backend.name(), "Seatbelt");
     }
 
+    /// Linux has one too since 15c, and it can be absent for two different
+    /// reasons — so what is asserted is that the platform gets an answer, and
+    /// that an absent one still names the platform.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_either_has_landlock_or_says_what_is_missing() {
+        match host_backend() {
+            Some(backend) => assert_eq!(backend.name(), "Landlock"),
+            None => {
+                let reason = super::absence();
+                assert!(reason.contains(std::env::consts::OS), "{reason}");
+                assert!(
+                    reason.contains("Landlock") || reason.contains("re-execut"),
+                    "the reason says which of the two things is missing: {reason}"
+                );
+            }
+        }
+    }
+
     /// Everywhere else there is still nothing, and the reason still names the
     /// platform — which is what an operator reading the boot warning needs.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[test]
     fn a_platform_with_no_backend_says_which_platform() {
         assert!(
             host_backend().is_none(),
-            "this build has a backend for macOS only — Landlock is Slice 15c"
+            "this build has backends for macOS and Linux only"
         );
         let reason = super::absence();
         assert!(reason.contains(std::env::consts::OS), "{reason}");

@@ -357,3 +357,150 @@ mod tests {
         }
     }
 }
+
+// ─── The Linux half: applying the ruleset ────────────────────────────────────
+//
+// Everything above rewrites a command and is platform-independent. What follows
+// talks to the kernel, so it exists only where that kernel does.
+
+/// Whether this kernel can enforce anything, and what to say when it cannot.
+///
+/// Checked at boot rather than at the first command: a kernel without Landlock
+/// is a fact the runtime can report while it is still reporting other facts,
+/// which is what [`crate::sandbox::host_backend`] returning `Option` is for.
+///
+/// Asks for the *first* Landlock version's filesystem rights as a
+/// [`CompatLevel::HardRequirement`], which is an error on a kernel that has no
+/// Landlock rather than a silently empty ruleset. The ruleset it builds is
+/// dropped unused — this only wants the answer.
+///
+/// # Errors
+/// The reason, ready to print, when Landlock is unavailable.
+#[cfg(target_os = "linux")]
+pub fn available() -> Result<(), String> {
+    use landlock::{Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr, ABI};
+
+    Ruleset::default()
+        .set_compatibility(CompatLevel::HardRequirement)
+        .handle_access(AccessFs::from_all(ABI::V1))
+        .and_then(Ruleset::create)
+        .map(|_created| ())
+        .map_err(|err| {
+            format!(
+                "this kernel cannot enforce Landlock ({err}); it needs 5.13 or newer, built \
+                 with CONFIG_SECURITY_LANDLOCK"
+            )
+        })
+}
+
+/// The newest Landlock version whose filesystem rights this build asks for.
+///
+/// A **maintenance point**, and the crate's own documentation says so: "the
+/// Landlock ABI should be incremented (and tested) regularly". Asking for more
+/// rights *restricts* more kinds of operation, so a version left behind is a
+/// hole — `Truncate` arrived in ABI 3, and a build handling only ABI 1 would let
+/// a command truncate a file it cannot write. Requested best-effort, so a kernel
+/// that does not know these rights is not refused for it.
+#[cfg(target_os = "linux")]
+const NEWEST_FS: landlock::ABI = landlock::ABI::V6;
+
+/// The Landlock version that introduced network restriction.
+#[cfg(target_os = "linux")]
+const NETWORK_ABI: landlock::ABI = landlock::ABI::V4;
+
+/// Restrict *this* process to `plan`, so the command it is about to become
+/// inherits the restriction.
+///
+/// # What is granted
+///
+/// Read on `/`, and read-write beneath each `writable` path. Reads are not
+/// narrowed for the same reason Seatbelt does not narrow them: the gap being
+/// closed is over effects, and a command that cannot read its own toolchain does
+/// not run at all.
+///
+/// # Two compatibility levels, on purpose
+///
+/// ABI 1's filesystem rights are a [`CompatLevel::HardRequirement`] — without
+/// them there is no confinement to speak of, so a kernel that cannot provide
+/// them must fail rather than proceed. Everything newer is best-effort, so a
+/// kernel that lacks it is not refused. Denying the network is a hard
+/// requirement *again*, because it needs ABI 4 and a kernel without it must not
+/// be reported as having denied something it cannot.
+///
+/// # Errors
+/// The reason, ready to print, when the ruleset cannot be built or cannot be
+/// **fully** enforced. Anything short of full enforcement is a refusal:
+/// [`RulesetStatus::NotEnforced`] is what a kernel without Landlock produces and
+/// `PartiallyEnforced` is what a partial one does, and a partly applied sandbox
+/// reported as success is indistinguishable from the real thing — which the
+/// [`crate::sandbox::SandboxBackend`] contract calls the one outcome worse than
+/// none.
+///
+/// [`RulesetStatus::NotEnforced`]: landlock::RulesetStatus::NotEnforced
+#[cfg(target_os = "linux")]
+pub fn apply(plan: &Confinement) -> Result<(), String> {
+    use landlock::{
+        Access, AccessFs, AccessNet, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
+        RulesetAttr, RulesetCreatedAttr, RulesetStatus, ABI,
+    };
+
+    let mut ruleset = Ruleset::default()
+        .set_compatibility(CompatLevel::HardRequirement)
+        .handle_access(AccessFs::from_all(ABI::V1))
+        .map_err(|err| {
+            format!(
+                "this kernel cannot enforce Landlock's filesystem rights ({err}); it needs \
+                 5.13 or newer, built with CONFIG_SECURITY_LANDLOCK"
+            )
+        })?
+        .set_compatibility(CompatLevel::BestEffort)
+        .handle_access(AccessFs::from_all(NEWEST_FS))
+        .map_err(|err| format!("Landlock refused the newer filesystem rights: {err}"))?;
+
+    if !plan.network {
+        ruleset = ruleset
+            .set_compatibility(CompatLevel::HardRequirement)
+            .handle_access(AccessNet::from_all(NETWORK_ABI))
+            .map_err(|err| {
+                format!(
+                    "`execution.sandbox.network: false` needs Landlock ABI 4 (kernel 6.7 or \
+                     newer) and this kernel cannot deny a command the network ({err}). Set \
+                     `network: true` to allow it deliberately, or `mode: approval-only` to \
+                     stop claiming a sandbox"
+                )
+            })?;
+    }
+
+    let mut created = ruleset
+        .set_compatibility(CompatLevel::BestEffort)
+        .create()
+        .map_err(|err| format!("Landlock ruleset could not be created: {err}"))?
+        .add_rule(PathBeneath::new(
+            PathFd::new("/").map_err(|err| format!("cannot open `/` to grant reads: {err}"))?,
+            AccessFs::from_read(NEWEST_FS),
+        ))
+        .map_err(|err| format!("Landlock refused the read rule for `/`: {err}"))?;
+    for path in &plan.writable {
+        let fd = PathFd::new(path)
+            .map_err(|err| format!("cannot open {} to grant writes: {err}", path.display()))?;
+        created = created
+            .add_rule(PathBeneath::new(fd, AccessFs::from_all(NEWEST_FS)))
+            .map_err(|err| {
+                format!(
+                    "Landlock refused the write rule for {}: {err}",
+                    path.display()
+                )
+            })?;
+    }
+
+    let status = created
+        .restrict_self()
+        .map_err(|err| format!("Landlock could not restrict this process: {err}"))?;
+    match status.ruleset {
+        RulesetStatus::FullyEnforced => Ok(()),
+        other => Err(format!(
+            "Landlock reported {other:?} rather than full enforcement, so the command is \
+             refused: a partly confined command is indistinguishable from a confined one"
+        )),
+    }
+}

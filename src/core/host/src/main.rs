@@ -51,6 +51,10 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("serve") => serve(&args[1..]),
         Some("rpc") => rpc(&args[1..]),
+        // Internal: how the Linux sandbox confines a command. Deliberately
+        // undocumented — an operator has no reason to run it, and the docs check
+        // requires documented commands to exist, not the reverse.
+        Some(jan_klod_core::sandbox_landlock::CONFINE_SUBCOMMAND) => confine(&args[1..]),
         Some("telegram") => telegram(&args[1..]),
         Some("verify") => verify(&args[1..]),
         Some("ask") => ask(&args[1..]),
@@ -317,6 +321,62 @@ fn rpc(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Restrict this process with Landlock, then become the command.
+///
+/// The Linux half of the command sandbox. It exists as a subcommand because
+/// Landlock restricts *the calling process*, and applying it between `fork` and
+/// `exec` means `pre_exec`, which is `unsafe` — forbidden by this workspace's
+/// lints. Restricting ourselves and then calling the **safe** `exec` reaches the
+/// same place: the command replaces this process and inherits the restriction.
+/// See `jan_klod_core::sandbox_landlock` for the whole argument.
+///
+/// Exits `126` when it cannot confine or cannot exec, following the shell's
+/// "found but not executable" convention, so a wrapper failure is not mistaken
+/// for the command's own exit code.
+#[cfg(target_os = "linux")]
+fn confine(args: &[String]) -> ExitCode {
+    use jan_klod_core::sandbox_landlock;
+
+    const CANNOT_EXECUTE: u8 = 126;
+
+    let plan = match sandbox_landlock::parse_confine_args(args.to_vec()) {
+        Ok(plan) => plan,
+        Err(err) => {
+            eprintln!("jan-klod: {err}");
+            return ExitCode::from(CANNOT_EXECUTE);
+        }
+    };
+    // Before the command exists, not after: a confinement that failed must not
+    // be followed by running the command anyway.
+    if let Err(reason) = sandbox_landlock::apply(&plan) {
+        eprintln!("jan-klod: {reason}");
+        return ExitCode::from(CANNOT_EXECUTE);
+    }
+    let mut command = std::process::Command::new(&plan.command[0]);
+    command.args(&plan.command[1..]);
+    // Returns only on failure — on success this process *is* the command.
+    let err = std::os::unix::process::CommandExt::exec(&mut command);
+    eprintln!(
+        "jan-klod: cannot execute {:?}: {err}",
+        plan.command[0].to_string_lossy()
+    );
+    ExitCode::from(CANNOT_EXECUTE)
+}
+
+/// The same subcommand where there is no Landlock to apply.
+///
+/// Reachable only by running it by hand: `sandbox::host_backend` hands out the
+/// Landlock backend on Linux alone, so nothing on another platform produces a
+/// command that calls this.
+#[cfg(not(target_os = "linux"))]
+fn confine(_args: &[String]) -> ExitCode {
+    eprintln!(
+        "jan-klod: `confine` applies the Linux command sandbox, and this build is for {}",
+        std::env::consts::OS
+    );
+    ExitCode::FAILURE
 }
 
 /// Boot the agent and serve turns over the host-side REST surface until killed.
