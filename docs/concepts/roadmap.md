@@ -5,7 +5,7 @@ description: Phased plan from the Rust + Wasmtime + Component Model foundation d
 tags: [roadmap, planning, rust, wasmtime, component-model, phases, vision]
 created: 2026-06-29
 updated: 2026-09-09
-status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Harness as a Platform under way — Phase 14 done, 13, 15 and 16 in progress, 17–18 not-started
+status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Harness as a Platform under way — Phases 13 and 14 done (13c deferred to Phase 17), 15 and 16 in progress, 17–18 not-started
 ---
 
 # Roadmap
@@ -84,7 +84,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 10 — Skills + MCP registry | `done` | **Done 2026-07-03.** `registry-skills` (scans `.agents/skills/*.md`, parses YAML frontmatter `name:`/`description:`, exposes via `skill-registry` WIT, `invoke` renders template); `registry-mcp` (SSE/streamable-HTTP MCP gateway, JSON-RPC `tools/list` + `tools/call`). `registry_host.rs` binds both worlds; `CombinedFleet` dispatches tool calls to `ToolFleet` then `RegistryFleet`. `host-fs` added to `skill-registry-world`. |
 | 11 — UX polish | `done` | **Done 2026-07-03.** REST surface migrated to resource model (`POST /turn` retired; `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message` added); `store::list_namespaces` + `AgentSession::list_sessions`; workspace auto-detection (defaults to `$PWD` when `workspace:` key absent); per-token streaming in TUI via mpsc channel + `apply_delta`/`finish_turn`. UI client and integration tests updated. |
 | 12 — Release: GitHub + web | `done` | **Done 2026-07-03.** GitHub Actions release workflow (`.github/workflows/release.yml`; tag `v*` → matrix linux/darwin × x86_64/arm64 bundles + SHA256SUMS, `gh release create`); `scripts/install.sh` (OS/arch detect, checksum verify, installs to `~/.local/bin`); `pages/index.html` (GitHub Pages landing); `docs/quickstart.md`; README rewrite. |
-| 13 — Client protocol | `in-progress` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. **13b done 2026-09-10** ([#42](https://github.com/PromptPasture/jan-klod/issues/42)): `jan-klod-gateway rpc` on stdin/stdout, and `jan-klod` uses it by default — no port, no token, nothing left running. The framing moved into the contract crate (the core writes frames and every client reads them); `turn/follow-up` works over stdio and cannot over REST. **The exit gate is met** — a full turn streams, an `ask` is answered on the same pipe, a `turn/cancel` stops a turn (proven by the completion it never asks for), and REST + SSE still pass. 13c is what is left. |
+| 13 — Client protocol | `done` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. **13b done 2026-09-10** ([#42](https://github.com/PromptPasture/jan-klod/issues/42)): `jan-klod-gateway rpc` on stdin/stdout, and `jan-klod` uses it by default — no port, no token, nothing left running. The framing moved into the contract crate (the core writes frames and every client reads them); `turn/follow-up` works over stdio and cannot over REST. **The exit gate is met** — a full turn streams, an `ask` is answered on the same pipe, a `turn/cancel` stops a turn (proven by the completion it never asks for), and REST + SSE still pass. **13c (WebSocket) is deferred until Phase 17 needs it** ([#43](https://github.com/PromptPasture/jan-klod/issues/43)) — `tiny_http` cannot hand back a socket that both times out a read and reads while writing, and the client that wants one is not started, so the socket decision belongs to whoever will use it. |
 | 14 — Event-sourced session log | `done` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. **Exit gate passed 2026-09-09** (`make gate`): the append-only `events` table with a versioned envelope (#44), and transcript/resume/fork as projections of it (#45) — a session resumed after a restart rebuilds from the log, and a fork at seq *N* runs independently. Nothing writes a transcript except through events; a pre-log database is converted at boot. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
 | 15 — OS-level effect sandbox | `in-progress` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, the `SandboxBackend` seam, boot-time resolution that never downgrades quietly, and `require: true` denying execution rather than degrading. No backend yet, so every platform is approval-only; the per-turn warning is deferred to 16a. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot and in the turn; the security-model row cites the tests. |
 | 16 — Capability manifest + signed registry | `in-progress` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. **16a done 2026-09-10** (#86, #87): every guest ships a manifest generated from its own imports, and the host refuses a component whose manifest is absent, under-declares what it imports, or names an incompatible interface version — cross-validated by two independent readers of the same artifacts. Remaining: 16b (versioning policy), 16c (`ext install` provenance), 16d (registry index). Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
@@ -382,8 +382,20 @@ REST"; REST + SSE stay as one *projection* of the protocol.
   simpler, because a closed pipe is a real signal where a dead socket needs a
   heartbeat to discover. `--addr <host:port>` still drives a running gateway over
   REST + SSE.
-- **13c — WebSocket transport.** The same protocol over WebSocket on the existing
-  listener, for browser clients (Phase 17). Token auth as for REST.
+- **13c — WebSocket transport. Deferred until Phase 17 needs it**
+  ([#43](https://github.com/PromptPasture/jan-klod/issues/43)). The same protocol
+  over WebSocket, for browser clients — and the obstacle turned out to be the
+  socket rather than the protocol. A parked `ask` has to be able to give up
+  (`JK_ANSWER_TIMEOUT_SECS`; the core is single-threaded, so a silent client
+  wedges the runtime, not just its own connection) and a mid-turn `turn/cancel`
+  has to be readable while frames are being written. `tiny_http` hands an
+  upgraded connection back with both halves fused, no `try_clone` and no read
+  timeout, so serving this on the existing listener cannot do either. The
+  alternatives — a second listener, or replacing the HTTP surface — are
+  architecture decisions whose cost only the client that needs the socket can
+  justify, and 17a is not started. Measurements worth keeping: `tungstenite`
+  costs 6 packages without its `handshake` feature and ~10 with it; a hand-rolled
+  RFC 6455 handshake costs `sha1` alone, 1 package.
 
 **Exit gate:** `jan-klod-ui` drives a full turn — streaming, `ask`, cancel — over
 stdio JSON-RPC; REST + SSE tests still pass; protocol version negotiated at connect.
@@ -521,7 +533,15 @@ works offline; a WIT major mismatch is a clear error.
 ## Phase 17 — Web client + GUI shell
 
 **Goal:** one front-end codebase serves both the browser and the desktop window.
-Needs Phase 13c.
+
+**Needs Phase 13c, and now owns the decision it was deferred for.** 13c stopped
+on a question only this client can answer: the WebSocket needs a socket that can
+time out a read and be read while written, `tiny_http` gives neither, and the
+ways out (a second listener, or a listener the core owns and serves both from)
+trade a bind address, an `Origin` check and a second place the token rule lives
+against a rewrite of the REST surface. 17a should pick one and unblock
+[#43](https://github.com/PromptPasture/jan-klod/issues/43); the measurements it
+needs are already on that issue.
 
 - **17a — Web client.** A static, dependency-light TypeScript SPA served by the
   core at `/`, speaking the protocol over WebSocket: sessions, streaming, `ask`,

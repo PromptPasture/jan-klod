@@ -337,8 +337,18 @@ is how `turn/cancel` gets read at all, and how `turn/follow-up` (steering a
 running turn) becomes possible for the first time, REST having no way to deliver
 one.
 
-**Still planned, Phase 13c:** WebSocket, for the web client. REST + SSE stays as
-one projection of the same contract, not a second contract. Vision
+**Phase 13c — WebSocket — is deferred until Phase 17 needs it**
+([#43](https://github.com/PromptPasture/jan-klod/issues/43)). The obstacle is the
+socket, not the framing: this protocol needs a read that can time out (so a
+client that goes *silent* cannot pin a turn open — the core is single-threaded,
+so that wedges the runtime, which is what `prompt_disconnect.rs` guards) and a
+read that can run while a write does (so a mid-turn `turn/cancel` is readable).
+`tiny_http`'s `Request::upgrade` returns the two halves **fused**, with no
+`try_clone` and no `set_read_timeout`, and the private accessors it builds that
+from are not exposed. The ways out — a second listener, or a listener the core
+owns that serves both — are decisions best made by the client that will use one,
+and that client is not started. REST + SSE stays as one projection of the same
+contract, not a second contract. Vision
 [decision 1](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions);
 plan in the [roadmap](roadmap.md#phase-13--client-protocol).
 
