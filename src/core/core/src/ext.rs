@@ -1,10 +1,17 @@
-//! Reading and unmaking what is staged in `ext/`.
+//! Putting components into `ext/`, reading what is there, and taking them out.
 //!
-//! `list` and `remove` only. Installing is a later slice
-//! ([#91](https://github.com/PromptPasture/jan-klod/issues/91)'s remaining
-//! boxes) and deliberately absent here: an `install` that copies before it can
-//! verify is the thing this whole slice exists to replace, and a half-written
-//! one is worse than none because `ext/` would already contain its output.
+//! # What `install` checks, and what it does not yet
+//!
+//! Structural integrity: the file is a WebAssembly component, a manifest is
+//! beside it, and the manifest matches the component's real imports — decided
+//! by the same [`crate::inspect`] the boot path uses, so an install cannot
+//! accept what boot would refuse.
+//!
+//! **Provenance is not checked yet.** The checksum and the signature are later
+//! boxes of [#91](https://github.com/PromptPasture/jan-klod/issues/91). Until
+//! they land this proves a component is well-formed and honest *about itself*,
+//! not that it came from anyone in particular — so it is a real improvement on
+//! `cp`, and not yet the whole guarantee the slice is for.
 //!
 //! # Why `list` reads manifests rather than filenames
 //!
@@ -15,10 +22,21 @@
 
 use std::path::{Path, PathBuf};
 
+use wasmtime::component::Component;
+use wasmtime::Engine;
+
 use crate::manifest::{manifest_path, Manifest};
+use crate::{inspect, Verdict};
 
 /// The extension of a staged component.
 const COMPONENT_EXT: &str = "wasm";
+
+/// Where an install is assembled and checked before anything lands in `ext/`.
+///
+/// Inside `ext/` rather than a temp directory so the final move is a rename
+/// within one filesystem — a rename across devices is a copy, and a copy is
+/// exactly the non-atomic step this staging exists to avoid.
+const STAGING: &str = ".staging";
 
 /// What a component's manifest turned out to be.
 ///
@@ -70,6 +88,86 @@ pub enum ExtError {
     #[error("removing {path}")]
     Undeletable {
         /// The file that could not be removed.
+        path: String,
+        /// The underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The path given to `install` is not a `.wasm` file.
+    #[error("{path} is not a .wasm component file")]
+    NotAWasm {
+        /// The path as given.
+        path: String,
+    },
+    /// The path given to `install` does not exist.
+    #[error("{path} does not exist")]
+    SourceMissing {
+        /// The path as given.
+        path: String,
+    },
+    /// Something of that name is already staged.
+    #[error("{name} is already installed in {dir}; remove it first")]
+    AlreadyInstalled {
+        /// The name that collided.
+        name: String,
+        /// Where it collided.
+        dir: String,
+    },
+    /// The file is not a WebAssembly component (a core module, or not wasm).
+    #[error("{path} is not a WebAssembly component")]
+    NotAComponent {
+        /// The file that failed to compile.
+        path: String,
+        /// Wasmtime's complaint, boxed as `CoreError::Load` boxes it.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// No manifest beside the component being installed.
+    #[error("no manifest beside {path}; a component nobody can inspect is not installable")]
+    NoManifest {
+        /// The component that arrived alone.
+        path: String,
+    },
+    /// A manifest is there and cannot be used.
+    #[error("the manifest beside {path} cannot be used")]
+    ManifestUnusable {
+        /// The component whose manifest is broken.
+        path: String,
+        /// Why it could not be read.
+        #[source]
+        source: crate::manifest::ManifestError,
+    },
+    /// Built against an interface package this host does not speak.
+    #[error("{path} was built against jan-klod:interfaces@{theirs}, and this host speaks {ours}")]
+    ApiMismatch {
+        /// The component that does not fit.
+        path: String,
+        /// The version its manifest declares.
+        theirs: String,
+        /// The version this host was built against.
+        ours: String,
+    },
+    /// The component imports host interfaces its manifest does not declare.
+    #[error("{path} imports {interfaces}, which its manifest does not declare")]
+    UnderDeclared {
+        /// The component that asks for more than it admits to.
+        path: String,
+        /// The interfaces it did not declare.
+        interfaces: String,
+    },
+    /// Staging failed — copying in, or making the directory.
+    #[error("staging {path}")]
+    Staging {
+        /// What was being written.
+        path: String,
+        /// The underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The final move into `ext/` failed.
+    #[error("moving {path} into place")]
+    Landing {
+        /// What was being moved.
         path: String,
         /// The underlying I/O error.
         #[source]
@@ -193,9 +291,185 @@ pub fn remove(dir: &Path, name: &str) -> Result<Removed, ExtError> {
     })
 }
 
+/// Install the component at `source` into `dir`, or refuse and change nothing.
+///
+/// The order is the point: everything is assembled and checked in
+/// `ext/.staging/<name>/`, and only a component that passed every check is
+/// moved into `ext/`. Nothing half-verified is ever visible to a boot, which is
+/// the difference between this and `cp`.
+///
+/// # What is checked here, and what is not
+///
+/// Structural integrity only — the file is a component, a manifest is beside
+/// it, and the manifest matches the component's real imports, decided by the
+/// same [`crate::inspect`] boot uses so an install cannot accept what boot
+/// refuses. **Provenance is not checked yet**: the checksum and signature are
+/// later boxes of
+/// [#91](https://github.com/PromptPasture/jan-klod/issues/91). Until they land
+/// this verifies that a component is well-formed and honest about itself, not
+/// that it came from anyone in particular.
+///
+/// # Errors
+/// A distinct [`ExtError`] for each way it can refuse, because four refusals
+/// that all said "install failed" would leave the operator no better off than
+/// `cp` did. In every case `dir` is left exactly as it was and the staging
+/// directory is removed.
+pub fn install(dir: &Path, source: &Path) -> Result<Installed, ExtError> {
+    if !source.exists() {
+        return Err(ExtError::SourceMissing {
+            path: source.display().to_string(),
+        });
+    }
+    if source.extension().and_then(|e| e.to_str()) != Some(COMPONENT_EXT) {
+        return Err(ExtError::NotAWasm {
+            path: source.display().to_string(),
+        });
+    }
+    let Some(name) = source.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
+        return Err(ExtError::NotAWasm {
+            path: source.display().to_string(),
+        });
+    };
+
+    let landing = dir.join(format!("{name}.{COMPONENT_EXT}"));
+    if landing.exists() {
+        // Refused rather than replaced. An install that silently overwrites is
+        // an upgrade path nobody asked for, and the component it replaced is
+        // the one the running config was verified against.
+        return Err(ExtError::AlreadyInstalled {
+            name,
+            dir: dir.display().to_string(),
+        });
+    }
+
+    let staging = dir.join(STAGING).join(&name);
+    // A leftover from an interrupted run must not be mistaken for this one's
+    // work, so the directory starts empty every time.
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|source| ExtError::Staging {
+        path: staging.display().to_string(),
+        source,
+    })?;
+
+    // From here on every exit goes through `staged`, which removes the staging
+    // directory whatever the outcome — an install that refuses must not leave
+    // its workings behind for the next one to trip over.
+    let outcome = stage_and_check(&staging, source, &name);
+    let _ = std::fs::remove_dir_all(&staging);
+    // Prune `.staging` itself when this was the only occupant; it is an
+    // implementation detail and `list` should not have to know to skip it.
+    let _ = std::fs::remove_dir(dir.join(STAGING));
+    outcome
+}
+
+/// Copy into `staging`, check, and move into place on success.
+fn stage_and_check(staging: &Path, source: &Path, name: &str) -> Result<Installed, ExtError> {
+    let dir = staging
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| ExtError::Staging {
+            path: staging.display().to_string(),
+            source: std::io::Error::other("staging path has no extension directory above it"),
+        })?;
+
+    let staged_component = staging.join(format!("{name}.{COMPONENT_EXT}"));
+    std::fs::copy(source, &staged_component).map_err(|err| ExtError::Staging {
+        path: staged_component.display().to_string(),
+        source: err,
+    })?;
+
+    // The manifest travels with the component, and its absence is refused
+    // rather than tolerated: `allow-unmanifested` exists for a component
+    // already on disk, not as a way to put a new one there.
+    let source_manifest = manifest_path(source);
+    if !source_manifest.exists() {
+        return Err(ExtError::NoManifest {
+            path: source.display().to_string(),
+        });
+    }
+    let staged_manifest = manifest_path(&staged_component);
+    std::fs::copy(&source_manifest, &staged_manifest).map_err(|err| ExtError::Staging {
+        path: staged_manifest.display().to_string(),
+        source: err,
+    })?;
+
+    // Compiling it *is* the "is this a component" check — the same call the
+    // boot path makes, with the same default engine, so a file that installs
+    // is a file that loads.
+    let engine = Engine::default();
+    let component = Component::from_file(&engine, &staged_component).map_err(|err| {
+        ExtError::NotAComponent {
+            path: source.display().to_string(),
+            source: err.into(),
+        }
+    })?;
+
+    let inspected = inspect(&component, &engine, &staged_component).map_err(|err| {
+        ExtError::ManifestUnusable {
+            path: source.display().to_string(),
+            source: err,
+        }
+    })?;
+    match inspected.verdict {
+        Verdict::Consistent => {}
+        Verdict::NoManifest => {
+            // Copied above, so this is unreachable in practice; treated as the
+            // refusal it is rather than papered over with a wildcard arm.
+            return Err(ExtError::NoManifest {
+                path: source.display().to_string(),
+            });
+        }
+        Verdict::ApiMismatch { theirs } => {
+            return Err(ExtError::ApiMismatch {
+                path: source.display().to_string(),
+                theirs,
+                ours: crate::manifest::API_VERSION.to_owned(),
+            });
+        }
+        Verdict::UnderDeclared { interfaces } => {
+            return Err(ExtError::UnderDeclared {
+                path: source.display().to_string(),
+                interfaces: interfaces.join(", "),
+            });
+        }
+    }
+
+    // **Manifest first.** Between the two renames one file is in `ext/` without
+    // the other, and the two orders are not equally safe: a component that
+    // arrives before its manifest is a component a concurrent boot could load
+    // *unmanifested* if `allow-unmanifested` is set, while a manifest that
+    // arrives first describes nothing and is inert — `list` reports it as an
+    // orphan and boot never looks for it.
+    let landed_manifest = manifest_path(&dir.join(format!("{name}.{COMPONENT_EXT}")));
+    std::fs::rename(&staged_manifest, &landed_manifest).map_err(|err| ExtError::Landing {
+        path: landed_manifest.display().to_string(),
+        source: err,
+    })?;
+    let landed_component = dir.join(format!("{name}.{COMPONENT_EXT}"));
+    if let Err(err) = std::fs::rename(&staged_component, &landed_component) {
+        // The manifest is already in place; take it back out so a failure
+        // here leaves `ext/` as it was rather than holding an orphan.
+        let _ = std::fs::remove_file(&landed_manifest);
+        return Err(ExtError::Landing {
+            path: landed_component.display().to_string(),
+            source: err,
+        });
+    }
+
+    Ok(Installed {
+        name: name.to_owned(),
+        component: landed_component,
+        declaration: match Manifest::beside(&dir.join(format!("{name}.{COMPONENT_EXT}"))) {
+            Ok(Some(manifest)) => Declaration::Present(manifest),
+            Ok(None) => Declaration::Absent,
+            Err(err) => Declaration::Broken(err.to_string()),
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{list, remove, Declaration, ExtError, Removed};
+    use super::{install, list, remove, Declaration, ExtError, Removed};
     use std::path::{Path, PathBuf};
 
     /// Removes the directory on drop, panic or not.
@@ -324,6 +598,158 @@ mod tests {
             remove(&dir.0, "tool-ghost").expect("removes"),
             Removed::ManifestOnly
         );
+    }
+
+    /// Every file in `dir`, with its bytes — the "did `ext/` change" oracle.
+    ///
+    /// Compared instead of reading the code, per the plan: an install that
+    /// refuses must leave the directory *byte-identical*, and a rollback that
+    /// re-creates a file with different contents would pass a name-only check.
+    fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir)
+            .expect("reads the directory")
+            .map(|entry| {
+                let path = entry.expect("an entry").path();
+                let name = path
+                    .strip_prefix(dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                let bytes = if path.is_dir() {
+                    Vec::new()
+                } else {
+                    std::fs::read(&path).expect("reads a file")
+                };
+                (name, bytes)
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// A refusal must leave nothing behind: not the component, not a manifest,
+    /// and not the staging directory the attempt used.
+    fn refuses_and_changes_nothing(tag: &str, prepare: impl Fn(&Path) -> PathBuf) -> ExtError {
+        let dir = temp_dir(tag);
+        let ext = dir.0.join("ext");
+        std::fs::create_dir_all(&ext).expect("creates ext/");
+        // One innocent bystander, so "unchanged" means something.
+        stage(
+            &ext,
+            "tool-present",
+            Some(&manifest_for("tool-present", "")),
+        );
+        let before = snapshot(&ext);
+
+        let source = prepare(&dir.0);
+        let err = install(&ext, &source).expect_err("must refuse");
+
+        assert_eq!(
+            snapshot(&ext),
+            before,
+            "{tag}: ext/ must be byte-identical after a refused install"
+        );
+        assert!(
+            !ext.join(super::STAGING).exists(),
+            "{tag}: the staging directory must not survive a refusal"
+        );
+        err
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_component_is_refused_and_leaves_nothing() {
+        let err = refuses_and_changes_nothing("not-component", |root| {
+            let source = root.join("tool-junk.wasm");
+            std::fs::write(&source, b"not wasm at all").expect("writes junk");
+            std::fs::write(
+                root.join("tool-junk.manifest.toml"),
+                manifest_for("tool-junk", ""),
+            )
+            .expect("writes a manifest");
+            source
+        });
+        assert!(
+            matches!(err, ExtError::NotAComponent { .. }),
+            "arbitrary bytes are refused as not-a-component: {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_component_with_no_manifest_is_refused_and_leaves_nothing() {
+        let err = refuses_and_changes_nothing("no-manifest", |root| {
+            let source = root.join("tool-alone.wasm");
+            std::fs::write(&source, b"\0asm").expect("writes a component");
+            source
+        });
+        assert!(
+            matches!(err, ExtError::NoManifest { .. }),
+            "a component arriving alone is refused before it is compiled: {err:?}"
+        );
+    }
+
+    /// The four refusals must be *distinguishable*, which is the whole reason
+    /// each has its own variant — `install failed` four times would leave the
+    /// operator no better off than `cp`.
+    #[test]
+    fn each_refusal_says_something_different() {
+        let dir = temp_dir("distinct");
+        let ext = dir.0.join("ext");
+        std::fs::create_dir_all(&ext).expect("creates ext/");
+
+        let absent = install(&ext, &dir.0.join("nowhere.wasm")).expect_err("refuses");
+        let not_wasm = {
+            let path = dir.0.join("notes.txt");
+            std::fs::write(&path, b"x").expect("writes");
+            install(&ext, &path).expect_err("refuses")
+        };
+        let alone = {
+            let path = dir.0.join("tool-alone.wasm");
+            std::fs::write(&path, b"\0asm").expect("writes");
+            install(&ext, &path).expect_err("refuses")
+        };
+        let junk = {
+            let path = dir.0.join("tool-junk.wasm");
+            std::fs::write(&path, b"nope").expect("writes");
+            std::fs::write(
+                dir.0.join("tool-junk.manifest.toml"),
+                manifest_for("tool-junk", ""),
+            )
+            .expect("writes");
+            install(&ext, &path).expect_err("refuses")
+        };
+
+        let messages = [
+            absent.to_string(),
+            not_wasm.to_string(),
+            alone.to_string(),
+            junk.to_string(),
+        ];
+        let mut unique = messages.to_vec();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            messages.len(),
+            "each refusal needs its own message: {messages:?}"
+        );
+    }
+
+    #[test]
+    fn installing_over_something_already_there_is_refused() {
+        let dir = temp_dir("collide");
+        let ext = dir.0.join("ext");
+        std::fs::create_dir_all(&ext).expect("creates ext/");
+        stage(&ext, "tool-fs", Some(&manifest_for("tool-fs", "")));
+        let before = snapshot(&ext);
+
+        let source = dir.0.join("tool-fs.wasm");
+        std::fs::write(&source, b"\0asm").expect("writes a component");
+        let err = install(&ext, &source).expect_err("must refuse");
+        assert!(
+            matches!(err, ExtError::AlreadyInstalled { .. }),
+            "replacing silently would discard the component the config was verified against: {err:?}"
+        );
+        assert_eq!(snapshot(&ext), before, "and the original is untouched");
     }
 
     #[test]

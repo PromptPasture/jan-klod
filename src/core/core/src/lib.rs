@@ -148,6 +148,80 @@ fn host_capabilities(component: &Component, engine: &Engine) -> Vec<String> {
     found
 }
 
+/// Whether a component and the manifest beside it agree.
+///
+/// Neutral about what to *do*: boot refuses on all but `Consistent` (unless
+/// `allow-unmanifested` covers the absent case) and `ext install` refuses on
+/// all of them, and each maps this to its own error with its own wording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    /// A manifest is present, built against a compatible interface package,
+    /// and declaring everything the component imports.
+    Consistent,
+    /// No manifest file beside the component.
+    NoManifest,
+    /// Built against an interface package this host does not speak.
+    ApiMismatch {
+        /// The version the manifest declares.
+        theirs: String,
+    },
+    /// The component imports host interfaces its manifest does not admit to.
+    UnderDeclared {
+        /// Those interfaces, in the order `undeclared` reports them.
+        interfaces: Vec<String>,
+    },
+}
+
+/// A component's real imports, and the verdict on its manifest.
+pub(crate) struct Inspected {
+    /// The `host-*` interfaces the component actually imports.
+    pub capabilities: Vec<String>,
+    /// What the manifest beside it turned out to say.
+    pub verdict: Verdict,
+}
+
+/// Read a compiled component's imports and check the manifest beside it.
+///
+/// **One implementation on purpose.** Boot does this at every load and
+/// `ext install` must do exactly the same thing before a component lands, and
+/// two copies of "consistent" is how an install comes to accept what boot
+/// refuses — a divergence that would be silent and security-relevant, since
+/// the thing being compared is what a component may ask the host for.
+fn inspect(
+    component: &Component,
+    engine: &Engine,
+    path: &Path,
+) -> Result<Inspected, manifest::ManifestError> {
+    // Read once, while the component is compiled and in hand.
+    let capabilities = host_capabilities(component, engine);
+    let verdict = match manifest::Manifest::beside(path)? {
+        Some(declared) => {
+            // The contract version first: a component built against a different
+            // interface package is refused with both versions named, rather
+            // than later as an obscure "no such import" from the linker.
+            if manifest::api_compatible(manifest::API_VERSION, &declared.api_version) {
+                let undeclared = declared.undeclared(&capabilities);
+                if undeclared.is_empty() {
+                    Verdict::Consistent
+                } else {
+                    Verdict::UnderDeclared {
+                        interfaces: undeclared.iter().map(|i| (*i).to_owned()).collect(),
+                    }
+                }
+            } else {
+                Verdict::ApiMismatch {
+                    theirs: declared.api_version,
+                }
+            }
+        }
+        None => Verdict::NoManifest,
+    };
+    Ok(Inspected {
+        capabilities,
+        verdict,
+    })
+}
+
 /// A booted core: the engine, the capability linker, and every enabled instance
 /// resolved against `ext/`. Holds compiled components ready to instantiate.
 pub struct Runtime {
@@ -222,54 +296,48 @@ impl Runtime {
                         path: path.display().to_string(),
                         source: source.into(),
                     })?;
-                // Read once, here, while the component is compiled and in hand.
-                let capabilities = host_capabilities(&component, &engine);
-                // Cross-check against what the component declares. A manifest
-                // that is absent is tolerated for now; one that is *present*
-                // and under-declares is refused, because a component needing
-                // more than it admits to is either mislabelled or lying.
-                let declared =
-                    manifest::Manifest::beside(&path).map_err(|source| CoreError::Manifest {
+                // Cross-check the component against what it declares, through
+                // the same `inspect` that `ext install` uses.
+                let inspected =
+                    inspect(&component, &engine, &path).map_err(|source| CoreError::Manifest {
                         id: instance.id.clone(),
                         source,
                     })?;
-                match &declared {
-                    Some(declared) => {
-                        // The contract version first: a component built against
-                        // a different interface package is refused here with
-                        // both versions named, rather than later as an obscure
-                        // "no such import" from the linker.
-                        if !manifest::api_compatible(manifest::API_VERSION, &declared.api_version) {
-                            return Err(CoreError::ApiVersion {
-                                id: instance.id.clone(),
-                                component: instance.component_file(),
-                                theirs: declared.api_version.clone(),
-                                ours: manifest::API_VERSION.to_owned(),
-                            });
-                        }
-                        let undeclared = declared.undeclared(&capabilities);
-                        if !undeclared.is_empty() {
-                            return Err(CoreError::Undeclared {
-                                id: instance.id.clone(),
-                                component: instance.component_file(),
-                                interfaces: undeclared.join(", "),
-                            });
-                        }
+                match inspected.verdict {
+                    Verdict::ApiMismatch { theirs } => {
+                        return Err(CoreError::ApiVersion {
+                            id: instance.id.clone(),
+                            component: instance.component_file(),
+                            theirs,
+                            ours: manifest::API_VERSION.to_owned(),
+                        });
+                    }
+                    // A component needing more than it admits to is either
+                    // mislabelled or lying.
+                    Verdict::UnderDeclared { interfaces } => {
+                        return Err(CoreError::Undeclared {
+                            id: instance.id.clone(),
+                            component: instance.component_file(),
+                            interfaces: interfaces.join(", "),
+                        });
                     }
                     // No manifest at all: refused, because an undeclared
                     // component is one nobody can inspect before running it,
                     // and the whole point of a declaration is to be checkable
                     // ahead of time. `allow-unmanifested` is the named
                     // widening for local development.
-                    None if !allow_unmanifested => {
+                    Verdict::NoManifest if !allow_unmanifested => {
                         return Err(CoreError::NoManifest {
                             id: instance.id.clone(),
                             component: instance.component_file(),
                         });
                     }
-                    None => {}
+                    // Consistent, or unmanifested where that is allowed. The
+                    // guarded arm above is what makes the second case a
+                    // deliberate widening rather than a gap.
+                    Verdict::Consistent | Verdict::NoManifest => {}
                 }
-                (LoadState::Compiled(component), Some(capabilities))
+                (LoadState::Compiled(component), Some(inspected.capabilities))
             } else {
                 (LoadState::Missing(path), None)
             };

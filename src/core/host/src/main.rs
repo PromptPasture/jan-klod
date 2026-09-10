@@ -75,9 +75,64 @@ fn ext(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("list") => ext_list(&args[1..]),
         Some("remove") => ext_remove(&args[1..]),
+        Some("install") => ext_install(&args[1..]),
         _ => {
             eprintln!("usage: jan-klod-gateway ext list [ext-dir]");
+            eprintln!("       jan-klod-gateway ext install <path.wasm> [ext-dir]");
             eprintln!("       jan-klod-gateway ext remove <name> [ext-dir]");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Install a component after checking it, or refuse and change nothing.
+fn ext_install(args: &[String]) -> ExitCode {
+    let Some(source) = args.first() else {
+        eprintln!("usage: jan-klod-gateway ext install <path.wasm> [ext-dir]");
+        return ExitCode::FAILURE;
+    };
+    let dir = resolve_default(&arg_or(args, 1, "ext"));
+    match jan_klod_core::ext::install(
+        std::path::Path::new(&dir),
+        std::path::Path::new(source.as_str()),
+    ) {
+        Ok(installed) => {
+            // What it may ask the host for, at the moment it is installed —
+            // the one time an operator is certainly looking.
+            match &installed.declaration {
+                jan_klod_core::ext::Declaration::Present(manifest)
+                    if manifest.capabilities.is_empty() =>
+                {
+                    println!("installed {} into {dir}/ — needs nothing", installed.name);
+                }
+                jan_klod_core::ext::Declaration::Present(manifest) => {
+                    println!(
+                        "installed {} into {dir}/ — may use {}",
+                        installed.name,
+                        manifest.capabilities.join(", ")
+                    );
+                }
+                // `install` refuses both of these, so reaching here would mean
+                // the manifest changed under us between landing and reading.
+                jan_klod_core::ext::Declaration::Absent
+                | jan_klod_core::ext::Declaration::Broken(_) => {
+                    println!(
+                        "installed {} into {dir}/, but its manifest no longer reads",
+                        installed.name
+                    );
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            // The chain, not just the head: each refusal has its own message
+            // and the cause underneath it is what says which file was at fault.
+            eprintln!("jan-klod: {err}");
+            let mut cause = std::error::Error::source(&err);
+            while let Some(inner) = cause {
+                eprintln!("  caused by: {inner}");
+                cause = inner.source();
+            }
             ExitCode::FAILURE
         }
     }
