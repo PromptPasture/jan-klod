@@ -162,14 +162,33 @@ pub trait SandboxBackend {
     /// The mechanism's name, for boot output — "Seatbelt", "Landlock".
     fn name(&self) -> &'static str;
 
-    /// Confine `command` to `policy` before it is spawned.
+    /// Return `command` confined to `policy`, ready to spawn.
+    ///
+    /// # Why this takes and returns the command rather than borrowing it
+    ///
+    /// Because one of the two mechanisms in the roadmap works by **replacing**
+    /// the program. Seatbelt confines a child by running it under
+    /// `sandbox-exec -p <profile> -- <command>`, and `std::process::Command`
+    /// cannot be told to change its program: `get_program`, `get_args`,
+    /// `get_envs` and `get_current_dir` read it, and nothing writes it. A
+    /// `&mut Command` can therefore express an in-process mechanism (Landlock
+    /// restricting the child before `exec`) and cannot express a wrapping one.
+    /// Owned-in, owned-out expresses both — a wrapper builds a new command from
+    /// the parts of the old one, an in-process mechanism hands back the same
+    /// command with its own hook attached.
+    ///
+    /// This signature was `confine(&mut Command)` in 15a, where the only
+    /// implementation was one that confines nothing and the difference could not
+    /// show.
     ///
     /// # Errors
     /// [`SandboxError`] when the mechanism is unavailable or rejects the policy.
     /// A backend must fail rather than apply a weaker policy than asked for:
     /// partial confinement reported as success is the one outcome worse than
-    /// none, because it is indistinguishable from the real thing.
-    fn confine(&self, command: &mut Command, policy: &SandboxPolicy) -> Result<(), SandboxError>;
+    /// none, because it is indistinguishable from the real thing. Returning the
+    /// command unchanged is exactly that failure, so a backend that cannot
+    /// confine returns `Err` instead.
+    fn confine(&self, command: Command, policy: &SandboxPolicy) -> Result<Command, SandboxError>;
 }
 
 /// A backend that confines nothing.
@@ -185,7 +204,10 @@ impl SandboxBackend for NoBackend {
         "none"
     }
 
-    fn confine(&self, _command: &mut Command, _policy: &SandboxPolicy) -> Result<(), SandboxError> {
+    fn confine(&self, _command: Command, _policy: &SandboxPolicy) -> Result<Command, SandboxError> {
+        // The command is dropped rather than handed back: returning it would be
+        // returning an unconfined command from a call whose whole purpose is to
+        // confine one.
         Err(SandboxError::Unsupported)
     }
 }
@@ -444,8 +466,8 @@ mod tests {
         fn name(&self) -> &'static str {
             "stub"
         }
-        fn confine(&self, _: &mut Command, _: &SandboxPolicy) -> Result<(), SandboxError> {
-            Ok(())
+        fn confine(&self, command: Command, _: &SandboxPolicy) -> Result<Command, SandboxError> {
+            Ok(command)
         }
     }
 
@@ -471,11 +493,13 @@ mod tests {
     #[test]
     fn no_backend_refuses_rather_than_confining_nothing_quietly() {
         let policy = parse("{}").unwrap();
-        let mut command = Command::new("true");
-        assert_eq!(
-            NoBackend.confine(&mut command, &policy),
-            Err(SandboxError::Unsupported)
-        );
+        // `Command` has no `Debug`-comparable equality, so the outcome is
+        // matched rather than compared — and matching is what says the `Ok`
+        // arm is unreachable here, which is the property under test.
+        let Err(err) = NoBackend.confine(Command::new("true"), &policy) else {
+            panic!("a backend that confines nothing must refuse, not hand the command back")
+        };
+        assert_eq!(err, SandboxError::Unsupported);
         assert_eq!(NoBackend.name(), "none");
     }
 
