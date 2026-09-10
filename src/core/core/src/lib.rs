@@ -29,6 +29,7 @@ pub mod registry_host;
 pub mod route;
 pub mod rpc;
 pub mod sandbox;
+pub mod sandbox_seatbelt;
 pub mod serve;
 pub mod store;
 pub mod telegram;
