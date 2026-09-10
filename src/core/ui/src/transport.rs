@@ -1,0 +1,463 @@
+//! How the client reaches the core: over a pipe to a gateway it spawned, or
+//! over the REST surface of one that is already running.
+//!
+//! # Why this is a trait and not two functions
+//!
+//! The REST client's connection handle was the address, a `String`, cloned into
+//! a fresh thread for every turn and every answer. A pipe to a child process
+//! cannot be cloned that way: there is one stdin, one stdout, and two threads
+//! that want them — the turn streaming its events, and the keypress answering a
+//! confirmation. So the handle became one shared object, and the two paths
+//! became implementations of it. `app.rs` never knew which transport was
+//! underneath and still does not; `tui.rs` knew, only because it held the
+//! address.
+
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio as ChildIo};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex;
+
+use jan_klod_protocol::{compatible, jsonrpc, Command as Rpc, Notification, PROTOCOL_VERSION};
+
+use crate::StreamEvent;
+
+/// One way of driving a core.
+///
+/// `Send + Sync` because the TUI hands it to a turn thread and an answer thread
+/// at the same time, which is the whole reason it exists.
+pub trait Transport: Send + Sync {
+    /// Drive one turn, calling `on_event` as the core reports.
+    ///
+    /// # Errors
+    /// A human-readable message if the connection fails or the turn does.
+    fn stream_turn(
+        &self,
+        session: &str,
+        message: &str,
+        on_event: &mut dyn FnMut(StreamEvent),
+    ) -> Result<(), String>;
+
+    /// Answer a [`StreamEvent::Prompt`] that is holding a turn open. Called
+    /// while [`Transport::stream_turn`] is still running, from another thread.
+    ///
+    /// # Errors
+    /// A human-readable message if the answer cannot be sent.
+    fn answer(&self, session: &str, answer: &str) -> Result<(), String>;
+
+    /// How to describe this connection in a status line.
+    fn describe(&self) -> String;
+}
+
+/// The REST + SSE surface of a gateway that is already listening.
+pub struct Rest {
+    addr: String,
+}
+
+impl Rest {
+    /// Talk to the gateway at `addr` (`host:port`).
+    #[must_use]
+    pub const fn new(addr: String) -> Self {
+        Self { addr }
+    }
+}
+
+impl Transport for Rest {
+    fn stream_turn(
+        &self,
+        session: &str,
+        message: &str,
+        on_event: &mut dyn FnMut(StreamEvent),
+    ) -> Result<(), String> {
+        crate::stream_turn(&self.addr, session, message, on_event)
+    }
+
+    fn answer(&self, session: &str, answer: &str) -> Result<(), String> {
+        crate::answer_prompt(&self.addr, session, answer)
+    }
+
+    fn describe(&self) -> String {
+        format!("{} over REST", self.addr)
+    }
+}
+
+/// What to do with the gateway's own log output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Logs {
+    /// Let it through to this process's stderr. Right for a line-mode REPL,
+    /// where an interleaved log line is readable and often what you wanted.
+    Inherit,
+    /// Throw it away. Right for the full-screen TUI, which owns the terminal —
+    /// a log line written into it lands on top of the rendering. Losing the
+    /// diagnostics is the cost; a log *file* would be better than either, and
+    /// is not this slice's business.
+    Discard,
+}
+
+/// A gateway this client spawned, driven over its stdin and stdout.
+///
+/// One child, one pipe each way. `stream_turn` holds the reader for the length
+/// of a turn; `answer` only needs the writer, which it takes briefly. Writing
+/// and reading are separate locks for exactly that reason — sharing one would
+/// deadlock the moment a confirmation arrived.
+pub struct Stdio {
+    child: Mutex<Child>,
+    writer: Mutex<ChildStdin>,
+    reader: Mutex<BufReader<ChildStdout>>,
+    /// Request ids are ours to choose; a counter is enough, and it has to be
+    /// atomic because two threads mint them.
+    next_id: AtomicI64,
+    described: String,
+}
+
+impl Stdio {
+    /// Spawn `jan-klod-gateway rpc` beside this binary (or on `PATH`) and
+    /// negotiate the protocol version.
+    ///
+    /// # Errors
+    /// A human-readable message if the gateway cannot be started, or speaks a
+    /// protocol this client cannot talk to.
+    pub fn spawn(logs: Logs) -> Result<Self, String> {
+        Self::spawn_from(&crate::gateway_bin(), &[], logs)
+    }
+
+    /// Spawn a named gateway binary, passing `args` after `rpc`.
+    ///
+    /// Separate from [`Stdio::spawn`] so a test can point the client at the
+    /// binary it just built and at a config it wrote, rather than at whatever
+    /// happens to be installed.
+    ///
+    /// # Errors
+    /// As [`Stdio::spawn`].
+    pub fn spawn_from(bin: &Path, args: &[&str], logs: Logs) -> Result<Self, String> {
+        let mut child = Command::new(bin)
+            .arg("rpc")
+            .args(args)
+            .stdin(ChildIo::piped())
+            .stdout(ChildIo::piped())
+            .stderr(match logs {
+                Logs::Inherit => ChildIo::inherit(),
+                Logs::Discard => ChildIo::null(),
+            })
+            .spawn()
+            .map_err(|err| {
+                format!(
+                    "could not start {} ({err}). Install it, or pass --addr <host:port> to \
+                     use a gateway that is already running.",
+                    bin.display()
+                )
+            })?;
+        // Taken out of the child, so the struct owns each end exactly once.
+        let writer = child.stdin.take().ok_or("the gateway has no stdin")?;
+        let reader = BufReader::new(child.stdout.take().ok_or("the gateway has no stdout")?);
+        let transport = Self {
+            child: Mutex::new(child),
+            writer: Mutex::new(writer),
+            reader: Mutex::new(reader),
+            next_id: AtomicI64::new(1),
+            described: format!("{} over stdio", bin.display()),
+        };
+        match transport.handshake() {
+            Ok(()) => Ok(transport),
+            Err(err) => Err(transport.explain(err, logs)),
+        }
+    }
+
+    /// Turn a failed handshake into something a first-time user can act on.
+    ///
+    /// The common failure is not a protocol mismatch, it is a gateway that
+    /// refused to boot — no API key, a config it could not read — and said so
+    /// on its own stderr before exiting. "The gateway closed the connection" is
+    /// true and useless next to that, so if the child is already gone, this
+    /// says so and points at where the reason is.
+    fn explain(&self, err: String, logs: Logs) -> String {
+        // `try_wait`, not `wait`: a version mismatch leaves the gateway running
+        // and waiting for the next frame, and blocking on it would hang.
+        let exited = self
+            .child
+            .lock()
+            .ok()
+            .and_then(|mut child| child.try_wait().ok().flatten());
+        exited.map_or(err, |status| {
+            let where_to_look = match logs {
+                Logs::Inherit => "Its own explanation is above.",
+                Logs::Discard => {
+                    "Run the line REPL (`jan-klod`, without `tui`) to see why — the \
+                     full-screen UI hides the gateway's stderr because it would be drawn over."
+                }
+            };
+            format!("the gateway exited before answering ({status}). {where_to_look}")
+        })
+    }
+
+    /// Agree a protocol version before anything else is sent.
+    ///
+    /// The core requires this and closes the connection on a mismatch, so a
+    /// client that skipped it would fail later and less clearly.
+    fn handshake(&self) -> Result<(), String> {
+        let id = self.send(&Rpc::Hello {
+            version: PROTOCOL_VERSION.to_owned(),
+        })?;
+        let result = self.read_until(&id, &mut |_| {})?;
+        let core = result
+            .get("version")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("the gateway's handshake carried no version")?;
+        if compatible(core, PROTOCOL_VERSION) {
+            Ok(())
+        } else {
+            Err(format!(
+                "this client speaks protocol {PROTOCOL_VERSION} and the gateway speaks {core}. \
+                 Install a matching jan-klod-gateway."
+            ))
+        }
+    }
+
+    /// Frame `command` and write it. Returns the id to expect an answer against.
+    fn send(&self, command: &Rpc) -> Result<jsonrpc::Id, String> {
+        let id = jsonrpc::Id::Number(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let frame = jsonrpc::Request::new(id.clone(), command.clone());
+        let line = serde_json::to_string(&frame).map_err(|err| err.to_string())?;
+        {
+            // Scoped: the writer is released before this returns, so an answer
+            // from another thread never waits on a turn that is only reading.
+            let mut writer = self.writer.lock().map_err(|_| "the writer is poisoned")?;
+            writeln!(writer, "{line}").map_err(|err| format!("writing to the gateway: {err}"))?;
+            writer
+                .flush()
+                .map_err(|err| format!("writing to the gateway: {err}"))?;
+        }
+        Ok(id)
+    }
+
+    /// Read frames until the answer to `id`, handing notifications to
+    /// `on_event` on the way.
+    // The reader is held for the whole exchange on purpose: one turn owns the
+    // stream until its answer arrives, which is what keeps two threads from
+    // interleaving reads of the same pipe. Releasing it sooner, as clippy
+    // suggests, is precisely the bug.
+    #[allow(clippy::significant_drop_tightening)]
+    fn read_until(
+        &self,
+        id: &jsonrpc::Id,
+        on_event: &mut dyn FnMut(StreamEvent),
+    ) -> Result<serde_json::Value, String> {
+        let mut reader = self.reader.lock().map_err(|_| "the reader is poisoned")?;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => return Err("the gateway closed the connection".to_owned()),
+                Ok(_) => {}
+                Err(err) => return Err(format!("reading from the gateway: {err}")),
+            }
+            let text = line.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if let Ok(response) = serde_json::from_str::<jsonrpc::Response>(text) {
+                match response.outcome {
+                    jsonrpc::Outcome::Result(value) if &response.id == id => return Ok(value),
+                    jsonrpc::Outcome::Error(error) if &response.id == id => {
+                        return Err(error.message)
+                    }
+                    // Someone else's answer: an `answer` sent from the other
+                    // thread, which does not wait for its own reply. A refusal
+                    // there matters — it means the answer was not taken — so it
+                    // is surfaced rather than dropped.
+                    jsonrpc::Outcome::Error(error) => on_event(StreamEvent::Error(error.message)),
+                    jsonrpc::Outcome::Result(_) => {}
+                }
+                continue;
+            }
+            match serde_json::from_str::<jsonrpc::Notification>(text) {
+                Ok(framed) => {
+                    if let Some(event) = event_for(&framed.notification) {
+                        on_event(event);
+                    }
+                }
+                Err(err) => on_event(StreamEvent::Error(format!(
+                    "the gateway sent something this client cannot read ({err}): {text}"
+                ))),
+            }
+        }
+    }
+}
+
+impl Transport for Stdio {
+    fn stream_turn(
+        &self,
+        session: &str,
+        message: &str,
+        on_event: &mut dyn FnMut(StreamEvent),
+    ) -> Result<(), String> {
+        let id = self.send(&Rpc::SessionMessage {
+            session: session.to_owned(),
+            message: message.to_owned(),
+        })?;
+        self.read_until(&id, on_event)?;
+        Ok(())
+    }
+
+    fn answer(&self, session: &str, answer: &str) -> Result<(), String> {
+        // Written and not waited for: the turn thread owns the reader, so this
+        // one cannot read its own acknowledgement. A refusal comes back as an
+        // error response with this id, which `read_until` surfaces as an
+        // event — the turn thread is the one that can display it anyway.
+        self.send(&Rpc::TurnAnswer {
+            session: session.to_owned(),
+            answer: answer.to_owned(),
+        })?;
+        Ok(())
+    }
+
+    fn describe(&self) -> String {
+        self.described.clone()
+    }
+}
+
+impl Drop for Stdio {
+    /// The client owns the process, so it ends with the client.
+    ///
+    /// Killed rather than politely hung up on: closing stdin would let the
+    /// gateway finish on its own, but a turn still in flight would hold the
+    /// wait open — and a client that is exiting should not block on a model.
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// The [`StreamEvent`] a notification becomes, or `None` when this client has
+/// nowhere to put it.
+///
+/// Exhaustive — no `_ =>` arm — so a notification added to the protocol has to
+/// be decided about here rather than silently ignored.
+#[must_use]
+pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
+    match notification {
+        Notification::TextDelta { text } => Some(StreamEvent::Delta(text.clone())),
+        Notification::ToolInvoked { name, .. } => Some(StreamEvent::Tool(name.clone())),
+        Notification::Warning { message } => Some(StreamEvent::Warning(message.clone())),
+        Notification::Done { answer, .. } => Some(StreamEvent::Done(answer.clone())),
+        Notification::Ask {
+            question,
+            options,
+            default,
+            ..
+        } => Some(StreamEvent::Prompt {
+            question: question.clone(),
+            options: options.clone(),
+            default: default.clone(),
+        }),
+        Notification::Error { message } => Some(StreamEvent::Error(message.clone())),
+        // The two this client has nowhere to put, for different reasons.
+        //
+        // `tool-result`: `StreamEvent` has no variant for it, which is the same
+        // missing variant that makes the REST path report every tool result as
+        // an error (#81). Adding one belongs with that fix; dropping it here at
+        // least does not claim a result is a failure.
+        //
+        // `session/updated`: this client shows one session at a time, so a list
+        // that moved is nothing to refresh.
+        Notification::ToolResult { .. } | Notification::SessionUpdated { .. } => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{event_for, Logs, Stdio};
+    use crate::StreamEvent;
+    use jan_klod_protocol::Notification;
+
+    /// Every notification is either shown or deliberately dropped, and the two
+    /// that are dropped are the two named in `event_for`'s documentation.
+    #[test]
+    fn every_notification_is_decided_about() {
+        let cases = [
+            Notification::TextDelta {
+                text: "hi".to_owned(),
+            },
+            Notification::ToolInvoked {
+                id: "c1".to_owned(),
+                name: "fs.read".to_owned(),
+                arguments: "{}".to_owned(),
+            },
+            Notification::ToolResult {
+                id: "c1".to_owned(),
+                content: "ok".to_owned(),
+            },
+            Notification::Warning {
+                message: "w".to_owned(),
+            },
+            Notification::Done {
+                answer: "42".to_owned(),
+                agentic: true,
+            },
+            Notification::Ask {
+                session: "s".to_owned(),
+                question: "?".to_owned(),
+                options: vec!["yes".to_owned()],
+                default: "no".to_owned(),
+            },
+            Notification::Error {
+                message: "e".to_owned(),
+            },
+            Notification::SessionUpdated {
+                session: "s".to_owned(),
+                preview: "hi".to_owned(),
+            },
+        ];
+        let dropped: Vec<usize> = cases
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| event_for(n).is_none())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            dropped,
+            vec![2, 7],
+            "only `tool-result` (#81) and `session/updated` are dropped"
+        );
+    }
+
+    #[test]
+    fn an_ask_keeps_its_options_and_its_default() {
+        // The default is what the core takes if nobody answers, so a client
+        // that lost it would offer the user a choice the core will not honour.
+        let event = event_for(&Notification::Ask {
+            session: "s".to_owned(),
+            question: "Run it?".to_owned(),
+            options: vec!["yes".to_owned(), "no".to_owned()],
+            default: "no".to_owned(),
+        })
+        .expect("an ask is shown");
+        assert_eq!(
+            event,
+            StreamEvent::Prompt {
+                question: "Run it?".to_owned(),
+                options: vec!["yes".to_owned(), "no".to_owned()],
+                default: "no".to_owned(),
+            }
+        );
+    }
+
+    /// A gateway that is not there is a message naming the alternative, not a
+    /// panic and not a hang.
+    #[test]
+    fn a_missing_gateway_says_what_to_do_instead() {
+        let outcome = Stdio::spawn_from(
+            std::path::Path::new("/nonexistent/jan-klod-gateway"),
+            &[],
+            Logs::Discard,
+        );
+        // Not `expect_err`: `Stdio` has no `Debug`, and giving it one would
+        // mean deciding how to print a live child process.
+        let Err(err) = outcome else {
+            panic!("there is no gateway at that path")
+        };
+        assert!(err.contains("--addr"), "names the alternative: {err}");
+    }
+}

@@ -1,16 +1,44 @@
-//! `jan-klod-ui` — a thin client that drives a running core over its REST surface.
+//! `jan-klod-ui` — a thin client that drives a core it spawned, or one that is
+//! already running.
 //!
-//! A UI is a **separate process**, not an extension: it connects to core the way
-//! any HTTP client would (the LSP/server model). This library holds the transport
-//! ([`send_turn`]); the binary layers a REPL over it (a `ratatui` TUI is a later
-//! step). It depends on neither the core runtime nor Wasmtime — only the REST
-//! contract: `POST /session/:id/message` with `{"message":"..."}` → `{"answer","agentic"}`.
+//! A UI is a **separate process**, not an extension (the LSP/server model). Two
+//! ways to reach one, both behind [`transport::Transport`]:
+//!
+//! * **stdio**, the default: spawn `jan-klod-gateway rpc` and speak
+//!   newline-delimited JSON-RPC over its pipes. No port, no token, nothing left
+//!   running.
+//! * **REST + SSE**, when the user names an address: `POST
+//!   /session/:id/message` with `{"message":"..."}`, streamed back as
+//!   `event:`/`data:` frames ([`stream_turn`], [`answer_prompt`]).
+//!
+//! It depends on neither the core runtime nor Wasmtime — only on the wire
+//! contract in `jan-klod-protocol`, which carries nothing beyond serde for
+//! exactly this reason.
 
 pub mod app;
+pub mod transport;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::time::Duration;
+
+/// Resolve the `jan-klod-gateway` binary: sibling of the current exe first,
+/// then `PATH`.
+///
+/// Here rather than in the binary because [`transport::Stdio`] spawns it, and a
+/// second copy of this rule would eventually find a different gateway than the
+/// one the REST path starts.
+#[must_use]
+pub fn gateway_bin() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        let sibling = exe.with_file_name("jan-klod-gateway");
+        if sibling.exists() {
+            return sibling;
+        }
+    }
+    PathBuf::from("jan-klod-gateway")
+}
 
 /// The `Authorization` header line to send, or empty when no token is set.
 ///

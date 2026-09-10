@@ -1327,6 +1327,7 @@ dependencies = [
 name = "jan-klod"
 version = "0.1.0"
 dependencies = [
+ "jan-klod-protocol",
  "ratatui",
  "serde_json",
  "tiny_http",

@@ -1,13 +1,21 @@
-//! Terminal-UI shell over the [`app`](jan_klod::app) model and
-//! [`stream_turn`](jan_klod::stream_turn). This is thin, terminal-bound glue (not
-//! unit-tested); all state logic lives in the tested `App` model.
+//! Terminal-UI shell over the [`app`](jan_klod::app) model and a
+//! [`Transport`]. This is thin, terminal-bound glue (not unit-tested); all
+//! state logic lives in the tested `App` model, which has never known what the
+//! transport is and still does not.
+//!
+//! The transport arrives as an `Arc<dyn Transport>` rather than as an address
+//! because a turn and an answer run on different threads and, over stdio,
+//! share one pipe to one child process. An address could be cloned per thread;
+//! a pipe cannot.
 
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use jan_klod::app::{App, Prompt, Who};
-use jan_klod::{answer_prompt, stream_turn, StreamEvent};
+use jan_klod::transport::Transport;
+use jan_klod::StreamEvent;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style};
@@ -17,22 +25,27 @@ use ratatui::{DefaultTerminal, Frame};
 
 const POLL_MS: u64 = 50;
 
-/// Run the TUI against the core at `addr` with the given `session`, restoring the
+/// Run the TUI against `transport` with the given `session`, restoring the
 /// terminal on exit.
 ///
 /// # Errors
 /// Propagates a terminal I/O error from the draw/event loop.
-pub fn run(addr: &str, session: &str) -> std::io::Result<()> {
+pub fn run(transport: &Arc<dyn Transport>, session: &str) -> std::io::Result<()> {
     let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, addr, session);
+    let result = event_loop(&mut terminal, transport, session);
     ratatui::restore();
     result
 }
 
-fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std::io::Result<()> {
+fn event_loop(
+    terminal: &mut DefaultTerminal,
+    transport: &Arc<dyn Transport>,
+    session: &str,
+) -> std::io::Result<()> {
     let mut app = App::default();
     app.record_status(format!(
-        "connected to {addr} (session `{session}`); Esc to quit"
+        "connected to {} (session `{session}`); Esc to quit",
+        transport.describe()
     ));
 
     // Channel carrying stream events from a background turn thread.
@@ -100,22 +113,22 @@ fn event_loop(terminal: &mut DefaultTerminal, addr: &str, session: &str) -> std:
             // that turn is precisely what is blocked waiting for it.
             KeyCode::Enter if app.pending_prompt.is_some() => {
                 if let Some(answer) = app.take_answer() {
-                    let addr = addr.to_string();
+                    let transport = Arc::clone(transport);
                     let session = session.to_string();
-                    // Off-thread: the answer POST blocks until core acknowledges,
-                    // and the UI must keep drawing the stream meanwhile.
+                    // Off-thread: sending the answer can block on the core, and
+                    // the UI must keep drawing the stream meanwhile.
                     thread::spawn(move || {
-                        let _ = answer_prompt(&addr, &session, &answer);
+                        let _ = transport.answer(&session, &answer);
                     });
                 }
             }
             KeyCode::Enter if rx.is_none() => {
                 if let Some(message) = app.take_submission() {
-                    let addr = addr.to_string();
+                    let transport = Arc::clone(transport);
                     let session = session.to_string();
                     let (tx, new_rx) = mpsc::channel();
                     thread::spawn(move || {
-                        let result = stream_turn(&addr, &session, &message, &mut |event| {
+                        let result = transport.stream_turn(&session, &message, &mut |event| {
                             let _ = tx.send(Ok(event));
                         });
                         if let Err(err) = result {

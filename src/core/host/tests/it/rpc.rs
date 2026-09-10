@@ -12,6 +12,9 @@ use std::io::{BufRead, BufReader, Cursor, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
+// The client's transport trait, so its methods are callable here the same way
+// the `jan-klod` binary calls them.
+use jan_klod_client::transport::Transport as _;
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::rpc;
@@ -713,4 +716,87 @@ extensions:
         stderr.contains("INFO ["),
         "the boot log is on stderr, where a client will not parse it: {stderr:?}"
     );
+}
+
+/// The shipped client library drives the shipped gateway binary over stdio.
+///
+/// Everything above tests one side or the other. This is the pair: the real
+/// `jan-klod` client spawns the real `jan-klod-gateway rpc`, negotiates, and
+/// drives a turn — which is what a user gets by typing `jan-klod`.
+///
+/// The provider is pointed at a port nothing listens on, so the turn fails.
+/// That is the deterministic half of what matters here: the failure has to
+/// *arrive*, and the stream has to stay usable afterwards, because a response
+/// correlated to the wrong id would leave the client reading one turn's answer
+/// as the next one's.
+#[test]
+fn the_shipped_client_drives_the_shipped_gateway_over_stdio() {
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
+        return;
+    }
+    let dir =
+        common::TempDir(std::env::temp_dir().join(format!("jk-rpc-client-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).expect("creates the temp dir");
+    let config = dir.0.join("config.yaml");
+    // Port 1, not a hostname: nothing listens there and nothing has to be
+    // resolved, so the provider fails immediately rather than at a DNS timeout.
+    // Egress permits it because `base-url` names it.
+    std::fs::write(
+        &config,
+        "
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://127.0.0.1:1/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    intent-router:
+      enabled: true
+",
+    )
+    .expect("writes the config");
+    let ext = common::repo_root().join("ext");
+
+    // `spawn_from` returning `Ok` *is* the handshake: it sends
+    // `protocol/hello`, reads the answer and compares versions before handing
+    // the transport back.
+    let transport = jan_klod_client::transport::Stdio::spawn_from(
+        std::path::Path::new(env!("CARGO_BIN_EXE_jan-klod-gateway")),
+        &[
+            config.to_str().expect("utf-8 path"),
+            ext.to_str().expect("utf-8 path"),
+        ],
+        jan_klod_client::transport::Logs::Discard,
+    )
+    .expect("the client spawns the gateway and negotiates a protocol version");
+
+    for attempt in 1..=2 {
+        let mut events = Vec::new();
+        let outcome = transport.stream_turn("client-stdio", "hello", &mut |event| {
+            events.push(event);
+        });
+        // Named, not merely failed: a bare `is_err` would also be satisfied by
+        // "the gateway closed the connection", which is what a crashed child
+        // looks like. This says the turn reached the provider chain and came
+        // back with its verdict.
+        let Err(err) = outcome else {
+            panic!("attempt {attempt}: nothing is listening on port 1, so the turn cannot succeed")
+        };
+        assert!(
+            err.contains("all providers failed"),
+            "attempt {attempt}: the provider's own failure came back: {err}"
+        );
+        // And the turn's warnings arrived as notifications on the way, which is
+        // the streaming half of the round trip.
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, jan_klod_client::StreamEvent::Warning(_))),
+            "attempt {attempt}: the fallback warnings streamed to the client: {events:?}"
+        );
+    }
+    // Twice, because the second turn is the one that would misbehave if the
+    // first turn's answer had been matched to the wrong request id.
 }

@@ -6,14 +6,19 @@ license.workspace = true
 publish.workspace = true
 
 # A UI is NOT an extension — it is a separate client *process* that drives a
-# running core over the REST surface (the LSP/server model). This crate depends on
-# neither `jan-klod-core` nor Wasmtime: it speaks only the REST contract.
+# core (the LSP/server model): over stdio, having spawned it, or over REST if one
+# is already running. This crate depends on neither `jan-klod-core` nor Wasmtime:
+# it speaks only the wire contract.
 [[bin]]
 name = "jan-klod"
 path = "src/main.rs"
 
 [dependencies]
 serde_json.workspace = true
+# The wire contract. Serde-only by design (#41), which is what lets a client
+# depend on it without pulling in the core or Wasmtime — the rule this crate's
+# comment above states. The stdio transport frames commands with it.
+jan-klod-protocol = { path = "../protocol" }
 # Terminal UI for the `tui` mode (binary only). Bundles the crossterm backend +
 # event types (used via `ratatui::crossterm`). The pure App model in `app` needs
 # no TUI deps and is unit-tested without a terminal.
