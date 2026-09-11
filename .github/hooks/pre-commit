@@ -2,75 +2,38 @@
 # Pre-commit hook — compilation + tests only (fast gate).
 # Skip with: git commit --no-verify
 #
-# Since #79, `make test` below is unit tests only: the host workspace's
-# `#[cfg(test)]` units, the guests' native tests, and the Go supervisor's
-# `go vet`/`go test`. The host integration suite (host/tests/it/, ~160 tests)
-# needs the `integration` cargo feature, which this hook does not pass — that
-# suite runs at `git push` instead, via `pre-push`'s `make gate`. The saving is
-# real: no wasmtime link, no ~200M `it-*` binary built on every commit, so this
-# hook stays a fast gate rather than repeating the push-time run.
+# The gate sequence itself lives in the root Makefile's `gate-commit` target,
+# not here — `.github/workflows/ci.yml` and a developer running `make
+# gate-commit` by hand call the same target, so this hook cannot drift from
+# CI the way #65 did. Since #79, `gate-commit`'s `make test` is unit tests
+# only: the host workspace's `#[cfg(test)]` units, the guests' native tests,
+# and the Go supervisor's `go vet`/`go test`. The host integration suite
+# (host/tests/it/, ~160 tests) needs the `integration` cargo feature, which
+# `gate-commit` does not pass — that suite runs at `git push` instead, via
+# `pre-push`'s `gate-push` target (`make gate`).
 
 set -euo pipefail
 
 RED='\033[0;31m'
 GRN='\033[0;32m'
-YLW='\033[1;33m'
-BLD='\033[1m'
 RST='\033[0m'
-
-pass() { printf "${GRN}✓${RST} %s\n" "$*"; }
-fail() { printf "${RED}✗${RST} %s\n" "$*" >&2; }
-step() { printf "\n${BLD}${YLW}▶ %s${RST}\n" "$*"; }
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
 # Skip entirely unless the commit touches something Rust build output depends
 # on, so doc/workflow-only commits stay instant. wit/ is included because guest
-# crates read it at compile time via wit_bindgen::generate!.
+# crates read it at compile time via wit_bindgen::generate!. This reads the
+# staged diff, so it belongs in the hook rather than the Makefile target: a
+# target has no notion of what is staged.
 if ! git diff --cached --name-only --diff-filter=ACM \
      | grep -qE '\.rs$|Cargo\.(toml|lock)$|^wit/'; then
   exit 0
 fi
 
-step "rustfmt"
-cargo fmt --manifest-path src/core/Cargo.toml --all -- --check \
-  && pass "core formatted" \
-  || { fail "src/core unformatted — run: cargo fmt --manifest-path src/core/Cargo.toml --all"; exit 1; }
-
-cargo fmt --manifest-path src/extensions/Cargo.toml --all -- --check \
-  && pass "extensions formatted" \
-  || { fail "src/extensions unformatted — run: cargo fmt --manifest-path src/extensions/Cargo.toml --all"; exit 1; }
-
-step "Build + test"
-
-# Stage the guests fresh. This used to be `rm -rf ext/` alone, which defeated its
-# own purpose: with no manifests in ext/, `make test`'s manifest self-test
-# (scripts/manifests-selftest.sh, run by `make -C src/extensions test`) skips
-# rather than checking anything, and the hook still printed "passed". Removing
-# *and rebuilding* gets what the removal was reaching for — no stale artifact —
-# while leaving that self-test something to run against.
-#
-# Since #79 this is the only reason `make test` still needs guests staged: the
-# host's own integration suite (host/tests/it/) is gated behind the
-# `integration` feature and this hook's `make test` does not pass it, so that
-# suite does not build here at all — it runs at `git push` instead, via
-# `pre-push`'s `make gate`.
-rm -rf ext/
-make -C src/extensions all \
-  && pass "guests staged" \
-  || { fail "guest build failed"; exit 1; }
-
-# A skipped self-test must now fail rather than pass quietly
-# (scripts/manifests-selftest.sh).
-export JK_REQUIRE_GUESTS=1
-
-make -C src/core check \
-  && pass "core check" \
-  || { fail "core check failed"; exit 1; }
-
-make test \
-  && pass "make test" \
-  || { fail "make test failed"; exit 1; }
-
-printf "\n${GRN}${BLD}Build and tests passed.${RST}\n\n"
+if make gate-commit; then
+  printf "\n${GRN}✓${RST} Build and tests passed.\n\n"
+else
+  printf "\n${RED}✗${RST} pre-commit gate failed — see above.\n\n" >&2
+  exit 1
+fi

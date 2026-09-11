@@ -1,89 +1,25 @@
 #!/usr/bin/env bash
-# Pre-push hook — mirrors .github/workflows/ci.yml in job order.
+# Pre-push hook — the full exit gate.
 # Skip entirely with: git push --no-verify
+#
+# The gate sequence itself lives in the root Makefile's `gate-push` target,
+# not here — `.github/workflows/ci.yml` and a developer running `make
+# gate-push` by hand call the same target, so this hook cannot drift from CI
+# the way #65 did (`pre-push` once ran the host workspace suite twice, and
+# nothing but reading this file's bash would have caught it).
 
 set -euo pipefail
 
 RED='\033[0;31m'
 GRN='\033[0;32m'
-YLW='\033[1;33m'
-BLD='\033[1m'
 RST='\033[0m'
-
-pass() { printf "${GRN}✓${RST} %s\n" "$*"; }
-fail() { printf "${RED}✗${RST} %s\n" "$*" >&2; }
-step() { printf "\n${BLD}${YLW}▶ %s${RST}\n" "$*"; }
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-# ── Job 1: lint + test ────────────────────────────────────────────────────────
-step "Job 1/3 · lint + test (host workspace)"
-
-make -C src/extensions spike-deps \
-  && pass "spike WIT deps fetched" \
-  || { fail "spike-deps failed"; exit 1; }
-
-# Rebuild rather than merely remove: an absent guest makes the integration tests
-# skip, so `rm -rf ext/` on its own quietly emptied this job of most of its value.
-rm -rf ext/
-make -C src/extensions all \
-  && pass "guests staged" \
-  || { fail "guest build failed"; exit 1; }
-
-export JK_REQUIRE_GUESTS=1
-
-# Not `make test`: that starts with the host workspace's *unit* tests
-# (`cargo nextest run` in src/core, unit-only since #79 — see src/core/Makefile),
-# which `make gate` below re-runs and then some: `gate` passes
-# `--features jan-klod-host/integration`, so it is a strict superset — every
-# unit test `make test` would run, plus the ~160-test host integration suite
-# (host/tests/it/) that `make test` no longer builds at all. The two legs
-# `gate` never reaches are the guests' native tests and the Go supervisor.
-make test-guests \
-  && pass "make test-guests" \
-  || { fail "make test-guests failed"; exit 1; }
-
-make clippy \
-  && pass "make clippy" \
-  || { fail "make clippy failed"; exit 1; }
-
-# ── Job 2: component harness ──────────────────────────────────────────────────
-step "Job 2/3 · component harness (exit gate)"
-
-# `make gate` only — not `make harness` first. harness names nine test targets
-# (component_harness, agent_loop, persistence, api_rest, telegram, host_fs,
-# host_process, tool_fleet, tool_wiring), every one a file in src/core/host/tests/
-# that `cargo test --workspace` already runs. It stays a hand-run dev target; here
-# it was a second build and run of nine wasmtime-linked binaries. Both stage the
-# guests, so nothing is lost by dropping it.
-make gate \
-  && pass "make gate" \
-  || { fail "make gate failed"; exit 1; }
-
-# ── Job 3: supply-chain gates ─────────────────────────────────────────────────
-step "Job 3/3 · supply-chain gates"
-
-for m in src/core/Cargo.toml src/extensions/Cargo.toml; do
-  cargo metadata --locked --format-version 1 --manifest-path "$m" >/dev/null \
-    && pass "lockfile current: $m" \
-    || { fail "stale lockfile: $m (run: cargo update --manifest-path $m)"; exit 1; }
-done
-
-make deny \
-  && pass "make deny" \
-  || { fail "make deny failed"; exit 1; }
-
-make audit \
-  && pass "make audit" \
-  || { fail "make audit failed"; exit 1; }
-
-make -C src/extensions go-supply-chain \
-  && pass "go supply-chain" \
-  || { fail "go supply-chain failed"; exit 1; }
-
-make sbom \
-  && pass "make sbom" \
-  || { fail "make sbom failed"; exit 1; }
-
-printf "\n${GRN}${BLD}All CI gates passed.${RST}\n\n"
+if make gate-push; then
+  printf "\n${GRN}✓${RST} All CI gates passed.\n\n"
+else
+  printf "\n${RED}✗${RST} pre-push gate failed — see above.\n\n" >&2
+  exit 1
+fi

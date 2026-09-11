@@ -208,17 +208,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Every committed Cargo.lock must already be current — a stale lock means the
-      # audited/denied tree is not the tree that builds. Two workspaces: the host
-      # workspace and the guest extensions workspace (one shared Cargo.lock across
-      # all guests), so a new guest added to src/extensions/Cargo.toml's members is
-      # covered automatically without editing this list.
+      # `make lockfile` (root Makefile) — every committed Cargo.lock must already
+      # be current, --locked, or the audited/denied tree below is not the tree
+      # that builds. This used to be a loop inlined here and, separately, in
+      # `.github/hooks/pre-push` — the same commands typed twice, free to drift.
+      # Both now call the one target (#72).
       - name: Verify lockfiles (--locked)
-        run: |
-          for m in src/core/Cargo.toml src/extensions/Cargo.toml; do
-            cargo metadata --locked --format-version 1 \
-              --manifest-path "$m" >/dev/null
-          done
+        run: make lockfile
 
       # Prebuilt binaries — far faster than `cargo install` from source.
       #

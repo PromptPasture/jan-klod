@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions ext supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -27,6 +27,9 @@ help:
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
+	@echo "  gate-commit the pre-commit gate: fmt + stage guests + core check + test"
+	@echo "  gate-push   the pre-push gate: stage guests + test-guests + clippy + gate"
+	@echo "              + lockfile + supply-chain, in that order"
 	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go)"
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
@@ -103,6 +106,22 @@ clippy: check-spike-deps
 	$(MAKE) -C $(CORE) clippy
 
 # --- Supply-chain gates (CI enforces all of these) ---
+
+# Verify each Cargo.lock is current against its manifest — `--locked` fails
+# rather than silently re-resolving, so a stale lock cannot slip an
+# audited/denied tree that differs from the one that actually builds. Two
+# workspaces: the host workspace and the guest extensions workspace (one
+# shared Cargo.lock across all guests, so a new guest added to
+# src/extensions/Cargo.toml's members is covered without editing this list).
+# This used to be a loop inlined in both `pre-push` and `ci.yml`'s
+# supply-chain job — the same commands typed twice, free to drift the way
+# the rest of #72 was about. Named here, both now call it.
+lockfile:
+	@for m in $(CORE)/Cargo.toml $(EXT)/Cargo.toml; do \
+	  cargo metadata --locked --format-version 1 --manifest-path "$$m" >/dev/null \
+	    && echo "lockfile current: $$m" \
+	    || { echo "stale lockfile: $$m (run: cargo update --manifest-path $$m)" >&2; exit 1; }; \
+	done
 
 # Each subtree owns its own audit/deny invocation; root fans out to both.
 audit deny:
@@ -190,6 +209,61 @@ gate: check-spike-deps extensions
 	  fi
 	cd $(CORE) && cargo nextest run --workspace --features jan-klod-host/integration --no-fail-fast
 	cd $(CORE) && cargo test --doc --workspace
+
+# --- Hook-facing gates (also called directly by .github/workflows/ci.yml) ---
+#
+# `.github/hooks/pre-commit` and `.github/hooks/pre-push` used to carry these
+# two sequences as bash: each hook a hand-ordered list of `make` calls that
+# only the hook itself could run and that `ci.yml` had no way to reuse — two
+# independent copies of "what a commit/push must pass," free to drift the way
+# #65 did (`pre-push` ran the host workspace suite twice, and nothing but
+# reading the bash would have caught it). Naming them here means a developer
+# can run either by hand, and the hook and `ci.yml` share one place these
+# steps are listed instead of restating them.
+#
+# The staged-diff skip check that lets a doc-only commit skip `pre-commit`
+# instantly stays in the hook itself, not here: it reads the git index
+# (`git diff --cached --name-only`), and a target has no notion of a staged
+# diff to read.
+
+# The pre-commit gate: both `cargo fmt --check` invocations, then a rebuilt
+# (not just removed) ext/ — an absent ext/ makes
+# scripts/manifests-selftest.sh (run by `make -C src/extensions test`, part of
+# `make test` below) skip instead of checking anything, so `rm -rf` alone
+# would let a missing manifest report green. JK_REQUIRE_GUESTS=1 is what turns
+# a skipped self-test into a failure rather than trusting the rebuild alone to
+# keep it honest, the same reasoning `gate`'s own export above uses.
+gate-commit: export JK_REQUIRE_GUESTS = 1
+gate-commit:
+	cargo fmt --manifest-path $(CORE)/Cargo.toml --all -- --check
+	cargo fmt --manifest-path $(EXT)/Cargo.toml --all -- --check
+	rm -rf $(EXT_DIR)
+	$(MAKE) -C $(EXT) all
+	$(MAKE) -C $(CORE) check
+	$(MAKE) test
+
+# The pre-push gate: a push pays the full gate unconditionally, no skip check.
+# `spike-deps` here is the *fetch*, not the `check-spike-deps` prerequisite
+# `clippy` and `gate` already carry below — that target only verifies
+# wit/spike/deps exists, so a clone that skipped `make setup` still needs this
+# explicit fetch before clippy/gate can compile against it. Guests are
+# rebuilt for the same reason `gate-commit` rebuilds them. `test-guests`, not
+# `test`, runs here: `gate` below is a strict superset of the host workspace's
+# unit tests once --features jan-klod-host/integration is added, so running
+# `test-core` a second time here would just repeat it for no extra coverage.
+gate-push: export JK_REQUIRE_GUESTS = 1
+gate-push:
+	$(MAKE) -C $(EXT) spike-deps
+	rm -rf $(EXT_DIR)
+	$(MAKE) -C $(EXT) all
+	$(MAKE) test-guests
+	$(MAKE) clippy
+	$(MAKE) gate
+	$(MAKE) lockfile
+	$(MAKE) deny
+	$(MAKE) audit
+	$(MAKE) -C $(EXT) go-supply-chain
+	$(MAKE) sbom
 
 # Boot the real core against config.yaml: resolve extensions against ext/,
 # compile present components, run their lifecycle, print the boot plan.
