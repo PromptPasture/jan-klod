@@ -257,6 +257,7 @@ An answer that arrives when nothing asked is refused on both — `409` over REST
 | `session/create` | — | `POST /sessions` |
 | `session/list` | — | `GET /sessions` |
 | `session/get` | `session` | `GET /session/:id` |
+| `session/fork` | `session`, `at-seq` | `POST /session/:id/fork` |
 | `session/message` | `session`, `message` | `POST /session/:id/message` |
 | `turn/answer` | `session`, `answer` | `POST /session/:id/answer` |
 | `turn/cancel` | `session` | — (today: drop the SSE connection) |

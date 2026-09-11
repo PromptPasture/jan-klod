@@ -397,6 +397,39 @@ fn the_security_model_cites_tests_that_exist() {
     );
 }
 
+/// Every wire command in `jan_klod_protocol::COMMAND_METHODS` has a row in the
+/// **Commands** table in `docs/concepts/contracts.md`.
+///
+/// That table is hand-maintained prose, which is exactly how `session/fork`
+/// went missing from it while the schema beside it, and the wire tests, both
+/// had all nine commands. `COMMAND_METHODS` is not re-typed here as a second
+/// list that could itself fall behind: `protocol/tests/wire.rs` already checks
+/// it both ways against the exhaustive `match` in `expected_method`, so it is
+/// as authoritative as the `Command` enum itself, and a command missing from
+/// it fails there before this test ever runs. Modelled on
+/// `the_security_model_cites_tests_that_exist` above: both defend a table that
+/// ends in a citation/route no compiler checks.
+#[test]
+fn the_commands_table_lists_every_wire_command() {
+    let root = common::repo_root();
+    let page = root.join("docs/concepts/contracts.md");
+    let text = std::fs::read_to_string(&page).expect("the contracts page is readable");
+
+    let missing: Vec<&str> = jan_klod_protocol::COMMAND_METHODS
+        .iter()
+        .copied()
+        .filter(|method| !text.contains(&format!("`{method}`")))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "docs/concepts/contracts.md's Commands table is missing {missing:?} — every name in \
+         `jan_klod_protocol::COMMAND_METHODS` must appear as `` `method` `` somewhere on the \
+         page, or a non-Rust client reading only the docs sees fewer commands than the schema \
+         ships"
+    );
+}
+
 /// Every instance the shipped config declares resolves to a component that
 /// exists. An *unenabled* block's component reference is otherwise tested by
 /// nothing, so a stale reference (wrong `type:`, or wrong default derived from
