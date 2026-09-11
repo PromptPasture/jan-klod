@@ -1387,6 +1387,7 @@ dependencies = [
  "tiny_http",
  "toml",
  "ureq",
+ "url",
  "wasmtime",
  "wasmtime-wasi",
 ]

@@ -437,17 +437,156 @@ fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
         "the permitted origin was reached — otherwise this test proves nothing"
     );
 
-    // What the caller got back is the redirect itself, not the secret.
-    let response = outcome.expect("a 3xx is a response, not a transport error");
+    // The caller gets the *policy's* refusal, not a puzzling 302. That is what
+    // the per-hop loop changed: #107's first box merely declined to follow and
+    // surfaced the redirect; now the hop is checked and refused, which is both
+    // safe and legible.
     assert_eq!(
-        response.status, 302,
-        "the redirect is surfaced, not followed"
-    );
-    assert!(
-        !response.body.windows(6).any(|w| w == b"secret"),
-        "the refused destination's body did not arrive"
+        outcome.err(),
+        Some(jan_klod_core::http::WireError::ConnectionFailed),
+        "the refused hop is reported as the policy refusing it"
     );
 
     // And the assertion this test exists for.
     forbidden.only_hit();
+}
+
+/// A server that redirects once, then serves — and records the headers and
+/// method of every request, so what survived a hop can be asserted.
+struct Hops {
+    port: u16,
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Hops {
+    /// `first` is answered with `status` and a `Location` of `location`;
+    /// everything after is answered `200 landed`.
+    fn start(status: u16, location: String) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
+        let port = listener.local_addr().expect("has an address").port();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut socket) = stream else { continue };
+                let mut request = Vec::new();
+                let mut byte = [0_u8; 1];
+                while socket.read(&mut byte).unwrap_or(0) == 1 {
+                    request.push(byte[0]);
+                    if request.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let text = String::from_utf8_lossy(&request).into_owned();
+                let first = recorded.lock().expect("not poisoned").is_empty();
+                recorded.lock().expect("not poisoned").push(text);
+                let reply = if first {
+                    format!(
+                        "HTTP/1.1 {status} Moved\r\nLocation: {location}\r\n\
+                         Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nlanded"
+                        .to_owned()
+                };
+                let _ = socket.write_all(reply.as_bytes());
+            }
+        });
+        Self { port, seen }
+    }
+
+    fn requests(&self) -> Vec<String> {
+        self.seen.lock().expect("not poisoned").clone()
+    }
+}
+
+/// A redirect to a destination the policy permits is still followed — the fix
+/// for #107 must not be "break every redirect".
+#[test]
+fn a_redirect_to_a_permitted_destination_is_followed() {
+    // Same origin, so one grant covers both hops.
+    let hops = Hops::start(302, "/landed".to_owned());
+    let policy = jan_klod_core::egress::EgressPolicy::public_only()
+        .allowing(&format!("http://127.0.0.1:{}", hops.port));
+    let entry = format!("http://127.0.0.1:{}/start", hops.port);
+
+    let response = jan_klod_core::http::fetch_within(&policy, "GET", &entry, &[], None, 2_000)
+        .expect("a permitted redirect is followed");
+    assert_eq!(
+        response.status, 200,
+        "the second hop's response is returned"
+    );
+    assert_eq!(response.body, b"landed");
+
+    let requests = hops.requests();
+    assert_eq!(requests.len(), 2, "two hops were made: {requests:?}");
+    assert!(
+        requests[1].starts_with("GET /landed"),
+        "the relative Location resolved against the first URL: {:?}",
+        requests[1]
+    );
+}
+
+/// `Authorization` does not survive a redirect.
+///
+/// ureq stripped it for us (`RedirectAuthHeaders::Never`); following redirects
+/// by hand means doing that deliberately, and forgetting would send a
+/// provider's API key to wherever the redirect pointed — a credential leak
+/// introduced *by* the fix for a policy bypass.
+#[test]
+fn credentials_do_not_survive_a_redirect() {
+    let hops = Hops::start(302, "/landed".to_owned());
+    let policy = jan_klod_core::egress::EgressPolicy::public_only()
+        .allowing(&format!("http://127.0.0.1:{}", hops.port));
+    let entry = format!("http://127.0.0.1:{}/start", hops.port);
+
+    let headers = vec![
+        ("Authorization".to_owned(), "Bearer sk-secret".to_owned()),
+        ("X-Kept".to_owned(), "yes".to_owned()),
+    ];
+    jan_klod_core::http::fetch_within(&policy, "GET", &entry, &headers, None, 2_000)
+        .expect("follows");
+
+    let requests = hops.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert!(
+        requests[0].contains("sk-secret"),
+        "the first hop did carry it, or this test proves nothing: {:?}",
+        requests[0]
+    );
+    assert!(
+        !requests[1].contains("sk-secret"),
+        "and the second did not: {:?}",
+        requests[1]
+    );
+    assert!(
+        requests[1].to_ascii_lowercase().contains("x-kept"),
+        "while an ordinary header still travels — names arrive lowercased: {:?}",
+        requests[1]
+    );
+}
+
+/// A `302` turns a POST into a GET and drops the body; a `307` does not.
+///
+/// Getting this wrong is silent: the request still succeeds, just with a method
+/// or a body the caller did not send.
+#[test]
+fn a_302_becomes_a_get_and_a_307_keeps_the_post() {
+    for (status, expected) in [(302_u16, "GET"), (307, "POST")] {
+        let hops = Hops::start(status, "/landed".to_owned());
+        let policy = jan_klod_core::egress::EgressPolicy::public_only()
+            .allowing(&format!("http://127.0.0.1:{}", hops.port));
+        let entry = format!("http://127.0.0.1:{}/start", hops.port);
+
+        jan_klod_core::http::fetch_within(&policy, "POST", &entry, &[], Some(b"payload"), 2_000)
+            .expect("follows");
+
+        let requests = hops.requests();
+        assert_eq!(requests.len(), 2, "{status}: {requests:?}");
+        assert!(
+            requests[1].starts_with(&format!("{expected} /landed")),
+            "{status} should arrive as {expected}: {:?}",
+            requests[1]
+        );
+    }
 }

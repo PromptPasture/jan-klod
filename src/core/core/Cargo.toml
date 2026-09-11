@@ -38,6 +38,7 @@ sha2 = "0.10"
 # their fixtures from `ring` + `blake2` instead (dev-only, in `jan-klod-host`),
 # at one more package.
 minisign-verify = "0.2.5"
+url = "2"
 
 
 # Landlock, for the Linux command sandbox (Slice 15c). Target-gated, so it never

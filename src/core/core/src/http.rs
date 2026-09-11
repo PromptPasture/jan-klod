@@ -82,16 +82,49 @@ pub fn fetch(
     )
 }
 
-/// As [`fetch`], but the destination must satisfy `policy` first.
+/// How many redirects to follow before giving up.
+///
+/// ureq's own former default, now enforced here because this module drives the
+/// redirect loop itself — see [`fetch_within`].
+const MAX_REDIRECTS: usize = 10;
+
+/// Headers that must not survive a redirect.
+///
+/// **This is why following redirects by hand is not merely more code.** ureq
+/// defaults to `RedirectAuthHeaders::Never` and strips `Authorization` for you;
+/// a loop that forwarded the caller's headers verbatim would send a provider's
+/// API key to whatever the redirect pointed at — a credential leak introduced
+/// by the fix for a policy bypass. Dropped on *every* hop rather than only
+/// cross-origin ones, matching what ureq did before.
+const STRIPPED_ON_REDIRECT: [&str; 3] = ["authorization", "cookie", "proxy-authorization"];
+
+/// As [`fetch`], but every destination must satisfy `policy` — including the
+/// ones a redirect chooses.
 ///
 /// This is the function the runtime hands to guests. [`fetch`] keeps the
 /// unparameterised signature for the host's own calls (a probe example, the
 /// `ask` CLI) and applies the default public-only rule, so there is no spelling
 /// of "send anywhere" left in the codebase.
 ///
+/// # Redirects are followed here, not by ureq
+///
+/// `max_redirects(0)` on the agent and a loop around it, because the policy has
+/// to be checked **per hop**. ureq will follow up to ten redirects and tell
+/// nobody, so a permitted origin answering
+/// `302 Location: http://169.254.169.254/…` would reach cloud metadata with the
+/// policy consulted only about the first URL
+/// ([#107](https://github.com/PromptPasture/jan-klod/issues/107)). The check
+/// that matters is the one on the destination actually contacted.
+///
+/// A relative `Location` is resolved against the current URL by `url::Url`
+/// rather than by hand: RFC 3986's rules are not obvious, and getting them
+/// wrong here would mean checking one URL and fetching another.
+///
 /// # Errors
-/// The policy's refusal (see [`crate::egress::EgressPolicy::check`]) or any
-/// [`WireError`] from the exchange itself.
+/// The policy's refusal (see [`crate::egress::EgressPolicy::check`]) for any
+/// hop, [`WireError::InvalidUrl`] for a `Location` that cannot be resolved,
+/// [`WireError::Backend`] if the chain exceeds [`MAX_REDIRECTS`], or any
+/// [`WireError`] from an exchange itself.
 pub fn fetch_within(
     policy: &crate::egress::EgressPolicy,
     method: &str,
@@ -100,29 +133,89 @@ pub fn fetch_within(
     body: Option<&[u8]>,
     timeout_ms: u32,
 ) -> Result<WireResponse, WireError> {
-    policy.check(url)?;
     let timeout = if timeout_ms == 0 {
         DEFAULT_TIMEOUT_MS
     } else {
         timeout_ms
     };
+    let mut target = url.to_owned();
+    let mut method = method.to_owned();
+    let mut body = body.map(<[u8]>::to_vec);
+    let mut forwarded = headers.to_vec();
+
+    for _ in 0..=MAX_REDIRECTS {
+        // Every hop, including the first. This is the whole point of the loop.
+        policy.check(&target)?;
+        let response = exchange(&method, &target, &forwarded, body.as_deref(), timeout)?;
+
+        let Some(location) = redirect_location(&response) else {
+            if let Some(err) = status_error(response.status) {
+                return Err(err);
+            }
+            return Ok(response);
+        };
+
+        // A 3xx that names somewhere else: resolve it, strip what must not
+        // travel, and let the top of the loop decide whether it is permitted.
+        target = resolve(&target, &location)?;
+        forwarded.retain(|(name, _)| {
+            let name = name.to_ascii_lowercase();
+            !STRIPPED_ON_REDIRECT.contains(&name.as_str())
+        });
+        // 303 is defined to become a GET, and 301/302 have done so in practice
+        // for so long that preserving a POST across them would surprise every
+        // caller. 307 and 308 exist precisely to preserve it, so they do.
+        if matches!(response.status, 301..=303)
+            && !method.eq_ignore_ascii_case("GET")
+            && !method.eq_ignore_ascii_case("HEAD")
+        {
+            "GET".clone_into(&mut method);
+            body = None;
+        }
+    }
+    // Refusing to keep going is the safe end of a redirect loop: a chain that
+    // long is either a mistake or someone probing for one.
+    Err(WireError::Backend)
+}
+
+/// The `Location` of a redirect response, if it is one.
+fn redirect_location(response: &WireResponse) -> Option<String> {
+    if !matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+        return None;
+    }
+    response
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("location"))
+        .map(|(_, value)| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// `location` resolved against `base`, absolute or relative.
+fn resolve(base: &str, location: &str) -> Result<String, WireError> {
+    let base = url::Url::parse(base).map_err(|_| WireError::InvalidUrl)?;
+    base.join(location)
+        .map(|resolved| resolved.to_string())
+        .map_err(|_| WireError::InvalidUrl)
+}
+
+/// One request, with no policy and no redirect handling.
+fn exchange(
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<&[u8]>,
+    timeout: u32,
+) -> Result<WireResponse, WireError> {
     // One-shot agent per request: simple, and providers issue infrequent calls.
     // `http_status_as_error(false)` lets us read 4xx/5xx as responses and map
     // them ourselves rather than losing the status inside a ureq error.
     //
-    // **`max_redirects(0)` is a security setting, not a preference.** The policy
-    // above is checked once, against the URL we were handed. ureq's default is
-    // to follow up to 10 redirects, so a permitted origin answering
-    // `302 Location: http://169.254.169.254/…` would be followed and the policy
-    // would never see the destination — for every guest, since this is the one
-    // outbound path. That made `security-model.md`'s "public destinations only"
-    // untrue as written.
-    //
-    // At 0, ureq returns the 3xx **as-is** rather than erroring
-    // (`max_redirects_do_error()` is `max_redirects > 0 && …`), so a caller sees
-    // the redirect and its `Location` and nothing was fetched from the new
-    // destination. Following again, with the policy applied per hop, is
-    // [#107](https://github.com/PromptPasture/jan-klod/issues/107)'s next box.
+    // **`max_redirects(0)` is a security setting, not a preference.** ureq
+    // follows up to 10 redirects and tells nobody, which would leave the egress
+    // policy consulted about the first URL only. At 0 the 3xx is returned as-is
+    // (`max_redirects_do_error()` is `max_redirects > 0 && …`), which is what
+    // lets `fetch_within` check each hop before taking it.
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_millis(u64::from(timeout))))
         .http_status_as_error(false)
@@ -155,9 +248,8 @@ pub fn fetch_within(
         .read_to_vec()
         .map_err(|_| WireError::Backend)?;
 
-    if let Some(err) = status_error(status) {
-        return Err(err);
-    }
+    // No status mapping here: `fetch_within` needs to see a 3xx to follow it,
+    // and it applies `status_error` to the response it finally returns.
     Ok(WireResponse {
         status,
         headers,
