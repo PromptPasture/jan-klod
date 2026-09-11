@@ -73,7 +73,7 @@ impl Editor {
         agent: &mut jan_klod_core::AgentSession,
         line: &str,
     ) -> Option<serde_json::Value> {
-        self.send_with(agent, line, &mut jan_klod_core::acp::NoAsker)
+        self.send_with(agent, line, &jan_klod_core::acp::NoAsker)
     }
 
     /// The same, with a chosen [`jan_klod_core::acp::Asker`].
@@ -81,7 +81,7 @@ impl Editor {
         &mut self,
         agent: &mut jan_klod_core::AgentSession,
         line: &str,
-        asker: &mut A,
+        asker: &A,
     ) -> Option<serde_json::Value> {
         self.connection
             .answer(line, agent, &self.writer, asker)
@@ -235,12 +235,27 @@ fn a_prompt_with_no_text_content_is_refused() {
 /// what it was asked.
 struct Answering {
     answer: String,
-    asked: Vec<String>,
+    /// `RefCell` because `Asker::ask` takes `&self` — the streaming sink and
+    /// the permission driver both hold this during one turn, and Rust will not
+    /// lend it mutably twice.
+    asked: RefCell<Vec<String>>,
+    /// What `cancelled()` reports, so a test can cancel a turn.
+    cancel: bool,
+}
+
+impl Answering {
+    fn replying(answer: &str) -> Self {
+        Self {
+            answer: answer.to_owned(),
+            asked: RefCell::new(Vec::new()),
+            cancel: false,
+        }
+    }
 }
 
 impl jan_klod_core::acp::Asker for Answering {
-    fn ask(&mut self, _session: &str, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
-        self.asked.push(prompt.question.clone());
+    fn ask(&self, _session: &str, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
+        self.asked.borrow_mut().push(prompt.question.clone());
         // A real editor picks an `optionId`, and those are the prompt's own
         // options — so answering with one is answering as ACP would.
         assert!(
@@ -249,6 +264,10 @@ impl jan_klod_core::acp::Asker for Answering {
             prompt.options
         );
         self.answer.clone()
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel
     }
 }
 
@@ -340,10 +359,7 @@ fn an_editor_that_grants_permission_gets_the_write() {
     };
     let mut editor = Editor::new();
     let session = editor.opened(&mut agent);
-    let mut answering = Answering {
-        answer: "yes".to_owned(),
-        asked: Vec::new(),
-    };
+    let answering = Answering::replying("yes");
 
     let answer = editor
         .send_with(
@@ -351,12 +367,12 @@ fn an_editor_that_grants_permission_gets_the_write() {
             &format!(
                 r#"{{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{{"sessionId":"{session}","prompt":[{{"type":"text","text":"write it"}}]}}}}"#
             ),
-            &mut answering,
+            &answering,
         )
         .expect("the prompt is answered");
 
     assert!(
-        !answering.asked.is_empty(),
+        !answering.asked.borrow().is_empty(),
         "the editor was asked at all: {answer}"
     );
     assert!(
@@ -387,10 +403,7 @@ fn an_editor_that_refuses_permission_prevents_the_write() {
     };
     let mut editor = Editor::new();
     let session = editor.opened(&mut agent);
-    let mut answering = Answering {
-        answer: "no".to_owned(),
-        asked: Vec::new(),
-    };
+    let answering = Answering::replying("no");
 
     let answer = editor
         .send_with(
@@ -398,11 +411,11 @@ fn an_editor_that_refuses_permission_prevents_the_write() {
             &format!(
                 r#"{{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{{"sessionId":"{session}","prompt":[{{"type":"text","text":"write it"}}]}}}}"#
             ),
-            &mut answering,
+            &answering,
         )
         .expect("the prompt is answered");
 
-    assert!(!answering.asked.is_empty(), "the editor was asked");
+    assert!(!answering.asked.borrow().is_empty(), "the editor was asked");
     assert!(
         !target.exists(),
         "and the refusal held: {} does not exist",
@@ -412,5 +425,86 @@ fn an_editor_that_refuses_permission_prevents_the_write() {
         answer["result"]["stopReason"], "end_turn",
         "a refused *tool* is not a refused *turn* — `refusal` would tell the \
          editor to discard the user's prompt: {answer}"
+    );
+}
+
+// ---- Cancel, and the editor that vanishes (#57 box 4) ----
+
+/// A cancelled turn is **answered** `cancelled`, not left hanging.
+///
+/// The spec is emphatic that `cancelled` "MUST be returned when the client
+/// sends a `session/cancel` notification, even if the cancellation causes
+/// exceptions in underlying operations". An editor waiting on a reply that
+/// never comes is a hung editor, so the obligation is to answer — and to
+/// answer with the reason, not with `end_turn`, which would tell the editor
+/// the turn finished normally.
+#[test]
+fn a_cancelled_turn_is_answered_cancelled() {
+    let Some((_dir, mut agent, target)) = booted_writing("cancel") else {
+        return;
+    };
+    let mut editor = Editor::new();
+    let session = editor.opened(&mut agent);
+
+    // An editor that has cancelled: it refuses the permission *and* reports the
+    // turn cancelled, which is what a real `session/cancel` produces.
+    let cancelling = Answering {
+        answer: "no".to_owned(),
+        asked: RefCell::new(Vec::new()),
+        cancel: true,
+    };
+
+    let answer = editor
+        .send_with(
+            &mut agent,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{{"sessionId":"{session}","prompt":[{{"type":"text","text":"write it"}}]}}}}"#
+            ),
+            &cancelling,
+        )
+        .expect("the parked prompt is answered rather than abandoned");
+
+    assert_eq!(
+        answer["result"]["stopReason"], "cancelled",
+        "cancellation wins over how the turn happened to finish: {answer}"
+    );
+    assert!(
+        answer.get("error").is_none(),
+        "and it is an answer, not an error — a cancel is not a failure: {answer}"
+    );
+    assert!(
+        !target.exists(),
+        "nothing was written on the way out: {}",
+        target.display()
+    );
+}
+
+/// The same turn, uncancelled, answers `end_turn` — so the assertion above is
+/// about the cancel and not about the refusal that accompanies it.
+///
+/// Without this pair, `stopReason: cancelled` could equally have come from the
+/// permission being refused, which is the confusion the mapping exists to
+/// avoid: a refused tool is not a cancelled turn.
+#[test]
+fn a_refusal_without_a_cancel_still_ends_the_turn() {
+    let Some((_dir, mut agent, _target)) = booted_writing("nocancel") else {
+        return;
+    };
+    let mut editor = Editor::new();
+    let session = editor.opened(&mut agent);
+    let answering = Answering::replying("no");
+
+    let answer = editor
+        .send_with(
+            &mut agent,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{{"sessionId":"{session}","prompt":[{{"type":"text","text":"write it"}}]}}}}"#
+            ),
+            &answering,
+        )
+        .expect("answered");
+    assert_eq!(
+        answer["result"]["stopReason"], "end_turn",
+        "a refused tool is not a cancelled turn: {answer}"
     );
 }

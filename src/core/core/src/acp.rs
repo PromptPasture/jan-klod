@@ -91,7 +91,21 @@ pub trait Asker {
     ///
     /// Returning `prompt.default_answer` is always safe — it is what a headless
     /// driver does, and it is a refusal.
-    fn ask(&mut self, session: &str, prompt: &UserPrompt) -> String;
+    ///
+    /// `&self` with interior mutability, because the streaming sink and the
+    /// permission driver both need this object *during one turn* and Rust will
+    /// not lend it mutably twice. The same reason `rpc`'s sink and driver share
+    /// an immutable `&Receiver`.
+    fn ask(&self, session: &str, prompt: &UserPrompt) -> String;
+
+    /// Whether the client has cancelled the turn.
+    ///
+    /// Asked between streamed events and after the turn, so a
+    /// `session/cancel` both stops the loop and decides the stop reason.
+    /// Sticky once true: a cancel cannot be un-seen.
+    fn cancelled(&self) -> bool {
+        false
+    }
 }
 
 /// An [`Asker`] that never asks: every prompt takes its default.
@@ -100,14 +114,14 @@ pub trait Asker {
 /// construction — the same posture [`crate::HeadlessDriver`] takes.
 pub struct NoAsker;
 impl Asker for NoAsker {
-    fn ask(&mut self, _session: &str, prompt: &UserPrompt) -> String {
+    fn ask(&self, _session: &str, prompt: &UserPrompt) -> String {
         prompt.default_answer.clone()
     }
 }
 
 /// Turns the loop's `ask` into ACP's `session/request_permission`.
 struct AcpDriver<'a, A: Asker> {
-    asker: &'a mut A,
+    asker: &'a A,
     session: String,
 }
 
@@ -115,6 +129,13 @@ impl<A: Asker> Driver for AcpDriver<'_, A> {
     fn ask(&mut self, prompt: &UserPrompt) -> String {
         self.asker.ask(&self.session, prompt)
     }
+}
+
+/// Whether a line is a `session/cancel` notification.
+fn is_cancel(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line).is_ok_and(|frame| {
+        frame.get("method").and_then(serde_json::Value::as_str) == Some("session/cancel")
+    })
 }
 
 /// The `options` array for a permission request, built from the prompt's own.
@@ -160,13 +181,35 @@ fn permission_options(prompt: &UserPrompt) -> serde_json::Value {
 struct PipeAsker<'a, W: Write> {
     writer: Rc<RefCell<W>>,
     incoming: &'a Receiver<String>,
-    next_id: i64,
+    next_id: std::cell::Cell<i64>,
+    /// Set the moment a `session/cancel` is seen, and never unset.
+    cancelled: std::cell::Cell<bool>,
+}
+
+impl<W: Write> PipeAsker<'_, W> {
+    /// Drain whatever the editor has sent without waiting, noting a cancel.
+    ///
+    /// Called between streamed events, which is the only place a cancel can be
+    /// noticed while a turn is running — the serving loop is inside the
+    /// conductor until the turn ends.
+    fn drain(&self) {
+        while let Ok(line) = self.incoming.try_recv() {
+            if is_cancel(&line) {
+                self.cancelled.set(true);
+            }
+        }
+    }
 }
 
 impl<W: Write> Asker for PipeAsker<'_, W> {
-    fn ask(&mut self, session: &str, prompt: &UserPrompt) -> String {
-        let id = self.next_id;
-        self.next_id += 1;
+    fn cancelled(&self) -> bool {
+        self.drain();
+        self.cancelled.get()
+    }
+
+    fn ask(&self, session: &str, prompt: &UserPrompt) -> String {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
         let request = serde_json::json!({
             "jsonrpc": jsonrpc::VERSION,
             "id": id,
@@ -197,10 +240,12 @@ impl<W: Write> Asker for PipeAsker<'_, W> {
             let Ok(frame) = serde_json::from_str::<serde_json::Value>(&line) else {
                 continue;
             };
-            if frame.get("method").and_then(serde_json::Value::as_str) == Some("session/cancel") {
-                // Partial: the pending permission is cancelled, which is what
-                // the default expresses. Answering the parked `session/prompt`
-                // with `stopReason: cancelled` is the next box's.
+            if is_cancel(&line) {
+                // The spec requires a `cancelled` outcome for every pending
+                // permission request, and the default expresses exactly that
+                // refusal. The flag is what turns the parked `session/prompt`
+                // into `stopReason: cancelled` rather than `end_turn`.
+                self.cancelled.set(true);
                 return prompt.default_answer.clone();
             }
             if frame.get("id").and_then(serde_json::Value::as_i64) != Some(id) {
@@ -273,17 +318,21 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
     });
 
     let mut connection = Connection::default();
-    let mut asker = PipeAsker {
+    let asker = PipeAsker {
         writer: Rc::clone(&writer),
         incoming: &incoming,
-        next_id: 1_000_000,
+        // Agent-chosen ids, well clear of anything an editor is likely to
+        // pick. The two directions have independent id spaces, so this is
+        // legibility rather than correctness.
+        next_id: std::cell::Cell::new(1_000_000),
+        cancelled: std::cell::Cell::new(false),
     };
     // `recv` ends when the reader thread drops its end, which is EOF.
     while let Ok(line) = incoming.recv() {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = connection.answer(&line, agent, &writer, &mut asker) {
+        if let Some(response) = connection.answer(&line, agent, &writer, &asker) {
             write_frame(&mut *writer.borrow_mut(), &response)?;
         }
     }
@@ -291,12 +340,13 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
 }
 
 /// Streams a turn's events as ACP `session/update` notifications.
-struct AcpSink<'a, W: Write> {
+struct AcpSink<'a, W: Write, A: Asker> {
     writer: &'a Rc<RefCell<W>>,
     session: String,
+    asker: &'a A,
 }
 
-impl<W: Write> EventSink for AcpSink<'_, W> {
+impl<W: Write, A: Asker> EventSink for AcpSink<'_, W, A> {
     fn emit(&mut self, event: &Event) -> Flow {
         // Only assistant text maps to an ACP update today. A tool call has its
         // own `sessionUpdate` kinds in the spec, and inventing a shape for them
@@ -317,13 +367,22 @@ impl<W: Write> EventSink for AcpSink<'_, W> {
             "method": "session/update",
             "params": update,
         });
-        let mut writer = self.writer.borrow_mut();
-        // Nobody reading means nothing left to stream, which the conductor
-        // treats as a cancellation at its next loop boundary.
-        if serde_json::to_writer(&mut *writer, &notification).is_err()
-            || writer.write_all(b"\n").is_err()
-            || writer.flush().is_err()
         {
+            let mut writer = self.writer.borrow_mut();
+            // Nobody reading means nothing left to stream, which the conductor
+            // treats as a cancellation at its next loop boundary.
+            if serde_json::to_writer(&mut *writer, &notification).is_err()
+                || writer.write_all(b"\n").is_err()
+                || writer.flush().is_err()
+            {
+                return Flow::Stop;
+            }
+        }
+        // Between two events is where a cancel gets read — the serving loop is
+        // inside the conductor until the turn ends, so this is the only place
+        // it can be noticed. The conductor checks `Flow` at its own
+        // boundaries, so `Stop` here needs no conductor change.
+        if self.asker.cancelled() {
             return Flow::Stop;
         }
         Flow::Continue
@@ -349,7 +408,7 @@ impl Connection {
         line: &str,
         agent: &mut AgentSession,
         writer: &Rc<RefCell<W>>,
-        asker: &mut A,
+        asker: &A,
     ) -> Option<jsonrpc::Response> {
         match self.route(line) {
             Routed::Silent => None,
@@ -525,7 +584,7 @@ impl Connection {
         params: &serde_json::Value,
         agent: &mut AgentSession,
         writer: &Rc<RefCell<W>>,
-        asker: &mut A,
+        asker: &A,
     ) -> Result<serde_json::Value, String> {
         let Some(session) = params.get("sessionId").and_then(serde_json::Value::as_str) else {
             return Err("`session/prompt` needs a `sessionId`".to_owned());
@@ -560,6 +619,7 @@ impl Connection {
         let mut sink = AcpSink {
             writer,
             session: session.to_owned(),
+            asker,
         };
         // The editor answers a permission request through `asker`, so a
         // granted write actually happens — unlike MCP, where nobody can answer.
@@ -567,7 +627,16 @@ impl Connection {
             asker,
             session: session.to_owned(),
         };
-        match agent.run_streaming_with_driver(&mut driver, &mut sink, session, &text) {
+        let outcome = agent.run_streaming_with_driver(&mut driver, &mut sink, session, &text);
+        // Cancellation wins over how the turn happened to finish. The spec is
+        // emphatic: `cancelled` "MUST be returned when the client sends a
+        // `session/cancel` notification, **even if the cancellation causes
+        // exceptions in underlying operations**" — so a cancelled turn is
+        // answered, not left hanging and not reported as a failure.
+        if asker.cancelled() {
+            return Ok(serde_json::json!({ "stopReason": "cancelled" }));
+        }
+        match outcome {
             RunResult::Answered { .. } => Ok(serde_json::json!({ "stopReason": "end_turn" })),
             RunResult::Failed(message) => Err(message),
         }
@@ -773,10 +842,11 @@ mod tests {
         let (handover, incoming) = std::sync::mpsc::channel();
         handover.send(answer.to_owned()).expect("queues the answer");
         let writer = Rc::new(RefCell::new(Vec::new()));
-        let mut asker = PipeAsker {
+        let asker = PipeAsker {
             writer: Rc::clone(&writer),
             incoming: &incoming,
-            next_id: 7,
+            next_id: std::cell::Cell::new(7),
+            cancelled: std::cell::Cell::new(false),
         };
         let given = asker.ask("sess-1", prompt);
         let written = String::from_utf8(writer.borrow().clone()).expect("UTF-8");
@@ -843,13 +913,76 @@ mod tests {
     /// The spec requires a cancelled outcome for every pending permission
     /// request. Answering the parked `session/prompt` with
     /// `stopReason: cancelled` is a later box; not hanging is this one's.
+    /// A cancel while parked refuses the permission **and** marks the turn
+    /// cancelled, which is what turns the parked prompt's answer from
+    /// `end_turn` into `cancelled`.
     #[test]
-    fn a_cancel_while_parked_stops_waiting() {
-        let (_, given) = asked(
-            r#"{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"sess-1"}}"#,
-            &confirm(),
+    fn a_cancel_while_parked_refuses_and_marks_the_turn() {
+        let (handover, incoming) = std::sync::mpsc::channel();
+        handover
+            .send(
+                r#"{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"sess-1"}}"#
+                    .to_owned(),
+            )
+            .expect("queues the cancel");
+        let asker = PipeAsker {
+            writer: Rc::new(RefCell::new(Vec::new())),
+            incoming: &incoming,
+            next_id: std::cell::Cell::new(7),
+            cancelled: std::cell::Cell::new(false),
+        };
+        // Not asserting `!cancelled()` first: `cancelled()` drains, and the
+        // cancel is already queued — so it is legitimately true straight away.
+        // What matters is that `ask` refuses *and* the turn is marked.
+        assert_eq!(
+            asker.ask("sess-1", &confirm()),
+            "no",
+            "the permission is refused"
         );
-        assert_eq!(given, "no");
+        assert!(asker.cancelled(), "and the turn is marked cancelled");
+    }
+
+    /// A cancel arriving while the turn *streams* is noticed too — between
+    /// events is the only other place it can be.
+    #[test]
+    fn a_cancel_between_events_is_noticed_without_waiting() {
+        let (handover, incoming) = std::sync::mpsc::channel();
+        let asker = PipeAsker {
+            writer: Rc::new(RefCell::new(Vec::new())),
+            incoming: &incoming,
+            next_id: std::cell::Cell::new(1),
+            cancelled: std::cell::Cell::new(false),
+        };
+        assert!(!asker.cancelled());
+        handover
+            .send(
+                r#"{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"s"}}"#
+                    .to_owned(),
+            )
+            .expect("queues it");
+        assert!(asker.cancelled(), "drained without blocking");
+        // Sticky: a cancel cannot be un-seen by a later empty drain.
+        assert!(asker.cancelled());
+    }
+
+    /// An ordinary frame arriving mid-turn is not a cancel, and must not be
+    /// mistaken for one — a client is allowed to talk while a turn runs.
+    #[test]
+    fn an_unrelated_frame_mid_turn_is_not_a_cancel() {
+        let (handover, incoming) = std::sync::mpsc::channel();
+        let asker = PipeAsker {
+            writer: Rc::new(RefCell::new(Vec::new())),
+            incoming: &incoming,
+            next_id: std::cell::Cell::new(1),
+            cancelled: std::cell::Cell::new(false),
+        };
+        handover
+            .send(r#"{"jsonrpc":"2.0","id":9,"method":"session/new","params":{}}"#.to_owned())
+            .expect("queues it");
+        handover
+            .send("not even json".to_owned())
+            .expect("queues it");
+        assert!(!asker.cancelled(), "neither frame cancels anything");
     }
 
     /// An editor that closes the pipe while parked does not hang the turn.
@@ -858,10 +991,11 @@ mod tests {
         let (handover, incoming) = std::sync::mpsc::channel::<String>();
         drop(handover); // the editor is gone
         let writer = Rc::new(RefCell::new(Vec::new()));
-        let mut asker = PipeAsker {
+        let asker = PipeAsker {
             writer,
             incoming: &incoming,
-            next_id: 1,
+            next_id: std::cell::Cell::new(1),
+            cancelled: std::cell::Cell::new(false),
         };
         assert_eq!(asker.ask("sess-1", &confirm()), "no");
     }
