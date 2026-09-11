@@ -263,6 +263,10 @@ pub struct Runtime {
     /// expose it — so [`Self::compile_cache_stats`] can report whether the
     /// components just compiled were cache hits or misses.
     compile_cache: wasmtime::Cache,
+    /// The binary [`sandbox_landlock::LandlockBackend`] re-executes to confine a
+    /// command, when it must not be discovered. See
+    /// [`Self::with_sandbox_wrapper`].
+    sandbox_wrapper: Option<PathBuf>,
 }
 
 /// Pass 1 output of [`Runtime::build_agent`]: every instantiated provider,
@@ -390,7 +394,34 @@ impl Runtime {
             agent,
             config_dir,
             compile_cache,
+            sandbox_wrapper: None,
         })
+    }
+
+    /// Name the binary the Landlock backend re-executes, instead of letting it
+    /// discover one.
+    ///
+    /// # This exists for tests, and only tests should call it
+    ///
+    /// [`sandbox_landlock::LandlockBackend::here`] resolves the wrapper with
+    /// `std::env::current_exe()`, which is right in production — the process
+    /// booting a [`Runtime`] *is* `jan-klod-gateway`, the binary that handles
+    /// the `confine` subcommand. Under `cargo test` it is the test binary,
+    /// which does not, so every confined command dies with `error:
+    /// Unrecognized option: 'writable'` — a failure that reads exactly like
+    /// Landlock refusing the command
+    /// ([#124](https://github.com/PromptPasture/jan-klod/issues/124)).
+    ///
+    /// `sandbox_landlock.rs` avoids this by constructing its backend directly
+    /// with `LandlockBackend::new`. A test that boots a real `Runtime` cannot:
+    /// the backend is resolved inside [`Self::open_process_runner`]. This is
+    /// that seam, and it is deliberately **not** a `config.yaml` key — an
+    /// operator who could name the confinement wrapper could name one that
+    /// confines nothing.
+    #[must_use]
+    pub fn with_sandbox_wrapper(mut self, wrapper: impl Into<PathBuf>) -> Self {
+        self.sandbox_wrapper = Some(wrapper.into());
+        self
     }
 
     /// Wasmtime's own compile-cache hit/miss counters for this boot's
@@ -996,7 +1027,18 @@ impl Runtime {
                 // calls could disagree (the mechanism could vanish between
                 // them), and then the boot line would describe a confinement
                 // the runner does not have.
-                let backend = sandbox::host_backend();
+                //
+                // `with_sandbox_wrapper` overrides only *which binary* Landlock
+                // re-executes, never whether confinement happens: an override
+                // that does not resolve leaves `backend` `None`, so the mode
+                // downgrades and the boot line says so, exactly as an absent
+                // mechanism would.
+                let backend = self
+                    .sandbox_wrapper
+                    .as_ref()
+                    .map_or_else(sandbox::host_backend, |wrapper| {
+                        sandbox::host_backend_at(wrapper)
+                    });
                 let effective = policy.resolve(backend.as_deref());
                 // `require: true` asked for no command rather than an unconfined
                 // one, so a refusal here is the configuration working, not

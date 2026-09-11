@@ -273,6 +273,36 @@ pub fn host_backend() -> Option<Box<dyn SandboxBackend>> {
     None
 }
 
+/// [`host_backend`], with the binary a backend re-executes **named** rather than
+/// discovered.
+///
+/// Only Landlock re-executes anything, so this differs from [`host_backend`] on
+/// Linux alone — Seatbelt applies a profile through `sandbox-exec` and ignores
+/// `wrapper` entirely. Returning `Option` for the same reason [`host_backend`]
+/// does: a named wrapper that is not there is "no backend", stated up front,
+/// not a command that fails later in a way indistinguishable from a denial.
+///
+/// See `Runtime::with_sandbox_wrapper` for the caller and for why this is a test
+/// seam rather than a configuration key.
+#[must_use]
+#[cfg(target_os = "linux")]
+pub fn host_backend_at(wrapper: &std::path::Path) -> Option<Box<dyn SandboxBackend>> {
+    crate::sandbox_landlock::available().ok()?;
+    wrapper.exists().then(|| {
+        Box::new(crate::sandbox_landlock::LandlockBackend::new(
+            wrapper.to_path_buf(),
+        )) as Box<dyn SandboxBackend>
+    })
+}
+
+/// [`host_backend_at`] where nothing is re-executed: the argument cannot matter,
+/// so this is [`host_backend`].
+#[must_use]
+#[cfg(not(target_os = "linux"))]
+pub fn host_backend_at(_wrapper: &std::path::Path) -> Option<Box<dyn SandboxBackend>> {
+    host_backend()
+}
+
 /// Why there is no backend, phrased for the operator reading a boot warning.
 ///
 /// One function rather than a message built where it is used, so it cannot

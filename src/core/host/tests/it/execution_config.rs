@@ -130,7 +130,21 @@ workspace: {ws}
         })
     };
 
-    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
+    // The wrapper is named, not discovered — the same seam `sandbox_landlock.rs`
+    // uses, and for the same reason. `LandlockBackend` confines by re-executing
+    // `current_exe()`, which in production is `jan-klod-gateway` (the binary that
+    // handles the `confine` subcommand) and under nextest is *this test binary*,
+    // which answers `error: Unrecognized option: 'writable'`. Every command then
+    // fails in a way that reads exactly like Landlock refusing it, and the four
+    // tests below that assert a command *runs* failed on Linux for that reason
+    // alone ([#124](https://github.com/PromptPasture/jan-klod/issues/124)).
+    //
+    // Ignored on macOS, where Seatbelt shells out to `/usr/bin/sandbox-exec` and
+    // no binary is re-executed. Naming it unconditionally keeps one code path
+    // for both platforms.
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext"))
+        .expect("runtime boots")
+        .with_sandbox_wrapper(env!("CARGO_BIN_EXE_jan-klod-gateway"));
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
     let _ = agent.run("s1", "run the command");
 
