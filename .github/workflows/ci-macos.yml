@@ -115,11 +115,21 @@ jobs:
       # exists to detect. So: let cargo fail loudly on its own exit code, then
       # count from a file, with `|| true` so "zero" reaches the `if` as a number
       # rather than as a dead shell.
+      #
+      # **`--color never` is load-bearing.** This workflow sets
+      # `CARGO_TERM_COLOR: always`, which nextest honours even when stdout is a
+      # file — and it colours the module and the test name as *separate* spans,
+      # so `sandbox_seatbelt::` on the wire is
+      # `…sandbox_seatbelt<ESC>[0m<ESC>[36m::…` and a literal grep for it matches
+      # nothing. The first run failed exactly this way, reporting zero tests
+      # while all four were listed. Locally the same command passes, because
+      # nothing sets `CARGO_TERM_COLOR` there.
       - name: Guard — the Seatbelt tests must exist on this runner
         run: |
           cd src/core
           cargo nextest list -p jan-klod-host \
-            --features jan-klod-host/integration --bins --tests > /tmp/nextest-list.txt
+            --features jan-klod-host/integration --bins --tests \
+            --color never > /tmp/nextest-list.txt
           n=$(grep -c 'sandbox_seatbelt::' /tmp/nextest-list.txt || true)
           echo "ci-macos: sandbox_seatbelt resolves $n test(s)"
           if [ "$n" -eq 0 ]; then
