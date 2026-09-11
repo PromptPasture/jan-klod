@@ -479,6 +479,13 @@ pub fn migrate_transcripts(store: &Store) -> Result<u64, StoreError> {
 ///
 /// Called by the turn runner rather than by a wrapper: the message never passes
 /// through a `Driver` or an `EventSink`, it is simply the turn's input.
+///
+/// `message` must be what the model actually received, not necessarily what a
+/// caller asked to send — a `before-loop` interceptor may `replace` it first.
+/// `run_and_persist` calls this from `conductor::run_turn`'s
+/// `on_effective_message` hook for exactly that reason (#84): the log is a
+/// record of what happened, and a rewrite that reached the model but not the
+/// log would make a resumed session replay a history the model never had.
 pub fn log_user_message(store: &Mutex<Store>, session: &str, message: &str) {
     let mut warned = false;
     append(

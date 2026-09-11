@@ -1369,12 +1369,18 @@ fn run_and_persist(
     // Every entry point into a turn funnels through here, so one wrap covers
     // them all — `run`, `run_with`, `run_streaming` and the rest cannot acquire
     // a turn that goes unlogged by forgetting to opt in.
-    //
-    // The user message first, so a session's log opens with its own input
-    // rather than with the first thing the model said about it.
-    event_log::log_user_message(store, session, message);
     let mut logged_sink = event_log::PersistingSink::new(sink, store, session);
     let mut logged_driver = event_log::PersistingDriver::new(driver, store, session);
+    // Logs the message the model is actually about to receive, not `message`
+    // itself: a `before-loop` interceptor may `replace` it before the
+    // conductor resolves `effective_message` (see `conductor::run_turn`'s
+    // `on_effective_message` hook), and the log exists to record what
+    // happened, not what was asked for — #84. The conductor calls this
+    // exactly once, at the point `effective_message` is resolved and before
+    // it emits a single event, so this row still opens the session's log
+    // ahead of everything the turn goes on to record.
+    let mut log_effective_message =
+        |effective: &str| event_log::log_user_message(store, session, effective);
     let result = conductor::run_turn(
         dispatcher,
         providers,
@@ -1385,6 +1391,7 @@ fn run_and_persist(
         message,
         history,
         limits,
+        &mut log_effective_message,
     );
     // No transcript append. The turn recorded itself as it ran — the user
     // message before `run_turn`, every event through the sink — so writing a
@@ -1810,5 +1817,97 @@ extensions:
         assert!(runtime.start_all().unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `before-loop` interceptor that unconditionally `replace`s the user
+    /// message — the in-process stub `core/tests/intercept.rs` already uses for
+    /// exactly this phase (`Behavior::ReplaceUserMessage`), reproduced here
+    /// because that file only sees `jan_klod_core`'s public API and cannot
+    /// reach `run_and_persist`, which is private to this crate.
+    struct RewriteBeforeLoop {
+        replacement: String,
+    }
+    impl intercept::Interceptor for RewriteBeforeLoop {
+        fn id(&self) -> &'static str {
+            "rewrite"
+        }
+        fn subscribed_phases(&self) -> Vec<intercept::Phase> {
+            vec![intercept::Phase::BeforeLoop]
+        }
+        fn intercept(
+            &mut self,
+            _input: &intercept::InterceptInput,
+        ) -> Result<intercept::Decision, intercept::InterceptorError> {
+            Ok(intercept::Decision::Replace(
+                intercept::HookState::BeforeLoop(intercept::UserTurn {
+                    session: "s".to_string(),
+                    user_message: self.replacement.clone(),
+                }),
+            ))
+        }
+    }
+
+    /// A provider whose answer plays no part in what this test checks —
+    /// present only so the turn has something to complete with.
+    struct FixedAnswer;
+    impl conductor::Completer for FixedAnswer {
+        fn id(&self) -> &'static str {
+            "p"
+        }
+        fn complete(
+            &mut self,
+            _request: &intercept::PendingRequest,
+        ) -> Result<conductor::Completion, String> {
+            Ok(conductor::Completion {
+                text: "hi".to_string(),
+                tool_calls: vec![],
+                finish_reason: "stop".to_string(),
+            })
+        }
+    }
+
+    /// #84: `event_log::log_user_message` used to record `run_and_persist`'s
+    /// own `message` argument — what the caller asked to send — even though a
+    /// `before-loop` interceptor may `replace` it before the conductor builds
+    /// the request the model actually sees. The log is supposed to be the
+    /// record of what happened; on this field it recorded what was asked for.
+    /// A resumed session (the projection in `projection.rs`) would then replay
+    /// a history the model never had.
+    ///
+    /// This proves the fix by driving `run_and_persist` (private to this
+    /// crate, hence a test here rather than in `core/tests/`) with a
+    /// `before-loop` interceptor that rewrites the message, and reading back
+    /// the very first row of the session's log.
+    #[test]
+    fn the_log_holds_the_message_a_before_loop_rewrite_produced() {
+        let store = Mutex::new(store::Store::open_in_memory().unwrap());
+        let mut dispatcher = intercept::Dispatcher::new(vec![Box::new(RewriteBeforeLoop {
+            replacement: "rewritten by the interceptor".to_string(),
+        })]);
+        let mut providers: Vec<Box<dyn conductor::Completer>> = vec![Box::new(FixedAnswer)];
+        let mut tools = conductor::NoTools;
+        let mut driver = HeadlessDriver;
+        let mut sink = conductor::NoSink;
+
+        run_and_persist(
+            &mut dispatcher,
+            &mut providers,
+            &store,
+            conductor::Limits::default(),
+            &mut tools,
+            &mut driver,
+            &mut sink,
+            "s",
+            "the message the caller actually sent",
+        );
+
+        let events = store.lock().unwrap().session_events("s").unwrap();
+        let first = event_log::decode_record(&events[0].kind, &events[0].payload)
+            .expect("the first row of a fresh session's log decodes");
+        assert_eq!(
+            first,
+            event_log::Record::UserMessage("rewritten by the interceptor".to_string()),
+            "the log must hold what the model received, not what the caller asked to send"
+        );
     }
 }

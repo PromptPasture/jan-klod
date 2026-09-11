@@ -40,9 +40,17 @@
 //! it is written down because "the whole conversation" is what an event log
 //! invites you to assume.
 //!
-//! A `user-message` row holds the message as the caller sent it. If a
-//! `before-loop` interceptor rewrote it, the model saw the rewrite and this
-//! replays the original.
+//! A `user-message` row holds the message the model actually received — after
+//! `before-loop` has had its chance to `replace` it — not necessarily the one a
+//! caller asked to send (#84). This replays exactly that message, which is what
+//! makes it correct to feed back into a following turn.
+//!
+//! A log written before #84 was fixed can still hold the as-asked message for
+//! a turn where a `before-loop` interceptor rewrote it — the row's *kind* did
+//! not change, only what a live turn puts in it, so an old row still decodes
+//! and replays fine; it is simply a record of what that older build logged. No
+//! interceptor shipped in `config.yaml` rewrites the message, so in practice no
+//! existing session is actually affected.
 
 use crate::event_log::{decode_record, Record, KIND_USER_MESSAGE};
 use crate::intercept::{Message, Role};

@@ -186,6 +186,13 @@ pub enum RunResult {
 /// tool calls. `driver` answers any interceptor `ask`. The conductor never
 /// inspects the payloads it threads — all policy lives in the dispatched
 /// interceptors.
+///
+/// `on_effective_message` is called once, with the message the model is about
+/// to receive — after `before-loop` has had its chance to `replace`
+/// `user_message` (see [`build_initial_request`]). The conductor only supplies
+/// the hook; what a caller does with it is policy, not mechanism. `run_and_persist`
+/// uses it to log the message that actually reached the model rather than the
+/// one it was asked to send — see #84.
 #[allow(clippy::too_many_arguments)] // A turn genuinely needs all of these; a
                                      // bag-of-fields struct would only move the list somewhere less visible.
 pub fn run_turn(
@@ -198,9 +205,16 @@ pub fn run_turn(
     user_message: &str,
     history: Vec<Message>,
     limits: Limits,
+    on_effective_message: &mut dyn FnMut(&str),
 ) -> RunResult {
-    let (agentic, mut request) =
-        build_initial_request(dispatcher, driver, session, user_message, history);
+    let (agentic, mut request) = build_initial_request(
+        dispatcher,
+        driver,
+        session,
+        user_message,
+        history,
+        on_effective_message,
+    );
 
     // Agentic path shapes the request; the simple path answers inline as-is.
     if agentic {
@@ -302,12 +316,20 @@ pub fn run_turn(
 ///
 /// `history` must come before the new message, or a session has no memory at
 /// all. Trimming to the model's window is `select-context`'s job, not this one's.
+///
+/// `on_effective_message` fires exactly once, right after `effective_message` is
+/// resolved below and before anything else this turn does — in particular,
+/// before the `ReAct` loop below emits a single event. A caller that logs from it
+/// therefore gets a row that is truthfully the *first* thing this turn recorded,
+/// the same guarantee `run_and_persist` relied on when it logged
+/// `user_message` directly (see #84).
 fn build_initial_request(
     dispatcher: &mut Dispatcher,
     driver: &mut dyn Driver,
     session: &str,
     user_message: &str,
     history: Vec<Message>,
+    on_effective_message: &mut dyn FnMut(&str),
 ) -> (bool, PendingRequest) {
     let mut state = HookState::BeforeLoop(UserTurn {
         session: session.to_string(),
@@ -317,11 +339,14 @@ fn build_initial_request(
         dispatcher.dispatch(Phase::BeforeLoop, &mut state, driver),
         Outcome::Proceeded
     );
-    // An interceptor may have rewritten the user message via `replace`.
+    // An interceptor may have rewritten the user message via `replace`. This is
+    // what the model is actually about to see, so it — never the original
+    // `user_message` — is what gets reported onward.
     let effective_message = match &state {
         HookState::BeforeLoop(turn) => turn.user_message.clone(),
         _ => user_message.to_string(),
     };
+    on_effective_message(&effective_message);
 
     let mut messages = history;
     messages.push(Message {
@@ -801,6 +826,7 @@ mod tests {
             "hello",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert_eq!(
             out,
@@ -855,6 +881,7 @@ mod tests {
             "do many things",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert_eq!(
             out,
@@ -865,6 +892,44 @@ mod tests {
         );
         assert_eq!(*log.borrow(), vec!["intent", "model"]);
         assert_eq!(*seen.borrow(), vec![Some("gpt-x".to_string())]);
+    }
+
+    /// #84: `on_effective_message` must see what `before-loop` rewrote, not what
+    /// the caller passed to `run_turn` — that is the whole reason the hook
+    /// exists, so it is worth pinning at the conductor's own level, independent
+    /// of anything a caller (like `run_and_persist`) does with it.
+    #[test]
+    fn on_effective_message_sees_a_before_loop_rewrite_not_the_original() {
+        let log = Rc::new(RefCell::new(vec![]));
+        let mut d = Dispatcher::new(vec![stub(
+            "rewrite",
+            vec![Phase::BeforeLoop],
+            &log,
+            Decision::Replace(HookState::BeforeLoop(UserTurn {
+                session: "s".into(),
+                user_message: "rewritten".into(),
+            })),
+        )]);
+        let mut providers = vec![text_provider("p", Ok("hi"))];
+        let seen = Rc::new(RefCell::new(Vec::<String>::new()));
+        let mut record = |effective: &str| seen.borrow_mut().push(effective.to_string());
+        run_turn(
+            &mut d,
+            &mut providers,
+            &mut NoTools,
+            &mut NoDriver,
+            &mut NoSink,
+            "s",
+            "original",
+            vec![],
+            Limits::default(),
+            &mut record,
+        );
+        assert_eq!(
+            *seen.borrow(),
+            vec!["rewritten".to_string()],
+            "the hook must fire exactly once, with the rewrite, not `original`"
+        );
     }
 
     /// A turn that hits the cycle cap says so, in the text and on the stream —
@@ -902,6 +967,7 @@ mod tests {
             "keep going",
             vec![],
             Limits { max_iterations: 3 },
+            &mut |_: &str| {},
         );
 
         let RunResult::Answered { text, .. } = out else {
@@ -949,6 +1015,7 @@ mod tests {
             "multi-step",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert_eq!(
             out,
@@ -998,6 +1065,7 @@ mod tests {
             "please rm",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert_eq!(
             out,
@@ -1040,6 +1108,7 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         // Exactly the text, with no "stopped before the turn finished" note: a
         // `tool-result` terminate is a decision, not an interruption.
@@ -1074,6 +1143,7 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert_eq!(
             out,
@@ -1102,6 +1172,7 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert!(
             matches!(out, RunResult::Failed(msg) if msg.contains("malformed output after 3 retries"))
@@ -1125,6 +1196,7 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert_eq!(
             out,
@@ -1152,6 +1224,7 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert!(matches!(out, RunResult::Failed(msg) if msg.contains("all providers failed")));
     }
@@ -1179,6 +1252,7 @@ mod tests {
             "hello",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert_eq!(
             out,
@@ -1231,6 +1305,7 @@ mod tests {
             "hello",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert_eq!(
             sink.0,
@@ -1270,6 +1345,7 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         // First completion had no text (only a tool call), so no leading delta.
         assert_eq!(
@@ -1329,6 +1405,7 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert_eq!(
             out,
@@ -1376,6 +1453,7 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert!(
             matches!(out, RunResult::Answered { .. }),
@@ -1414,6 +1492,7 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert!(
             matches!(&sink.0[0], Event::Warning(w) if w.contains("primary") && w.contains("falling back")),
@@ -1453,6 +1532,7 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
 
         assert!(
@@ -1484,6 +1564,7 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            &mut |_: &str| {},
         );
         assert!(
             !sink.0.iter().any(|e| matches!(e, Event::Warning(_))),
