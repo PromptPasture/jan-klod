@@ -30,6 +30,7 @@ mod host_process;
 mod installed_layout;
 mod local_model;
 mod manifest;
+mod mcp;
 mod persistence;
 mod polyglot;
 mod prompt_disconnect;

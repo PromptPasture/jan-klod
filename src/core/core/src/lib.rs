@@ -1491,7 +1491,13 @@ fn reorder<T>(items: Vec<T>, order: &[usize]) -> Vec<T> {
 
 /// Headless driver: no interactive surface, so an `ask` takes the prompt's
 /// `default-answer`.
-struct HeadlessDriver;
+///
+/// Public because `mcp` needs it and must not have any other kind. An MCP
+/// server owns **stdin for protocol frames**, so a driver that prompted on the
+/// terminal would read a frame as an answer and the client's next request would
+/// vanish into a confirmation. The default answer is a refusal, which is also
+/// the right policy there — an editor cannot answer a confirmation prompt.
+pub struct HeadlessDriver;
 impl intercept::Driver for HeadlessDriver {
     fn ask(&mut self, prompt: &intercept::UserPrompt) -> String {
         prompt.default_answer.clone()

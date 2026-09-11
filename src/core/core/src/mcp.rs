@@ -32,6 +32,8 @@ use std::io::{BufRead, Write};
 
 use jan_klod_protocol::jsonrpc;
 
+use crate::{AgentSession, HeadlessDriver};
+
 /// The MCP spec revision this server implements.
 ///
 /// A date, not a semver — and negotiated separately from this repository's own
@@ -41,6 +43,9 @@ pub const MCP_VERSION: &str = "2025-11-25";
 
 /// What this server calls itself in `initialize`.
 const SERVER_NAME: &str = "jan-klod";
+
+/// The session an `ask` uses when the caller names none.
+const DEFAULT_SESSION: &str = "mcp";
 
 /// One MCP request or notification.
 ///
@@ -107,41 +112,111 @@ fn tools() -> serde_json::Value {
 
 /// Serve MCP on `input`/`output` until the client hangs up.
 ///
-/// Discovery only for now: `initialize`, `notifications/initialized` and
-/// `tools/list`. `tools/call` answers `METHOD_NOT_FOUND` with a message saying
-/// so, which is a clearer thing for a client author to read than a tool that
-/// half-runs — and the tools are advertised because that is what makes the
-/// discovery surface testable at all.
-///
 /// # Errors
 /// Any I/O failure on `output`. A malformed *frame* is answered, not returned:
 /// the loop keeps serving, because one bad line from a client is not a reason
 /// to hang up on it.
-pub fn serve<R: BufRead, W: Write>(input: R, output: &mut W) -> std::io::Result<()> {
+pub fn serve<R: BufRead, W: Write>(
+    input: R,
+    output: &mut W,
+    agent: &mut AgentSession,
+) -> std::io::Result<()> {
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = answer(&line) {
+        if let Some(response) = answer(&line, agent) {
             write_frame(output, &response)?;
         }
     }
     Ok(())
 }
 
-/// One line to the response it earns, or `None` for a notification.
+/// Run one turn and render it as MCP tool content.
 ///
-/// Split out so the frame rules can be tested without a runtime — there is no
-/// `AgentSession` in this box at all, which is the other reason `tools/call`
-/// waits.
-fn answer(line: &str) -> Option<jsonrpc::Response> {
+/// # `isError` is a field on a *successful* result
+///
+/// This is the shape MCP chose and it is the opposite of this repository's
+/// [`jsonrpc::Outcome`], which makes result and error mutually exclusive so
+/// that "both" and "neither" are unrepresentable. Here a tool that fails
+/// reports it **in band**: the JSON-RPC response is a success carrying
+/// `isError: true`.
+///
+/// Mapping a refused turn onto a JSON-RPC error instead would make every
+/// permission refusal read to an editor as a broken server — which is the
+/// failure that looks fine in a passing test and wrong in use. A refusal is an
+/// answer, not a transport fault.
+fn call_ask(agent: &mut AgentSession, params: &serde_json::Value) -> serde_json::Value {
+    let arguments = params.get("arguments").unwrap_or(&serde_json::Value::Null);
+    let Some(question) = arguments
+        .get("question")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return content("`ask` needs a `question` string", true);
+    };
+    // A named session continues; an absent one gets this server's own, so two
+    // calls in a row share a transcript rather than starting fresh each time.
+    let session = arguments
+        .get("session")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(DEFAULT_SESSION);
+
+    // `HeadlessDriver`, always: see its docs. Prompting would read a protocol
+    // frame as an answer, and an editor could not have answered anyway.
+    let mut driver = HeadlessDriver;
+    match agent.run_with_driver(&mut driver, session, question) {
+        crate::conductor::RunResult::Answered { text, .. } => content(&text, false),
+        // The message is written for a person; the Debug of an enum is not a
+        // diagnosis, and this one reaches a model.
+        crate::conductor::RunResult::Failed(message) => content(&message, true),
+    }
+}
+
+/// A `tools/call` result: one text block, and whether it went wrong.
+fn content(text: &str, is_error: bool) -> serde_json::Value {
+    serde_json::json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": is_error,
+    })
+}
+
+/// One line to the response it earns, or `None` for a notification.
+fn answer(line: &str, agent: &mut AgentSession) -> Option<jsonrpc::Response> {
+    match classify(line) {
+        Asked::Silent => None,
+        Asked::Answer(response) => Some(response),
+        Asked::Ask { id, params } => Some(jsonrpc::Response::result(id, call_ask(agent, &params))),
+    }
+}
+
+/// What a line asks for, decided **without** a session.
+///
+/// Everything except running a turn is settled here, which is what keeps the
+/// frame rules — most of the rules — testable with no booted runtime, no
+/// staged `ext/` and no model. [`crate::rpc`] splits its `parse` out for the
+/// same reason.
+enum Asked {
+    /// A notification: nothing to answer.
+    Silent,
+    /// Answerable without running anything.
+    Answer(jsonrpc::Response),
+    /// `tools/call ask`, which needs a turn.
+    Ask {
+        /// The request to answer.
+        id: jsonrpc::Id,
+        /// The `tools/call` params, arguments included.
+        params: serde_json::Value,
+    },
+}
+
+fn classify(line: &str) -> Asked {
     let frame: Frame = match serde_json::from_str(line) {
         Ok(frame) => frame,
         Err(err) => {
             // No id could be read, so the answer carries a null one. The spec
             // allows exactly this for a frame that could not be parsed.
-            return Some(refuse(
+            return Asked::Answer(refuse(
                 jsonrpc::Id::Null,
                 jsonrpc::PARSE_ERROR,
                 format!("a frame must be one JSON-RPC object on one line: {err}"),
@@ -151,10 +226,12 @@ fn answer(line: &str) -> Option<jsonrpc::Response> {
 
     // A notification has no id and earns no answer — including a malformed one,
     // since there is nothing to correlate a complaint with.
-    let id = frame.id?;
+    let Some(id) = frame.id else {
+        return Asked::Silent;
+    };
 
     if frame.jsonrpc != jsonrpc::VERSION {
-        return Some(refuse(
+        return Asked::Answer(refuse(
             id,
             jsonrpc::INVALID_REQUEST,
             format!(
@@ -165,14 +242,30 @@ fn answer(line: &str) -> Option<jsonrpc::Response> {
         ));
     }
 
-    Some(match frame.method.as_str() {
+    Asked::Answer(match frame.method.as_str() {
         "initialize" => jsonrpc::Response::result(id, initialized(&frame.params)),
         "tools/list" => jsonrpc::Response::result(id, serde_json::json!({ "tools": tools() })),
-        "tools/call" => refuse(
-            id,
-            jsonrpc::METHOD_NOT_FOUND,
-            "`tools/call` is not served yet; `initialize` and `tools/list` are".to_owned(),
-        ),
+        "tools/call" => match frame.params.get("name").and_then(serde_json::Value::as_str) {
+            Some("ask") => {
+                return Asked::Ask {
+                    id,
+                    params: frame.params,
+                }
+            }
+            // A tool that does not exist *is* a protocol error — the client
+            // asked for something `tools/list` never offered — unlike a tool
+            // that ran and failed, which is `isError`.
+            Some(other) => refuse(
+                id,
+                jsonrpc::METHOD_NOT_FOUND,
+                format!("no such tool: {other}"),
+            ),
+            None => refuse(
+                id,
+                jsonrpc::INVALID_PARAMS,
+                "`tools/call` needs a `name`".to_owned(),
+            ),
+        },
         other => refuse(
             id,
             jsonrpc::METHOD_NOT_FOUND,
@@ -225,12 +318,19 @@ fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::i
 
 #[cfg(test)]
 mod tests {
-    use super::{answer, tools, MCP_VERSION};
+    use super::{classify, content, tools, Asked, MCP_VERSION};
     use jan_klod_protocol::jsonrpc;
 
+    /// Classify a line and render the response it earns.
+    ///
+    /// Through `classify` rather than `answer`, so the frame rules are tested
+    /// with no booted runtime and no model — the reason the two are separate.
     fn call(line: &str) -> serde_json::Value {
-        let response = answer(line).expect("a request earns an answer");
-        serde_json::to_value(response).expect("it serializes")
+        match classify(line) {
+            Asked::Answer(response) => serde_json::to_value(response).expect("it serializes"),
+            Asked::Silent => panic!("{line} earns an answer"),
+            Asked::Ask { .. } => panic!("{line} needs a turn; test it through the harness"),
+        }
     }
 
     #[test]
@@ -290,7 +390,10 @@ mod tests {
     #[test]
     fn an_initialized_notification_is_accepted_in_silence() {
         assert!(
-            answer(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none(),
+            matches!(
+                classify(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#),
+                Asked::Silent
+            ),
             "a notification gets no response"
         );
     }
@@ -308,20 +411,50 @@ mod tests {
         assert!(value["id"].is_null(), "{value}");
     }
 
-    /// Advertised but not yet served, and the message says which — a client
-    /// author reading `METHOD_NOT_FOUND` for a tool they can see in
-    /// `tools/list` would otherwise assume a typo.
     #[test]
-    fn tools_call_says_it_is_not_served_yet() {
-        let value =
-            call(r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"ask"}}"#);
-        assert_eq!(value["error"]["code"], jsonrpc::METHOD_NOT_FOUND);
+    fn tools_call_ask_is_routed_to_a_turn() {
+        let line = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"ask","arguments":{"question":"hi"}}}"#;
         assert!(
-            value["error"]["message"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("not served yet"),
-            "{value}"
+            matches!(classify(line), Asked::Ask { .. }),
+            "`ask` needs a session, so it is classified rather than answered"
+        );
+    }
+
+    /// A tool `tools/list` never offered is a *protocol* error, unlike a tool
+    /// that ran and failed — which is `isError`. Conflating the two would tell
+    /// a client its request was malformed when the tool simply refused.
+    #[test]
+    fn an_unknown_tool_is_a_protocol_error_not_an_is_error() {
+        let value =
+            call(r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"nope"}}"#);
+        assert_eq!(value["error"]["code"], jsonrpc::METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn tools_call_without_a_name_is_invalid_params() {
+        let value = call(r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{}}"#);
+        assert_eq!(value["error"]["code"], jsonrpc::INVALID_PARAMS);
+    }
+
+    /// The shape MCP chose, pinned: a failed tool is a **successful** response
+    /// carrying `isError: true`. Mapping it onto a JSON-RPC error would make
+    /// every permission refusal read to an editor as a broken server.
+    #[test]
+    fn a_failure_is_content_with_is_error_rather_than_a_jsonrpc_error() {
+        let ok = content("the answer", false);
+        assert_eq!(ok["isError"], serde_json::Value::Bool(false));
+        assert_eq!(ok["content"][0]["type"], "text");
+        assert_eq!(ok["content"][0]["text"], "the answer");
+
+        let bad = content("refused: a write needs confirmation", true);
+        assert_eq!(bad["isError"], serde_json::Value::Bool(true));
+        assert_eq!(
+            bad["content"][0]["text"], "refused: a write needs confirmation",
+            "the reason reaches the model, which is the only way it can adapt"
+        );
+        assert!(
+            bad.get("error").is_none(),
+            "and it is not a JSON-RPC error: {bad}"
         );
     }
 

@@ -66,17 +66,41 @@ fn main() -> ExitCode {
 
 /// Serve the Model Context Protocol on stdin/stdout.
 ///
-/// No config and no runtime yet: this box answers `initialize` and
-/// `tools/list`, which need neither. `tools/call` is where a session appears,
-/// and it is deliberately not served until it can run a turn rather than
-/// half-run one.
+/// Boots the same runtime `ask` does, because `tools/call ask` runs a real
+/// turn. The driver is **headless by construction** — see
+/// `jan_klod_core::HeadlessDriver`: stdin here carries protocol frames, so
+/// anything that prompted would read a frame as an answer.
 ///
 /// Frames on stdout and nothing else, per the MCP stdio transport — which is
 /// the same rule `rpc` follows, so logs and errors go to stderr.
 fn mcp() -> ExitCode {
+    let config_path = resolve_default("config.yaml");
+    let ext_dir = resolve_default("ext");
+    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("jan-klod: boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let policy = runtime.egress_policy();
+    let factory = move || -> HttpFn {
+        let policy = policy.clone();
+        Box::new(move |method, url, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+        })
+    };
+    let mut agent = match runtime.build_agent(&factory) {
+        Ok(agent) => agent,
+        Err(err) => {
+            eprintln!("jan-klod: agent boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let input = std::io::BufReader::new(std::io::stdin());
     let mut output = std::io::stdout();
-    match jan_klod_core::mcp::serve(input, &mut output) {
+    match jan_klod_core::mcp::serve(input, &mut output, &mut agent) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("jan-klod: mcp: {err}");
