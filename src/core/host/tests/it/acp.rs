@@ -65,13 +65,26 @@ impl Editor {
     }
 
     /// Send one frame and return the response it earned, if any.
+    ///
+    /// `NoAsker` — this editor never answers a permission request, so every
+    /// prompt takes its default. The tests that *do* answer supply their own.
     fn send(
         &mut self,
         agent: &mut jan_klod_core::AgentSession,
         line: &str,
     ) -> Option<serde_json::Value> {
+        self.send_with(agent, line, &mut jan_klod_core::acp::NoAsker)
+    }
+
+    /// The same, with a chosen [`jan_klod_core::acp::Asker`].
+    fn send_with<A: jan_klod_core::acp::Asker>(
+        &mut self,
+        agent: &mut jan_klod_core::AgentSession,
+        line: &str,
+        asker: &mut A,
+    ) -> Option<serde_json::Value> {
         self.connection
-            .answer(line, agent, &self.writer)
+            .answer(line, agent, &self.writer, asker)
             .map(|response| serde_json::to_value(response).expect("it serializes"))
     }
 
@@ -213,5 +226,191 @@ fn a_prompt_with_no_text_content_is_refused() {
             .unwrap_or_default()
             .contains("no text"),
         "refused for want of text: {answer}"
+    );
+}
+
+// ---- The agent→client direction (#57 box 3) ----
+
+/// An editor that answers every permission request with `answer`, recording
+/// what it was asked.
+struct Answering {
+    answer: String,
+    asked: Vec<String>,
+}
+
+impl jan_klod_core::acp::Asker for Answering {
+    fn ask(&mut self, _session: &str, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
+        self.asked.push(prompt.question.clone());
+        // A real editor picks an `optionId`, and those are the prompt's own
+        // options — so answering with one is answering as ACP would.
+        assert!(
+            prompt.options.is_empty() || prompt.options.contains(&self.answer),
+            "the answer must be one of the options offered: {:?}",
+            prompt.options
+        );
+        self.answer.clone()
+    }
+}
+
+/// Boot an agent whose provider asks for a real workspace write, then answers.
+fn booted_writing(
+    tag: &str,
+) -> Option<(
+    common::TempDir,
+    jan_klod_core::AgentSession,
+    std::path::PathBuf,
+)> {
+    const GUESTS: [&str; 4] = [
+        "provider-openai.wasm",
+        "interceptor-permission.wasm",
+        "interceptor-tool-selector.wasm",
+        "tool-fs.wasm",
+    ];
+    if !common::guests_staged(&GUESTS) {
+        return None;
+    }
+    let dir =
+        common::TempDir(std::env::temp_dir().join(format!("jk-acp-{tag}-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).expect("creates the temp dir");
+    let target = dir.0.join("written-by-the-editor.txt");
+    let config = dir.0.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "
+workspace: {}
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    tool-selector:
+      enabled: true
+    permission:
+      enabled: true
+  tool:
+    fs:
+      enabled: true
+",
+            dir.0.display()
+        ),
+    )
+    .expect("writes the config");
+
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let http = move || -> jan_klod_core::route::HttpFn {
+        let calls = std::sync::Arc::clone(&calls);
+        Box::new(move |_m, _u, _h, _b, _t| {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let body = if n == 0 {
+                serde_json::json!({"choices":[{"message":{"role":"assistant","tool_calls":[{
+                    "id":"w1",
+                    "function":{
+                        "name":"fs",
+                        "arguments":"{\"op\":\"write\",\"path\":\"written-by-the-editor.txt\",\"contents\":\"granted\"}"
+                    }}]},"finish_reason":"tool_calls"}]})
+            } else {
+                serde_json::json!({"choices":[{"message":{"role":"assistant",
+                    "content":"done"},"finish_reason":"stop"}]})
+            };
+            Ok(jan_klod_core::http::WireResponse {
+                status: 200,
+                headers: vec![],
+                body: serde_json::to_vec(&body).expect("serializes"),
+            })
+        })
+    };
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
+    let agent = runtime.build_agent(&http).expect("agent boots");
+    Some((dir, agent, target))
+}
+
+/// An editor that grants the permission gets the write.
+///
+/// The assertion is the **file**, not that the turn continued — a turn
+/// continues either way, and "the editor was asked" proves only that a question
+/// was posed. Only the file says the answer was honoured.
+#[test]
+fn an_editor_that_grants_permission_gets_the_write() {
+    let Some((_dir, mut agent, target)) = booted_writing("grant") else {
+        return;
+    };
+    let mut editor = Editor::new();
+    let session = editor.opened(&mut agent);
+    let mut answering = Answering {
+        answer: "yes".to_owned(),
+        asked: Vec::new(),
+    };
+
+    let answer = editor
+        .send_with(
+            &mut agent,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{{"sessionId":"{session}","prompt":[{{"type":"text","text":"write it"}}]}}}}"#
+            ),
+            &mut answering,
+        )
+        .expect("the prompt is answered");
+
+    assert!(
+        !answering.asked.is_empty(),
+        "the editor was asked at all: {answer}"
+    );
+    assert!(
+        target.exists(),
+        "and the answer was honoured — {} exists",
+        target.display()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("reads it").trim(),
+        "granted",
+        "with the contents the model asked for"
+    );
+    assert_eq!(
+        answer["result"]["stopReason"], "end_turn",
+        "a granted turn ends normally: {answer}"
+    );
+}
+
+/// The same turn, refused: the editor is asked, says no, and nothing is written.
+///
+/// The pair is the point. One test showing the file present and another showing
+/// it absent, from the same provider script, is what proves the *answer* decides
+/// — rather than the tool never having been reached.
+#[test]
+fn an_editor_that_refuses_permission_prevents_the_write() {
+    let Some((_dir, mut agent, target)) = booted_writing("refuse") else {
+        return;
+    };
+    let mut editor = Editor::new();
+    let session = editor.opened(&mut agent);
+    let mut answering = Answering {
+        answer: "no".to_owned(),
+        asked: Vec::new(),
+    };
+
+    let answer = editor
+        .send_with(
+            &mut agent,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{{"sessionId":"{session}","prompt":[{{"type":"text","text":"write it"}}]}}}}"#
+            ),
+            &mut answering,
+        )
+        .expect("the prompt is answered");
+
+    assert!(!answering.asked.is_empty(), "the editor was asked");
+    assert!(
+        !target.exists(),
+        "and the refusal held: {} does not exist",
+        target.display()
+    );
+    assert_eq!(
+        answer["result"]["stopReason"], "end_turn",
+        "a refused *tool* is not a refused *turn* — `refusal` would tell the \
+         editor to discard the user's prompt: {answer}"
     );
 }

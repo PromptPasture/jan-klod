@@ -34,7 +34,10 @@ use std::rc::Rc;
 
 use jan_klod_protocol::jsonrpc;
 
+use std::sync::mpsc::Receiver;
+
 use crate::conductor::{Event, EventSink, Flow, RunResult};
+use crate::intercept::{Driver, UserPrompt};
 use crate::AgentSession;
 
 /// The ACP revision this agent implements.
@@ -75,6 +78,150 @@ pub struct Connection {
     sessions: Vec<String>,
 }
 
+/// How the agent puts a question to the editor.
+///
+/// A seam, because the thing that makes `session/request_permission` hard is
+/// not its shape but its *direction*: the agent originates a request and then
+/// **blocks reading the answer off the same pipe it is writing to**. Only
+/// [`serve`] needs that; a test needs a scripted answer. Splitting them means
+/// the protocol shape is checkable without threads, and the blocking read has
+/// one implementation in one place.
+pub trait Asker {
+    /// Put `prompt` to the editor for `session` and return the answer.
+    ///
+    /// Returning `prompt.default_answer` is always safe — it is what a headless
+    /// driver does, and it is a refusal.
+    fn ask(&mut self, session: &str, prompt: &UserPrompt) -> String;
+}
+
+/// An [`Asker`] that never asks: every prompt takes its default.
+///
+/// The right behaviour when there is no editor to ask, and a refusal by
+/// construction — the same posture [`crate::HeadlessDriver`] takes.
+pub struct NoAsker;
+impl Asker for NoAsker {
+    fn ask(&mut self, _session: &str, prompt: &UserPrompt) -> String {
+        prompt.default_answer.clone()
+    }
+}
+
+/// Turns the loop's `ask` into ACP's `session/request_permission`.
+struct AcpDriver<'a, A: Asker> {
+    asker: &'a mut A,
+    session: String,
+}
+
+impl<A: Asker> Driver for AcpDriver<'_, A> {
+    fn ask(&mut self, prompt: &UserPrompt) -> String {
+        self.asker.ask(&self.session, prompt)
+    }
+}
+
+/// The `options` array for a permission request, built from the prompt's own.
+///
+/// The `optionId` **is** the interceptor's option text, so nothing translates
+/// between two vocabularies: whatever the editor picks is already one of the
+/// answers the gate offered. A translation table here would be a second place
+/// for the permission model to drift from itself.
+///
+/// `kind` is ACP's hint for how to render a choice, so an affirmative is
+/// `allow_once` and everything else `reject_once`. Getting it wrong is
+/// cosmetic; getting `optionId` wrong would answer a different question.
+fn permission_options(prompt: &UserPrompt) -> serde_json::Value {
+    let offered: Vec<&str> = if prompt.options.is_empty() {
+        // A free-text prompt still has to be answerable, and an editor cannot
+        // type into a permission dialog — so it is offered the default and a
+        // refusal, which is the honest pair.
+        vec![prompt.default_answer.as_str()]
+    } else {
+        prompt.options.iter().map(String::as_str).collect()
+    };
+    serde_json::Value::Array(
+        offered
+            .into_iter()
+            .map(|option| {
+                let affirmative = matches!(option, "yes" | "always" | "allow");
+                serde_json::json!({
+                    "optionId": option,
+                    "name": option,
+                    "kind": if affirmative { "allow_once" } else { "reject_once" },
+                })
+            })
+            .collect(),
+    )
+}
+
+/// The [`Asker`] [`serve`] uses: write the request, then block on the answer.
+///
+/// This is the agent→client direction, and the only place in this repository
+/// where the core originates a JSON-RPC request and waits. It works because the
+/// reader thread holds the pipe while the turn runs — without that, the answer
+/// could not arrive until the turn it is blocking had already finished.
+struct PipeAsker<'a, W: Write> {
+    writer: Rc<RefCell<W>>,
+    incoming: &'a Receiver<String>,
+    next_id: i64,
+}
+
+impl<W: Write> Asker for PipeAsker<'_, W> {
+    fn ask(&mut self, session: &str, prompt: &UserPrompt) -> String {
+        let id = self.next_id;
+        self.next_id += 1;
+        let request = serde_json::json!({
+            "jsonrpc": jsonrpc::VERSION,
+            "id": id,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": session,
+                "toolCall": { "toolCallId": format!("perm-{id}") },
+                "options": permission_options(prompt),
+                "_meta": { "question": prompt.question },
+            },
+        });
+        {
+            let mut writer = self.writer.borrow_mut();
+            if serde_json::to_writer(&mut *writer, &request).is_err()
+                || writer.write_all(b"\n").is_err()
+                || writer.flush().is_err()
+            {
+                // Nobody is reading, so nobody will answer. The default is a
+                // refusal, which is the safe end of a broken pipe.
+                return prompt.default_answer.clone();
+            }
+        }
+
+        // Read until our answer arrives. Anything else on the pipe is not this
+        // request's business — except a cancel, which the spec says MUST be
+        // answered with a `cancelled` outcome, so it ends the wait.
+        while let Ok(line) = self.incoming.recv() {
+            let Ok(frame) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if frame.get("method").and_then(serde_json::Value::as_str) == Some("session/cancel") {
+                // Partial: the pending permission is cancelled, which is what
+                // the default expresses. Answering the parked `session/prompt`
+                // with `stopReason: cancelled` is the next box's.
+                return prompt.default_answer.clone();
+            }
+            if frame.get("id").and_then(serde_json::Value::as_i64) != Some(id) {
+                continue;
+            }
+            let outcome = &frame["result"]["outcome"];
+            return match outcome.get("outcome").and_then(serde_json::Value::as_str) {
+                Some("selected") => outcome
+                    .get("optionId")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or_else(|| prompt.default_answer.clone(), str::to_owned),
+                // `cancelled`, or a shape this cannot read: the default, which
+                // refuses. An unreadable answer must never widen a permission.
+                _ => prompt.default_answer.clone(),
+            };
+        }
+        // EOF while parked: the editor is gone.
+        prompt.default_answer.clone()
+    }
+}
+
 /// What a frame means, decided without a session.
 enum Routed {
     /// A notification: nothing to answer.
@@ -95,7 +242,7 @@ enum Routed {
 /// # Errors
 /// Any I/O failure on `output`. A malformed frame is answered, not returned:
 /// one bad line is not a reason to hang up on an editor.
-pub fn serve<R: BufRead, W: Write>(
+pub fn serve<R: BufRead + Send + 'static, W: Write>(
     input: R,
     output: W,
     agent: &mut AgentSession,
@@ -103,13 +250,40 @@ pub fn serve<R: BufRead, W: Write>(
     // Shared because a turn streams `session/update` notifications *while* it
     // runs, so the sink and the answer both write here.
     let writer = Rc::new(RefCell::new(output));
+
+    // The reader thread does one thing: hand lines over. It holds no session —
+    // `AgentSession` is `!Send` and stays here — and that division is what
+    // makes an editor's answer readable at all: while a turn runs, this thread
+    // is inside the conductor, so something else has to be holding the pipe.
+    // The same shape `rpc` uses, for the same reason.
+    let (handover, incoming) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in input.lines() {
+            let handed = match line {
+                Ok(line) => handover.send(line),
+                // Not UTF-8: that frame's problem, not the stream's. The line
+                // is consumed, so the loop carries on.
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidData => continue,
+                Err(_) => break,
+            };
+            if handed.is_err() {
+                break; // the loop below is gone
+            }
+        }
+    });
+
     let mut connection = Connection::default();
-    for line in input.lines() {
-        let line = line?;
+    let mut asker = PipeAsker {
+        writer: Rc::clone(&writer),
+        incoming: &incoming,
+        next_id: 1_000_000,
+    };
+    // `recv` ends when the reader thread drops its end, which is EOF.
+    while let Ok(line) = incoming.recv() {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = connection.answer(&line, agent, &writer) {
+        if let Some(response) = connection.answer(&line, agent, &writer, &mut asker) {
             write_frame(&mut *writer.borrow_mut(), &response)?;
         }
     }
@@ -170,19 +344,22 @@ impl Connection {
     /// **minted by the agent**, so a client cannot script `session/prompt` in
     /// advance. It must read the id out of `session/new` first, exactly as an
     /// editor does.
-    pub fn answer<W: Write>(
+    pub fn answer<W: Write, A: Asker>(
         &mut self,
         line: &str,
         agent: &mut AgentSession,
         writer: &Rc<RefCell<W>>,
+        asker: &mut A,
     ) -> Option<jsonrpc::Response> {
         match self.route(line) {
             Routed::Silent => None,
             Routed::Answer(response) => Some(response),
-            Routed::Prompt { id, params } => Some(match self.prompt(&params, agent, writer) {
-                Ok(result) => jsonrpc::Response::result(id, result),
-                Err(message) => refuse(id, jsonrpc::INTERNAL_ERROR, message),
-            }),
+            Routed::Prompt { id, params } => {
+                Some(match self.prompt(&params, agent, writer, asker) {
+                    Ok(result) => jsonrpc::Response::result(id, result),
+                    Err(message) => refuse(id, jsonrpc::INTERNAL_ERROR, message),
+                })
+            }
         }
     }
 
@@ -343,11 +520,12 @@ impl Connection {
     /// # Errors
     /// A message when the frame is unusable or the turn failed, which the
     /// caller returns as a JSON-RPC error.
-    fn prompt<W: Write>(
+    fn prompt<W: Write, A: Asker>(
         &self,
         params: &serde_json::Value,
         agent: &mut AgentSession,
         writer: &Rc<RefCell<W>>,
+        asker: &mut A,
     ) -> Result<serde_json::Value, String> {
         let Some(session) = params.get("sessionId").and_then(serde_json::Value::as_str) else {
             return Err("`session/prompt` needs a `sessionId`".to_owned());
@@ -383,11 +561,13 @@ impl Connection {
             writer,
             session: session.to_owned(),
         };
-        // `run_streaming_headless` for now: an editor *can* answer a
-        // permission request, but asking it needs the agent→client direction,
-        // which is the next box. Until then each prompt takes its default,
-        // which is a refusal — the same posture as MCP.
-        match agent.run_streaming_headless(&mut sink, session, &text) {
+        // The editor answers a permission request through `asker`, so a
+        // granted write actually happens — unlike MCP, where nobody can answer.
+        let mut driver = AcpDriver {
+            asker,
+            session: session.to_owned(),
+        };
+        match agent.run_streaming_with_driver(&mut driver, &mut sink, session, &text) {
             RunResult::Answered { .. } => Ok(serde_json::json!({ "stopReason": "end_turn" })),
             RunResult::Failed(message) => Err(message),
         }
@@ -411,7 +591,7 @@ fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::i
 
 #[cfg(test)]
 mod tests {
-    use super::{Connection, Routed, ACP_VERSION};
+    use super::{Asker, Connection, PipeAsker, Rc, RefCell, Routed, UserPrompt, ACP_VERSION};
     use jan_klod_protocol::jsonrpc;
 
     /// Everything except `session/prompt` is answered without touching the
@@ -580,6 +760,125 @@ mod tests {
             ),
             "a cancel is a notification"
         );
+    }
+
+    // ---- The agent→client direction, on the wire ----
+
+    /// Ask through a real [`PipeAsker`] with the answer already queued.
+    ///
+    /// The integration tests use a scripted `Asker`, which checks that the loop
+    /// honours an answer. These check the **wire shape** — what is written, and
+    /// how an ACP outcome maps back — which a scripted asker bypasses entirely.
+    fn asked(answer: &str, prompt: &UserPrompt) -> (serde_json::Value, String) {
+        let (handover, incoming) = std::sync::mpsc::channel();
+        handover.send(answer.to_owned()).expect("queues the answer");
+        let writer = Rc::new(RefCell::new(Vec::new()));
+        let mut asker = PipeAsker {
+            writer: Rc::clone(&writer),
+            incoming: &incoming,
+            next_id: 7,
+        };
+        let given = asker.ask("sess-1", prompt);
+        let written = String::from_utf8(writer.borrow().clone()).expect("UTF-8");
+        let frame = serde_json::from_str(written.trim()).expect("one frame was written");
+        (frame, given)
+    }
+
+    fn confirm() -> UserPrompt {
+        UserPrompt {
+            question: "write config.yaml?".to_owned(),
+            options: vec!["yes".to_owned(), "no".to_owned(), "always".to_owned()],
+            default_answer: "no".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_permission_request_carries_the_gates_own_options() {
+        let (frame, given) = asked(
+            r#"{"jsonrpc":"2.0","id":7,"result":{"outcome":{"outcome":"selected","optionId":"always"}}}"#,
+            &confirm(),
+        );
+        assert_eq!(frame["method"], "session/request_permission");
+        assert_eq!(frame["id"], 7);
+        assert_eq!(frame["params"]["sessionId"], "sess-1");
+
+        // The `optionId`s are the gate's own answers, so nothing translates
+        // between two vocabularies.
+        let ids: Vec<&str> = frame["params"]["options"]
+            .as_array()
+            .expect("options")
+            .iter()
+            .map(|o| o["optionId"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(ids, ["yes", "no", "always"]);
+        assert_eq!(frame["params"]["options"][0]["kind"], "allow_once");
+        assert_eq!(frame["params"]["options"][1]["kind"], "reject_once");
+
+        assert_eq!(
+            given, "always",
+            "the selected optionId is handed back to the gate verbatim"
+        );
+    }
+
+    /// Every answer this cannot read takes the default, which refuses.
+    ///
+    /// The direction matters: an unreadable answer must never *widen* a
+    /// permission. A client that sends nonsense, or an outcome shape from a
+    /// future revision, gets a refusal rather than a grant.
+    #[test]
+    fn an_answer_that_cannot_be_read_refuses() {
+        for answer in [
+            r#"{"jsonrpc":"2.0","id":7,"result":{"outcome":{"outcome":"cancelled"}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"result":{"outcome":{"outcome":"selected"}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"result":{}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"error":{"code":-1,"message":"no"}}"#,
+        ] {
+            let (_, given) = asked(answer, &confirm());
+            assert_eq!(given, "no", "{answer} must not grant anything");
+        }
+    }
+
+    /// A `session/cancel` arriving while parked ends the wait with a refusal.
+    ///
+    /// The spec requires a cancelled outcome for every pending permission
+    /// request. Answering the parked `session/prompt` with
+    /// `stopReason: cancelled` is a later box; not hanging is this one's.
+    #[test]
+    fn a_cancel_while_parked_stops_waiting() {
+        let (_, given) = asked(
+            r#"{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"sess-1"}}"#,
+            &confirm(),
+        );
+        assert_eq!(given, "no");
+    }
+
+    /// An editor that closes the pipe while parked does not hang the turn.
+    #[test]
+    fn a_closed_pipe_while_parked_refuses_rather_than_hanging() {
+        let (handover, incoming) = std::sync::mpsc::channel::<String>();
+        drop(handover); // the editor is gone
+        let writer = Rc::new(RefCell::new(Vec::new()));
+        let mut asker = PipeAsker {
+            writer,
+            incoming: &incoming,
+            next_id: 1,
+        };
+        assert_eq!(asker.ask("sess-1", &confirm()), "no");
+    }
+
+    /// A free-text prompt still has to be answerable by a dialog.
+    #[test]
+    fn a_free_text_prompt_offers_its_default_as_an_option() {
+        let prompt = UserPrompt {
+            question: "which branch?".to_owned(),
+            options: vec![],
+            default_answer: "main".to_owned(),
+        };
+        let (frame, _) = asked(
+            r#"{"jsonrpc":"2.0","id":7,"result":{"outcome":{"outcome":"selected","optionId":"main"}}}"#,
+            &prompt,
+        );
+        assert_eq!(frame["params"]["options"][0]["optionId"], "main");
     }
 
     #[test]
