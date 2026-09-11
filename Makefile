@@ -14,6 +14,12 @@ SUPERVISOR := src/supervisor
 CONFIG := $(abspath config.yaml)
 EXT_DIR := $(abspath ext)
 
+# The shipped config.yaml's storage.cache-dir default (#60): Wasmtime's
+# compiled-component cache, beside config.yaml unless an operator overrides
+# the key. A path this Makefile assumes rather than reads out of the YAML —
+# the same convention CONFIG/EXT_DIR already are.
+CACHE_DIR := $(abspath wasmtime-cache)
+
 # List the common targets.
 help:
 	@echo "Targets:"
@@ -341,3 +347,4 @@ install-hooks:
 clean:
 	$(MAKE) -C $(CORE) clean
 	$(MAKE) -C $(EXT) clean
+	rm -rf $(CACHE_DIR)

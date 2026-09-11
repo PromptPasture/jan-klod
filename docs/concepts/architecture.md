@@ -503,6 +503,20 @@ A component that wanted swappable backends would be trading the one guarantee
 this design exists to make for a plugin point nobody asked for. Postgres or
 Supabase, if they arrive, arrive as host backends behind the same `Store` type.
 
+### Compile cache
+
+Unrelated to the store, but configured in the same `storage:` block:
+`cache-dir` (default `wasmtime-cache`, beside `config.yaml`) is where Wasmtime
+caches compiled components ([#60](https://github.com/PromptPasture/jan-klod/issues/60)),
+so a second boot skips Cranelift instead of recompiling every guest. This is
+Wasmtime's own built-in cache (`Cache`/`CacheConfig`, `Config::cache`) wired to
+that directory at `Runtime::boot` — not a bespoke `.cwasm` cache — evaluated
+first per the issue and adopted because it already keys on everything that
+affects codegen (component bytes, target triple, compiler/ISA flags, Wasmtime
+version) and treats a corrupt or foreign artefact as a miss, never an error.
+See `core/src/wasm_cache.rs` for the evaluation and
+[Security model](security-model.md) for what a cache hit trusts.
+
 ### Two tables
 
 `entries` is the key/value store `host-storage` serves: `(namespace, key)`,

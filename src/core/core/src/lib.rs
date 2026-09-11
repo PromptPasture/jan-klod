@@ -38,6 +38,7 @@ pub mod serve;
 pub mod store;
 pub mod telegram;
 pub mod tool_host;
+mod wasm_cache;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -257,6 +258,11 @@ pub struct Runtime {
     /// Directory holding `config.yaml`, so a relative `storage.path` resolves
     /// against the deployment rather than the working directory.
     config_dir: PathBuf,
+    /// Wasmtime's own compile cache, wired into `engine` at boot (#60). Kept
+    /// here — rather than read back out of `engine`'s `Config`, which does not
+    /// expose it — so [`Self::compile_cache_stats`] can report whether the
+    /// components just compiled were cache hits or misses.
+    compile_cache: wasmtime::Cache,
 }
 
 /// Pass 1 output of [`Runtime::build_agent`]: every instantiated provider,
@@ -276,9 +282,10 @@ impl Runtime {
     /// recorded so a partial deployment still boots.
     ///
     /// # Errors
-    /// Returns [`CoreError::Config`] if the config fails to load, [`CoreError::Linker`]
-    /// if a host capability cannot be wired, or [`CoreError::Load`] if a present
-    /// component fails to compile.
+    /// Returns [`CoreError::Config`] if the config fails to load,
+    /// [`CoreError::Cache`] if the Wasmtime compile cache directory cannot be
+    /// prepared, [`CoreError::Linker`] if a host capability cannot be wired, or
+    /// [`CoreError::Load`] if a present component fails to compile.
     pub fn boot(
         config_path: impl AsRef<Path>,
         ext_dir: impl AsRef<Path>,
@@ -289,7 +296,12 @@ impl Runtime {
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let config = Config::from_path(config_path)?;
         let agent = config.agent.clone();
-        let engine = Engine::default();
+        // Wasmtime's own compile cache (#60), not a bespoke `.cwasm` one — see
+        // `wasm_cache` for why the built-in cache meets the need. Every
+        // `Component::from_file` below goes through this one `Engine`, so a
+        // second boot against the same `storage.cache-dir` skips Cranelift for
+        // every guest the first boot compiled, not just one.
+        let (engine, compile_cache) = wasm_cache::build_engine(&config_dir, &agent)?;
         let linker = build_linker(&engine)?;
 
         // Enabled instances in deterministic dependency order.
@@ -377,7 +389,29 @@ impl Runtime {
             extensions,
             agent,
             config_dir,
+            compile_cache,
         })
+    }
+
+    /// Wasmtime's own compile-cache hit/miss counters for this boot's
+    /// `Engine`, as `(hits, misses)`.
+    ///
+    /// A cache hit is Cranelift skipped for that component: the boot-plan
+    /// report line built from this is the acceptance criterion's proof that a
+    /// second boot skips it, read from Wasmtime's own counters rather than
+    /// inferred from how long boot took.
+    #[must_use]
+    pub fn compile_cache_stats(&self) -> (usize, usize) {
+        (
+            self.compile_cache.cache_hits(),
+            self.compile_cache.cache_misses(),
+        )
+    }
+
+    /// Where compiled artefacts are cached on disk for this boot.
+    #[must_use]
+    pub fn compile_cache_dir(&self) -> &Path {
+        self.compile_cache.directory()
     }
 
     /// The resolved extension set, in boot order.
@@ -1676,7 +1710,18 @@ impl fmt::Display for BootReport<'_> {
                 }
             }
         }
-        write!(f, "{compiled} loaded, {} missing", exts.len() - compiled)
+        writeln!(f, "{compiled} loaded, {} missing", exts.len() - compiled)?;
+        // The acceptance line's proof: a metric, read from Wasmtime's own
+        // counters, not an inference from how long this boot took. A cold
+        // cache directory reports 0 hits here; a second boot against the same
+        // `storage.cache-dir` reports one hit per component this pass
+        // compiled — see `Runtime::compile_cache_stats`.
+        let (hits, misses) = self.0.compile_cache_stats();
+        write!(
+            f,
+            "wasmtime compile cache: {hits} hit(s), {misses} miss(es) (dir: {})",
+            self.0.compile_cache_dir().display()
+        )
     }
 }
 
@@ -1782,6 +1827,16 @@ pub enum CoreError {
     #[error("opening the persistent store: {message}")]
     Store {
         /// The underlying store error, stringified.
+        message: String,
+    },
+    /// Wasmtime's compile cache could not be set up at `storage.cache-dir` (or
+    /// its default, beside `config.yaml`).
+    #[error("setting up the wasmtime compile cache at {path}: {message}")]
+    Cache {
+        /// The cache directory that could not be prepared.
+        path: String,
+        /// What went wrong — an I/O error creating/chmod-ing the directory,
+        /// or Wasmtime refusing the cache configuration or engine.
         message: String,
     },
     /// A lifecycle call returned an error result (the extension refused to load).

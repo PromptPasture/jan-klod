@@ -289,8 +289,17 @@ extensions:
 # Omit `path` (or the whole block) for an in-memory store: nothing survives a
 # restart, which is the right default for trying it out and the wrong one for
 # using it.
+#
+# `cache-dir` is unrelated to the store above: it is where Wasmtime caches
+# compiled components (#60), so a second boot skips Cranelift instead of
+# recompiling every guest. Omit it for the default, `wasmtime-cache` beside
+# this file — shown here only for clarity. The directory is created
+# user-private (0700 on unix): a cache hit is deserialized as native code, not
+# re-verified, so anyone who could write into it could hand this host bytes it
+# would later execute.
 storage:
   path: ./jan-klod.db
+  # cache-dir: ./wasmtime-cache
 
 # Who may vouch for a component `jan-klod-gateway ext install` puts into `ext/`.
 #

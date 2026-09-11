@@ -780,12 +780,14 @@ suite, which has no network.
 
 Resource-budget and developer-experience items from the vision, tracked as
 issues, not phases: **lazy guest instantiation** (instantiate a component on
-first call, not at boot — **#59 done 2026-09-11**, below), an **AOT component
-cache** (`.cwasm` keyed by component hash + Wasmtime version), an
-**accelerated `host-fs.grep`** (native tree search behind the existing jail,
-the guest only shapes the request), the **Rust extension PDK**
-(`make ext-new NAME=` template + guest test harness guide), and **named
-distributions** in the Configurator (`coding`, `headless-chat`, `minimal`).
+first call, not at boot — **#59 done 2026-09-11**, below), a **compiled-component
+cache** keyed by component bytes + Wasmtime version + target triple + engine
+config (Wasmtime's own built-in cache, not a bespoke `.cwasm` one —
+**#60 done 2026-09-11**, below), an **accelerated `host-fs.grep`** (native tree
+search behind the existing jail, the guest only shapes the request), the
+**Rust extension PDK** (`make ext-new NAME=` template + guest test harness
+guide), and **named distributions** in the Configurator (`coding`,
+`headless-chat`, `minimal`).
 
 **#59 done 2026-09-11:** `tool-*`/`registry-*`/`agent` guests compile at boot
 (unchanged) but instantiate (`Store` + `init` + `start`) only when the fleet
@@ -812,6 +814,30 @@ guest's own `meta` drifting apart (16a's `inspect` cross-check covers
 host-capability imports, not tool metadata). Left as a follow-up, not
 half-built. Full detail, the measured numbers, and the mechanism (
 `LazyToolFleet`/`LazyRegistryFleet`) are in
+[the changelog](../changelog.md#2026-09-11).
+
+**#60 done 2026-09-11:** evaluated Wasmtime's built-in cache first, as the
+issue asked, and it meets the need — adopted instead of a hand-rolled `.cwasm`
+cache, and stopped there. Checked against 46.0.3 (this workspace's pinned
+version): the issue's named API, `Config::cache_config_load*`, no longer
+exists there; the current shape is `Cache::from_file`/`CacheConfig` plus
+`Config::cache(Some(cache))`, and it already caches components (not only core
+modules), keys on component bytes + target triple + compiler/ISA flags +
+Wasmtime version (`HashedEngineCompileEnv`, `wasmtime-46.0.3/src/compile/
+code_builder.rs`), and treats a corrupt or foreign artefact as a miss, never
+an error — every property the issue's fallback would otherwise have had to
+build by hand. `storage.cache-dir` (optional; defaults to `wasmtime-cache`
+beside `config.yaml`) is the one new config surface; the directory is created
+user-private (`0700` on unix) since a hit is deserialized as native code, not
+re-verified — a new row in
+[Security model](security-model.md#capabilities) names the test. Proven live
+against the shipped `config.yaml`: a fresh boot logs
+`wasmtime compile cache: 0 hit(s), 9 miss(es)`, a second boot against the same
+directory logs `9 hit(s), 0 miss(es)` — not inferred from a timing. Measured,
+same methodology as #59: cold ~0.20s / ~48MB peak RSS vs warm ~0.02s / ~24MB —
+roughly 10x less boot time and half the peak RSS, the win #59's honest
+"no difference" measurement said would need this issue. Full detail, the
+key-completeness argument, and the numbers are in
 [the changelog](../changelog.md#2026-09-11).
 
 
