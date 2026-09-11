@@ -20,6 +20,22 @@ EXT_DIR := $(abspath ext)
 # the same convention CONFIG/EXT_DIR already are.
 CACHE_DIR := $(abspath wasmtime-cache)
 
+# Colour, set here so a local gate runs in CI's environment rather than its own.
+#
+# `.github/workflows/ci.yml` sets `CARGO_TERM_COLOR: always`, and cargo and
+# nextest honour it even when stdout is a pipe. Locally nothing set it, so the
+# default `auto` gave *uncoloured* output into exactly the pipes these Makefiles
+# parse — and `gate`'s zero-test guard, which counts lines of `nextest list`,
+# matched 172 locally and 0 in CI (#123). `.github/hooks/pre-push` therefore
+# passed on every push that CI then failed.
+#
+# The hook already says the gate sequence lives here "so this hook cannot drift
+# from CI". The environment it runs in has to live here for the same reason,
+# or the sequence matching proves nothing. `?=` so a developer who wants plain
+# output can still ask: `CARGO_TERM_COLOR=never make gate`.
+CARGO_TERM_COLOR ?= always
+export CARGO_TERM_COLOR
+
 # List the common targets.
 help:
 	@echo "Targets:"

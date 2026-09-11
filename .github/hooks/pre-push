@@ -7,6 +7,11 @@
 # gate-push` by hand call the same target, so this hook cannot drift from CI
 # the way #65 did (`pre-push` once ran the host workspace suite twice, and
 # nothing but reading this file's bash would have caught it).
+#
+# Matching the sequence is not enough on its own: for seven pushes this hook
+# ran the same target in a different *environment* and passed every time CI
+# failed (#123). `CARGO_TERM_COLOR` now comes from the root Makefile too, so
+# both sides parse tool output the same way. Same reason, one layer down.
 
 set -euo pipefail
 
