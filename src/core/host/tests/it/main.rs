@@ -24,6 +24,7 @@ mod component_harness;
 mod docs_match_config;
 mod egress_boundary;
 mod event_log;
+mod execution_config;
 mod ext_install;
 mod gate;
 mod host_fs;
