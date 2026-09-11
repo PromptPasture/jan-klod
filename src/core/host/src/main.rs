@@ -60,7 +60,27 @@ fn main() -> ExitCode {
         Some("ask") => ask(&args[1..]),
         Some("ext") => ext(&args[1..]),
         Some("mcp") => mcp(),
+        Some("acp") => acp(),
         _ => boot_plan(&args),
+    }
+}
+
+/// Serve the Agent Client Protocol on stdin/stdout, agent side.
+///
+/// No runtime yet: this box serves `initialize` and `session/new`, which mint a
+/// session id and touch nothing. A turn arrives with `session/prompt`, and with
+/// it the reader-thread shape `rpc` uses — because ACP asks the *editor* for a
+/// permission answer mid-turn, so the pipe has to stay readable while the turn
+/// runs.
+fn acp() -> ExitCode {
+    let input = std::io::BufReader::new(std::io::stdin());
+    let mut output = std::io::stdout();
+    match jan_klod_core::acp::serve(input, &mut output) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("jan-klod: acp: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

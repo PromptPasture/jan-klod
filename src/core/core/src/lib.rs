@@ -11,6 +11,7 @@
 //! extensions it hosts.
 
 // Generated Component-Model bindings; lint exemptions scoped to the macro output.
+pub mod acp;
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bindings;
 pub mod conductor;
