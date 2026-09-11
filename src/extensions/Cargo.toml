@@ -72,3 +72,20 @@ debug = 0
 opt-level = "s"
 strip = true
 lto = true
+
+# #71 measured `lto = "thin"` as a separate `[profile.release-fast]` for local
+# builds (both git hooks pay this profile on every commit/push) and rejected it
+# — do not re-propose without new numbers. Same machine, same touched guest
+# (tool-fs), before/after, each leg run 2-4x:
+#   - guest build, changed source (touch one guest, `make -C src/extensions
+#     all`, no clean): fat 1.57s/1.57s vs thin 1.26s/1.23s — thin ~0.3s faster.
+#   - `du -sh ext/` after a full rebuild: fat 2.5M vs thin 2.8M — thin ~12%
+#     bigger, because thin LTO optimizes less across crate boundaries.
+#   - `JK_REQUIRE_GUESTS=1 make gate` (513 tests, 0 skipped both profiles):
+#     fat 84.4s/91.1s/91.5s/98.7s (mean ~91.4s) vs thin 101.7s/105.6s/105.8s
+#     (mean ~104.4s) — thin ~13s *slower*, consistently above every fat run
+#     including one taken after the thin runs, so this isn't just load drift.
+# The bigger guest wasm costs more at `make gate`'s end (Wasmtime's Cranelift
+# compiles every staged component at boot, see #60) than thin LTO saves at the
+# guest-build end: ~13s lost per gate run against ~0.3s saved per commit. Net
+# negative — declined.
