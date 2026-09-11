@@ -221,7 +221,8 @@ question (a separate `api-rest` guest vs. a built-in endpoint) is closed.
 | `jan-klod` (default) | Terminal UI | `ratatui`, over stdio JSON-RPC — it spawns the gateway; `--addr` drives a running one over REST + SSE instead | built |
 | browser → core `/` | Web UI | a static, dependency-light TypeScript front-end served by the core, speaking the protocol over WebSocket | planned, Phase 17 |
 | `jan-klod-ui --gui` | Native window | a **Tauri shell around the same web front-end** — system webview, not a third client codebase | planned, Phase 17 |
-| editor | IDE integration | ACP server side mapped onto the protocol | planned, Phase 18 |
+| editor | IDE integration | `jan-klod-gateway acp` — ACP agent side on stdio, mapped onto the same turn path | **built** (18a is MCP, 18b is this) |
+| other agents | MCP server | `jan-klod-gateway mcp` — `ask`, `session_list`, `session_get` over MCP stdio | **built** |
 
 All are clients of one surface, share one backend, and carry no agent logic. A
 client holds no state the core does not: every view is a projection of the
@@ -395,6 +396,44 @@ re-exposes the existing turn path behind the same permission gate, and the test
 above is the evidence rather than the claim. A row asserting a boundary that
 nothing separately enforces would be worse than no row; recorded here so that
 "no row" is a decision rather than an omission.
+
+### The ACP port (`jan-klod-gateway acp`)
+
+The editor side, and **the first surface where the core is a JSON-RPC client as
+well as a server on one pipe**. Everything else it serves is client→server
+requests plus server→client notifications; ACP has the agent originate
+`session/request_permission` and block on the editor's answer.
+
+That is why this port needed `rpc`'s reader-thread shape and the MCP port did
+not: while a turn runs, the serving thread is inside the conductor, so something
+else has to be holding the pipe or the answer could not arrive until the turn it
+unblocks had already finished.
+
+Three things differ from MCP beyond the direction:
+
+- **The version is an integer** (`protocolVersion: 1`), where MCP's is a date
+  string. Three schemes now coexist and none may be copied into another.
+- **`session/new` mints the session id**, so a client must read it back before
+  it can prompt. `acp::Connection` is therefore drivable frame by frame rather
+  than being only a read loop.
+- **`stopReason` is not `isError`.** It says why a turn *ended*:
+  `end_turn`, `max_tokens`, `max_turn_requests`, `refusal`, `cancelled`. A
+  permission refusal is **`end_turn`** — `refusal` means the agent declined the
+  whole exchange and the spec lets an editor discard the user's prompt, so
+  reporting a blocked tool call that way would throw away what the user typed.
+  A turn that genuinely failed has no stop reason and is a JSON-RPC error: the
+  opposite placement from MCP, where a failure rides in-band.
+
+**The editor's `cwd` is reported, not adopted.** `session/new` carries it, and
+honouring it would let a client choose what the file tools may reach — the
+workspace is a grant, and `Workspace::open` already refuses `$HOME` and
+filesystem roots. It is echoed in `_meta` so a mismatch is visible.
+
+**A disconnected editor needs no timeout.** Over REST an answer arrives on a
+second connection, so a vanished client is invisible until a deadline expires.
+Here it arrives on the same pipe: the channel closes on EOF and the parked read
+returns at once, which is detection rather than waiting. A closed pipe refuses,
+which is the safe end of it.
 
 ## Command sandbox
 
