@@ -105,14 +105,27 @@ jobs:
       # compile to nothing and a run over them is green having checked nothing.
       # nextest exits non-zero on a filter that matches nothing, but that catches
       # only a mistyped filter; this catches the whole module vanishing.
+      #
+      # **`list` runs on its own line, and its stderr is kept.** The first version
+      # of this step was `n=$(cargo nextest list … 2>/dev/null | grep -c …)`, and
+      # it could not report its own failure: under `bash -e` a `grep -c` finding
+      # nothing exits 1 and kills the step before the echo, and `2>/dev/null`
+      # threw away the compile error that would have said why. It failed with no
+      # output but "exit code 1" — indistinguishable from the zero-test case it
+      # exists to detect. So: let cargo fail loudly on its own exit code, then
+      # count from a file, with `|| true` so "zero" reaches the `if` as a number
+      # rather than as a dead shell.
       - name: Guard — the Seatbelt tests must exist on this runner
         run: |
-          n=$(cd src/core && cargo nextest list -p jan-klod-host \
-                --features jan-klod-host/integration --bins --tests 2>/dev/null \
-                | grep -c 'sandbox_seatbelt::')
+          cd src/core
+          cargo nextest list -p jan-klod-host \
+            --features jan-klod-host/integration --bins --tests > /tmp/nextest-list.txt
+          n=$(grep -c 'sandbox_seatbelt::' /tmp/nextest-list.txt || true)
           echo "ci-macos: sandbox_seatbelt resolves $n test(s)"
           if [ "$n" -eq 0 ]; then
             echo "ci-macos: zero Seatbelt tests compiled — this job is checking nothing" >&2
+            echo "--- what nextest listed ---" >&2
+            head -40 /tmp/nextest-list.txt >&2
             exit 1
           fi
 
