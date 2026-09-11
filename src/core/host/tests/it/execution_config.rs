@@ -51,6 +51,18 @@ impl ProbeTurn {
 /// operator would — including leaving it out entirely, which is the default
 /// this block exists to override.
 fn run_command(execution: &str, command: &str, args: &[&str]) -> ProbeTurn {
+    run_command_in(None, execution, command, args)
+}
+
+/// [`run_command`] with the `workspace:` line under the test's control.
+///
+/// `None` is the real temporary workspace every test above wants. `Some(root)`
+/// splices that path in instead, which is the only way to reach the "enabled,
+/// but no workspace" denial from config: [`Runtime::open_workspace`] falls back
+/// to `$PWD` when the key is *absent*, and the suite's `$PWD` is a perfectly
+/// adoptable directory, so leaving the key out would hand the runner a
+/// workspace rather than withhold one.
+fn run_command_in(root: Option<&str>, execution: &str, command: &str, args: &[&str]) -> ProbeTurn {
     let dir = std::env::temp_dir().join(format!(
         "jk-execcfg-{}-{:?}",
         std::process::id(),
@@ -61,6 +73,7 @@ fn run_command(execution: &str, command: &str, args: &[&str]) -> ProbeTurn {
     let _guard = common::TempDir(dir.clone());
 
     let config = dir.join("config.yaml");
+    let ws = root.map_or_else(|| workspace.display().to_string(), str::to_owned);
     let arguments = serde_json::json!({ "command": command, "args": args }).to_string();
     std::fs::write(
         &config,
@@ -78,8 +91,7 @@ extensions:
       enabled: true
 workspace: {ws}
 {execution}
-",
-            ws = workspace.display()
+"
         ),
     )
     .unwrap();
@@ -280,6 +292,95 @@ fn env_passthrough_grants_one_name_and_not_the_rest() {
     assert!(
         !turn.produced("keep-me-out"),
         "an ungranted name must not, or `env-passthrough` is not a grant: {}",
+        turn.tool_result
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The denials, which are the branch's real job.
+//
+// Each of these runs the **same command** as
+// `the_execution_block_builds_a_runner_that_runs_a_command` above, which is
+// therefore their shared control: that test is what says `echo from-config`
+// reaches the model when nothing refuses it, so a run here that does not
+// produce it was refused rather than merely broken. They differ from it by one
+// config key each.
+//
+// Every assertion is on the **effect** — the command did not run — and not on
+// the warning text, because a branch can print a warning and then carry on,
+// which is the shape of bug this issue exists to catch.
+// ---------------------------------------------------------------------------
+
+/// `enabled: true` with no usable workspace still denies: a command's cwd is
+/// jailed to the workspace, so without one there is nowhere to run.
+///
+/// The root is one that cannot be opened, per `run_command_in` — an absent
+/// `workspace:` key adopts `$PWD` instead of withholding a workspace, so it
+/// would not exercise this at all.
+#[test]
+fn enabled_without_a_usable_workspace_denies_the_command() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_command_in(
+        Some("/jan-klod-no-such-workspace"),
+        "execution:\n  enabled: true",
+        "echo",
+        &["from-config"],
+    );
+    assert!(
+        !turn.produced("from-config"),
+        "`enabled: true` without a workspace must deny: {}",
+        turn.tool_result
+    );
+}
+
+/// An `execution.sandbox` that cannot be read denies rather than running the
+/// command unconfined.
+///
+/// One line of code stands between those two outcomes, and the wrong one grants
+/// more than the operator wrote: they asked for something specific about a
+/// command's effects, and a misspelt mode is the likeliest way to ask for it
+/// wrongly.
+#[test]
+fn an_unreadable_sandbox_block_denies_rather_than_running_unconfined() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_command(
+        "execution:\n  enabled: true\n  sandbox:\n    mode: definitely-not-a-mode",
+        "echo",
+        &["from-config"],
+    );
+    assert!(
+        !turn.produced("from-config"),
+        "an unparseable `execution.sandbox` must deny, not run unconfined: {}",
+        turn.tool_result
+    );
+}
+
+/// `require: true` that cannot be satisfied denies — the operator said they
+/// would rather no command ran than one ran unconfined.
+///
+/// Asked for here as `mode: approval-only` with `require: true`, which is the
+/// contradiction that refuses on **every** platform. The other way in — `mode:
+/// os` with no backend — depends on the host having no sandbox mechanism, so on
+/// a machine with one it cannot be reached; both arrive at the same
+/// `policy.refusal(&effective)` line in `open_process_runner`, and this one is
+/// the half that a CI runner of any OS will actually execute.
+#[test]
+fn an_unsatisfiable_require_denies_the_command() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_command(
+        "execution:\n  enabled: true\n  sandbox:\n    mode: approval-only\n    require: true",
+        "echo",
+        &["from-config"],
+    );
+    assert!(
+        !turn.produced("from-config"),
+        "`require: true` with `mode: approval-only` must deny: {}",
         turn.tool_result
     );
 }
