@@ -136,6 +136,31 @@ and `ext/` is left byte-identical. `ext list` shows what is there with the
 capabilities each component declares, and `ext remove` takes a component and
 its manifest together.
 
+**A URL works wherever a path does**, and the same checks run on what arrives:
+
+```console
+$ jan-klod-gateway ext install https://example.com/ext/tool-thing.wasm
+```
+
+The URL names the **component**; the manifest and the signatures are fetched
+from beside it (`tool-thing.manifest.toml`, `tool-thing.wasm.minisig`,
+`tool-thing.manifest.toml.minisig`) — the same layout as on disk, so a
+publisher serves one directory and both forms work. With `--allow-unsigned` the
+signatures are not requested at all.
+
+Two things a remote install refuses that a local one cannot:
+
+- **A destination the egress policy denies** — public addresses only, so
+  loopback, private, link-local and cloud-metadata URLs are refused *before a
+  byte moves*, and every redirect hop is re-checked rather than followed on
+  trust. A component source on a private address therefore has no way in today;
+  that grant arrives with the registry when something needs it.
+- **A URL carrying a query or fragment.** The companion URLs are derived by
+  resolving a relative reference, which drops a query — so
+  `…/tool-thing.wasm?token=abc` would fetch the component authenticated and the
+  manifest not, and the resulting 404 would read as "no manifest published".
+  Refusing says what is wrong instead.
+
 ## Opaque config and `${VAR}` expansion
 
 Every key in an entry other than `enabled`/`type` is the instance's private

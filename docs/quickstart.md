@@ -175,11 +175,16 @@ jan-klod-gateway ext list
 ```
 
 A component from somewhere other than this repository goes in with `ext install`,
-which verifies before it copies rather than after:
+which verifies before it copies rather than after — from a path or a URL:
 
 ```sh
 jan-klod-gateway ext install ./tool-thing.wasm --sha256 <hex> --allow-unsigned
+jan-klod-gateway ext install https://example.com/ext/tool-thing.wasm
 ```
+
+A URL names the component; the manifest and signatures are fetched from beside
+it. Only public destinations are allowed, checked before anything is fetched and
+again on every redirect.
 
 Signed is the default; `--allow-unsigned` is the deliberate way past it and
 requires `--sha256`, because waiving the signature leaves the digest as the only
