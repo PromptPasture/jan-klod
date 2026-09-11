@@ -59,8 +59,19 @@ ring = "0.17.14"
 #
 # They are still linted: `make clippy` passes the feature, and clippy type-checks
 # without linking, so the check costs nothing it used to cost.
+#
+# `integration` gates tests/it/ (one binary since #68) the same way: it links
+# wasmtime statically like the examples above, and cargo builds+links a test
+# target regardless of which tests are selected to run within it —
+# `#[ignore]`, name filters and a release-only job only save *run* time, not
+# build/link time or disk. required-features on the `[[test]]` block below
+# means the target is invisible unless `--features integration` (or
+# `jan-klod-host/integration`) is passed, so every caller that needs the full
+# suite must ask for it explicitly: see the root Makefile's `gate` and
+# `harness` targets.
 [features]
 examples = []
+integration = []
 
 [[example]]
 name = "provider_probe"
@@ -69,6 +80,10 @@ required-features = ["examples"]
 [[example]]
 name = "spike_gate"
 required-features = ["examples"]
+
+[[test]]
+name = "it"
+required-features = ["integration"]
 
 [lints]
 workspace = true

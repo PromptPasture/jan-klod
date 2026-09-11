@@ -20,8 +20,9 @@ help:
 	@echo "  all         build the host workspace + Rust guests (default)"
 	@echo "  core        build the host workspace"
 	@echo "  extensions  build the Rust guests, staged in ext/ (alias: ext)"
-	@echo "  test        run host-side unit tests (core + guests + supervisor)"
-	@echo "  test-core   run the host workspace's tests only"
+	@echo "  test        run host-side unit tests only (core + guests + supervisor);"
+	@echo "              the integration suite needs 'gate' or 'harness' instead"
+	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
@@ -129,19 +130,50 @@ harness: extensions
 	  test -f $(CORE)/host/tests/it/$$m.rs \
 	    || { echo "harness: no module $$m.rs in $(CORE)/host/tests/it/" >&2; exit 1; }; \
 	done
-	cd $(CORE) && cargo nextest run -p jan-klod-host $(addsuffix ::,$(HARNESS_MODULES))
+	cd $(CORE) && cargo nextest run -p jan-klod-host --features jan-klod-host/integration $(addsuffix ::,$(HARNESS_MODULES))
 
 # Exit gate: the full offline integration suite, nothing allowed to skip.
 # JK_REQUIRE_GUESTS turns a silently-skipped test into a failure.
+#
+# #79 verified this gate's test count is unchanged by the feature gate below:
+# 504 tests run, 0 skipped (160 of them jan-klod-host::it, the rest unit
+# tests across the workspace) under JK_REQUIRE_GUESTS=1, same as immediately
+# before the `integration` feature landed. That absolute count will drift as
+# the suite grows — it is not itself a gate — but a *drop to zero* is exactly
+# what the guard below exists to catch.
 #
 # nextest over `cargo test`: (1) one process per test — some modules set
 # conflicting process-global env vars, which race under in-binary threading;
 # (2) nextest exits nonzero on zero tests matched, `cargo test` exits 0.
 # --no-fail-fast reports every failure in the run, not just the first.
 # Doctests run separately since nextest doesn't run them.
+#
+# --features jan-klod-host/integration cannot be dropped: since #79 the `it`
+# target (tests/it/, the whole integration suite) carries `required-features =
+# ["integration"]`, so without this flag cargo simply does not build it — no
+# wasmtime link, no test, and critically no *failure* either. `cargo nextest
+# run --workspace` without the feature still finds every other crate's unit
+# tests, runs them, and exits 0, having never touched integration coverage. In
+# the same spirit as the note above about not naming individual test files:
+# dropping this flag is a second, quieter way for the whole suite to vanish
+# that JK_REQUIRE_GUESTS cannot catch, since the tests are never compiled to
+# check anything. The guard below is what actually catches it.
+#
+# Positive guard, not a convention: fail the gate if the integration suite
+# resolved to zero tests, rather than trusting that the feature flag above is
+# never dropped or mistyped. `cargo nextest list` is cheap (no run, just
+# compiles-and-enumerates) and prints one line per test as
+# "<binary> <test-name>"; the `it` binary's lines start with
+# "jan-klod-host::it ".
 gate: export JK_REQUIRE_GUESTS = 1
 gate: extensions
-	cd $(CORE) && cargo nextest run --workspace --no-fail-fast
+	@n=$$(cd $(CORE) && cargo nextest list -p jan-klod-host --features jan-klod-host/integration --bins --tests 2>/dev/null | grep -c '^jan-klod-host::it '); \
+	  echo "gate: integration suite (jan-klod-host::it) resolves $$n test(s)"; \
+	  if [ "$$n" -eq 0 ]; then \
+	    echo "gate: the integration suite compiled zero tests - the --features integration gate is broken" >&2; \
+	    exit 1; \
+	  fi
+	cd $(CORE) && cargo nextest run --workspace --features jan-klod-host/integration --no-fail-fast
 	cd $(CORE) && cargo test --doc --workspace
 
 # Boot the real core against config.yaml: resolve extensions against ext/,

@@ -18,8 +18,18 @@ build:
 check:
 	cargo check
 
-# Host-side tests, under cargo-nextest. Config in .config/nextest.toml; install
-# the runner with `make setup` from the repo root.
+# Host-side *unit* tests, under cargo-nextest. Config in .config/nextest.toml;
+# install the runner with `make setup` from the repo root.
+#
+# Unit-only since #79: the host's integration suite (host/tests/it/, one
+# binary since #68) now carries `required-features = ["integration"]` in
+# host/Cargo.toml, so a plain `cargo nextest run` here — no `--features
+# integration` — does not build or link it at all, only every crate's `#[cfg
+# (test)]` units. That is intentional, not a regression: this target backs
+# `pre-commit`, which wants a fast, no-wasmtime-link gate on every commit. The
+# integration suite still runs in full, feature and all, from the *root*
+# Makefile's `gate` (and `harness` for a named subset) — this target is not a
+# substitute for either.
 #
 # nextest and not `cargo test`, for two reasons that are both about this suite
 # specifically rather than a preference:
