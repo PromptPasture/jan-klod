@@ -275,6 +275,32 @@ fn wanted(url: &str, allow_unsigned: bool) -> Result<Vec<(String, String)>, ExtE
         .collect()
 }
 
+/// The HTTP client a remote install should be given.
+///
+/// Here rather than in the gateway so there is **one** construction of it and
+/// no way to pass a weaker one by accident. `fetch_within` with
+/// [`crate::egress::EgressPolicy::public_only`] means every redirect hop is
+/// re-checked ([#107](https://github.com/PromptPasture/jan-klod/issues/107)),
+/// and `Authorization` does not survive a hop.
+///
+/// [`install_from_url`] still takes the client as an argument, because a test
+/// has to be able to serve bytes without a socket — but a caller reaching for
+/// a client now finds this one first, which is a better guarantee than a guard
+/// that notices afterwards.
+#[must_use]
+pub fn policy_bound_http() -> crate::route::HttpFn {
+    Box::new(|method, url, headers, body, timeout| {
+        crate::http::fetch_within(
+            &crate::egress::EgressPolicy::public_only(),
+            method,
+            url,
+            headers,
+            body,
+            timeout,
+        )
+    })
+}
+
 /// Fetch a component and its companions, then install them as if they had been
 /// on disk all along.
 ///

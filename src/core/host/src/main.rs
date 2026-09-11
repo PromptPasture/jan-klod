@@ -147,16 +147,7 @@ fn ext_install(args: &[String]) -> ExitCode {
     // policy-bound client, so a redirect is re-checked per hop rather than
     // followed on trust.
     let outcome = if jan_klod_core::ext::looks_remote(source) {
-        let http: jan_klod_core::route::HttpFn = Box::new(|method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(
-                &jan_klod_core::egress::EgressPolicy::public_only(),
-                method,
-                url,
-                headers,
-                body,
-                timeout,
-            )
-        });
+        let http = jan_klod_core::ext::policy_bound_http();
         jan_klod_core::ext::install_from_url(std::path::Path::new(&dir), source, &checks, &http)
     } else {
         jan_klod_core::ext::install(

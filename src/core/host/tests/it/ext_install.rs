@@ -880,3 +880,55 @@ fn a_refused_destination_is_not_even_requested() {
         asked.lock().expect("not poisoned")
     );
 }
+
+/// A redirect off the permitted origin is caught, through the installer.
+///
+/// # Why the client is asked for one URL and fetches another
+///
+/// `install_from_url` refuses a non-public URL itself, before the client is
+/// asked anything — which is right, and means **no test can host a redirector
+/// at an entry URL the installer will accept**: a redirector has to bind
+/// somewhere, and nothing a test can bind is public. So the shape here is: the
+/// installer is given a public URL it accepts, and the client it holds performs
+/// a real request against a loopback redirector under a policy that permits
+/// *that* origin and not the sentinel behind it.
+///
+/// What that proves is the claim worth proving — **when the installer's client
+/// is policy-bound, a redirect to a refused destination ends the install and
+/// the destination is never touched.** The per-hop mechanism itself is
+/// `egress_boundary::a_permitted_origin_cannot_redirect_to_a_refused_one`;
+/// this is about the installer honouring it rather than papering over it.
+#[test]
+fn a_redirect_to_a_refused_destination_ends_a_remote_install() {
+    let scratch = scratch("remote-redirect");
+    let forbidden = common::Countable::start();
+    let (redirect_port, _) = crate::egress_boundary::redirector_to(format!(
+        "http://127.0.0.1:{}/tool-fs.wasm",
+        forbidden.port
+    ));
+
+    // Permits the redirector, not the sentinel behind it — exactly the
+    // asymmetry a redirect would exploit.
+    let entry = format!("http://127.0.0.1:{redirect_port}/tool-fs.wasm");
+    let policy = jan_klod_core::egress::EgressPolicy::public_only()
+        .allowing(&format!("http://127.0.0.1:{redirect_port}"));
+    let http: jan_klod_core::route::HttpFn =
+        Box::new(move |method, _asked, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(&policy, method, &entry, headers, body, timeout)
+        });
+
+    let err = ext::install_from_url(
+        &scratch.ext,
+        "https://example.com/ext/tool-fs.wasm",
+        &ext::Checks::default(),
+        &http,
+    )
+    .expect_err("the redirect leaves the permitted origin");
+    assert!(
+        matches!(err, ExtError::Fetch { .. }),
+        "the install ends on the fetch, not on a later check: {err:?}"
+    );
+    assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
+
+    forbidden.only_hit();
+}

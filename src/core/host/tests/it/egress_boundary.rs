@@ -302,7 +302,7 @@ fn every_guest_facing_backend_goes_through_the_policy() {
 // ---- Redirects (#107) ----
 
 /// A server that answers every request with `302` to `target`, and counts.
-fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
+pub fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
     let port = listener.local_addr().expect("has an address").port();
     let hits = Arc::new(AtomicU32::new(0));
