@@ -545,3 +545,56 @@ fn no_configured_keys_refuses_rather_than_accepting_anything() {
     };
     assert_eq!(*keys, 0, "and the message says how many keys were tried");
 }
+
+/// Acceptance line 2 in full: what `install` accepted, **a real boot loads**.
+///
+/// The valid-install test above compiles the landed component, which is what
+/// the boot path does to load one — but compiling is not booting. A `Runtime`
+/// also resolves the instance against `config.yaml`, reads the manifest beside
+/// the component, cross-checks the declaration against the real imports, and
+/// refuses on any of those. So only this test can say the two ends agree: that
+/// an install is not merely well-formed but *accepted by the thing that will
+/// run it*.
+#[test]
+fn a_component_installed_here_is_loaded_by_a_real_boot() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let scratch = scratch("boots");
+    let (source, checks) = signed_offer(&scratch, "tool-fs");
+    ext::install(&scratch.ext, &source, &checks).expect("installs");
+
+    // A config that enables exactly the instance just installed. `tool.fs`
+    // resolves to `tool-fs.wasm`, which is the file that landed.
+    let config = scratch.root.join("config.yaml");
+    std::fs::write(
+        &config,
+        "
+execution:
+  enabled: false
+extensions:
+  tool:
+    fs:
+      enabled: true
+",
+    )
+    .expect("writes a config");
+
+    let runtime = jan_klod_core::Runtime::boot(&config, &scratch.ext)
+        .expect("the core boots against what install put there");
+    let loaded = runtime
+        .extensions()
+        .iter()
+        .find(|e| e.instance.id == "tool.fs")
+        .expect("the instance resolved");
+    assert!(
+        matches!(loaded.state, jan_klod_core::LoadState::Compiled(_)),
+        "compiled rather than missing — the manifest beside it satisfied the \
+         boot-time cross-check too"
+    );
+    assert_eq!(
+        loaded.capabilities.as_deref(),
+        Some(["host-fs".to_owned()].as_slice()),
+        "and boot read the same capabilities install reported"
+    );
+}

@@ -95,6 +95,47 @@ imports is still read either way.
 What a manifest still does not decide is what a component may *do*. That
 remains this file's grants, each default-deny.
 
+### Putting something in `ext/` (`registry:`)
+
+`make ext` fills `ext/` from this repository. A component from anywhere else
+goes in with `jan-klod-gateway ext install`, which verifies before it copies —
+because the build pipeline is not behind the runtime sandbox, so whatever lands
+in `ext/` decides what runs with your privileges. `cp` performs no checks at
+all.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `registry.trusted-keys` | Minisign public keys that may vouch for an installed component. **Top-level**, and distinct from `extensions.registry`, which is the category holding the `skills` and `mcp` catalogues — they share a word and nothing else | `[]` |
+
+**An empty list means nothing is trusted, not "skip the check".** That is the
+same default-deny rule as every other grant here: an operator who has named no
+keys has granted nothing, so every install is refused until a key is
+configured. The alternative reading — empty means unsigned is fine — would make
+the check disappear for exactly the person who never configured it.
+
+A signature must cover **both** the component and its manifest. A manifest
+carries no provenance of its own; the host trusts it at boot purely for sitting
+beside the component, so a signature over the `.wasm` alone would verify the
+artefact while trusting someone else's description of what it may ask for.
+
+Nothing first-party is signed yet, so today an install needs the deliberate
+widening:
+
+```console
+$ jan-klod-gateway ext install ./tool-thing.wasm --sha256 <hex> --allow-unsigned
+installed tool-thing into ext/ — may use host-fs
+```
+
+`--allow-unsigned` **requires** `--sha256`, so there is no combination of flags
+that lands a component with nothing vouching for it. A digest is worth having
+only when it reached you by a different route than the bytes did — a release
+note, not a hash of the file you are about to install.
+
+A refused install changes nothing: the pair is assembled in `ext/.staging/`
+and `ext/` is left byte-identical. `ext list` shows what is there with the
+capabilities each component declares, and `ext remove` takes a component and
+its manifest together.
+
 ## Opaque config and `${VAR}` expansion
 
 Every key in an entry other than `enabled`/`type` is the instance's private

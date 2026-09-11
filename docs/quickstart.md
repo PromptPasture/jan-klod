@@ -167,6 +167,27 @@ list of things that go wrong on a first run. Drop `--live` in a build step, wher
 spending a request would be rude; keep it when you are asking "why doesn't this
 work?".
 
+To see what is in `ext/` and what each component may ask the host for — which
+`ls` cannot tell you:
+
+```sh
+jan-klod-gateway ext list
+```
+
+A component from somewhere other than this repository goes in with `ext install`,
+which verifies before it copies rather than after:
+
+```sh
+jan-klod-gateway ext install ./tool-thing.wasm --sha256 <hex> --allow-unsigned
+```
+
+Signed is the default; `--allow-unsigned` is the deliberate way past it and
+requires `--sha256`, because waiving the signature leaves the digest as the only
+evidence about those bytes. Name the keys you trust in `registry.trusted-keys`
+and the flags are unnecessary — see
+[Configuration → Putting something in `ext/`](concepts/configuration.md#putting-something-in-ext-registry).
+A refused install leaves `ext/` exactly as it was.
+
 ## 7. Resume a session
 
 Sessions persist across server restarts (SQLite store). The REST API:
