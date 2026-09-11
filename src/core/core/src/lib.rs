@@ -1406,11 +1406,15 @@ fn run_and_persist(
 /// job.
 ///
 /// This used to bound the store read itself (`recent(session, 20)` over the
-/// transcript). It no longer does: the log is read whole and trimmed in memory,
-/// because bounding an event log by *turns* is not something a `LIMIT` can
-/// express — a turn is a variable number of rows. So a long session now reads
-/// its whole log each turn and discards most of it. Correct, and a cost that
-/// grows with the session; tracked as #85 rather than left as a surprise.
+/// transcript), then stopped doing that when #45's box 4 moved the log whole
+/// into memory and trimmed it there with `projection::last_turns`, because
+/// bounding an event log by *turns* is not something a plain `LIMIT` can
+/// express — a turn is a variable number of rows. That made every turn read
+/// and decode a session's entire log to keep the last 20 turns of it, a cost
+/// that grew without bound in session length (#85). `Store::recent_turns` puts
+/// the same rule back in SQL — the seq of the bound is itself a query rather
+/// than a `LIMIT` — so the read is bounded again, in the store rather than
+/// after it.
 const REPLAYED_TURNS: u32 = 20;
 
 /// The conversation so far, oldest-first, as loop messages.
@@ -1421,10 +1425,14 @@ const REPLAYED_TURNS: u32 = 20;
 fn replay(store: &store::Store, session: &str) -> Vec<intercept::Message> {
     // Read from the event log, not the `entries` transcript. Both are written
     // today; the transcript write goes away once every read path is off it.
-    // `session_events` is oldest-first already, so nothing is reversed here —
-    // the log's order *is* the conversation's.
-    let events = store.session_events(session).unwrap_or_default();
-    projection::transcript(projection::last_turns(&events, REPLAYED_TURNS))
+    // `recent_turns` is oldest-first already, so nothing is reversed here —
+    // the log's order *is* the conversation's. It is `session_events`'s
+    // bounded sibling, reading only the tail this replay actually uses
+    // instead of the whole log and trimming in memory afterward.
+    let events = store
+        .recent_turns(session, REPLAYED_TURNS)
+        .unwrap_or_default();
+    projection::transcript(&events)
 }
 
 /// The closure interceptors' `llm-provider` resolves to.

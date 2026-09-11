@@ -1,5 +1,9 @@
 //! The host-side persistent store.
 
+use jan_klod_core::conductor::Event;
+use jan_klod_core::event_log::{encode, envelope, KIND_USER_MESSAGE};
+use jan_klod_core::intercept::{ToolCall, ToolOutcome};
+use jan_klod_core::projection;
 use jan_klod_core::store::{Store, StoreError};
 
 #[test]
@@ -392,4 +396,201 @@ fn a_fork_bound_outside_the_log_copies_what_there_is() {
     assert_eq!(store.fork_events("parent", 99, "all").unwrap(), 2);
     assert_eq!(store.fork_events("parent", 0, "none").unwrap(), 0);
     assert!(store.session_events("none").unwrap().is_empty());
+}
+
+// ─── `recent_turns`: the SQL bound, checked against the in-memory rule (#85) ─
+
+/// Appends one turn to `session`: a `user-message`, then `tool_calls` pairs of
+/// `tool-invoked`/`tool-result` — the variable-row-count case a plain `LIMIT`
+/// cannot express — then a `done`. Turns in the same session vary in row
+/// count on purpose: 0 tool calls is 2 rows, 1 is 4, and so on, which is
+/// exactly the shape that defeats a row-based bound.
+fn append_turn(store: &Store, session: &str, turn: usize, tool_calls: usize) {
+    store
+        .append_event(
+            session,
+            KIND_USER_MESSAGE,
+            &envelope(&serde_json::json!({ "message": format!("q{turn}") })),
+        )
+        .unwrap();
+    for call in 0..tool_calls {
+        let id = format!("t{turn}-{call}");
+        let (kind, payload) = encode(&Event::ToolInvoked(ToolCall {
+            id: id.clone(),
+            name: "tool".to_owned(),
+            arguments: "{}".to_owned(),
+        }));
+        store.append_event(session, kind, &payload).unwrap();
+        let (kind, payload) = encode(&Event::ToolResult(ToolOutcome {
+            tool_call_id: id,
+            content: format!("result{turn}-{call}"),
+        }));
+        store.append_event(session, kind, &payload).unwrap();
+    }
+    let (kind, payload) = encode(&Event::Done {
+        text: format!("a{turn}"),
+        agentic: tool_calls > 0,
+    });
+    store.append_event(session, kind, &payload).unwrap();
+}
+
+/// Builds `session`'s log with one turn per entry of `tool_calls_per_turn`
+/// (that entry's value is how many tool calls that turn makes).
+fn build_session(store: &Store, session: &str, tool_calls_per_turn: &[usize]) {
+    for (turn, &tool_calls) in tool_calls_per_turn.iter().enumerate() {
+        append_turn(store, session, turn, tool_calls);
+    }
+}
+
+/// The two independent paths to a bounded replay must agree: `recent_turns`
+/// is a SQL query over `events`, `last_turns` is a slice over the whole log
+/// held in memory, and neither calls the other. If they disagreed, a replay
+/// would silently hand the model a different history than a full projection
+/// (`GET /session/:id`) would show for the same bound — the exact drift this
+/// asserts cannot happen.
+fn assert_recent_turns_matches_last_turns(store: &Store, session: &str, turns: u32) {
+    let whole = store.session_events(session).unwrap();
+    let expected = projection::last_turns(&whole, turns).to_vec();
+    let actual = store.recent_turns(session, turns).unwrap();
+    assert_eq!(
+        actual,
+        expected,
+        "session={session:?} turns={turns} whole_log_len={} disagree",
+        whole.len()
+    );
+}
+
+#[test]
+fn recent_turns_matches_last_turns_when_the_session_has_fewer_turns_than_the_bound() {
+    let store = Store::open_in_memory().unwrap();
+    build_session(&store, "s", &[0, 1, 2]);
+    for turns in [0, 1, 3, 4, 20] {
+        assert_recent_turns_matches_last_turns(&store, "s", turns);
+    }
+}
+
+#[test]
+fn recent_turns_matches_last_turns_at_exactly_the_bound() {
+    let store = Store::open_in_memory().unwrap();
+    build_session(&store, "s", &[1; 20]);
+    assert_recent_turns_matches_last_turns(&store, "s", 20);
+    // One turn less than the log has, and one more: both sides of the exact
+    // match, still agreeing.
+    assert_recent_turns_matches_last_turns(&store, "s", 19);
+    assert_recent_turns_matches_last_turns(&store, "s", 21);
+}
+
+/// Many more turns than the bound, with a per-turn tool-call count that
+/// varies (0, 1, 2, 3, repeating) — the case a `LIMIT` cannot express,
+/// because the turn kept at the boundary is a different number of rows than
+/// its neighbours.
+#[test]
+fn recent_turns_matches_last_turns_on_a_long_session_with_variable_row_counts() {
+    let store = Store::open_in_memory().unwrap();
+    let tool_calls_per_turn: Vec<usize> = (0..200).map(|i| i % 4).collect();
+    build_session(&store, "s", &tool_calls_per_turn);
+    for turns in [0, 1, 20, 199, 200, 201] {
+        assert_recent_turns_matches_last_turns(&store, "s", turns);
+    }
+}
+
+#[test]
+fn recent_turns_matches_last_turns_on_an_empty_session() {
+    let store = Store::open_in_memory().unwrap();
+    for turns in [0, 1, 20] {
+        assert_recent_turns_matches_last_turns(&store, "never-used", turns);
+    }
+}
+
+/// A deterministic sweep over many generated logs, standing in for a
+/// property test: the repo has no `proptest`/`quickcheck` dependency, so this
+/// is a small seeded PRNG (xorshift64, `std` only) driving many
+/// turn-count/tool-call-count/bound combinations instead. Reproducible across
+/// runs, and — the point of it — exercises shapes a handful of hand-picked
+/// literals would not: bounds that land exactly on a turn boundary with a
+/// preceding turn of a different row count, bounds larger than the log,
+/// zero-tool-call turns next to multi-tool-call ones, and so on.
+#[test]
+fn recent_turns_agrees_with_last_turns_across_many_generated_logs() {
+    struct Xorshift64(u64);
+    impl Xorshift64 {
+        fn next_u32(&mut self) -> u32 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            (x >> 32) as u32
+        }
+        fn below(&mut self, bound: u32) -> u32 {
+            self.next_u32() % bound
+        }
+    }
+
+    for seed in 1..=8_u64 {
+        let mut rng = Xorshift64(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let turn_count: u32 = rng.below(60);
+        let tool_calls_per_turn: Vec<usize> =
+            (0..turn_count).map(|_| rng.below(4) as usize).collect();
+
+        let store = Store::open_in_memory().unwrap();
+        let session = format!("seed-{seed}");
+        build_session(&store, &session, &tool_calls_per_turn);
+
+        for turns in [0, 1, 2, turn_count, turn_count + 1, 200] {
+            assert_recent_turns_matches_last_turns(&store, &session, turns);
+        }
+        // A handful of bounds strictly between 0 and the log's own turn
+        // count, landing mid-log rather than only at its edges.
+        for _ in 0..5 {
+            let bound = if turn_count == 0 {
+                0
+            } else {
+                rng.below(turn_count + 1)
+            };
+            assert_recent_turns_matches_last_turns(&store, &session, bound);
+        }
+    }
+}
+
+/// The measurable win #85 asks for: on a session long enough that trimming
+/// in SQL versus in memory is not a rounding error, `recent_turns` reads a
+/// small, bounded number of rows while `session_events` reads (and this
+/// asserts, decodes into) the whole log — and the two still resolve to the
+/// same conversation.
+#[test]
+fn recent_turns_reads_a_small_bounded_tail_of_a_long_session_with_the_same_messages() {
+    let store = Store::open_in_memory().unwrap();
+    let tool_calls_per_turn: Vec<usize> = (0..1000).map(|i| i % 3).collect();
+    build_session(&store, "long", &tool_calls_per_turn);
+
+    let turns = 20;
+    let whole = store.session_events("long").unwrap();
+    let bounded = store.recent_turns("long", turns).unwrap();
+
+    assert!(
+        bounded.len() < whole.len() / 20,
+        "bounded read ({} rows) should be a small fraction of the whole log \
+         ({} rows) on a 1000-turn session",
+        bounded.len(),
+        whole.len()
+    );
+
+    // `Message` has no `PartialEq` (it is not a comparable value anywhere
+    // else in the crate), so the comparison is over `(role, content,
+    // tool_call_id)` tuples rather than the messages themselves.
+    let as_tuples = |messages: Vec<jan_klod_core::intercept::Message>| {
+        messages
+            .into_iter()
+            .map(|m| (m.role, m.content, m.tool_call_id))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        as_tuples(projection::transcript(&bounded)),
+        as_tuples(projection::transcript(projection::last_turns(
+            &whole, turns
+        ))),
+        "same messages whether read bounded from SQL or trimmed in memory \
+         from the whole log"
+    );
 }

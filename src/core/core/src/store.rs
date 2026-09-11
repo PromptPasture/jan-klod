@@ -357,9 +357,10 @@ impl Store {
 
     /// Every event logged for `session`, in the order it happened.
     ///
-    /// Unbounded on purpose: the callers are a replay and a test, and both want
-    /// the whole log. A `limit` would have to be a *tail* to be useful, and a
-    /// tail of an event log is not a projection of anything.
+    /// Unbounded on purpose: the callers are a full projection (`GET
+    /// /session/:id`), a fork, and a test — each wants the whole log, not a
+    /// tail of it. [`Self::recent_turns`] is the bounded sibling for the one
+    /// caller (`replay`) that only wants the end of it.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -383,6 +384,78 @@ impl Store {
                     payload: row.get::<_, String>(3)?,
                 })
             })
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })
+    }
+
+    /// The tail of `session`'s log holding at most the last `turns` turns —
+    /// the bounded sibling of [`Self::session_events`], for the one caller
+    /// (`replay`) that only ever wants the end of a possibly long log.
+    ///
+    /// [`crate::projection::last_turns`] is the rule this SQL has to agree
+    /// with, in memory over the whole log; this is the same rule pushed into
+    /// the query so a long session does not pay to read and decode rows it is
+    /// about to discard. A turn begins at a `user-message` row, and a turn is
+    /// a variable number of rows — a tool call adds two — so a plain `LIMIT`
+    /// cannot express the bound: it would cut a turn in half and hand the
+    /// model a conversation that opens with a tool result answering a call it
+    /// cannot see. Instead this finds the seq of the earliest `user-message`
+    /// row among the last `turns` of them, and reads everything from there
+    /// on.
+    ///
+    /// `COALESCE(MIN(seq), 0)` is what makes a session with fewer than
+    /// `turns` user-message rows — including a log with none at all — read
+    /// from the very start: the inner query then returns fewer than `turns`
+    /// rows (or zero), `MIN` over them is either the earliest one present or
+    /// `NULL`, and `COALESCE` turns the `NULL` case into `0`, a seq no row can
+    /// be below. That matches `last_turns` returning the whole slice rather
+    /// than trimming when there are not that many turns to trim to.
+    ///
+    /// `turns == 0` is handled before the query runs, rather than as
+    /// `LIMIT 0`: an empty inner query would still make `COALESCE` fall back
+    /// to `0` and read the *whole* log, which is the one case above's
+    /// reasoning gets backwards — asking for zero turns means none, not all.
+    ///
+    /// # Errors
+    /// [`StoreError::Backend`] on a SQL failure.
+    pub fn recent_turns(&self, session: &str, turns: u32) -> Result<Vec<LoggedEvent>, StoreError> {
+        if turns == 0 {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, ts, kind, payload FROM events
+                 WHERE session = ?1 AND seq >= (
+                     SELECT COALESCE(MIN(seq), 0) FROM (
+                         SELECT seq FROM events
+                         WHERE session = ?1 AND kind = ?3
+                         ORDER BY seq DESC LIMIT ?2
+                     )
+                 )
+                 ORDER BY seq",
+            )
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+        let rows = stmt
+            .query_map(
+                params![session, turns, crate::event_log::KIND_USER_MESSAGE],
+                |row| {
+                    Ok(LoggedEvent {
+                        session: session.to_string(),
+                        seq: to_u64(row.get::<_, i64>(0)?),
+                        ts: to_u64(row.get::<_, i64>(1)?),
+                        kind: row.get::<_, String>(2)?,
+                        payload: row.get::<_, String>(3)?,
+                    })
+                },
+            )
             .map_err(|e| StoreError::Backend {
                 detail: e.to_string(),
             })?;
