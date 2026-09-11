@@ -486,3 +486,40 @@ fn a_config_built_runner_is_confined_by_the_backend_it_resolved() {
         turn.tool_result
     );
 }
+
+/// The other half of that claim: confinement still **permits** what the policy
+/// grants. A confined runner that denies everything passes the test above.
+///
+/// This is the distinction [#124](https://github.com/PromptPasture/jan-klod/issues/124)
+/// was filed over. For seven CI runs the Landlock wrapper was the test binary
+/// rather than the gateway, so every confined command failed before it started
+/// — and the escape test above passed throughout, because "denied" and "never
+/// ran" are the same observation from outside. Only a command that is confined
+/// *and* succeeds separates them.
+///
+/// The write is relative, so it lands in the workspace the runner jails the
+/// command's cwd to — the one directory `writable: ["."]` grants. Reading it
+/// back is what reaches the model: a write alone produces no output, and this
+/// test exists to see a visible effect rather than an exit code.
+///
+/// Gated on a backend for the same reason as its sibling: without one the mode
+/// downgrades and this would assert that an *unconfined* command can write,
+/// which is a weaker claim wearing this one's name.
+#[test]
+fn a_confined_config_built_runner_can_still_write_inside_the_workspace() {
+    if !common::guests_staged(&GUESTS) || sandbox::host_backend().is_none() {
+        return;
+    }
+    let turn = run_command(
+        "execution:\n  enabled: true",
+        "sh",
+        &["-c", "echo inside-ok > allowed.txt && cat allowed.txt"],
+    );
+    assert!(
+        turn.produced("inside-ok"),
+        "a confined command must still write where the policy grants it — \
+         otherwise the escape test above passes for a runner that denies \
+         everything: {}",
+        turn.tool_result
+    );
+}
