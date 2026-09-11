@@ -8,6 +8,7 @@
 //! to disagree *about*, and fabricated bytes have none.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use jan_klod_core::ext::{self, Declaration, ExtError};
 
@@ -670,4 +671,212 @@ fn only_http_and_https_count_as_remote() {
     ] {
         assert!(!ext::looks_remote(local), "{local} is not remote");
     }
+}
+
+// ---- Remote sources: the fetch (#92 box 2) ----
+
+/// Serve a set of files by URL, recording every URL asked for.
+///
+/// A canned `HttpFn` rather than a socket, and the URLs are `example.com` —
+/// public, so the policy permits them without widening anything. A loopback
+/// test server would have needed a grant, and granting one to test a fetch
+/// would have tested a policy nobody runs.
+fn canned_files(
+    files: Vec<(&'static str, Vec<u8>)>,
+) -> (
+    jan_klod_core::route::HttpFn,
+    Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&asked);
+    let http: jan_klod_core::route::HttpFn = Box::new(move |_m, url, _h, _b, _t| {
+        recorded.lock().expect("not poisoned").push(url.to_owned());
+        let found = files
+            .iter()
+            .find(|(name, _)| url.ends_with(name))
+            .map(|(_, body)| body.clone());
+        Ok(jan_klod_core::http::WireResponse {
+            status: if found.is_some() { 200 } else { 404 },
+            headers: vec![],
+            body: found.unwrap_or_default(),
+        })
+    });
+    (http, asked)
+}
+
+/// The four files a signed remote install needs, read off a real staged guest.
+fn published(scratch: &Scratch, guest: &str) -> (Vec<(&'static str, Vec<u8>)>, ext::Checks) {
+    let component = offer(scratch, guest);
+    let signer = crate::common::minisig::Signer::new();
+    signer.sign(&component);
+    let manifest = scratch.incoming.join(format!("{guest}.manifest.toml"));
+    signer.sign(&manifest);
+    let read = |p: &Path| std::fs::read(p).expect("reads a published file");
+    let mut path = component.as_os_str().to_os_string();
+    path.push(".minisig");
+    let component_sig = read(Path::new(&path));
+    let mut path = manifest.as_os_str().to_os_string();
+    path.push(".minisig");
+    let manifest_sig = read(Path::new(&path));
+    (
+        vec![
+            ("tool-fs.wasm", read(&component)),
+            ("tool-fs.manifest.toml", read(&manifest)),
+            ("tool-fs.wasm.minisig", component_sig),
+            ("tool-fs.manifest.toml.minisig", manifest_sig),
+        ],
+        ext::Checks {
+            sha256: None,
+            trusted_keys: vec![signer.public_key_base64()],
+            allow_unsigned: false,
+        },
+    )
+}
+
+/// A signed remote install fetches four files and goes through the same
+/// verification a local one does.
+#[test]
+fn a_remote_install_fetches_the_pair_and_both_signatures() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let scratch = scratch("remote");
+    let (files, checks) = published(&scratch, "tool-fs");
+    let (http, asked) = canned_files(files);
+
+    let installed = ext::install_from_url(
+        &scratch.ext,
+        "https://example.com/ext/tool-fs.wasm",
+        &checks,
+        &http,
+    )
+    .expect("a signed remote install lands");
+    assert_eq!(installed.name, "tool-fs");
+    assert_eq!(
+        names(&scratch.ext),
+        ["tool-fs.manifest.toml", "tool-fs.wasm"],
+        "the pair landed and the signatures did not follow them in"
+    );
+
+    let asked = asked.lock().expect("not poisoned").clone();
+    assert_eq!(
+        asked,
+        [
+            "https://example.com/ext/tool-fs.wasm",
+            "https://example.com/ext/tool-fs.manifest.toml",
+            "https://example.com/ext/tool-fs.wasm.minisig",
+            "https://example.com/ext/tool-fs.manifest.toml.minisig",
+        ],
+        "siblings are resolved against the component's URL, not guessed"
+    );
+}
+
+/// Tampering the **served** bytes is refused exactly as a tampered local file
+/// is — which is what proves the download did not get its own weaker path.
+#[test]
+fn bytes_tampered_in_flight_are_refused() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let scratch = scratch("remote-tamper");
+    let (mut files, checks) = published(&scratch, "tool-fs");
+    let middle = files[0].1.len() / 2;
+    files[0].1[middle] ^= 0xff;
+    let (http, _) = canned_files(files);
+
+    let err = ext::install_from_url(
+        &scratch.ext,
+        "https://example.com/ext/tool-fs.wasm",
+        &checks,
+        &http,
+    )
+    .expect_err("the signature no longer covers these bytes");
+    assert!(
+        matches!(err, ExtError::Untrusted { .. }),
+        "refused by the same check a local tampered file hits: {err:?}"
+    );
+    assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
+}
+
+/// With the signature waived, only two files are fetched — a 404 on a
+/// `.minisig` must not fail an install that never wanted one.
+#[test]
+fn an_unsigned_remote_install_does_not_fetch_signatures() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let scratch = scratch("remote-unsigned");
+    let (files, _) = published(&scratch, "tool-fs");
+    let two = vec![files[0].clone(), files[1].clone()];
+    let (http, asked) = canned_files(two);
+
+    // From the system hasher, as the local digest test does — an expectation
+    // computed by the code under test would agree with itself.
+    let Some(digest) = sha256_of(&scratch.incoming.join("tool-fs.wasm")) else {
+        return;
+    };
+    ext::install_from_url(
+        &scratch.ext,
+        "https://example.com/ext/tool-fs.wasm",
+        &ext::Checks {
+            sha256: Some(digest),
+            trusted_keys: Vec::new(),
+            allow_unsigned: true,
+        },
+        &http,
+    )
+    .expect("an unsigned remote install with a digest lands");
+
+    let asked = asked.lock().expect("not poisoned").clone();
+    assert_eq!(asked.len(), 2, "no signature was requested: {asked:?}");
+}
+
+/// A URL carrying a query is refused rather than having its siblings silently
+/// requested without it.
+#[test]
+fn a_url_with_a_query_is_refused_rather_than_mangled() {
+    let (http, asked) = canned_files(vec![]);
+    let err = ext::install_from_url(
+        Path::new("/nonexistent"),
+        "https://example.com/ext/tool-fs.wasm?token=abc",
+        &ext::Checks::default(),
+        &http,
+    )
+    .expect_err("a query cannot survive sibling derivation");
+    assert!(
+        matches!(err, ExtError::OpaqueUrl { .. }),
+        "refused for its shape: {err:?}"
+    );
+    assert!(
+        asked.lock().expect("not poisoned").is_empty(),
+        "and nothing was requested"
+    );
+}
+
+/// `install_from_url` refuses a denied destination itself, before asking the
+/// injected client for anything.
+///
+/// Box 1 tests `check_remote` directly; this tests that the installer *calls*
+/// it. Without this, dropping the per-file check in a refactor would leave
+/// every remote test still green, because they all use a permitted origin —
+/// the policy would then rest entirely on whatever client the caller passed.
+#[test]
+fn a_refused_destination_is_not_even_requested() {
+    let (http, asked) = canned_files(vec![]);
+    let err = ext::install_from_url(
+        Path::new("/nonexistent"),
+        "http://127.0.0.1:9/ext/tool-fs.wasm",
+        &ext::Checks::default(),
+        &http,
+    )
+    .expect_err("loopback is not a public destination");
+    assert!(
+        matches!(err, ExtError::RefusedByPolicy { .. }),
+        "refused by the policy: {err:?}"
+    );
+    assert!(
+        asked.lock().expect("not poisoned").is_empty(),
+        "and the client was never asked: {:?}",
+        asked.lock().expect("not poisoned")
+    );
 }

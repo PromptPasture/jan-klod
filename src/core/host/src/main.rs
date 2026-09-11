@@ -78,7 +78,7 @@ fn ext(args: &[String]) -> ExitCode {
         _ => {
             eprintln!("usage: jan-klod-gateway ext list [ext-dir]");
             eprintln!(
-                "       jan-klod-gateway ext install <path.wasm> [ext-dir] \
+                "       jan-klod-gateway ext install <path.wasm|url> [ext-dir] \
                  [--sha256 <hex>] [--allow-unsigned]"
             );
             eprintln!("       jan-klod-gateway ext remove <name> [ext-dir]");
@@ -121,8 +121,8 @@ fn ext_install(args: &[String]) -> ExitCode {
 
     let Some(source) = positional.first() else {
         eprintln!(
-            "usage: jan-klod-gateway ext install <path.wasm> [ext-dir] [--sha256 <hex>] \
-             [--allow-unsigned]"
+            "usage: jan-klod-gateway ext install <path.wasm|url> [ext-dir] \
+             [--sha256 <hex>] [--allow-unsigned]"
         );
         return ExitCode::FAILURE;
     };
@@ -142,11 +142,30 @@ fn ext_install(args: &[String]) -> ExitCode {
         };
     checks.sha256 = sha256;
     checks.allow_unsigned = allow_unsigned;
-    match jan_klod_core::ext::install(
-        std::path::Path::new(&dir),
-        std::path::Path::new(source.as_str()),
-        &checks,
-    ) {
+
+    // A URL fetches; anything else is a path. The fetch is the host's own
+    // policy-bound client, so a redirect is re-checked per hop rather than
+    // followed on trust.
+    let outcome = if jan_klod_core::ext::looks_remote(source) {
+        let http: jan_klod_core::route::HttpFn = Box::new(|method, url, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(
+                &jan_klod_core::egress::EgressPolicy::public_only(),
+                method,
+                url,
+                headers,
+                body,
+                timeout,
+            )
+        });
+        jan_klod_core::ext::install_from_url(std::path::Path::new(&dir), source, &checks, &http)
+    } else {
+        jan_klod_core::ext::install(
+            std::path::Path::new(&dir),
+            std::path::Path::new(source.as_str()),
+            &checks,
+        )
+    };
+    match outcome {
         Ok(installed) => {
             // What it may ask the host for, at the moment it is installed —
             // the one time an operator is certainly looking.

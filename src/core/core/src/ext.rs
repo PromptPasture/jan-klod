@@ -208,6 +208,149 @@ pub fn check_remote(url: &str) -> Result<(), ExtError> {
         })
 }
 
+/// What a remote install has to fetch, and what to call each file locally.
+///
+/// # The convention, and why it is a convention rather than four arguments
+///
+/// The URL names the **component**; everything else sits beside it, exactly as
+/// it does on disk. `https://h/p/tool-fs.wasm` implies
+/// `tool-fs.manifest.toml`, and — unless the signature is waived —
+/// `tool-fs.wasm.minisig` and `tool-fs.manifest.toml.minisig`. That mirrors the
+/// local layout the verifier already requires, so one rule covers both cases
+/// and a release that publishes an installable directory publishes the same
+/// shape either way.
+///
+/// Only the signatures are conditional: with `allow_unsigned` there is nothing
+/// to verify them against, and fetching files to ignore would make a 404 on a
+/// `.minisig` fail an install that never wanted one.
+///
+/// # Errors
+/// [`ExtError::NotAWasm`] unless the URL's last segment ends in `.wasm`, and
+/// [`ExtError::OpaqueUrl`] for a query or fragment. The second matters: sibling
+/// URLs are derived by resolving a relative reference, which **drops** a query
+/// — so a URL carrying an access token would silently produce sibling URLs
+/// without it, and a 404 would look like a missing manifest rather than a
+/// mangled request. Refusing says so instead of guessing.
+fn wanted(url: &str, allow_unsigned: bool) -> Result<Vec<(String, String)>, ExtError> {
+    let parsed = url::Url::parse(url).map_err(|_| ExtError::NotAWasm {
+        path: url.to_owned(),
+    })?;
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(ExtError::OpaqueUrl {
+            url: url.to_owned(),
+        });
+    }
+    let file = parsed
+        .path_segments()
+        .and_then(Iterator::last)
+        .unwrap_or_default();
+    let Some(name) = file.strip_suffix(&format!(".{COMPONENT_EXT}")) else {
+        return Err(ExtError::NotAWasm {
+            path: url.to_owned(),
+        });
+    };
+    if name.is_empty() {
+        return Err(ExtError::NotAWasm {
+            path: url.to_owned(),
+        });
+    }
+
+    let component = format!("{name}.{COMPONENT_EXT}");
+    let manifest = format!("{name}.manifest.toml");
+    let mut files = vec![component.clone(), manifest.clone()];
+    if !allow_unsigned {
+        files.push(format!("{component}.minisig"));
+        files.push(format!("{manifest}.minisig"));
+    }
+    files
+        .into_iter()
+        .map(|file| {
+            parsed
+                .join(&file)
+                .map(|resolved| (resolved.to_string(), file))
+                .map_err(|_| ExtError::NotAWasm {
+                    path: url.to_owned(),
+                })
+        })
+        .collect()
+}
+
+/// Fetch a component and its companions, then install them as if they had been
+/// on disk all along.
+///
+/// The download **adds where the bytes come from and nothing else**: the files
+/// land in a scratch directory and go through [`install`] unchanged, so there
+/// is no second, weaker verification path to keep in step with the first. That
+/// was the reason for splitting 16c this way.
+///
+/// `http` is injected so a test can serve bytes without a socket. The egress
+/// policy is *not* injected: [`check_remote`] is called for every URL before it
+/// is requested, and the caller's `http` is expected to be policy-bound too
+/// (`http::fetch_within` checks each redirect hop). Both, because the first
+/// gives the operator a message naming the policy and the second is what
+/// actually holds when a server redirects.
+///
+/// # Errors
+/// [`ExtError::RefusedByPolicy`] for a destination the policy denies,
+/// [`ExtError::Fetch`] when a request fails or answers non-200, whatever
+/// [`wanted`] refuses about the URL's shape, and every refusal [`install`]
+/// can produce.
+pub fn install_from_url(
+    dir: &Path,
+    url: &str,
+    checks: &Checks,
+    http: &crate::route::HttpFn,
+) -> Result<Installed, ExtError> {
+    let wanted = wanted(url, checks.allow_unsigned)?;
+    let incoming = std::env::temp_dir().join(format!("jk-ext-fetch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&incoming);
+    std::fs::create_dir_all(&incoming).map_err(|source| ExtError::Staging {
+        path: incoming.display().to_string(),
+        source,
+    })?;
+
+    let outcome = fetch_all(&incoming, &wanted, http)
+        .and_then(|component| install(dir, &incoming.join(component), checks));
+    let _ = std::fs::remove_dir_all(&incoming);
+    outcome
+}
+
+/// Fetch each wanted file into `incoming`, returning the component's name.
+fn fetch_all(
+    incoming: &Path,
+    wanted: &[(String, String)],
+    http: &crate::route::HttpFn,
+) -> Result<String, ExtError> {
+    for (remote, file) in wanted {
+        // Before a byte moves, and per file: a manifest or signature URL is as
+        // much a destination as the component's.
+        check_remote(remote)?;
+        let response = http("GET", remote, &[], None, 0).map_err(|err| ExtError::Fetch {
+            url: remote.clone(),
+            detail: format!("{err:?}"),
+        })?;
+        if response.status != 200 {
+            return Err(ExtError::Fetch {
+                url: remote.clone(),
+                detail: format!("answered {}", response.status),
+            });
+        }
+        std::fs::write(incoming.join(file), &response.body).map_err(|source| {
+            ExtError::Staging {
+                path: incoming.join(file).display().to_string(),
+                source,
+            }
+        })?;
+    }
+    wanted
+        .first()
+        .map(|(_, file)| file.clone())
+        .ok_or(ExtError::Fetch {
+            url: String::new(),
+            detail: "nothing to fetch".to_owned(),
+        })
+}
+
 /// Where a file's detached signature lives: `<file>.minisig`, as minisign
 /// writes it by default.
 fn signature_path(file: &Path) -> PathBuf {
@@ -352,6 +495,26 @@ pub enum ExtError {
         /// The URL as given.
         url: String,
         /// What the policy said, for the operator to match against the rule.
+        detail: String,
+    },
+    /// A remote URL carries a query or fragment, which sibling derivation
+    /// would silently drop.
+    #[error(
+        "{url} carries a query or fragment. The manifest and signature URLs are \
+         derived from this one, and a relative reference drops a query — so they \
+         would be requested without it. Publish the files at plain paths, or fetch \
+         and install them separately."
+    )]
+    OpaqueUrl {
+        /// The URL as given.
+        url: String,
+    },
+    /// A remote file could not be fetched.
+    #[error("fetching {url}: {detail}")]
+    Fetch {
+        /// The URL that failed.
+        url: String,
+        /// What went wrong.
         detail: String,
     },
     /// The path given to `install` is not a `.wasm` file.
