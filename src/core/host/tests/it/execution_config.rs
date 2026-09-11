@@ -168,3 +168,118 @@ fn no_execution_block_denies_the_same_command() {
         turn.tool_result
     );
 }
+
+// ---------------------------------------------------------------------------
+// The values, not just the switch.
+//
+// `tool-proc-probe` maps **every** `proc-error` to `ToolError::ExecutionFailed`
+// with an empty message, so a timeout, a denial and a spawn failure are one
+// thing by the time they reach the model. A lone "it failed" assertion would
+// therefore pass for any of those reasons — including the config never being
+// read at all. So each of these runs the **same command** twice, changing only
+// the one config value under test: the run that succeeds is the control, and it
+// is what makes the run that fails mean what it says.
+// ---------------------------------------------------------------------------
+
+/// Two seconds, then a word to look for. Slow enough to outlast a one-second
+/// budget, short enough to sit under a generous one.
+const SLOW: (&str, [&str; 2]) = ("sh", ["-c", "sleep 2; echo slept"]);
+
+/// The control for the timeout pair: with room to finish, it finishes.
+#[test]
+fn a_slow_command_finishes_when_the_configured_timeout_allows_it() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_command(
+        "execution:\n  enabled: true\n  timeout-secs: 30",
+        SLOW.0,
+        &SLOW.1,
+    );
+    assert!(
+        turn.produced("slept"),
+        "the control must succeed, or the timeout test below proves nothing: {}",
+        turn.tool_result
+    );
+}
+
+/// `timeout-secs` from config bounds the command. Same command as the control
+/// above, so the only difference is the number in the config.
+#[test]
+fn timeout_secs_from_config_stops_a_slow_command() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_command(
+        "execution:\n  enabled: true\n  timeout-secs: 1",
+        SLOW.0,
+        &SLOW.1,
+    );
+    assert!(
+        !turn.produced("slept"),
+        "`timeout-secs: 1` must stop a two-second command: {}",
+        turn.tool_result
+    );
+}
+
+/// `output-cap` from config truncates, and says so.
+///
+/// This one carries its own evidence — the runner appends `…[truncated]`, which
+/// no other failure produces — but it still runs the pair, because a cap that
+/// was ignored and a command that produced nothing look identical otherwise.
+#[test]
+fn output_cap_from_config_truncates_a_long_result() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let long = "A".repeat(200);
+    let capped = run_command(
+        "execution:\n  enabled: true\n  output-cap: 16",
+        "echo",
+        &[&long],
+    );
+    assert!(
+        capped.produced("[truncated]"),
+        "`output-cap: 16` must truncate 200 bytes of output: {}",
+        capped.tool_result
+    );
+
+    let uncapped = run_command("execution:\n  enabled: true", "echo", &[&long]);
+    assert!(
+        !uncapped.produced("[truncated]"),
+        "the default cap must not truncate the same output: {}",
+        uncapped.tool_result
+    );
+}
+
+/// `env-passthrough` is a **grant**, one name at a time — not a switch that
+/// hands a child the parent's environment.
+///
+/// Both halves come from one `env` listing, which is what makes the absence
+/// meaningful: the same output that shows the granted value would have shown
+/// the ungranted one. Values are deliberately non-overlapping, so neither can
+/// satisfy the other's assertion by being a substring of it.
+#[test]
+fn env_passthrough_grants_one_name_and_not_the_rest() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    std::env::set_var("JK_EXEC_GRANTED", "let-me-in");
+    std::env::set_var("JK_EXEC_UNGRANTED", "keep-me-out");
+
+    let turn = run_command(
+        "execution:\n  enabled: true\n  env-passthrough: [JK_EXEC_GRANTED]",
+        "env",
+        &[],
+    );
+    assert!(
+        turn.produced("let-me-in"),
+        "a granted name must reach the child: {}",
+        turn.tool_result
+    );
+    assert!(
+        !turn.produced("keep-me-out"),
+        "an ungranted name must not, or `env-passthrough` is not a grant: {}",
+        turn.tool_result
+    );
+}
