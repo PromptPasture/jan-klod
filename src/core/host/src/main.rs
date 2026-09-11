@@ -59,7 +59,29 @@ fn main() -> ExitCode {
         Some("verify") => verify(&args[1..]),
         Some("ask") => ask(&args[1..]),
         Some("ext") => ext(&args[1..]),
+        Some("mcp") => mcp(),
         _ => boot_plan(&args),
+    }
+}
+
+/// Serve the Model Context Protocol on stdin/stdout.
+///
+/// No config and no runtime yet: this box answers `initialize` and
+/// `tools/list`, which need neither. `tools/call` is where a session appears,
+/// and it is deliberately not served until it can run a turn rather than
+/// half-run one.
+///
+/// Frames on stdout and nothing else, per the MCP stdio transport — which is
+/// the same rule `rpc` follows, so logs and errors go to stderr.
+fn mcp() -> ExitCode {
+    let input = std::io::BufReader::new(std::io::stdin());
+    let mut output = std::io::stdout();
+    match jan_klod_core::mcp::serve(input, &mut output) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("jan-klod: mcp: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

@@ -25,6 +25,7 @@ pub mod http;
 pub mod intercept;
 pub mod interceptor_host;
 pub mod manifest;
+pub mod mcp;
 pub mod projection;
 pub mod registry_host;
 pub mod route;
