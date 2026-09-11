@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 
+pub mod minisig;
+
 /// Removes the test temp directory on drop — even if the test panics.
 pub struct TempDir(pub PathBuf);
 impl Drop for TempDir {

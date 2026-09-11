@@ -36,6 +36,19 @@ jan-klod-protocol = { path = "../protocol" }
 # `jan_klod` namespace in this crate, so the client is imported as
 # `jan_klod_client` to keep the two unambiguous.
 jan-klod-client = { package = "jan-klod", path = "../ui" }
+# Minisign fixtures for the `ext install` signature tests — see
+# `tests/it/common/minisig.rs`. A test has to prove a *valid* signature is
+# accepted, since a suite of refusals alone passes with a verifier that rejects
+# everything, and there is no `minisign` binary to produce one with. The
+# `minisign` crate signs but costs 10 packages (it brings `rpassword` and
+# `scrypt` in for interactive prompts); these two cost **one** between them.
+#
+# `blake2` is pinned to 0.10 deliberately: it then shares `digest 0.10` with
+# `sha2` and adds one package, where 0.11 pulls `digest 0.11` and adds four.
+# It is needed because the installer requires *prehashed* signatures.
+blake2 = "0.10"
+# Ed25519 signing, and zero new packages: already in the lock via ureq/rustls.
+ring = "0.17.14"
 
 # The examples are opt-in, because cargo builds every example during `cargo test`
 # and `cargo nextest run` just to check they compile. Each of these links

@@ -73,6 +73,35 @@ impl Config {
         Self::from_yaml(&text)
     }
 
+    /// One top-level block, without resolving any extension instance.
+    ///
+    /// [`Config::from_path`] expands `${VAR}` in every *enabled* instance and
+    /// fails when one is unset, which is right for booting and wrong for
+    /// reading a key that has nothing to do with extensions. `ext install`
+    /// needs `registry.trusted-keys` and would otherwise refuse to run without
+    /// a provider's API key in the environment — an install command demanding
+    /// model credentials.
+    ///
+    /// Deliberately *not* a second reader of `config.yaml`: it is the same
+    /// crate and the same parse, stopping before the part that does not apply.
+    ///
+    /// # Errors
+    /// [`ConfigError::Read`] if the file cannot be read, [`ConfigError::Yaml`]
+    /// if it is not YAML, [`ConfigError::RootNotMap`] if the document is not a
+    /// mapping.
+    pub fn top_level(path: impl AsRef<Path>, key: &str) -> Result<Option<Value>, ConfigError> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
+            path: path.display().to_string(),
+            source,
+        })?;
+        let root: Value = serde_yaml_ng::from_str(&text)?;
+        let Value::Object(root) = root else {
+            return Err(ConfigError::RootNotMap);
+        };
+        Ok(root.get(key).cloned())
+    }
+
     /// Parse a `config.yaml` from a string.
     ///
     /// # Errors

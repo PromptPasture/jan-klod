@@ -30,6 +30,14 @@ tiny_http = "0.12"
 # so this only makes a transitive crate a direct one. Measured before adding,
 # the way `schemars` was measured and rejected at 7.
 sha2 = "0.10"
+# Signature verification for `ext install` (Slice 16c-1). **One package, no
+# transitive dependencies** — measured before adding. Verify-only on purpose:
+# the core never signs anything, so a signing crate would be capability this
+# binary has no use for. `minisign` (which signs) costs 10 packages and drags
+# `rpassword` and `scrypt` in for interactive password prompts; the tests build
+# their fixtures from `ring` + `blake2` instead (dev-only, in `jan-klod-host`),
+# at one more package.
+minisign-verify = "0.2.5"
 
 
 # Landlock, for the Linux command sandbox (Slice 15c). Target-gated, so it never

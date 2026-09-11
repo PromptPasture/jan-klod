@@ -292,6 +292,26 @@ extensions:
 storage:
   path: ./jan-klod.db
 
+# Who may vouch for a component `jan-klod-gateway ext install` puts into `ext/`.
+#
+# Minisign public keys, exactly as minisign prints them. **Empty means nothing
+# is trusted, not "skip the check"**: an install refuses unless a key here
+# verifies signatures over *both* the component and its manifest. That is the
+# default-deny rule — a grant is a named thing in this file — and it is why the
+# list ships empty rather than absent, so the shape is visible before there is
+# anything to put in it.
+#
+# Nothing first-party is signed yet (no tags, no releases), so today every
+# install needs the deliberate widening: `--allow-unsigned`, which in turn
+# requires `--sha256 <hex>`. There is no combination that lands a component
+# with nothing vouching for it.
+#
+# Note this is the **top-level** `registry`, not `extensions.registry` above —
+# that one holds the `skills` and `mcp` catalogue instances. They share a word
+# and nothing else.
+registry:
+  trusted-keys: []
+
 # Load a component that ships no `<name>.manifest.toml` beside it. Off, because
 # a component nobody can inspect before running it is the thing a manifest
 # exists to prevent — and `make ext` generates one per guest, so the only way

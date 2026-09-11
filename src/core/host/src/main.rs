@@ -65,12 +65,11 @@ fn main() -> ExitCode {
 
 /// What is staged in `ext/`, and unmaking it.
 ///
-/// `install` is **not** here yet, and its absence is the point: it arrives with
-/// the verification that makes it worth having (checksum, signature, component
-/// validity, manifest consistency). A subcommand that copied a file into `ext/`
-/// and called that installing would be `cp` with a longer name — and the
-/// build pipeline is not behind the runtime sandbox, so whatever lands there
-/// decides what runs with the host's privileges.
+/// `install` verifies before it copies — digest, signature over both files,
+/// component validity, manifest consistency — because the build pipeline is not
+/// behind the runtime sandbox, so whatever lands in `ext/` decides what runs
+/// with the host's privileges. A subcommand that copied a file in and called
+/// that installing would be `cp` with a longer name.
 fn ext(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("list") => ext_list(&args[1..]),
@@ -78,7 +77,10 @@ fn ext(args: &[String]) -> ExitCode {
         Some("install") => ext_install(&args[1..]),
         _ => {
             eprintln!("usage: jan-klod-gateway ext list [ext-dir]");
-            eprintln!("       jan-klod-gateway ext install <path.wasm> [ext-dir] [--sha256 <hex>]");
+            eprintln!(
+                "       jan-klod-gateway ext install <path.wasm> [ext-dir] \
+                 [--sha256 <hex>] [--allow-unsigned]"
+            );
             eprintln!("       jan-klod-gateway ext remove <name> [ext-dir]");
             ExitCode::FAILURE
         }
@@ -90,6 +92,7 @@ fn ext_install(args: &[String]) -> ExitCode {
     // `--sha256 <hex>`, pulled out before the positionals so a digest cannot be
     // mistaken for the extension directory.
     let mut sha256: Option<String> = None;
+    let mut allow_unsigned = false;
     let mut positional: Vec<String> = Vec::new();
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
@@ -103,6 +106,8 @@ fn ext_install(args: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             };
             sha256 = Some(value.clone());
+        } else if arg == "--allow-unsigned" {
+            allow_unsigned = true;
         } else if arg.starts_with("--") {
             // Refused rather than ignored: a mistyped `--sha265` that were
             // silently dropped would install without the check the operator
@@ -115,11 +120,28 @@ fn ext_install(args: &[String]) -> ExitCode {
     }
 
     let Some(source) = positional.first() else {
-        eprintln!("usage: jan-klod-gateway ext install <path.wasm> [ext-dir] [--sha256 <hex>]");
+        eprintln!(
+            "usage: jan-klod-gateway ext install <path.wasm> [ext-dir] [--sha256 <hex>] \
+             [--allow-unsigned]"
+        );
         return ExitCode::FAILURE;
     };
     let dir = resolve_default(&arg_or(&positional, 1, "ext"));
-    let checks = jan_klod_core::ext::Checks { sha256 };
+
+    // The trusted keys are a *grant*, so they come from `config.yaml` rather
+    // than from a flag: a key accepted on the command line would let whoever
+    // supplies the component also supply the key that vouches for it.
+    let config_path = resolve_default("config.yaml");
+    let mut checks =
+        match jan_klod_core::ext::Checks::from_config_path(std::path::Path::new(&config_path)) {
+            Ok(checks) => checks,
+            Err(err) => {
+                eprintln!("jan-klod: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+    checks.sha256 = sha256;
+    checks.allow_unsigned = allow_unsigned;
     match jan_klod_core::ext::install(
         std::path::Path::new(&dir),
         std::path::Path::new(source.as_str()),

@@ -7,15 +7,20 @@
 //! by the same [`crate::inspect`] the boot path uses, so an install cannot
 //! accept what boot would refuse.
 //!
-//! Integrity, when the caller supplies a digest to check against — see
-//! [`Checks`] for why that is optional for a local path and what makes it
-//! stop being optional.
+//! Integrity, when the caller supplies a digest — see [`Checks`] for why that
+//! is optional for a local path and what makes it stop being optional.
 //!
-//! **Provenance is still not checked.** The signature is a later box of
-//! [#91](https://github.com/PromptPasture/jan-klod/issues/91). Until it lands,
-//! this proves a component is well-formed, honest *about itself*, and — given a
-//! digest — the bytes someone meant to publish. It does not prove who published
-//! them. A real improvement on `cp`, and not yet the whole guarantee.
+//! Provenance: a minisign signature over **both** files, under a key the
+//! operator named in `registry.trusted-keys`. Signed is the default; the only
+//! way past it is `allow_unsigned`, which then requires a digest, so no
+//! combination of flags lands a component with nothing vouching for it.
+//!
+//! What is still unchecked is *where the bytes came from* — remote fetching is
+//! [#92](https://github.com/PromptPasture/jan-klod/issues/92) — and nothing
+//! first-party is signed yet, which is
+//! [#93](https://github.com/PromptPasture/jan-klod/issues/93). A signature
+//! check with no published key to check against verifies nobody's components
+//! until there is one, and that is the honest state today.
 //!
 //! # Why `list` reads manifests rather than filenames
 //!
@@ -47,15 +52,12 @@ const COMPONENT_EXT: &str = "wasm";
 /// proving nothing, and worse, it trains people to paste digests they just
 /// generated.
 ///
-/// So: **supplied is enforced, absent is allowed** — for now. The policy this
-/// slice commits to, and which #92 therefore does not have to invent, is that
-/// a component must never land with *no* integrity evidence at all. Once box 4
-/// adds signature checking, a digest becomes **required** wherever the
-/// signature is waived (`--allow-unsigned`), which is the case a URL install
-/// falls into when no key covers it. Until signatures exist, every install is
-/// unsigned, so enforcing that rule now would mean requiring a digest for
-/// everything — including the local, operator-chosen file where it means
-/// least.
+/// So: **supplied is enforced, absent is allowed only while the signature is
+/// not.** The invariant is not "always a digest" but "never nothing": a digest
+/// is **required** wherever the signature is waived with
+/// [`Checks::allow_unsigned`], which is the state a URL install (#92) falls
+/// into when no key covers it. #92 therefore does not have to invent a
+/// policy.
 #[derive(Debug, Clone, Default)]
 pub struct Checks {
     /// Expected SHA-256 of the **component**, as hex. Case-insensitive.
@@ -69,6 +71,88 @@ pub struct Checks {
     /// component reach it, since a capability it does not import is one it
     /// cannot call.
     pub sha256: Option<String>,
+
+    /// The minisign public keys an install may be signed by, base64 as minisign
+    /// writes them, from the top-level `registry.trusted-keys`.
+    ///
+    /// **Empty means nothing is trusted, not "skip the check".** That is the
+    /// repository's default-deny rule applied here: a capability is granted by
+    /// being named in `config.yaml`, so an operator who has named no keys has
+    /// granted nothing, and an install refuses rather than accepting whatever
+    /// turns up. Treating an empty list as "unsigned is fine" would make the
+    /// whole check vanish for exactly the operator who never configured it.
+    pub trusted_keys: Vec<String>,
+
+    /// Waive the signature requirement, deliberately and by name.
+    ///
+    /// Paired with `sha256`: see [`Checks::sha256`]. Waiving the signature
+    /// makes the digest **required**, so there is no combination of flags that
+    /// lands a component with no integrity evidence at all.
+    pub allow_unsigned: bool,
+}
+
+impl Checks {
+    /// Read `registry.trusted-keys` from the top-level `registry` block.
+    ///
+    /// `registry` is opaque JSON as the config crate preserved it, the same way
+    /// [`crate::sandbox::SandboxPolicy::from_config`] takes `execution`.
+    ///
+    /// Note this is the **top-level** `registry`, not the `extensions.registry`
+    /// category that holds `skills` and `mcp`. Two different things that share
+    /// a word.
+    ///
+    /// Strict, because neither fallback is safe: silently dropping a malformed
+    /// entry would leave an operator believing a key is trusted when it is not,
+    /// and refusing the whole list is the only reading that cannot quietly
+    /// widen or narrow what they asked for.
+    ///
+    /// # Errors
+    /// [`ExtError::TrustedKeysNotAList`] when `trusted-keys` is present and is
+    /// not a list of strings.
+    pub fn from_config(registry: Option<&serde_json::Value>) -> Result<Self, ExtError> {
+        let keys = match registry.and_then(|block| block.get("trusted-keys")) {
+            None => Vec::new(),
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .map(|item| {
+                    item.as_str()
+                        .map(str::to_owned)
+                        .ok_or(ExtError::TrustedKeysNotAList)
+                })
+                .collect::<Result<_, _>>()?,
+            Some(_) => return Err(ExtError::TrustedKeysNotAList),
+        };
+        Ok(Self {
+            sha256: None,
+            trusted_keys: keys,
+            allow_unsigned: false,
+        })
+    }
+
+    /// Read the grant straight from a `config.yaml`.
+    ///
+    /// Here rather than in the gateway binary because this crate already
+    /// depends on the config crate and the binary does not — the same division
+    /// as [`crate::Runtime::boot`], which takes a path and does the reading
+    /// itself. A CLI that parsed config would be a second reader of it.
+    ///
+    /// # Errors
+    /// [`ExtError::Config`] if the file cannot be read or parsed, and whatever
+    /// [`Checks::from_config`] refuses.
+    pub fn from_config_path(path: &Path) -> Result<Self, ExtError> {
+        // `top_level` rather than `from_path`: the latter expands `${VAR}` in
+        // every enabled instance and fails when one is unset, so reading a key
+        // that has nothing to do with extensions would make `ext install`
+        // refuse to run without a provider's API key in the environment.
+        // Found by running it, not by reading it.
+        let registry = jan_klod_config::Config::top_level(path, "registry").map_err(|err| {
+            ExtError::Config {
+                path: path.display().to_string(),
+                detail: err.to_string(),
+            }
+        })?;
+        Self::from_config(registry.as_ref())
+    }
 }
 
 /// A SHA-256 digest as lowercase hex.
@@ -77,6 +161,70 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut out, byte| {
         let _ = write!(out, "{byte:02x}");
         out
+    })
+}
+
+/// Where a file's detached signature lives: `<file>.minisig`, as minisign
+/// writes it by default.
+fn signature_path(file: &Path) -> PathBuf {
+    let mut name = file.as_os_str().to_os_string();
+    name.push(".minisig");
+    PathBuf::from(name)
+}
+
+/// Verify `file` against its `.minisig` under any of `keys`.
+///
+/// `content` is the staged copy — the bytes that will land — while the
+/// `.minisig` is read from beside `beside`, the file as the operator offered
+/// it. Verifying the staged bytes means a copy that went wrong fails here too.
+///
+/// **Prehashed signatures only** — `allow_legacy: false`. The legacy format is
+/// Ed25519 over the raw file rather than over its `BLAKE2b-512` hash, and
+/// minisign has moved on from it; accepting it would widen what the installer
+/// trusts in exchange for nothing, since nothing has ever been signed for this
+/// project and so there is no legacy signature to stay compatible with.
+fn verify_signature(
+    content: &Path,
+    beside: &Path,
+    shown: &str,
+    keys: &[String],
+) -> Result<(), ExtError> {
+    let signature = signature_path(beside);
+    if !signature.exists() {
+        return Err(ExtError::Unsigned {
+            path: shown.to_owned(),
+        });
+    }
+    let text = std::fs::read_to_string(&signature).map_err(|err| ExtError::MalformedSignature {
+        path: shown.to_owned(),
+        detail: err.to_string(),
+    })?;
+    let parsed =
+        minisign_verify::Signature::decode(&text).map_err(|err| ExtError::MalformedSignature {
+            path: shown.to_owned(),
+            detail: err.to_string(),
+        })?;
+    let bytes = std::fs::read(content).map_err(|err| ExtError::MalformedSignature {
+        path: shown.to_owned(),
+        detail: err.to_string(),
+    })?;
+
+    for (index, key) in keys.iter().enumerate() {
+        let key = minisign_verify::PublicKey::from_base64(key.trim()).map_err(|err| {
+            // A key the operator wrote that cannot be parsed is their mistake to
+            // see, not something to skip past on the way to "untrusted".
+            ExtError::MalformedTrustedKey {
+                index,
+                detail: err.to_string(),
+            }
+        })?;
+        if key.verify(&bytes, &parsed, false).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(ExtError::Untrusted {
+        path: shown.to_owned(),
+        keys: keys.len(),
     })
 }
 
@@ -191,6 +339,65 @@ pub enum ExtError {
         /// The digest the bytes actually have.
         actual: String,
     },
+    /// `config.yaml` could not be read or parsed.
+    #[error("reading {path}: {detail}")]
+    Config {
+        /// The config file that could not be used.
+        path: String,
+        /// What the config crate objected to.
+        detail: String,
+    },
+    /// `registry.trusted-keys` is not a list of strings.
+    #[error("`registry.trusted-keys` must be a list of minisign public keys")]
+    TrustedKeysNotAList,
+    /// A configured trusted key cannot be read as a minisign public key.
+    #[error("`registry.trusted-keys` entry {index} is not a minisign public key: {detail}")]
+    MalformedTrustedKey {
+        /// Which entry, so the operator can find it in `config.yaml`.
+        index: usize,
+        /// What the parser objected to.
+        detail: String,
+    },
+    /// No signature beside the file, and the signature was not waived.
+    #[error(
+        "no signature at {path}.minisig. Sign it, name the key in \
+         `registry.trusted-keys`, or pass --allow-unsigned with --sha256"
+    )]
+    Unsigned {
+        /// The file that arrived without a signature.
+        path: String,
+    },
+    /// A `.minisig` is there and cannot be parsed.
+    #[error("the signature at {path}.minisig cannot be read: {detail}")]
+    MalformedSignature {
+        /// The file whose signature is unreadable.
+        path: String,
+        /// What the parser objected to.
+        detail: String,
+    },
+    /// No trusted key verifies this signature.
+    ///
+    /// One error for "wrong key" and "wrong bytes" **on purpose**: the
+    /// distinction is not one an installer can draw honestly. A signature that
+    /// no trusted key accepts is untrusted, and guessing which half is at fault
+    /// would mean reporting a key id from an untrusted file as if it meant
+    /// something.
+    #[error(
+        "the signature for {path} is not valid under any key in \
+         `registry.trusted-keys` ({keys} configured)"
+    )]
+    Untrusted {
+        /// The file whose signature did not verify.
+        path: String,
+        /// How many keys were tried — `0` is the usual cause, and says so.
+        keys: usize,
+    },
+    /// `--allow-unsigned` without the digest that must accompany it.
+    #[error(
+        "--allow-unsigned requires --sha256 <hex>: waiving the signature leaves the \
+         digest as the only evidence about these bytes"
+    )]
+    DigestRequiredWhenUnsigned,
     /// The file is not a WebAssembly component (a core module, or not wasm).
     #[error("{path} is not a WebAssembly component")]
     NotAComponent {
@@ -393,6 +600,12 @@ pub fn remove(dir: &Path, name: &str) -> Result<Removed, ExtError> {
 /// `cp` did. In every case `dir` is left exactly as it was and the staging
 /// directory is removed.
 pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, ExtError> {
+    // Argument validation first, before a single byte is copied: waiving the
+    // signature without a digest would leave nothing at all vouching for these
+    // bytes, and that combination is refused rather than quietly accepted.
+    if checks.allow_unsigned && checks.sha256.is_none() {
+        return Err(ExtError::DigestRequiredWhenUnsigned);
+    }
     if !source.exists() {
         return Err(ExtError::SourceMissing {
             path: source.display().to_string(),
@@ -440,6 +653,73 @@ pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, 
     outcome
 }
 
+/// Check `staged` against an expected digest, if one was given.
+///
+/// Against the **staged copy** rather than the source: those bytes are the ones
+/// that would land, so a copy that went wrong is caught here too.
+fn verify_digest(staged: &Path, shown: &Path, expected: Option<&str>) -> Result<(), ExtError> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    if !looks_like_a_digest(expected) {
+        return Err(ExtError::MalformedDigest {
+            given: expected.to_owned(),
+            length: expected.len(),
+        });
+    }
+    let bytes = std::fs::read(staged).map_err(|err| ExtError::Staging {
+        path: staged.display().to_string(),
+        source: err,
+    })?;
+    let actual = hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes));
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(ExtError::DigestMismatch {
+            path: shown.display().to_string(),
+            expected: expected.to_ascii_lowercase(),
+            actual,
+        })
+    }
+}
+
+/// Compile the staged component and cross-check its manifest, mapping each
+/// verdict to the refusal an operator needs to see.
+///
+/// Compiling it *is* the "is this a component" check — the same call the boot
+/// path makes, with the same default engine, so a file that installs is a file
+/// that loads.
+fn check_structure(staged: &Path, shown: &Path) -> Result<(), ExtError> {
+    let engine = Engine::default();
+    let component =
+        Component::from_file(&engine, staged).map_err(|err| ExtError::NotAComponent {
+            path: shown.display().to_string(),
+            source: err.into(),
+        })?;
+    let inspected =
+        inspect(&component, &engine, staged).map_err(|err| ExtError::ManifestUnusable {
+            path: shown.display().to_string(),
+            source: err,
+        })?;
+    match inspected.verdict {
+        Verdict::Consistent => Ok(()),
+        // Staged above, so this is unreachable in practice; treated as the
+        // refusal it is rather than papered over with a wildcard arm.
+        Verdict::NoManifest => Err(ExtError::NoManifest {
+            path: shown.display().to_string(),
+        }),
+        Verdict::ApiMismatch { theirs } => Err(ExtError::ApiMismatch {
+            path: shown.display().to_string(),
+            theirs,
+            ours: crate::manifest::API_VERSION.to_owned(),
+        }),
+        Verdict::UnderDeclared { interfaces } => Err(ExtError::UnderDeclared {
+            path: shown.display().to_string(),
+            interfaces: interfaces.join(", "),
+        }),
+    }
+}
+
 /// Copy into `staging`, check, and move into place on success.
 fn stage_and_check(
     staging: &Path,
@@ -461,30 +741,9 @@ fn stage_and_check(
         source: err,
     })?;
 
-    // Integrity before anything else, and against the **staged copy** rather
-    // than the source: those bytes are the ones that would land, so a copy that
-    // went wrong is caught here too. Cheapest check first, and there is no
-    // reason to compile bytes already known to be the wrong ones.
-    if let Some(expected) = checks.sha256.as_deref() {
-        if !looks_like_a_digest(expected) {
-            return Err(ExtError::MalformedDigest {
-                given: expected.to_owned(),
-                length: expected.len(),
-            });
-        }
-        let bytes = std::fs::read(&staged_component).map_err(|err| ExtError::Staging {
-            path: staged_component.display().to_string(),
-            source: err,
-        })?;
-        let actual = hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes));
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(ExtError::DigestMismatch {
-                path: source.display().to_string(),
-                expected: expected.to_ascii_lowercase(),
-                actual,
-            });
-        }
-    }
+    // Integrity before anything else: cheapest check first, and no reason to
+    // compile bytes already known to be the wrong ones.
+    verify_digest(&staged_component, source, checks.sha256.as_deref())?;
 
     // The manifest travels with the component, and its absence is refused
     // rather than tolerated: `allow-unmanifested` exists for a component
@@ -501,46 +760,38 @@ fn stage_and_check(
         source: err,
     })?;
 
-    // Compiling it *is* the "is this a component" check — the same call the
-    // boot path makes, with the same default engine, so a file that installs
-    // is a file that loads.
-    let engine = Engine::default();
-    let component = Component::from_file(&engine, &staged_component).map_err(|err| {
-        ExtError::NotAComponent {
-            path: source.display().to_string(),
-            source: err.into(),
-        }
-    })?;
-
-    let inspected = inspect(&component, &engine, &staged_component).map_err(|err| {
-        ExtError::ManifestUnusable {
-            path: source.display().to_string(),
-            source: err,
-        }
-    })?;
-    match inspected.verdict {
-        Verdict::Consistent => {}
-        Verdict::NoManifest => {
-            // Copied above, so this is unreachable in practice; treated as the
-            // refusal it is rather than papered over with a wildcard arm.
-            return Err(ExtError::NoManifest {
-                path: source.display().to_string(),
-            });
-        }
-        Verdict::ApiMismatch { theirs } => {
-            return Err(ExtError::ApiMismatch {
-                path: source.display().to_string(),
-                theirs,
-                ours: crate::manifest::API_VERSION.to_owned(),
-            });
-        }
-        Verdict::UnderDeclared { interfaces } => {
-            return Err(ExtError::UnderDeclared {
-                path: source.display().to_string(),
-                interfaces: interfaces.join(", "),
-            });
-        }
+    // Provenance, over **both** files and before the component is compiled.
+    //
+    // Both, because a manifest carries no provenance of its own: it is trusted
+    // at boot purely for sitting beside the component, so signing the `.wasm`
+    // alone would verify the artefact while trusting an attacker's description
+    // of what it may ask the host for. That is worse than no signature, because
+    // it looks like one.
+    //
+    // The signatures are read from beside the *source* and checked against the
+    // *staged* bytes — the ones that will land — so a copy that went wrong
+    // fails here too. They are not carried into `ext/`: nothing at runtime
+    // reads them, and a file the runtime ignores does not belong beside the
+    // ones it loads.
+    //
+    // When the signature is waived, the digest checked above is the only
+    // evidence there is — which is why `install` refuses the flag without one.
+    if !checks.allow_unsigned {
+        verify_signature(
+            &staged_component,
+            source,
+            &source.display().to_string(),
+            &checks.trusted_keys,
+        )?;
+        verify_signature(
+            &staged_manifest,
+            &source_manifest,
+            &source_manifest.display().to_string(),
+            &checks.trusted_keys,
+        )?;
     }
+
+    check_structure(&staged_component, source)?;
 
     // **Manifest first.** Between the two renames one file is in `ext/` without
     // the other, and the two orders are not equally safe: a component that
@@ -708,6 +959,24 @@ mod tests {
         );
     }
 
+    /// Checks that get past the signature gate, for tests about something else.
+    ///
+    /// The installer requires a signature by default, and these fixtures are
+    /// fabricated bytes with no key to sign them — so they take the supported
+    /// waiver: `allow_unsigned` plus the digest it demands. The digest is
+    /// computed here rather than asserted, so this is a gate being opened, not
+    /// a check being tested; the digest's own correctness is covered by
+    /// `ext_install::a_correct_digest_installs_and_a_tampered_byte_is_refused`,
+    /// which takes its expected value from the system's hasher instead.
+    fn waived(file: &Path) -> Checks {
+        let bytes = std::fs::read(file).expect("reads the file being waived");
+        Checks {
+            sha256: Some(super::hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes))),
+            trusted_keys: Vec::new(),
+            allow_unsigned: true,
+        }
+    }
+
     /// Every file in `dir`, with its bytes — the "did `ext/` change" oracle.
     ///
     /// Compared instead of reading the code, per the plan: an install that
@@ -750,7 +1019,7 @@ mod tests {
         let before = snapshot(&ext);
 
         let source = prepare(&dir.0);
-        let err = install(&ext, &source, &Checks::default()).expect_err("must refuse");
+        let err = install(&ext, &source, &waived(&source)).expect_err("must refuse");
 
         assert_eq!(
             snapshot(&ext),
@@ -809,12 +1078,12 @@ mod tests {
         let not_wasm = {
             let path = dir.0.join("notes.txt");
             std::fs::write(&path, b"x").expect("writes");
-            install(&ext, &path, &Checks::default()).expect_err("refuses")
+            install(&ext, &path, &waived(&path)).expect_err("refuses")
         };
         let alone = {
             let path = dir.0.join("tool-alone.wasm");
             std::fs::write(&path, b"\0asm").expect("writes");
-            install(&ext, &path, &Checks::default()).expect_err("refuses")
+            install(&ext, &path, &waived(&path)).expect_err("refuses")
         };
         let junk = {
             let path = dir.0.join("tool-junk.wasm");
@@ -824,7 +1093,7 @@ mod tests {
                 manifest_for("tool-junk", ""),
             )
             .expect("writes");
-            install(&ext, &path, &Checks::default()).expect_err("refuses")
+            install(&ext, &path, &waived(&path)).expect_err("refuses")
         };
 
         let messages = [
@@ -867,6 +1136,8 @@ mod tests {
                 &source,
                 &Checks {
                     sha256: Some(bad.to_owned()),
+                    trusted_keys: Vec::new(),
+                    allow_unsigned: true,
                 },
             )
             .expect_err("must refuse");
@@ -890,7 +1161,7 @@ mod tests {
 
         let source = dir.0.join("tool-fs.wasm");
         std::fs::write(&source, b"\0asm").expect("writes a component");
-        let err = install(&ext, &source, &Checks::default()).expect_err("must refuse");
+        let err = install(&ext, &source, &waived(&source)).expect_err("must refuse");
         assert!(
             matches!(err, ExtError::AlreadyInstalled { .. }),
             "replacing silently would discard the component the config was verified against: {err:?}"
