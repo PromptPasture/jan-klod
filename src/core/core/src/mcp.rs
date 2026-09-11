@@ -173,6 +173,34 @@ fn call_ask(agent: &mut AgentSession, params: &serde_json::Value) -> serde_json:
     }
 }
 
+/// The two read tools, over the payloads the REST surface already builds.
+///
+/// `serve::sessions_payload` and `serve::session_payload` are reused rather
+/// than re-derived: a second reader of the same transcripts would be a second
+/// answer to "what sessions are there", and they would drift.
+///
+/// The payload is returned as **text**, pretty-printed JSON. Every MCP client
+/// can render a text block; `structuredContent` is newer and not universally
+/// supported, and a model reads JSON perfectly well.
+fn call_sessions(agent: &AgentSession, params: &serde_json::Value, one: bool) -> serde_json::Value {
+    let payload = if one {
+        let arguments = params.get("arguments").unwrap_or(&serde_json::Value::Null);
+        let Some(id) = arguments.get("session").and_then(serde_json::Value::as_str) else {
+            return content("`session_get` needs a `session` string", true);
+        };
+        crate::serve::session_payload(agent, id)
+    } else {
+        crate::serve::sessions_payload(agent)
+    };
+    match serde_json::to_string_pretty(&payload) {
+        Ok(text) => content(&text, false),
+        Err(err) => content(
+            &format!("the session payload could not be rendered: {err}"),
+            true,
+        ),
+    }
+}
+
 /// A `tools/call` result: one text block, and whether it went wrong.
 fn content(text: &str, is_error: bool) -> serde_json::Value {
     serde_json::json!({
@@ -187,6 +215,10 @@ fn answer(line: &str, agent: &mut AgentSession) -> Option<jsonrpc::Response> {
         Asked::Silent => None,
         Asked::Answer(response) => Some(response),
         Asked::Ask { id, params } => Some(jsonrpc::Response::result(id, call_ask(agent, &params))),
+        Asked::Sessions { id, params, one } => Some(jsonrpc::Response::result(
+            id,
+            call_sessions(agent, &params, one),
+        )),
     }
 }
 
@@ -207,6 +239,16 @@ enum Asked {
         id: jsonrpc::Id,
         /// The `tools/call` params, arguments included.
         params: serde_json::Value,
+    },
+    /// `tools/call session_list` or `session_get`, which need the session store
+    /// but run nothing.
+    Sessions {
+        /// The request to answer.
+        id: jsonrpc::Id,
+        /// The `tools/call` params, arguments included.
+        params: serde_json::Value,
+        /// `true` for `session_get`, `false` for `session_list`.
+        one: bool,
     },
 }
 
@@ -249,6 +291,13 @@ fn classify(line: &str) -> Asked {
             Some("ask") => {
                 return Asked::Ask {
                     id,
+                    params: frame.params,
+                }
+            }
+            Some(name @ ("session_list" | "session_get")) => {
+                return Asked::Sessions {
+                    id,
+                    one: name == "session_get",
                     params: frame.params,
                 }
             }
@@ -329,7 +378,9 @@ mod tests {
         match classify(line) {
             Asked::Answer(response) => serde_json::to_value(response).expect("it serializes"),
             Asked::Silent => panic!("{line} earns an answer"),
-            Asked::Ask { .. } => panic!("{line} needs a turn; test it through the harness"),
+            Asked::Ask { .. } | Asked::Sessions { .. } => {
+                panic!("{line} needs a session; test it through the harness")
+            }
         }
     }
 
@@ -409,6 +460,21 @@ mod tests {
         let value = call("not json at all");
         assert_eq!(value["error"]["code"], jsonrpc::PARSE_ERROR);
         assert!(value["id"].is_null(), "{value}");
+    }
+
+    #[test]
+    fn the_read_tools_are_routed_to_the_session_store() {
+        let list =
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"session_list"}}"#;
+        assert!(
+            matches!(classify(list), Asked::Sessions { one: false, .. }),
+            "session_list lists"
+        );
+        let get = r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"session_get","arguments":{"session":"x"}}}"#;
+        assert!(
+            matches!(classify(get), Asked::Sessions { one: true, .. }),
+            "session_get fetches one"
+        );
     }
 
     #[test]
