@@ -780,12 +780,39 @@ suite, which has no network.
 
 Resource-budget and developer-experience items from the vision, tracked as
 issues, not phases: **lazy guest instantiation** (instantiate a component on
-first call, not at boot), an **AOT component cache** (`.cwasm` keyed by
-component hash + Wasmtime version), an **accelerated `host-fs.grep`** (native
-tree search behind the existing jail, the guest only shapes the request), the
-**Rust extension PDK** (`make ext-new NAME=` template + guest test harness
-guide), and **named distributions** in the Configurator (`coding`,
-`headless-chat`, `minimal`).
+first call, not at boot — **#59 done 2026-09-11**, below), an **AOT component
+cache** (`.cwasm` keyed by component hash + Wasmtime version), an
+**accelerated `host-fs.grep`** (native tree search behind the existing jail,
+the guest only shapes the request), the **Rust extension PDK**
+(`make ext-new NAME=` template + guest test harness guide), and **named
+distributions** in the Configurator (`coding`, `headless-chat`, `minimal`).
+
+**#59 done 2026-09-11:** `tool-*`/`registry-*`/`agent` guests compile at boot
+(unchanged) but instantiate (`Store` + `init` + `start`) only when the fleet
+is first asked for something — its metadata (`select-tools` advertising) or
+an `invoke`, whichever comes first; providers and interceptors stay eager,
+not negotiable. The boot-plan/`verify`-offline path (`Runtime::start_all`, the
+default no-subcommand invocation) no longer instantiates the lazy categories
+at all; `verify`/`verify --live` are unaffected (`Runtime::start_all_eager`
+keeps their original, fully-eager behaviour, since proving instantiate+start
+work is their entire purpose). Measured honestly rather than assumed: on the
+shipped `config.yaml` (3 tools, `tool-selector` enabled) neither RSS-after-boot
+nor time-to-first-prompt moved outside run-to-run noise, before or after,
+because `tool-selector` needs every tool's metadata before turn one regardless
+— the real, identified reason is that compiling each guest (Cranelift JIT,
+unchanged by this issue) costs more than instantiating one at this repo's
+guest sizes, confirmed by re-running the same comparison on a synthetic
+14-instance config with all eight available tools enabled. The catalog
+option the issue raised — sourcing `select-tools`'s advertisement from the
+manifest instead of the guest, for real per-tool laziness — was decided
+against for this slice: it would need the manifest to carry a tool's
+model-facing name/description/schema, producible only by *running* `meta()`
+at manifest-generation time, and nothing today catches that manifest and the
+guest's own `meta` drifting apart (16a's `inspect` cross-check covers
+host-capability imports, not tool metadata). Left as a follow-up, not
+half-built. Full detail, the measured numbers, and the mechanism (
+`LazyToolFleet`/`LazyRegistryFleet`) are in
+[the changelog](../changelog.md#2026-09-11).
 
 
 

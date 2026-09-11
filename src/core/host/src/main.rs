@@ -488,7 +488,12 @@ fn verify(args: &[String]) -> ExitCode {
 
     // Present is not the same as working: a component that cannot be instantiated
     // or refuses to start would fail at the first turn instead of here.
-    match runtime.start_all() {
+    //
+    // `start_all_eager`, not `start_all`: since #59, `tool-*`/`registry-*` are
+    // instantiated on first use rather than at boot, and `start_all` (the
+    // boot-plan path) reflects that. `verify` must not — proving a lazy
+    // category *would* instantiate is the entire reason this command exists.
+    match runtime.start_all_eager() {
         Ok(started) => {
             println!("verified: {} extension(s) start cleanly", started.len());
             if live {
@@ -562,6 +567,11 @@ fn boot_plan(args: &[String]) -> ExitCode {
 
     println!("{}", runtime.report());
 
+    // `start_all`, not `start_all_eager`: this is the boot-plan path, and #59
+    // made it lazy for `tool-*`/`registry-*` — the report above already marks
+    // which loaded instances that applies to. `started` below is providers and
+    // interceptors only; use `verify` to force everything and prove a lazy one
+    // actually instantiates.
     match runtime.start_all() {
         Ok(started) if started.is_empty() => {
             println!("no components started (none present in {ext_dir}/)");

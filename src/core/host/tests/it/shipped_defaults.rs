@@ -84,7 +84,15 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
 
     // And every one of them must actually instantiate and start. This is the
     // assertion `start_all`'s neutral-linker bug failed for months.
-    let started = runtime.start_all().expect("every enabled extension starts");
+    //
+    // `start_all_eager`, not `start_all`: since #59 the plain `start_all` is
+    // lazy for `tool-*`/`registry-*` and would not touch `tool.fs` et al. at
+    // all, which is the right call for the boot-plan path but would make this
+    // specific assertion — that the shipped tools genuinely instantiate —
+    // vacuous. This is that dependency made explicit rather than dropped.
+    let started = runtime
+        .start_all_eager()
+        .expect("every enabled extension starts");
     for expected in [
         "tool.fs",
         "tool.edit",
@@ -94,6 +102,61 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
         assert!(
             started.iter().any(|id| id == expected),
             "{expected} started; got {started:?}"
+        );
+    }
+}
+
+/// #59's boot-plan claim, proved against the real shipped config rather than a
+/// synthetic one: `start_all` (the default, no-subcommand `jan-klod` path)
+/// starts providers and interceptors but leaves every `tool.*` uninstantiated,
+/// while `start_all_eager` (what `verify` uses) still starts all of them —
+/// same runtime, same config, the only difference is which method is called.
+/// Paired with the test above so a regression that makes `start_all` eager
+/// again, or `start_all_eager` lazy, fails one of the two.
+#[test]
+fn the_shipped_configs_tools_are_lazy_under_start_all_but_not_start_all_eager() {
+    let ext_dir = common::repo_root().join("ext");
+    if !common::guests_staged(&["provider-openai.wasm"]) {
+        return;
+    }
+    stub_env();
+
+    let dir = std::env::temp_dir().join(format!("jk-shipped-lazy-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    let config = dir.join("config.yaml");
+    std::fs::write(&config, shipped_config_with_workspace(&dir)).unwrap();
+
+    let runtime = Runtime::boot(&config, &ext_dir).expect("the shipped config boots");
+
+    let lazy = runtime
+        .start_all()
+        .expect("providers and interceptors start");
+    assert!(
+        lazy.iter().any(|id| id == "provider.openai"),
+        "the eager categories still start under `start_all`: {lazy:?}"
+    );
+    assert!(
+        lazy.iter().any(|id| id == "interceptor.permission"),
+        "the eager categories still start under `start_all`: {lazy:?}"
+    );
+    for lazy_id in ["tool.fs", "tool.edit", "tool.find"] {
+        assert!(
+            !lazy.iter().any(|id| id == lazy_id),
+            "{lazy_id} must not be instantiated by `start_all`: {lazy:?}"
+        );
+    }
+
+    // The same runtime, forced eager, does instantiate them — proving the
+    // difference above is `start_all`'s laziness and not, say, the shipped
+    // config being unable to start its tools at all.
+    let eager = runtime
+        .start_all_eager()
+        .expect("every enabled extension starts");
+    for expected in ["tool.fs", "tool.edit", "tool.find"] {
+        assert!(
+            eager.iter().any(|id| id == expected),
+            "{expected} started under `start_all_eager`; got {eager:?}"
         );
     }
 }

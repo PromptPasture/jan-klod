@@ -49,7 +49,7 @@ workspace: {ws}
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("ok");
-    let agent = runtime
+    let mut agent = runtime
         .build_agent(&factory)
         .expect("agent boots with tools");
 
@@ -57,6 +57,78 @@ workspace: {ws}
         agent.tool_names().contains(&"fs".to_string()),
         "the enabled tool.fs should be in the fleet: {:?}",
         agent.tool_names()
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// #59, proved end-to-end through `build_agent` rather than at the fleet
+/// mechanism level (`lazy_tool_fleet.rs`): a config with an enabled tool
+/// but no interceptor to advertise it to leaves that tool uninstantiated after
+/// `build_agent` returns, and instantiates it only once the loop actually asks
+/// — here, by calling `tool_names`, which stands in for the `select-tools`
+/// read `instantiate_interceptors` would otherwise have forced during
+/// `build_agent` itself.
+///
+/// No interceptor is enabled on purpose: with `tool-selector` (or any other)
+/// present, `build_agent` computes the combined tool advertisement up front so
+/// every interceptor can be served it uniformly — real, unavoidable eagerness
+/// under the current guest-sourced metadata design, not a bug this change
+/// fixes (see `is_lazy_category`'s doc comment and #59's PR). Dropping
+/// interceptors entirely is what isolates the tool fleet's own laziness from
+/// that separate, larger constraint.
+#[test]
+fn a_tool_with_no_interceptor_to_advertise_it_stays_uninstantiated_until_asked() {
+    let ext_dir = common::repo_root().join("ext");
+    if !common::guests_staged(&["provider-openai.wasm", "tool-fs.wasm"]) {
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("jk-toollazy-{}", std::process::id()));
+    let workspace = dir.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let _guard = common::TempDir(dir.clone());
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  tool:
+    fs:
+      enabled: true
+workspace: {ws}
+",
+            ws = workspace.display()
+        ),
+    )
+    .unwrap();
+
+    let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
+    let factory = || common::canned_http("ok");
+    let mut agent = runtime
+        .build_agent(&factory)
+        .expect("agent boots with no interceptors enabled");
+
+    assert!(
+        !agent.tools_instantiated(),
+        "no interceptor asked for the tool advertisement, so `build_agent` must \
+         not have instantiated `tool.fs`"
+    );
+
+    assert!(
+        agent.tool_names().contains(&"fs".to_string()),
+        "the tool is still there once actually asked for"
+    );
+    assert!(
+        agent.tools_instantiated(),
+        "asking for tool names is what instantiates it"
     );
 
     std::fs::remove_dir_all(&dir).ok();

@@ -92,6 +92,26 @@ fn boot_rank(category: &str) -> u8 {
     }
 }
 
+/// Whether `category` is instantiated on first use rather than eagerly (#59).
+///
+/// `tool-*` and `registry-*` are the categories `build_agent` can genuinely
+/// defer: a tool that a turn never calls, or a skills/MCP registry nobody
+/// queries, costs nothing until something asks for it. `agent` is listed for
+/// the same reason even though it is currently inert — `build_agent` never
+/// instantiates that category today and no `agent-*` component exists to
+/// stage, so this is future-proofing for when it does, not a claim that it is
+/// exercised now.
+///
+/// **Providers and interceptors are never lazy — not negotiable.** The loop
+/// needs a provider on turn one, and a provider that cannot instantiate must
+/// fail at boot rather than mid-turn; an interceptor is how policy is
+/// expressed at all, so deferring it would mean turn one runs without the
+/// decisions the operator configured. Both keep the eager path this whole
+/// runtime used before #59.
+fn is_lazy_category(category: &str) -> bool {
+    matches!(category, "tool" | "registry" | "agent")
+}
+
 /// Outcome of resolving one enabled instance to a component on disk.
 pub enum LoadState {
     /// `ext/<component>.wasm` was found and compiled.
@@ -239,14 +259,15 @@ pub struct Runtime {
     config_dir: PathBuf,
 }
 
-/// Pass 1 output of [`Runtime::build_agent`]: every instantiated provider, tool
-/// and registry instance, ready to fold into the fleet and fallback chain.
+/// Pass 1 output of [`Runtime::build_agent`]: every instantiated provider,
+/// ready to fold into the fallback chain, plus every enabled tool and registry
+/// instance — compiled, but not yet instantiated (#59; see
+/// [`tool_host::LazyToolFleet`]).
 struct ProvidersAndTools {
     providers: Vec<Box<dyn conductor::Completer>>,
     provider_ids: Vec<String>,
-    tool_extensions: Vec<tool_host::ToolExtension>,
-    skills_extensions: Vec<registry_host::SkillsExtension>,
-    mcp_extensions: Vec<registry_host::McpExtension>,
+    tool_fleet: tool_host::LazyToolFleet,
+    registry_fleet: registry_host::LazyRegistryFleet,
 }
 
 impl Runtime {
@@ -365,21 +386,52 @@ impl Runtime {
         &self.extensions
     }
 
-    /// Instantiate every compiled component in its own store and run its
-    /// lifecycle (`init` → `start`). Missing components are skipped. Returns the
-    /// ids that were started.
+    /// Instantiate every compiled component whose category is not lazy (#59:
+    /// `tool-*`/`registry-*`/`agent` are skipped — compiled already, by
+    /// `Runtime::boot`, and left that way) and run its lifecycle
+    /// (`init` → `start`). Missing components are skipped too. Returns the ids
+    /// that were started.
     ///
-    /// Categories whose world imports more than the neutral `extension-world`
-    /// grants (`tool-*` needs `host-fs`/`host-process`, `registry-*` needs
-    /// `host-fs`/`host-event`) go through their own seam — the same one
-    /// [`Self::build_agent`] uses — with the same default-deny substrates, so
-    /// this boot-plan path proves exactly what the agent path will do.
+    /// This is the boot-plan path (the default, no-subcommand `jan-klod`
+    /// invocation): a quick read on whether the things that must work on turn
+    /// one — providers, interceptors — actually do, without paying to
+    /// instantiate a dozen tool guests a plan-only run will never call.
+    /// [`Self::start_all_eager`] is the thorough sibling that does not skip
+    /// anything; `verify` uses that one, because proving a lazy category
+    /// *would* instantiate is the entire point of `verify`.
     ///
     /// # Errors
     /// Returns [`CoreError::Instantiate`] if a component cannot be instantiated,
     /// [`CoreError::Lifecycle`] if a lifecycle call traps, or
     /// [`CoreError::LifecycleRejected`] if an extension refuses to start.
     pub fn start_all(&self) -> Result<Vec<String>, CoreError> {
+        self.start_selected(true)
+    }
+
+    /// Like [`Self::start_all`], but instantiates every category regardless of
+    /// laziness — including `tool-*`/`registry-*`/`agent`. What `verify` (both
+    /// offline and `--live`) needs: its whole reason to exist is proving a
+    /// component instantiates and starts *before* a real turn finds out the
+    /// hard way, and a lazy category that verify didn't force would be exactly
+    /// the "gate that reports green while proving nothing" shape this
+    /// repository has been burned by before.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Instantiate`] if a component cannot be instantiated,
+    /// [`CoreError::Lifecycle`] if a lifecycle call traps, or
+    /// [`CoreError::LifecycleRejected`] if an extension refuses to start.
+    pub fn start_all_eager(&self) -> Result<Vec<String>, CoreError> {
+        self.start_selected(false)
+    }
+
+    /// Shared body of [`Self::start_all`]/[`Self::start_all_eager`].
+    ///
+    /// Categories whose world imports more than the neutral `extension-world`
+    /// grants (`tool-*` needs `host-fs`/`host-process`, `registry-*` needs
+    /// `host-fs`/`host-event`) go through their own seam — the same one
+    /// [`Self::build_agent`] uses — with the same default-deny substrates, so
+    /// this boot-plan path proves exactly what the agent path will do.
+    fn start_selected(&self, skip_lazy: bool) -> Result<Vec<String>, CoreError> {
         let mut started = Vec::new();
         let workspace = self.open_workspace();
         let process = self.open_process_runner(workspace.as_ref());
@@ -387,6 +439,9 @@ impl Runtime {
             let LoadState::Compiled(component) = &ext.state else {
                 continue;
             };
+            if skip_lazy && is_lazy_category(&ext.instance.category) {
+                continue;
+            }
             started.push(self.start_one(ext, component, workspace.as_ref(), &process)?);
         }
         Ok(started)
@@ -535,22 +590,37 @@ impl Runtime {
         let project_instructions = Self::project_instructions(workspace.as_ref());
         let process = self.open_process_runner(workspace.as_ref());
 
-        // Pass 1: providers + tools + registries. (Before interceptors so tool-selector
-        // can be handed the combined advertised metadata.)
+        // Pass 1: providers (instantiated now — eager, not negotiable, see
+        // `is_lazy_category`) + tools + registries (compiled, held pending;
+        // before interceptors so tool-selector can be handed the combined
+        // advertised metadata once something actually asks for it).
         let ProvidersAndTools {
             providers,
             provider_ids,
-            tool_extensions,
-            skills_extensions,
-            mcp_extensions,
+            tool_fleet,
+            registry_fleet,
         } = self.instantiate_providers_and_tools(http_factory, workspace.as_ref(), &process)?;
-        let tool_fleet = tool_host::ToolFleet::new(tool_extensions);
-        let registry_fleet = registry_host::RegistryFleet::new(skills_extensions, mcp_extensions);
         let mut tools = CombinedFleet {
             tools: tool_fleet,
             registry: registry_fleet,
         };
-        let tools_advert = tools.all_metas_json();
+        // Computed only if there is an interceptor to serve it to — with none
+        // enabled, nothing in `instantiate_interceptors` below reads it, so
+        // resolving it would instantiate every pending tool/registry for an
+        // audience of nobody. Enabled interceptors are counted from the same
+        // resolved-instance list `instantiate_interceptors` itself iterates,
+        // not by asking whether any *particular* interceptor wants "tools" —
+        // that would be core deciding which guest's opinion matters, and the
+        // core holds mechanism, not policy (see #59's PR for why the shipped
+        // config's `tool-selector` still forces this every time regardless).
+        let any_interceptor_enabled = self.extensions.iter().any(|ext| {
+            ext.instance.category == "interceptor" && matches!(ext.state, LoadState::Compiled(_))
+        });
+        let tools_advert = if any_interceptor_enabled {
+            tools.all_metas_json()?
+        } else {
+            serde_json::Value::Array(Vec::new())
+        };
 
         // An interceptor that consults a model (intent routing) gets its own
         // provider instance rather than a handle into the chain above: the
@@ -585,8 +655,10 @@ impl Runtime {
         })
     }
 
-    /// Pass 1 of [`Self::build_agent`]: instantiate every enabled provider, tool
-    /// and registry instance.
+    /// Pass 1 of [`Self::build_agent`]: instantiate every enabled provider
+    /// (eager — see [`is_lazy_category`]), and register every enabled tool and
+    /// registry instance as pending — compiled already, instantiated the first
+    /// time the fleet is actually asked for something (#59).
     fn instantiate_providers_and_tools(
         &self,
         http_factory: &dyn Fn() -> route::HttpFn,
@@ -597,9 +669,8 @@ impl Runtime {
         // Instance ids, parallel to `providers`, so the configured chain can be
         // matched by name without downcasting a `dyn Completer`.
         let mut provider_ids: Vec<String> = Vec::new();
-        let mut tool_extensions: Vec<tool_host::ToolExtension> = Vec::new();
-        let mut skills_extensions: Vec<registry_host::SkillsExtension> = Vec::new();
-        let mut mcp_extensions: Vec<registry_host::McpExtension> = Vec::new();
+        let mut tool_fleet = tool_host::LazyToolFleet::new(self.engine.clone());
+        let mut registry_fleet = registry_host::LazyRegistryFleet::new(self.engine.clone());
 
         for ext in &self.extensions {
             let LoadState::Compiled(component) = &ext.state else {
@@ -620,39 +691,38 @@ impl Runtime {
                     // Egress is granted per instance, never by default: a tool
                     // that never asked for the network must not have it, the same
                     // way `host-fs` needs a workspace and `host-process` needs
-                    // `execution:`.
+                    // `execution:`. Resolved now (cheap — a boxed closure, no
+                    // guest work) rather than deferred: the factory borrows from
+                    // this call's stack frame and cannot outlive it.
                     let network = ext
                         .instance
                         .config
                         .get("network")
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
-                    tool_extensions.push(tool_host::ToolExtension::instantiate_with_http(
-                        &self.engine,
+                    tool_fleet.push(
                         &ext.instance.id,
-                        component,
+                        component.clone(),
                         workspace.cloned(),
                         process.clone(),
                         network.then(|| http_factory()),
-                    )?);
+                    );
                 }
                 "registry" if ext.instance.kind == "skills" => {
-                    skills_extensions.push(registry_host::SkillsExtension::instantiate(
-                        &self.engine,
+                    registry_fleet.push_skills(
                         &ext.instance.id,
-                        component,
+                        component.clone(),
                         config_json,
                         workspace.cloned(),
-                    )?);
+                    );
                 }
                 "registry" if ext.instance.kind == "mcp" => {
-                    mcp_extensions.push(registry_host::McpExtension::instantiate(
-                        &self.engine,
+                    registry_fleet.push_mcp(
                         &ext.instance.id,
-                        component,
+                        component.clone(),
                         config_json,
                         self.egress_policy(),
-                    )?);
+                    );
                 }
                 _ => {}
             }
@@ -660,9 +730,8 @@ impl Runtime {
         Ok(ProvidersAndTools {
             providers,
             provider_ids,
-            tool_extensions,
-            skills_extensions,
-            mcp_extensions,
+            tool_fleet,
+            registry_fleet,
         })
     }
 
@@ -1044,9 +1113,12 @@ impl Runtime {
 /// Combined tool + registry fleet implementing [`conductor::ToolInvoker`].
 ///
 /// Dispatches first to the `tool-*` fleet, then to the registry fleet (skills + MCP).
+/// Both are lazy (#59): a fleet with nothing pending and nothing live yet costs
+/// nothing until [`Self::tool_names`]/[`Self::all_metas_json`]/`invoke` asks it
+/// for something.
 struct CombinedFleet {
-    tools: tool_host::ToolFleet,
-    registry: registry_host::RegistryFleet,
+    tools: tool_host::LazyToolFleet,
+    registry: registry_host::LazyRegistryFleet,
 }
 
 impl conductor::ToolInvoker for CombinedFleet {
@@ -1058,14 +1130,33 @@ impl conductor::ToolInvoker for CombinedFleet {
 }
 
 impl CombinedFleet {
-    fn tool_names(&self) -> Vec<String> {
-        self.tools.tool_names()
+    /// Whether the tool fleet has instantiated its pending guests yet — `false`
+    /// until the first thing (metadata, or an `invoke`) asks for one. A test's
+    /// hook onto #59's laziness at the `build_agent` level, not a read anything
+    /// else in the runtime depends on.
+    const fn tools_instantiated(&self) -> bool {
+        self.tools.is_instantiated()
     }
 
-    fn all_metas_json(&mut self) -> serde_json::Value {
+    /// The advertised tool names. A lazy instantiation failure is reported
+    /// (stderr) and degrades to "no tools" rather than propagating — the same
+    /// shape `ToolFleet::new` already used for a single guest's `meta` trap,
+    /// now covering the whole fleet's first-use instantiation too.
+    fn tool_names(&mut self) -> Vec<String> {
+        self.tools.tool_names().unwrap_or_else(|err| {
+            eprintln!("WARN [core] tool fleet failed to instantiate: {err}");
+            Vec::new()
+        })
+    }
+
+    /// # Errors
+    /// Returns a [`CoreError`] if a pending tool or registry fails to
+    /// instantiate or start — the same failure `build_agent`'s eager path
+    /// already surfaced this way, just raised on first use instead.
+    fn all_metas_json(&mut self) -> Result<serde_json::Value, CoreError> {
         let mut metas: Vec<serde_json::Value> = self
             .tools
-            .metas()
+            .metas()?
             .into_iter()
             .map(|m| {
                 serde_json::json!({
@@ -1075,14 +1166,14 @@ impl CombinedFleet {
                 })
             })
             .collect();
-        for (name, description, schema) in self.registry.all_metas() {
+        for (name, description, schema) in self.registry.all_metas()? {
             metas.push(serde_json::json!({
                 "name": name,
                 "description": description,
                 "parameters-schema": schema,
             }));
         }
-        serde_json::Value::Array(metas)
+        Ok(serde_json::Value::Array(metas))
     }
 }
 
@@ -1252,15 +1343,29 @@ impl AgentSession {
         )
     }
 
-    /// The names of the tools the loop can call (advertised names from the fleet).
+    /// The names of the tools the loop can call (advertised names from the
+    /// fleet). `&mut self` since #59: a fleet nothing has asked for yet
+    /// instantiates here, on this call, rather than having done so already.
     #[must_use]
-    pub fn tool_names(&self) -> Vec<String> {
+    pub fn tool_names(&mut self) -> Vec<String> {
         self.tools.tool_names()
     }
 
-    /// All tool + registry metadata as JSON (used in tests).
+    /// Whether the tool fleet has instantiated its pending `tool-*` guests yet
+    /// (#59). `false` right after `build_agent` returns for a config with no
+    /// interceptor to advertise them to; `true` from the first turn's `invoke`
+    /// or metadata request onward — never goes back to `false`.
     #[must_use]
-    pub fn all_metas_json(&mut self) -> serde_json::Value {
+    pub const fn tools_instantiated(&self) -> bool {
+        self.tools.tools_instantiated()
+    }
+
+    /// All tool + registry metadata as JSON (used in tests).
+    ///
+    /// # Errors
+    /// Returns a [`CoreError`] if a pending tool or registry fails to
+    /// instantiate or start on this, its first use.
+    pub fn all_metas_json(&mut self) -> Result<serde_json::Value, CoreError> {
         self.tools.all_metas_json()
     }
 
@@ -1544,7 +1649,22 @@ impl fmt::Display for BootReport<'_> {
             match &ext.state {
                 LoadState::Compiled(_) => {
                     compiled += 1;
-                    writeln!(f, "  loaded   {:<22} -> {file}", ext.instance.id)?;
+                    // The more honest of #59's two options: rather than a
+                    // not-yet-instantiated guest silently reporting the same
+                    // "loaded" an eagerly-started one does, its category is
+                    // named here so an operator can tell which is which. This
+                    // is a static fact about the category (`is_lazy_category`),
+                    // not a read of any particular `AgentSession`'s live
+                    // state — `Runtime` and the session it later builds are
+                    // separate objects with nothing to compare against each
+                    // other, and the category is true regardless of which
+                    // command is running.
+                    let note = if is_lazy_category(&ext.instance.category) {
+                        "  (lazy: instantiated on first use, not at boot)"
+                    } else {
+                        ""
+                    };
+                    writeln!(f, "  loaded   {:<22} -> {file}{note}", ext.instance.id)?;
                 }
                 LoadState::Missing(path) => {
                     writeln!(

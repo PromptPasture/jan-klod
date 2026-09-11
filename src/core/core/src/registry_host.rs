@@ -5,7 +5,7 @@
 //! The two registry types share a `RegistryFleet` that implements `ToolInvoker`
 //! so the conductor dispatches skill and MCP tool calls through the same seam.
 
-use wasmtime::component::{HasSelf, Linker};
+use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
@@ -565,6 +565,141 @@ impl crate::conductor::ToolInvoker for RegistryFleet {
             );
         }
         None
+    }
+}
+
+// ─── LazyRegistryFleet ───────────────────────────────────────────────────────
+
+/// A pending `registry-skills` instance — compiled, not yet instantiated.
+struct PendingSkills {
+    id: String,
+    component: Component,
+    config_json: String,
+    workspace: Option<Workspace>,
+}
+
+/// A pending `registry-mcp` instance — compiled, not yet instantiated.
+struct PendingMcp {
+    id: String,
+    component: Component,
+    config_json: String,
+    egress: crate::egress::EgressPolicy,
+}
+
+/// A registry fleet whose guests are compiled but not yet instantiated (#59).
+///
+/// Mirrors [`crate::tool_host::LazyToolFleet`] — see its doc comment for why
+/// the pending set resolves together rather than one entry at a time, and for
+/// the trade-off finer-grained laziness would need.
+///
+/// In the shipped `config.yaml` both `registry.skills` and `registry.mcp` are
+/// disabled, so this fleet is usually empty and `ensure` never runs at all —
+/// the cheapest case there is.
+pub struct LazyRegistryFleet {
+    engine: Engine,
+    pending_skills: Vec<PendingSkills>,
+    pending_mcp: Vec<PendingMcp>,
+    live: Option<RegistryFleet>,
+}
+
+impl LazyRegistryFleet {
+    /// An empty fleet, ready to receive pending registries via
+    /// [`Self::push_skills`]/[`Self::push_mcp`].
+    #[must_use]
+    pub const fn new(engine: Engine) -> Self {
+        Self {
+            engine,
+            pending_skills: Vec::new(),
+            pending_mcp: Vec::new(),
+            live: None,
+        }
+    }
+
+    /// Register a compiled `registry-skills` instance to instantiate on first use.
+    pub fn push_skills(
+        &mut self,
+        id: impl Into<String>,
+        component: Component,
+        config_json: String,
+        workspace: Option<Workspace>,
+    ) {
+        self.pending_skills.push(PendingSkills {
+            id: id.into(),
+            component,
+            config_json,
+            workspace,
+        });
+    }
+
+    /// Register a compiled `registry-mcp` instance to instantiate on first use.
+    pub fn push_mcp(
+        &mut self,
+        id: impl Into<String>,
+        component: Component,
+        config_json: String,
+        egress: crate::egress::EgressPolicy,
+    ) {
+        self.pending_mcp.push(PendingMcp {
+            id: id.into(),
+            component,
+            config_json,
+            egress,
+        });
+    }
+
+    /// Whether every pending registry has already been instantiated.
+    #[must_use]
+    pub const fn is_instantiated(&self) -> bool {
+        self.live.is_some()
+    }
+
+    /// Instantiate every pending registry (once; memoized), and hand back the
+    /// live fleet.
+    fn ensure(&mut self) -> Result<&mut RegistryFleet, CoreError> {
+        if self.live.is_none() {
+            let mut skills = Vec::with_capacity(self.pending_skills.len());
+            for pending in self.pending_skills.drain(..) {
+                skills.push(SkillsExtension::instantiate(
+                    &self.engine,
+                    &pending.id,
+                    &pending.component,
+                    pending.config_json,
+                    pending.workspace,
+                )?);
+            }
+            let mut mcp = Vec::with_capacity(self.pending_mcp.len());
+            for pending in self.pending_mcp.drain(..) {
+                mcp.push(McpExtension::instantiate(
+                    &self.engine,
+                    &pending.id,
+                    &pending.component,
+                    pending.config_json,
+                    pending.egress,
+                )?);
+            }
+            self.live = Some(RegistryFleet::new(skills, mcp));
+        }
+        Ok(self.live.as_mut().expect("just set above"))
+    }
+
+    /// Combined tool metadata (skills + MCP tools), instantiating the whole
+    /// pending set if this is the first call.
+    ///
+    /// # Errors
+    /// Returns a [`CoreError`] if a pending registry fails to instantiate or start.
+    pub fn all_metas(&mut self) -> Result<Vec<(String, String, String)>, CoreError> {
+        Ok(self.ensure()?.all_metas())
+    }
+}
+
+impl crate::conductor::ToolInvoker for LazyRegistryFleet {
+    fn invoke(&mut self, call: &crate::intercept::ToolCall) -> Option<String> {
+        match self.ensure() {
+            Ok(fleet) => fleet.invoke(call),
+            // Same rationale as `LazyToolFleet::invoke`: a lazy instantiation
+            // failure is fed back as this call's result, not an abort.
+            Err(err) => Some(format!("registry fleet failed to instantiate: {err}")),
+        }
     }
 }
 

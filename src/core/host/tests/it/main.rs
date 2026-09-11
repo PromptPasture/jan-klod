@@ -30,6 +30,7 @@ mod gate;
 mod host_fs;
 mod host_process;
 mod installed_layout;
+mod lazy_tool_fleet;
 mod local_model;
 mod manifest;
 mod mcp;

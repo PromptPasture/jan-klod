@@ -378,6 +378,149 @@ impl crate::conductor::ToolInvoker for ToolFleet {
     }
 }
 
+// ─── LazyToolFleet ───────────────────────────────────────────────────────────
+
+/// One `tool-*` instance's compiled component and the wiring it will need to
+/// instantiate — held, not yet used. Everything here is cheap: `component` is
+/// a Wasmtime handle (an `Arc` under the hood, already produced by
+/// `Runtime::boot`'s compile step), and the rest are values the caller already
+/// built for the eager path (`workspace`, `process`, `http`).
+struct PendingTool {
+    id: String,
+    component: Component,
+    workspace: Option<Workspace>,
+    process: ProcessRunner,
+    http: Option<crate::route::HttpFn>,
+}
+
+/// A tool fleet whose guests are compiled but not yet instantiated (#59).
+///
+/// `Runtime::boot` still compiles every enabled `tool-*` component, same as
+/// before — that part is unchanged and stays cheap (parses and validates the
+/// module, does not run it). What moves is the next step: creating the guest's
+/// `Store`, linking it, and driving `init`/`start` — the part that actually
+/// allocates the guest's linear memory and runs its setup code. That now
+/// happens the first time the fleet is asked for something, not unconditionally
+/// during `Runtime::build_agent`.
+///
+/// **The whole pending set resolves together, not just the tool asked for.**
+/// A model's `select-tools` advertisement is one JSON array describing every
+/// enabled tool at once ([`ToolFleet::metas`]), so the first thing that needs
+/// any of it needs all of it — there is no cheaper way to answer "what tools
+/// exist" than asking every one of them, because that answer (`tool-callable`'s
+/// `meta` export) is guest-authored data the host cannot derive any other way.
+/// Finer-grained laziness — instantiating only the one tool a model actually
+/// calls, never touching the rest even for `select-tools` — needs that catalog
+/// to live somewhere static (the manifest, or `config.yaml`) instead of inside
+/// the guest. That is a real, separate change with its own risk (the manifest
+/// and the guest's own `meta` could then disagree), noted in #59's PR rather
+/// than attempted here.
+pub struct LazyToolFleet {
+    engine: Engine,
+    pending: Vec<PendingTool>,
+    live: Option<ToolFleet>,
+}
+
+impl LazyToolFleet {
+    /// An empty fleet, ready to receive pending tools via [`Self::push`].
+    #[must_use]
+    pub const fn new(engine: Engine) -> Self {
+        Self {
+            engine,
+            pending: Vec::new(),
+            live: None,
+        }
+    }
+
+    /// Register a compiled tool to be instantiated on first use.
+    pub fn push(
+        &mut self,
+        id: impl Into<String>,
+        component: Component,
+        workspace: Option<Workspace>,
+        process: ProcessRunner,
+        http: Option<crate::route::HttpFn>,
+    ) {
+        self.pending.push(PendingTool {
+            id: id.into(),
+            component,
+            workspace,
+            process,
+            http,
+        });
+    }
+
+    /// Whether every pending tool has already been instantiated. `false` until
+    /// the first [`Self::metas`]/[`Self::tool_names`]/`invoke` call — the fact
+    /// a test asserting laziness checks before touching the fleet.
+    #[must_use]
+    pub const fn is_instantiated(&self) -> bool {
+        self.live.is_some()
+    }
+
+    /// Instantiate every pending tool (once; memoized), and hand back the live
+    /// fleet. A component that fails to instantiate or refuses to start is
+    /// reported the same way the eager path always was — a [`CoreError`] — just
+    /// raised here instead of during `build_agent`.
+    fn ensure(&mut self) -> Result<&mut ToolFleet, CoreError> {
+        if self.live.is_none() {
+            let mut extensions = Vec::with_capacity(self.pending.len());
+            for pending in self.pending.drain(..) {
+                extensions.push(Self::instantiate_pending(&self.engine, pending)?);
+            }
+            self.live = Some(ToolFleet::new(extensions));
+        }
+        // The `if` above guarantees this, but the borrow checker cannot see
+        // through `Option::is_none()` followed by a fresh `.as_mut()`.
+        Ok(self.live.as_mut().expect("just set above"))
+    }
+
+    fn instantiate_pending(
+        engine: &Engine,
+        pending: PendingTool,
+    ) -> Result<ToolExtension, CoreError> {
+        ToolExtension::instantiate_with_http(
+            engine,
+            &pending.id,
+            &pending.component,
+            pending.workspace,
+            pending.process,
+            pending.http,
+        )
+    }
+
+    /// The advertised metadata for every tool, instantiating the whole pending
+    /// set if this is the first call.
+    ///
+    /// # Errors
+    /// Returns a [`CoreError`] if a pending tool fails to instantiate or start.
+    pub fn metas(&mut self) -> Result<Vec<ToolMeta>, CoreError> {
+        Ok(self.ensure()?.metas())
+    }
+
+    /// The advertised tool names, instantiating the whole pending set if this
+    /// is the first call.
+    ///
+    /// # Errors
+    /// Returns a [`CoreError`] if a pending tool fails to instantiate or start.
+    pub fn tool_names(&mut self) -> Result<Vec<String>, CoreError> {
+        Ok(self.ensure()?.tool_names())
+    }
+}
+
+impl crate::conductor::ToolInvoker for LazyToolFleet {
+    fn invoke(&mut self, call: &crate::intercept::ToolCall) -> Option<String> {
+        match self.ensure() {
+            Ok(fleet) => fleet.invoke(call),
+            // Consistent with a live tool's own error handling (`ToolFleet::invoke`,
+            // `ToolExtension::invoke`): fed back to the model as the call's result,
+            // not an abort — a lazily-failing guest costs this one tool call, not
+            // the turn.
+            Err(err) => Some(format!("tool fleet failed to instantiate: {err}")),
+        }
+    }
+}
+
 fn drive(
     id: &str,
     result: wasmtime::Result<Result<(), String>>,
