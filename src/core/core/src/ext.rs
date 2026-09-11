@@ -202,6 +202,9 @@ pub fn looks_remote(spec: &str) -> bool {
 pub fn check_remote(url: &str) -> Result<(), ExtError> {
     crate::egress::EgressPolicy::public_only()
         .check(url)
+        // The addresses are of no use here: this refuses a source before a byte
+        // moves, and the fetch that follows runs its own check per hop.
+        .map(|_| ())
         .map_err(|err| ExtError::RefusedByPolicy {
             url: url.to_owned(),
             detail: format!("{err:?}"),

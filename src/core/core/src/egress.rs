@@ -20,18 +20,38 @@
 //! wrote (a provider's `base-url`, an MCP server's endpoint) — the local Ollama a
 //! user configured is reachable, the local Postgres they didn't is not.
 //!
-//! ## What this does not do
+//! ## One lookup, not two
 //!
 //! Resolves the hostname and checks every address returned, so a public name
-//! pointing at `127.0.0.1` is caught. It cannot close the window between that
-//! check and the connection (DNS rebinding) — `ureq` gives no way to pin the
-//! resolved address into the connection itself. A narrower hole than the one it
-//! replaces; an operator who cares can bind local services to a unix socket.
+//! pointing at `127.0.0.1` is caught. The addresses are then **handed back**
+//! rather than dropped, so the caller connects to the ones that were
+//! classified. Two separate resolutions is exactly what DNS rebinding needs: a
+//! name whose answer changes in between is checked as public and connected to
+//! as private ([#108](https://github.com/PromptPasture/jan-klod/issues/108)).
+//! Deciding here and connecting somewhere else would leave all the care over
+//! address classes below undone.
 
 use std::collections::HashSet;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
 use crate::http::WireError;
+
+/// Where a permitted request may go — what [`EgressPolicy::check`] decided.
+///
+/// Returned instead of `()` so the connection can be made to the addresses the
+/// policy classified. See the module docs: the value exists to stop the name
+/// being looked up a second time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Destination {
+    /// A name was resolved and every answer was public. Connect to **these**
+    /// addresses — resolving the name again is the hole this closes.
+    Resolved(Vec<SocketAddr>),
+    /// Nothing was resolved, so there is nothing to pin. Either the URL named
+    /// an address literal, which no resolver is consulted for and no answer can
+    /// change, or the operator granted this origin — where a granted origin
+    /// points is their decision, not a classification this made.
+    AsNamed,
+}
 
 /// Destinations a component may reach.
 #[derive(Clone, Debug, Default)]
@@ -64,7 +84,8 @@ impl EgressPolicy {
         self.allowed.is_empty()
     }
 
-    /// Decide whether a request to `url` may leave the host.
+    /// Decide whether a request to `url` may leave the host, and say where it
+    /// may go.
     ///
     /// # Errors
     /// [`WireError::InvalidUrl`] if the URL has no host this can reason about,
@@ -72,12 +93,12 @@ impl EgressPolicy {
     /// unallowed — deliberately the same error a refused connection produces, so
     /// a component cannot use the gate as a port scanner that distinguishes
     /// "blocked" from "nothing listening".
-    pub fn check(&self, url: &str) -> Result<(), WireError> {
+    pub fn check(&self, url: &str) -> Result<Destination, WireError> {
         let Some(origin) = origin_of(url) else {
             return Err(WireError::InvalidUrl);
         };
         if self.allowed.contains(&origin) {
-            return Ok(());
+            return Ok(Destination::AsNamed);
         }
         let Some((host, port)) = host_port(url) else {
             return Err(WireError::InvalidUrl);
@@ -87,7 +108,7 @@ impl EgressPolicy {
         // resolver is exactly what an attacker would like us to consult.
         if let Ok(ip) = host.parse::<IpAddr>() {
             return if is_public(ip) {
-                Ok(())
+                Ok(Destination::AsNamed)
             } else {
                 Err(WireError::ConnectionFailed)
             };
@@ -99,18 +120,19 @@ impl EgressPolicy {
         let resolved = (host.as_str(), port)
             .to_socket_addrs()
             .map_err(|_| WireError::ConnectionFailed)?;
-        let mut any = false;
+        let mut addrs = Vec::new();
         for addr in resolved {
-            any = true;
             if !is_public(addr.ip()) {
                 return Err(WireError::ConnectionFailed);
             }
+            addrs.push(addr);
         }
-        if any {
-            Ok(())
-        } else {
-            Err(WireError::ConnectionFailed)
+        if addrs.is_empty() {
+            return Err(WireError::ConnectionFailed);
         }
+        // Every one of these was classified above, so connecting to any of them
+        // is connecting to something this approved.
+        Ok(Destination::Resolved(addrs))
     }
 }
 
@@ -242,7 +264,7 @@ mod tests {
         let policy = EgressPolicy::public_only().allowing("http://127.0.0.1:11434/v1");
         assert_eq!(
             policy.check("http://127.0.0.1:11434/v1/chat/completions"),
-            Ok(())
+            Ok(Destination::AsNamed)
         );
         // The grant is that origin, not the machine: another local port stays shut.
         assert_eq!(
@@ -260,9 +282,15 @@ mod tests {
     #[test]
     fn a_default_port_matches_an_explicit_one() {
         let policy = EgressPolicy::public_only().allowing("https://api.example.test");
-        assert_eq!(policy.check("https://api.example.test:443/v1/chat"), Ok(()));
+        assert_eq!(
+            policy.check("https://api.example.test:443/v1/chat"),
+            Ok(Destination::AsNamed)
+        );
         let policy = EgressPolicy::public_only().allowing("http://192.168.0.9:80/mcp");
-        assert_eq!(policy.check("http://192.168.0.9/mcp/tools"), Ok(()));
+        assert_eq!(
+            policy.check("http://192.168.0.9/mcp/tools"),
+            Ok(Destination::AsNamed)
+        );
     }
 
     #[test]
@@ -287,6 +315,31 @@ mod tests {
     #[test]
     fn a_public_address_is_allowed_without_a_grant() {
         let policy = EgressPolicy::public_only();
-        assert_eq!(policy.check("https://93.184.216.34/"), Ok(()));
+        // A literal, so there is no lookup to pin and nothing to rebind.
+        assert_eq!(
+            policy.check("https://93.184.216.34/"),
+            Ok(Destination::AsNamed)
+        );
+    }
+
+    #[test]
+    fn a_resolved_name_hands_back_the_addresses_it_classified() {
+        // The point of #108: what `check` approved is what the caller connects
+        // to. `localhost` is the one name that resolves without a network, and
+        // it resolves somewhere private — so the pair of assertions is that a
+        // *name* takes the resolving path at all, and that the path refuses.
+        let policy = EgressPolicy::public_only();
+        assert_eq!(
+            policy.check("http://localhost:8787/"),
+            Err(WireError::ConnectionFailed)
+        );
+
+        // Granting the origin takes the other branch: nothing is resolved, so
+        // there is nothing to pin and the client looks the name up itself.
+        let policy = EgressPolicy::public_only().allowing("http://localhost:8787");
+        assert_eq!(
+            policy.check("http://localhost:8787/v1"),
+            Ok(Destination::AsNamed)
+        );
     }
 }

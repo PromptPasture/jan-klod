@@ -10,7 +10,11 @@
 //! 4xx/5xx are surfaced as errors; transport failures collapse onto the
 //! matching variant.
 
+use std::net::SocketAddr;
 use std::time::Duration;
+
+use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::DefaultConnector;
 
 /// Timeout applied when the caller passes `0` (mirrors `host-http`'s documented
 /// 30 s host default).
@@ -120,6 +124,13 @@ const STRIPPED_ON_REDIRECT: [&str; 3] = ["authorization", "cookie", "proxy-autho
 /// rather than by hand: RFC 3986's rules are not obvious, and getting them
 /// wrong here would mean checking one URL and fetching another.
 ///
+/// # The hop goes to the address that was checked
+///
+/// Checking a hop is only worth something if the connection lands where the
+/// check looked. The policy hands back the addresses it classified and
+/// [`exchange`] connects to those, so the name is resolved once
+/// ([#108](https://github.com/PromptPasture/jan-klod/issues/108)).
+///
 /// # Errors
 /// The policy's refusal (see [`crate::egress::EgressPolicy::check`]) for any
 /// hop, [`WireError::InvalidUrl`] for a `Location` that cannot be resolved,
@@ -145,8 +156,17 @@ pub fn fetch_within(
 
     for _ in 0..=MAX_REDIRECTS {
         // Every hop, including the first. This is the whole point of the loop.
-        policy.check(&target)?;
-        let response = exchange(&method, &target, &forwarded, body.as_deref(), timeout)?;
+        // The hop is then made to what the check resolved, not to what a second
+        // lookup of the same name would say — see [`exchange`].
+        let destination = policy.check(&target)?;
+        let response = exchange(
+            &method,
+            &target,
+            &destination,
+            &forwarded,
+            body.as_deref(),
+            timeout,
+        )?;
 
         let Some(location) = redirect_location(&response) else {
             if let Some(err) = status_error(response.status) {
@@ -199,10 +219,49 @@ fn resolve(base: &str, location: &str) -> Result<String, WireError> {
         .map_err(|_| WireError::InvalidUrl)
 }
 
-/// One request, with no policy and no redirect handling.
+/// ureq's cap on how many addresses a resolver may answer with
+/// (`unversioned::resolver::MAX_ADDRS`, not exported). Pushing past it panics,
+/// so the pin is truncated here. Safe to truncate: the policy refuses the URL
+/// unless **every** address it resolved is public, so any subset it approved is
+/// a subset of addresses it approved.
+const MAX_PINNED_ADDRS: usize = 16;
+
+/// A resolver that answers with the addresses the egress policy already
+/// classified, ignoring the name entirely.
+///
+/// This is the fix for [#108](https://github.com/PromptPasture/jan-klod/issues/108):
+/// without it the host is looked up twice — once by
+/// [`crate::egress::EgressPolicy::check`] and once by ureq on the way to the
+/// socket — and a name whose answer changes in between is checked as public and
+/// connected to as private.
+#[derive(Debug)]
+struct Pinned(Vec<SocketAddr>);
+
+impl Resolver for Pinned {
+    fn resolve(
+        &self,
+        _uri: &ureq::http::Uri,
+        _config: &ureq::config::Config,
+        _timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        // The URI is deliberately unused. Consulting it is the second lookup.
+        let mut addrs = self.empty();
+        for addr in self.0.iter().take(MAX_PINNED_ADDRS) {
+            addrs.push(*addr);
+        }
+        if addrs.is_empty() {
+            return Err(ureq::Error::HostNotFound);
+        }
+        Ok(addrs)
+    }
+}
+
+/// One request, with no policy and no redirect handling, sent to what
+/// `destination` says the policy approved.
 fn exchange(
     method: &str,
     url: &str,
+    destination: &crate::egress::Destination,
     headers: &[(String, String)],
     body: Option<&[u8]>,
     timeout: u32,
@@ -216,12 +275,33 @@ fn exchange(
     // policy consulted about the first URL only. At 0 the 3xx is returned as-is
     // (`max_redirects_do_error()` is `max_redirects > 0 && …`), which is what
     // lets `fetch_within` check each hop before taking it.
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_millis(u64::from(timeout))))
         .http_status_as_error(false)
         .max_redirects(0)
-        .build()
-        .into();
+        .build();
+
+    // `Host` and TLS are unaffected by pinning: ureq takes SNI and the header
+    // from the URI's authority, never from the address it connects to, so
+    // virtual hosting and certificate validation still see the name the caller
+    // asked for.
+    //
+    // The two arms differ in the resolver and nothing else: `Agent::from(config)`
+    // is `with_parts(config, DefaultConnector::default(), DefaultResolver)`, so
+    // the pinned agent keeps the same transport, TLS and pooling as before.
+    //
+    // **`Agent::with_parts` and `Resolver` live in `ureq::unversioned`, which
+    // its own docs exclude from semver.** A ureq minor bump may break this call
+    // site; that is a compile error rather than a silent reopening of #108, and
+    // it is the price of the guarantee.
+    let agent: ureq::Agent = match destination {
+        crate::egress::Destination::Resolved(addrs) => {
+            ureq::Agent::with_parts(config, DefaultConnector::default(), Pinned(addrs.clone()))
+        }
+        // Nothing was resolved, so there is nothing to pin — an address literal
+        // has no lookup to rebind, and a granted origin was trusted by name.
+        crate::egress::Destination::AsNamed => config.into(),
+    };
 
     let mut builder = ureq::http::Request::builder().method(method).uri(url);
     for (name, value) in headers {
@@ -270,7 +350,34 @@ const fn map_transport(err: &ureq::Error) -> WireError {
 
 #[cfg(test)]
 mod tests {
-    use super::{status_error, WireError};
+    use ureq::unversioned::resolver::Resolver;
+    use ureq::unversioned::transport::{time::Duration, NextTimeout};
+
+    use super::{status_error, Pinned, WireError};
+
+    #[test]
+    fn the_pinned_resolver_ignores_the_name_it_is_asked_about() {
+        // The whole of #108 in one assertion: whatever the URI says, the answer
+        // is the address the policy classified. A resolver that consulted the
+        // name here would be the second lookup that rebinding needs.
+        let pinned = Pinned(vec!["93.184.216.34:443".parse().unwrap()]);
+        let config = ureq::Agent::config_builder().build();
+        let timeout = NextTimeout {
+            after: Duration::from_secs(5),
+            reason: ureq::Timeout::Resolve,
+        };
+
+        for uri in ["https://example.test/", "https://elsewhere.test/"] {
+            let resolved = pinned
+                .resolve(&uri.parse().unwrap(), &config, timeout)
+                .expect("a pinned address always resolves");
+            assert_eq!(
+                &resolved[..],
+                ["93.184.216.34:443".parse().unwrap()],
+                "{uri} must not change where the connection goes"
+            );
+        }
+    }
 
     #[test]
     fn success_statuses_are_not_errors() {
