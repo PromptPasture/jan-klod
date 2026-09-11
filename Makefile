@@ -205,12 +205,32 @@ harness: check-spike-deps extensions
 # compiles-and-enumerates) and prints one line per test as
 # "<binary> <test-name>"; the `it` binary's lines start with
 # "jan-klod-host::it ".
+#
+# `--color never` is what makes that last sentence true, and it is not
+# cosmetic. `.github/workflows/ci.yml` sets `CARGO_TERM_COLOR: always`, which
+# nextest honours even when stdout is a pipe: every line then *begins* with an
+# SGR escape, the `^` anchor below matches nothing, and the guard reports zero
+# tests for a suite that compiled all of them. It did exactly that, and held
+# `main` red for seven runs (#123) — measured on one tree: 172 matches
+# uncoloured, 0 coloured, 172 with this flag. Nothing local sets the variable,
+# so `.github/hooks/pre-push` ran the same guard green every time.
+#
+# The list also gets its own line now. Folded into the `$(…)` with
+# `2>/dev/null`, a compile failure and a zero count were one outcome — "exit 1"
+# with no output — and the redirect discarded the error that said which. Let
+# cargo fail on its own exit code, then count from the file.
+GATE_LIST := $(CORE)/target/gate-tests.txt
+
 gate: export JK_REQUIRE_GUESTS = 1
 gate: check-spike-deps extensions
-	@n=$$(cd $(CORE) && cargo nextest list -p jan-klod-host --features jan-klod-host/integration --bins --tests 2>/dev/null | grep -c '^jan-klod-host::it '); \
+	@mkdir -p $(dir $(GATE_LIST))
+	@cd $(CORE) && cargo nextest list -p jan-klod-host --features jan-klod-host/integration --bins --tests --color never > target/gate-tests.txt
+	@n=$$(grep -c '^jan-klod-host::it ' $(GATE_LIST) || true); \
 	  echo "gate: integration suite (jan-klod-host::it) resolves $$n test(s)"; \
 	  if [ "$$n" -eq 0 ]; then \
 	    echo "gate: the integration suite compiled zero tests - the --features integration gate is broken" >&2; \
+	    echo "gate: what nextest listed (first 20 lines):" >&2; \
+	    head -20 $(GATE_LIST) >&2; \
 	    exit 1; \
 	  fi
 	cd $(CORE) && cargo nextest run --workspace --features jan-klod-host/integration --no-fail-fast
