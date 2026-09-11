@@ -78,6 +78,32 @@ jan-klod-gateway rpc
 It reads newline-delimited JSON-RPC 2.0 on stdin and writes it on stdout;
 **stdout carries nothing else**, so logs and errors go to stderr.
 
+## Point another agent at it (MCP)
+
+Claude Code, Codex, Goose and editors consume MCP servers. `jan-klod` is one:
+
+```sh
+jan-klod-gateway mcp
+```
+
+Same pipe discipline as `rpc` — the client spawns it, frames on stdout, logs on
+stderr. Three tools: `ask` (one turn, returning the answer), `session_list` and
+`session_get`. Point a client at it the way you point at any stdio MCP server;
+for Claude Code that is:
+
+```sh
+claude mcp add jan-klod -- jan-klod-gateway mcp
+```
+
+Run it from the repository you want it to work on — the gateway uses the current
+directory as the workspace, so file tools are jailed to it.
+
+**A turn over MCP will not write or run commands.** There is nobody to answer a
+confirmation, so each one takes its default, which is a refusal — the same rule
+as a scripted `ask`. Reads and searches work; a write comes back as a refusal
+the calling model can see and explain. If you want writes, drive it from `jan-klod`
+or the REST surface, where someone can say yes.
+
 Naming `config.yaml` and `ext` explicitly also works, but is only right inside a
 checkout: without them the gateway uses the current directory when it holds them
 and the installed copies otherwise, which is what makes `cd my-repo && jan-klod`

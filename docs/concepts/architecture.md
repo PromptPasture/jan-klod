@@ -352,6 +352,50 @@ contract, not a second contract. Vision
 [decision 1](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions);
 plan in the [roadmap](roadmap.md#phase-13--client-protocol).
 
+### The MCP port (`jan-klod-gateway mcp`)
+
+A third surface, and the first one this core does not define: **MCP's stdio
+transport is the framing `rpc` already speaks** — newline-delimited JSON-RPC
+2.0, frames on stdout and nothing else, logs on stderr. So `jan_klod_core::mcp`
+is a method-name-and-payload adapter over the same envelope, not a second
+transport, and it costs no dependency.
+
+`rmcp`, the official Rust SDK, is async on tokio. This core is deliberately
+synchronous — the agent session is `!Send` and lives on one thread, which is
+also why `tiny_http` was chosen over `axum` — so adopting it would be an
+architectural change dressed as a convenience.
+
+Three tools: `ask` (one turn, the answer as text), `session_list` and
+`session_get`, the last two reading the same payloads the REST surface serves so
+an editor and a browser cannot disagree about what a session is.
+
+Two things differ from the `rpc` surface, and both are MCP's shape rather than
+ours:
+
+- **A frame may have no `id`.** `notifications/initialized` arrives right after
+  the handshake and earns no answer. `rpc` refuses a null id on purpose — an
+  uncorrelatable answer is worse than none — and carrying that rule across would
+  have rejected the first thing every client sends.
+- **A failed tool is a *successful* response carrying `isError: true`.** That is
+  the opposite of `protocol::jsonrpc`'s `Outcome`, which makes result and error
+  mutually exclusive so "both" and "neither" are unrepresentable. Mapping a
+  refused turn onto a JSON-RPC error would make every permission refusal read to
+  an editor as a broken server.
+
+The driver is **headless by construction**: stdin here carries protocol frames,
+so anything that prompted would read a client's next request as the answer to a
+confirmation. Its default answer is a refusal, so the right policy and the right
+protocol behaviour come from one choice — an editor could not have answered
+anyway. `host/tests/it/mcp.rs::a_write_requiring_turn_is_refused_and_nothing_is_written`
+asserts that on the *effect*: the model asks to write a real path and the file
+is not there afterwards.
+
+**No security-model row, deliberately.** This surface grants nothing new — it
+re-exposes the existing turn path behind the same permission gate, and the test
+above is the evidence rather than the claim. A row asserting a boundary that
+nothing separately enforces would be worse than no row; recorded here so that
+"no row" is a decision rather than an omission.
+
 ## Command sandbox
 
 `host-process` bounds the *caller* — default-deny, a cwd jailed to the
