@@ -1,5 +1,27 @@
 #![allow(missing_docs)]
 use jan_klod::{parse_frame, StreamEvent};
+use jan_klod_protocol::SSE_FRAME_KINDS;
+
+/// The guard this file most needs, and the one that did not exist when #81
+/// happened: a frame kind the core can send that this client has no answer for.
+///
+/// It matters more since an unknown kind became a silent drop. Before that a
+/// missing arm was at least loud, if wrongly so — it reached the user as an
+/// error. Now nothing at runtime would say a word, so this test is the only
+/// thing between a new frame kind and a client that quietly ignores it.
+///
+/// The list is `jan-klod-protocol`'s because this crate cannot see the core;
+/// `core/tests/protocol_events.rs` holds the other end, proving the same
+/// constant is exactly what `serve` emits for every `conductor::Event`.
+#[test]
+fn every_sse_frame_kind_the_core_emits_is_handled() {
+    for kind in SSE_FRAME_KINDS {
+        assert!(
+            parse_frame(kind, "{}").is_some(),
+            "the core emits `{kind}` and this client drops it"
+        );
+    }
+}
 
 #[test]
 fn parse_frame_maps_each_event_kind() {

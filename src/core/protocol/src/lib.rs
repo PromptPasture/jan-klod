@@ -183,6 +183,33 @@ pub enum Command {
     },
 }
 
+/// Every `event:` kind the SSE projection can emit, sorted.
+///
+/// Here rather than in the core because **a client cannot see the core**: this
+/// crate is the only thing `jan-klod-core` and a UI both depend on, which is
+/// what lets the producer and the consumer be checked against one list instead
+/// of against each other's prose. Without that, a client can simply not know a
+/// frame — #81, where every tool result in a healthy turn reached the user as
+/// an error because `parse_frame` had never heard of `tool-result`.
+///
+/// Two tests hold the ends, and neither crate needs to see the other:
+/// `core/tests/protocol_events.rs` proves this is exactly what
+/// `serve::sse_frame`, `prompt_frame` and `error_frame` produce across every
+/// `conductor::Event`, and `ui/tests/parse_frame.rs` proves a client has an
+/// answer for each. Adding a frame to the core fails the first; shipping a
+/// client that ignores it fails the second.
+///
+/// These are **not** the [`Notification`] method names — see that type's docs.
+pub const SSE_FRAME_KINDS: [&str; 7] = [
+    "delta",
+    "done",
+    "error",
+    "prompt",
+    "tool",
+    "tool-result",
+    "warning",
+];
+
 /// Something the core reports to a client, unprompted.
 ///
 /// Tagged like [`Command`], so a transport wraps both the same way — a
@@ -205,6 +232,9 @@ pub enum Command {
 /// its own spelling, and the compatibility test is what holds them together.
 /// `ToolInvoked` is also a strict superset: the SSE `tool` frame carries only
 /// `id` and `name`, dropping the call's `arguments`.
+///
+/// Those names are [`SSE_FRAME_KINDS`], so the paragraph above is prose beside
+/// the data rather than a second copy of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params")]
 pub enum Notification {

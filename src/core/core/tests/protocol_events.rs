@@ -224,9 +224,13 @@ fn the_error_frame_fits_the_error_notification() {
     );
 }
 
-/// The frames above are the whole SSE surface. If a new one appears, this list
-/// is what a later reader checks against `serve.rs` — and the keepalive is a
-/// `:` comment rather than a frame precisely so it needs no notification.
+/// The frames above are the whole SSE surface, and this proves the shared
+/// constant lists exactly them — computed from `conductor::Event`, so adding a
+/// variant fails here rather than being noticed by a reader. The constant lives
+/// in `jan-klod-protocol` because a client cannot see this crate, and the
+/// client's half of the check (`ui/tests/parse_frame.rs`) reads the same one.
+/// The keepalive is a `:` comment rather than a frame precisely so it needs no
+/// notification.
 #[test]
 fn the_projected_frame_kinds_are_the_ones_the_protocol_covers() {
     let mut kinds: Vec<&str> = every_event()
@@ -248,14 +252,7 @@ fn the_projected_frame_kinds_are_the_ones_the_protocol_covers() {
     kinds.sort_unstable();
     assert_eq!(
         kinds,
-        vec![
-            "delta",
-            "done",
-            "error",
-            "prompt",
-            "tool",
-            "tool-result",
-            "warning"
-        ]
+        jan_klod_protocol::SSE_FRAME_KINDS,
+        "the shared list and what the core actually emits have diverged"
     );
 }
