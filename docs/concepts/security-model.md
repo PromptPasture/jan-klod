@@ -112,13 +112,26 @@ Stated because a security page that lists only its wins is marketing.
   - **Denying the network on Linux needs a 6.7 kernel** (Landlock ABI 4). Below
     that the runtime refuses to run the command rather than reporting a
     restriction it cannot apply, and the error says both ways out.
-  - **Only the Linux half is verified by CI.** CI runs on `ubuntu-latest`, which
-    has Landlock, so a regression there cannot land green. The Seatbelt tests are
-    macOS-only and CI has no macOS runner
-    ([#95](https://github.com/PromptPasture/jan-klod/issues/95)), so that half is
-    verified locally — where this repository is developed, but that is a
-    developer's diligence rather than a gate. The two backends are equally
-    tested and unequally *guarded*.
+  - **Both halves are verified by CI, on different schedules.** Landlock runs on
+    every push to `main`: `ci.yml`'s `harness` job is `ubuntu-latest`, which has
+    it, so a regression there cannot land green. Seatbelt runs in `ci-macos.yml`
+    on `macos-latest`, but only when the sandbox sources, the sandbox tests,
+    `wit/host-process.wit` or that workflow change — plus on demand via
+    `workflow_dispatch`. The asymmetry
+    is deliberate and is about money, not confidence: this repository is private,
+    and GitHub bills a macOS minute at ten Linux minutes, so a second full gate
+    on every push would exhaust the allowance in a handful of them
+    ([#95](https://github.com/PromptPasture/jan-klod/issues/95)).
+    - What that leaves open: a change that breaks Seatbelt **without touching
+      the paths that trigger the macOS job** lands green. `.github/AGENTS.md`
+      records the cost reasoning so the filter is widened by decision rather
+      than by reflex.
+    - It does not close the other half of the same asymmetry. `.github/hooks/pre-push`
+      runs on the developer's own machine, so a **Linux**-only failure is still
+      invisible before a push from a Mac. That is how four `execution_config`
+      tests reached `main` red ([#124](https://github.com/PromptPasture/jan-klod/issues/124)):
+      each backend is unverified in exactly the environment the other is
+      developed in, and only CI sees both.
   - One piece of 15a is **deferred**: a per-turn `Warning` telling the user, on
     every turn that runs a command, that the command is not isolated. Nothing
     currently distinguishes a tool that uses `host-process` from one that only
