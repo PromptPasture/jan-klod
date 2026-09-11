@@ -598,3 +598,76 @@ extensions:
         "and boot read the same capabilities install reported"
     );
 }
+
+// ---- Remote sources: the refusal, before any fetch (#92 box 1) ----
+
+/// A loopback URL is refused, and the server is never touched.
+///
+/// The sentinel is the whole assertion. `check_remote` returning `Err` only
+/// says it *decided* to refuse; what matters for an installer is that nothing
+/// went out on the wire first, and only the server can say that. It is
+/// `common::Countable` rather than a fresh listener because a negative
+/// assertion needs a counter that cannot lag — see that type for why.
+#[test]
+fn a_loopback_source_is_refused_before_anything_is_fetched() {
+    let sentinel = common::Countable::start();
+    let url = format!("http://127.0.0.1:{}/tool-thing.wasm", sentinel.port);
+
+    let err = ext::check_remote(&url).expect_err("loopback is not a public destination");
+    let ExtError::RefusedByPolicy { url: named, .. } = &err else {
+        panic!("refused by the policy, not something else: {err:?}")
+    };
+    assert_eq!(named, &url, "the refusal names the URL the operator gave");
+    assert!(
+        err.to_string().contains("egress policy"),
+        "and names the policy, so the reason is findable: {err}"
+    );
+
+    sentinel.only_hit();
+}
+
+/// The address classes the policy exists for, none of which can host a
+/// sentinel — so these assert the decision, and the test above asserts that no
+/// connection accompanies it.
+#[test]
+fn private_link_local_and_metadata_sources_are_refused() {
+    for url in [
+        "http://10.0.0.1/x.wasm",
+        "http://192.168.1.10/x.wasm",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::1]/x.wasm",
+        "http://localhost/x.wasm",
+    ] {
+        let err = ext::check_remote(url).expect_err("not a public destination");
+        assert!(
+            matches!(err, ExtError::RefusedByPolicy { .. }),
+            "{url} is refused by the policy: {err:?}"
+        );
+    }
+}
+
+/// A path is a path, and so is every scheme that is not http(s).
+///
+/// `file:///etc/passwd` matters: treated as remote it would be a fetch the
+/// policy has no opinion about, and treated as a path it is simply a missing
+/// file. The second is the honest answer.
+#[test]
+fn only_http_and_https_count_as_remote() {
+    for remote in [
+        "http://example.com/x.wasm",
+        "https://example.com/x.wasm",
+        "HTTPS://EXAMPLE.COM/x.wasm",
+    ] {
+        assert!(ext::looks_remote(remote), "{remote} is remote");
+    }
+    for local in [
+        "./tool-thing.wasm",
+        "/abs/tool-thing.wasm",
+        "tool-thing.wasm",
+        "file:///etc/passwd",
+        "ftp://example.com/x.wasm",
+        "httpx://example.com/x.wasm",
+    ] {
+        assert!(!ext::looks_remote(local), "{local} is not remote");
+    }
+}

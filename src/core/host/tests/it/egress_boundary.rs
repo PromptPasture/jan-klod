@@ -301,86 +301,6 @@ fn every_guest_facing_backend_goes_through_the_policy() {
 
 // ---- Redirects (#107) ----
 
-/// A loopback server whose request count can be asserted to be **zero**
-/// without a race.
-///
-/// [`Sentinel`] above cannot be used for that. It polls a non-blocking
-/// `accept()` with 20ms sleeps, so a connection that *was* made may not be
-/// counted yet when the assertion reads the counter — which turns "the server
-/// saw nothing" into a false pass, the exact class of defect
-/// [#83](https://github.com/PromptPasture/jan-klod/issues/83) records against
-/// it. Asserting a negative on a counter that can lag is asserting nothing.
-///
-/// This one closes the race rather than shortening it: [`Self::only_hit`]
-/// connects once itself and waits for *that* connection to be counted, so the
-/// queue is known to be drained past anything the code under test might have
-/// done. If the fetch had connected, the count would be two.
-struct Countable {
-    port: u16,
-    hits: Arc<AtomicU32>,
-}
-
-impl Countable {
-    fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
-        let port = listener.local_addr().expect("has an address").port();
-        let hits = Arc::new(AtomicU32::new(0));
-        let counted = Arc::clone(&hits);
-        // Blocking accept, and the thread is left to die with the test: there
-        // is no stop flag to race against, and a leaked thread blocked on
-        // accept costs a test binary nothing.
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut socket) = stream else { continue };
-                counted.fetch_add(1, Ordering::SeqCst);
-                // Read until the headers end rather than once into a fixed
-                // buffer: a short read followed by a reply and a close is what
-                // sends an RST back, which #78 and #83 both record.
-                let mut seen = Vec::new();
-                let mut byte = [0_u8; 1];
-                while socket.read(&mut byte).unwrap_or(0) == 1 {
-                    seen.push(byte[0]);
-                    if seen.ends_with(b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let _ = socket.write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret",
-                );
-            }
-        });
-        Self { port, hits }
-    }
-
-    /// Assert this server was reached exactly once, by us.
-    ///
-    /// The self-connection is the point: it proves the counter is live *and*
-    /// flushes the accept queue, so a count of one means the code under test
-    /// never connected. A bare `assert_eq!(hits, 0)` could pass simply because
-    /// the accepting thread had not got there yet.
-    fn only_hit(&self) {
-        let before = self.hits.load(Ordering::SeqCst);
-        let mut probe =
-            TcpStream::connect(("127.0.0.1", self.port)).expect("the sentinel is listening");
-        probe
-            .write_all(b"GET /probe HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-            .expect("writes the probe");
-        let mut sink = Vec::new();
-        let _ = probe.read_to_end(&mut sink);
-        assert_eq!(
-            self.hits.load(Ordering::SeqCst),
-            before + 1,
-            "the counter is live — if this fails the assertion below proves nothing"
-        );
-        assert_eq!(
-            self.hits.load(Ordering::SeqCst),
-            1,
-            "the only connection this server ever saw is the one this test made; \
-             anything more means the redirect was followed"
-        );
-    }
-}
-
 /// A server that answers every request with `302` to `target`, and counts.
 fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
@@ -418,7 +338,7 @@ fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
 /// after that is the redirect's doing, which is what the policy never saw.
 #[test]
 fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
-    let forbidden = Countable::start();
+    let forbidden = common::Countable::start();
     let target = format!("http://127.0.0.1:{}/secrets", forbidden.port);
     let (redirect_port, redirect_hits) = redirector_to(target);
     let entry = format!("http://127.0.0.1:{redirect_port}/start");

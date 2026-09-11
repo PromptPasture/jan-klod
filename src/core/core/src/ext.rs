@@ -164,6 +164,50 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
+/// Whether an `install` argument names a remote source rather than a file.
+///
+/// Only `http` and `https`. A bare path is a path, and every other scheme is a
+/// path too — `file:///x` is refused as a missing file rather than fetched,
+/// which is the honest answer for an installer that fetches over HTTP.
+#[must_use]
+pub fn looks_remote(spec: &str) -> bool {
+    let lower = spec.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// Refuse a remote source the egress policy would not permit, **before a byte
+/// moves**.
+///
+/// # Which policy, and why not the runtime's
+///
+/// [`crate::egress::EgressPolicy::public_only`], not
+/// [`crate::Runtime::egress_policy`]. The runtime's version also permits every
+/// origin an extension instance names in `base-url`/`endpoint`/`url`, and an
+/// origin trusted to answer model calls is not thereby a place to fetch
+/// executable components from. Two different grants that happen to be URLs.
+///
+/// It also cannot be obtained cheaply: `Runtime::egress_policy` needs a booted
+/// runtime, and booting expands `${VAR}` in every enabled instance — the same
+/// reason [`Checks::from_config_path`] reads one key instead of the whole
+/// config. An installer that demanded a model API key to reject a loopback URL
+/// would be absurd twice over.
+///
+/// A self-hosted component source on a private address is therefore refused,
+/// and deliberately has no grant yet: nothing needs one until there is a
+/// registry to host ([#53](https://github.com/PromptPasture/jan-klod/issues/53)),
+/// and inventing `registry.sources` now would be a widening with no caller.
+///
+/// # Errors
+/// [`ExtError::RefusedByPolicy`] naming the URL and what the policy said.
+pub fn check_remote(url: &str) -> Result<(), ExtError> {
+    crate::egress::EgressPolicy::public_only()
+        .check(url)
+        .map_err(|err| ExtError::RefusedByPolicy {
+            url: url.to_owned(),
+            detail: format!("{err:?}"),
+        })
+}
+
 /// Where a file's detached signature lives: `<file>.minisig`, as minisign
 /// writes it by default.
 fn signature_path(file: &Path) -> PathBuf {
@@ -298,6 +342,17 @@ pub enum ExtError {
         /// The underlying I/O error.
         #[source]
         source: std::io::Error,
+    },
+    /// A remote source the egress policy does not permit.
+    #[error(
+        "{url} is not a destination the egress policy permits ({detail}): only public \
+         addresses, and loopback, private, link-local and unique-local are refused"
+    )]
+    RefusedByPolicy {
+        /// The URL as given.
+        url: String,
+        /// What the policy said, for the operator to match against the rule.
+        detail: String,
     },
     /// The path given to `install` is not a `.wasm` file.
     #[error("{path} is not a .wasm component file")]
