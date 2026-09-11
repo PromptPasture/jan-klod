@@ -109,9 +109,24 @@ pub fn fetch_within(
     // One-shot agent per request: simple, and providers issue infrequent calls.
     // `http_status_as_error(false)` lets us read 4xx/5xx as responses and map
     // them ourselves rather than losing the status inside a ureq error.
+    //
+    // **`max_redirects(0)` is a security setting, not a preference.** The policy
+    // above is checked once, against the URL we were handed. ureq's default is
+    // to follow up to 10 redirects, so a permitted origin answering
+    // `302 Location: http://169.254.169.254/…` would be followed and the policy
+    // would never see the destination — for every guest, since this is the one
+    // outbound path. That made `security-model.md`'s "public destinations only"
+    // untrue as written.
+    //
+    // At 0, ureq returns the 3xx **as-is** rather than erroring
+    // (`max_redirects_do_error()` is `max_redirects > 0 && …`), so a caller sees
+    // the redirect and its `Location` and nothing was fetched from the new
+    // destination. Following again, with the policy applied per hop, is
+    // [#107](https://github.com/PromptPasture/jan-klod/issues/107)'s next box.
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_millis(u64::from(timeout))))
         .http_status_as_error(false)
+        .max_redirects(0)
         .build()
         .into();
 
