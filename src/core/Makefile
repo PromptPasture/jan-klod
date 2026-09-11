@@ -59,8 +59,13 @@ test:
 # them here costs almost nothing — unlike the test targets, which used to *link*
 # each example and left ~500MB in target/debug/examples for binaries no test
 # runs. Lint everything, build only what is needed.
+#
+# `jan-klod-host/integration` is the same bargain for the same reason: since #79
+# the `it` target is opt-in too, so without it `--all-targets` walks straight
+# past tests/it/ and lints nothing there while still exiting 0. Every opt-in
+# feature in this workspace has to be named here, or it leaves the lint gate.
 clippy:
-	cargo clippy --workspace --all-targets --features examples -- -D warnings
+	cargo clippy --workspace --all-targets --features examples,jan-klod-host/integration -- -D warnings
 
 # Supply-chain gates for the host workspace (Slice 1b gate). cargo-audit checks the
 # locked tree against the RUSTSEC database; cargo-deny applies the repo-wide
