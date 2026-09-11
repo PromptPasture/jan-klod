@@ -28,9 +28,14 @@
 //! negotiation guard, and for the same reason: a surface that works without its
 //! handshake teaches clients to skip it.
 
+use std::cell::RefCell;
 use std::io::{BufRead, Write};
+use std::rc::Rc;
 
 use jan_klod_protocol::jsonrpc;
+
+use crate::conductor::{Event, EventSink, Flow, RunResult};
+use crate::AgentSession;
 
 /// The ACP revision this agent implements.
 ///
@@ -63,11 +68,26 @@ struct Frame {
 /// `classify` there is a value here. It still needs no runtime, which is what
 /// keeps this box's rules testable without booting one.
 #[derive(Debug, Default)]
-struct Connection {
+pub struct Connection {
     /// Whether `initialize` has been answered.
     negotiated: bool,
     /// Session ids this connection minted, most recent last.
     sessions: Vec<String>,
+}
+
+/// What a frame means, decided without a session.
+enum Routed {
+    /// A notification: nothing to answer.
+    Silent,
+    /// Answerable without running anything.
+    Answer(jsonrpc::Response),
+    /// `session/prompt`, which needs a turn.
+    Prompt {
+        /// The request to answer.
+        id: jsonrpc::Id,
+        /// Its params.
+        params: serde_json::Value,
+    },
 }
 
 /// Serve ACP on `input`/`output` until the client hangs up.
@@ -75,27 +95,107 @@ struct Connection {
 /// # Errors
 /// Any I/O failure on `output`. A malformed frame is answered, not returned:
 /// one bad line is not a reason to hang up on an editor.
-pub fn serve<R: BufRead, W: Write>(input: R, output: &mut W) -> std::io::Result<()> {
+pub fn serve<R: BufRead, W: Write>(
+    input: R,
+    output: W,
+    agent: &mut AgentSession,
+) -> std::io::Result<()> {
+    // Shared because a turn streams `session/update` notifications *while* it
+    // runs, so the sink and the answer both write here.
+    let writer = Rc::new(RefCell::new(output));
     let mut connection = Connection::default();
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = connection.answer(&line) {
-            write_frame(output, &response)?;
+        if let Some(response) = connection.answer(&line, agent, &writer) {
+            write_frame(&mut *writer.borrow_mut(), &response)?;
         }
     }
     Ok(())
 }
 
+/// Streams a turn's events as ACP `session/update` notifications.
+struct AcpSink<'a, W: Write> {
+    writer: &'a Rc<RefCell<W>>,
+    session: String,
+}
+
+impl<W: Write> EventSink for AcpSink<'_, W> {
+    fn emit(&mut self, event: &Event) -> Flow {
+        // Only assistant text maps to an ACP update today. A tool call has its
+        // own `sessionUpdate` kinds in the spec, and inventing a shape for them
+        // here — rather than reading what ACP defines — is how a client ends up
+        // rendering something nobody agreed on. Left for the box that needs it.
+        let Event::TextDelta(text) = event else {
+            return Flow::Continue;
+        };
+        let update = serde_json::json!({
+            "sessionId": self.session,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": text },
+            },
+        });
+        let notification = serde_json::json!({
+            "jsonrpc": jsonrpc::VERSION,
+            "method": "session/update",
+            "params": update,
+        });
+        let mut writer = self.writer.borrow_mut();
+        // Nobody reading means nothing left to stream, which the conductor
+        // treats as a cancellation at its next loop boundary.
+        if serde_json::to_writer(&mut *writer, &notification).is_err()
+            || writer.write_all(b"\n").is_err()
+            || writer.flush().is_err()
+        {
+            return Flow::Stop;
+        }
+        Flow::Continue
+    }
+}
+
 impl Connection {
+    /// A connection that has not yet been negotiated.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// One line to the response it earns, or `None` for a notification.
-    fn answer(&mut self, line: &str) -> Option<jsonrpc::Response> {
+    ///
+    /// Public so a caller can drive ACP without owning the read loop — which
+    /// is what [`serve`] does, and what a test has to do: a session id is
+    /// **minted by the agent**, so a client cannot script `session/prompt` in
+    /// advance. It must read the id out of `session/new` first, exactly as an
+    /// editor does.
+    pub fn answer<W: Write>(
+        &mut self,
+        line: &str,
+        agent: &mut AgentSession,
+        writer: &Rc<RefCell<W>>,
+    ) -> Option<jsonrpc::Response> {
+        match self.route(line) {
+            Routed::Silent => None,
+            Routed::Answer(response) => Some(response),
+            Routed::Prompt { id, params } => Some(match self.prompt(&params, agent, writer) {
+                Ok(result) => jsonrpc::Response::result(id, result),
+                Err(message) => refuse(id, jsonrpc::INTERNAL_ERROR, message),
+            }),
+        }
+    }
+
+    /// Everything a frame can mean **without** a session.
+    ///
+    /// The handshake, the ordering MUST, and every refusal are settled here, so
+    /// they stay checkable with no booted runtime — the same division
+    /// [`crate::mcp`]'s `classify` and [`crate::rpc`]'s `parse` have.
+    fn route(&mut self, line: &str) -> Routed {
         let frame: Frame = match serde_json::from_str(line) {
             Ok(frame) => frame,
             Err(err) => {
-                return Some(refuse(
+                return Routed::Answer(refuse(
                     jsonrpc::Id::Null,
                     jsonrpc::PARSE_ERROR,
                     format!("a frame must be one JSON-RPC object on one line: {err}"),
@@ -104,10 +204,12 @@ impl Connection {
         };
 
         // A notification earns no answer; there is nothing to correlate one to.
-        let id = frame.id?;
+        let Some(id) = frame.id else {
+            return Routed::Silent;
+        };
 
         if frame.jsonrpc != jsonrpc::VERSION {
-            return Some(refuse(
+            return Routed::Answer(refuse(
                 id,
                 jsonrpc::INVALID_REQUEST,
                 format!(
@@ -122,7 +224,7 @@ impl Connection {
         // the handshake. A surface that works without it teaches clients to
         // skip it, and then the version negotiation is decoration.
         if !self.negotiated && frame.method != "initialize" {
-            return Some(refuse(
+            return Routed::Answer(refuse(
                 id,
                 jsonrpc::INVALID_REQUEST,
                 format!(
@@ -132,17 +234,18 @@ impl Connection {
             ));
         }
 
-        Some(match frame.method.as_str() {
+        Routed::Answer(match frame.method.as_str() {
             "initialize" => {
                 self.negotiated = true;
                 jsonrpc::Response::result(id, Self::initialized(&frame.params))
             }
             "session/new" => jsonrpc::Response::result(id, self.new_session(&frame.params)),
-            "session/prompt" => refuse(
-                id,
-                jsonrpc::METHOD_NOT_FOUND,
-                "`session/prompt` is not served yet; `initialize` and `session/new` are".to_owned(),
-            ),
+            "session/prompt" => {
+                return Routed::Prompt {
+                    id,
+                    params: frame.params,
+                }
+            }
             other => refuse(
                 id,
                 jsonrpc::METHOD_NOT_FOUND,
@@ -215,6 +318,82 @@ impl Connection {
     }
 }
 
+impl Connection {
+    /// Run one turn for `session/prompt`, streaming updates as it goes.
+    ///
+    /// # `stopReason` is not `isError`, and assuming otherwise would lose data
+    ///
+    /// ACP's stop reasons say why a turn **ended**: `end_turn`, `max_tokens`,
+    /// `max_turn_requests`, `refusal`, `cancelled`. None of them means "the
+    /// tool failed", which is the opposite of MCP's `isError` — so the mapping
+    /// had to be read rather than carried across from [`crate::mcp`].
+    ///
+    /// **A permission refusal is `end_turn`, never `refusal`.** The spec is
+    /// explicit that on `refusal` "the user prompt and everything that comes
+    /// after it won't be included in the next prompt, so this should be
+    /// reflected in the UI" — it means the agent declined the whole exchange,
+    /// and an editor is entitled to discard the prompt. A blocked tool call is
+    /// not that: the turn ran, the model was told, and it answered. Reporting
+    /// it as `refusal` would throw away what the user typed.
+    ///
+    /// A turn that genuinely *failed* has no stop reason at all, so it is a
+    /// JSON-RPC error — again the opposite of MCP, where a failure rides
+    /// in-band on a successful result.
+    ///
+    /// # Errors
+    /// A message when the frame is unusable or the turn failed, which the
+    /// caller returns as a JSON-RPC error.
+    fn prompt<W: Write>(
+        &self,
+        params: &serde_json::Value,
+        agent: &mut AgentSession,
+        writer: &Rc<RefCell<W>>,
+    ) -> Result<serde_json::Value, String> {
+        let Some(session) = params.get("sessionId").and_then(serde_json::Value::as_str) else {
+            return Err("`session/prompt` needs a `sessionId`".to_owned());
+        };
+        if !self.sessions.iter().any(|known| known == session) {
+            return Err(format!(
+                "no session {session} on this connection; create one with `session/new`"
+            ));
+        }
+
+        // The prompt is a list of content blocks. Only text is supported, and
+        // `initialize` says so — `promptCapabilities` declares image, audio and
+        // embedded context all false, so a client sending one was told not to.
+        let text = params
+            .get("prompt")
+            .and_then(serde_json::Value::as_array)
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter(|block| {
+                        block.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                    })
+                    .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        if text.trim().is_empty() {
+            return Err("`prompt` carried no text content".to_owned());
+        }
+
+        let mut sink = AcpSink {
+            writer,
+            session: session.to_owned(),
+        };
+        // `run_streaming_headless` for now: an editor *can* answer a
+        // permission request, but asking it needs the agent→client direction,
+        // which is the next box. Until then each prompt takes its default,
+        // which is a refusal — the same posture as MCP.
+        match agent.run_streaming_headless(&mut sink, session, &text) {
+            RunResult::Answered { .. } => Ok(serde_json::json!({ "stopReason": "end_turn" })),
+            RunResult::Failed(message) => Err(message),
+        }
+    }
+}
+
 /// A failed answer.
 fn refuse(id: jsonrpc::Id, code: i64, message: String) -> jsonrpc::Response {
     jsonrpc::Response::error(id, jsonrpc::Error::new(code, message))
@@ -232,25 +411,36 @@ fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::i
 
 #[cfg(test)]
 mod tests {
-    use super::{Connection, ACP_VERSION};
+    use super::{Connection, Routed, ACP_VERSION};
     use jan_klod_protocol::jsonrpc;
 
-    /// A negotiated connection, since almost everything needs one.
+    /// Everything except `session/prompt` is answered without touching the
+    /// agent, so these tests pass no runtime at all — the reason `answer` takes
+    /// the session by argument rather than holding one.
     fn negotiated() -> Connection {
         let mut connection = Connection::default();
-        let value = connection
-            .answer(r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}"#)
-            .expect("initialize is answered");
-        assert!(
-            serde_json::to_value(value).expect("serializes")["result"]["protocolVersion"] == 1,
+        let value = call(
+            &mut connection,
+            r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}"#,
+        );
+        assert_eq!(
+            value["result"]["protocolVersion"], 1,
             "the handshake succeeded"
         );
         connection
     }
 
+    /// Answer a line that does not need a turn.
+    ///
+    /// `session/prompt` is the only method that touches the agent, and it is
+    /// checked in `host/tests/it/acp.rs` where a real one exists — so these
+    /// call the frame handling directly and never reach it.
     fn call(connection: &mut Connection, line: &str) -> serde_json::Value {
-        let response = connection.answer(line).expect("a request earns an answer");
-        serde_json::to_value(response).expect("it serializes")
+        match connection.route(line) {
+            Routed::Answer(response) => serde_json::to_value(response).expect("it serializes"),
+            Routed::Silent => panic!("{line} earns an answer"),
+            Routed::Prompt { .. } => panic!("{line} needs a turn; check it through the harness"),
+        }
     }
 
     #[test]
@@ -353,22 +543,41 @@ mod tests {
     }
 
     #[test]
-    fn session_prompt_says_it_is_not_served_yet() {
+    fn session_prompt_is_routed_to_a_turn() {
         let mut connection = negotiated();
+        assert!(
+            matches!(
+                connection.route(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"sessionId":"x","prompt":[]}}"#
+                ),
+                Routed::Prompt { .. }
+            ),
+            "a prompt needs a session, so it is routed rather than answered"
+        );
+    }
+
+    /// But it is still refused before the handshake — the ordering MUST applies
+    /// to the method that matters most, not only to `session/new`.
+    #[test]
+    fn session_prompt_before_initialize_is_refused() {
+        let mut connection = Connection::default();
         let value = call(
             &mut connection,
             r#"{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"sessionId":"x","prompt":[]}}"#,
         );
-        assert_eq!(value["error"]["code"], jsonrpc::METHOD_NOT_FOUND);
+        assert_eq!(value["error"]["code"], jsonrpc::INVALID_REQUEST);
     }
 
     #[test]
     fn a_notification_earns_no_answer() {
         let mut connection = negotiated();
         assert!(
-            connection
-                .answer(r#"{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"x"}}"#)
-                .is_none(),
+            matches!(
+                connection.route(
+                    r#"{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"x"}}"#
+                ),
+                Routed::Silent
+            ),
             "a cancel is a notification"
         );
     }

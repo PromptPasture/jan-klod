@@ -14,6 +14,7 @@
 
 mod common;
 
+mod acp;
 mod agent_loop;
 mod api_prompt;
 mod api_rest;

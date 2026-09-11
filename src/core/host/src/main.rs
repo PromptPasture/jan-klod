@@ -67,15 +67,40 @@ fn main() -> ExitCode {
 
 /// Serve the Agent Client Protocol on stdin/stdout, agent side.
 ///
-/// No runtime yet: this box serves `initialize` and `session/new`, which mint a
-/// session id and touch nothing. A turn arrives with `session/prompt`, and with
-/// it the reader-thread shape `rpc` uses — because ACP asks the *editor* for a
-/// permission answer mid-turn, so the pipe has to stay readable while the turn
-/// runs.
+/// Boots the same runtime `ask` does, because `session/prompt` runs a real turn
+/// and streams `session/update` notifications as it goes.
+///
+/// The pipe is not yet *read* during a turn. It has to be once the agent asks
+/// the editor for a permission answer — ACP's agent→client direction — and that
+/// is where `rpc`'s reader-thread shape comes in.
 fn acp() -> ExitCode {
+    let config_path = resolve_default("config.yaml");
+    let ext_dir = resolve_default("ext");
+    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("jan-klod: boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let policy = runtime.egress_policy();
+    let factory = move || -> HttpFn {
+        let policy = policy.clone();
+        Box::new(move |method, url, headers, body, timeout| {
+            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+        })
+    };
+    let mut agent = match runtime.build_agent(&factory) {
+        Ok(agent) => agent,
+        Err(err) => {
+            eprintln!("jan-klod: agent boot failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let input = std::io::BufReader::new(std::io::stdin());
-    let mut output = std::io::stdout();
-    match jan_klod_core::acp::serve(input, &mut output) {
+    let output = std::io::stdout();
+    match jan_klod_core::acp::serve(input, output, &mut agent) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("jan-klod: acp: {err}");
