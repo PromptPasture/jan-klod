@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Pre-commit hook — compilation + tests only (fast gate).
 # Skip with: git commit --no-verify
+#
+# Since #79, `make test` below is unit tests only: the host workspace's
+# `#[cfg(test)]` units, the guests' native tests, and the Go supervisor's
+# `go vet`/`go test`. The host integration suite (host/tests/it/, ~160 tests)
+# needs the `integration` cargo feature, which this hook does not pass — that
+# suite runs at `git push` instead, via `pre-push`'s `make gate`. The saving is
+# real: no wasmtime link, no ~200M `it-*` binary built on every commit, so this
+# hook stays a fast gate rather than repeating the push-time run.
 
 set -euo pipefail
 
@@ -37,16 +45,24 @@ cargo fmt --manifest-path src/extensions/Cargo.toml --all -- --check \
 step "Build + test"
 
 # Stage the guests fresh. This used to be `rm -rf ext/` alone, which defeated its
-# own purpose: the integration tests skip when a guest is absent, so removing them
-# turned roughly thirty tests into no-ops and the hook still printed "passed".
-# Removing *and rebuilding* gets what the removal was reaching for — no stale
-# artifact — while leaving the tests something to run against.
+# own purpose: with no manifests in ext/, `make test`'s manifest self-test
+# (scripts/manifests-selftest.sh, run by `make -C src/extensions test`) skips
+# rather than checking anything, and the hook still printed "passed". Removing
+# *and rebuilding* gets what the removal was reaching for — no stale artifact —
+# while leaving that self-test something to run against.
+#
+# Since #79 this is the only reason `make test` still needs guests staged: the
+# host's own integration suite (host/tests/it/) is gated behind the
+# `integration` feature and this hook's `make test` does not pass it, so that
+# suite does not build here at all — it runs at `git push` instead, via
+# `pre-push`'s `make gate`.
 rm -rf ext/
 make -C src/extensions all \
   && pass "guests staged" \
   || { fail "guest build failed"; exit 1; }
 
-# A skipped test must now fail rather than pass quietly (see common::guests_staged).
+# A skipped self-test must now fail rather than pass quietly
+# (scripts/manifests-selftest.sh).
 export JK_REQUIRE_GUESTS=1
 
 make -C src/core check \

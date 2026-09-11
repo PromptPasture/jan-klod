@@ -116,6 +116,23 @@ jobs:
       - name: Stage guest components
         run: make -C src/extensions all
 
+      # #79 gated the host's integration suite (host/tests/it/) behind the
+      # `integration` cargo feature, so plain `make test` now builds and runs unit
+      # tests only — host workspace + guest native tests + the Go supervisor, no
+      # wasmtime link, no ~200M `it-*` binary. Deliberately not passing the feature
+      # here: before #79 this step already built and ran the full integration suite
+      # unconditionally, duplicating the `harness` job's `make gate` below — #64 kept
+      # that duplication because two independent runners cost nothing extra in wall
+      # clock. The feature gate changes that trade: carrying the suite here again
+      # would now cost a real extra wasmtime link and ~160 extra tests on every push,
+      # for signal that two identical ubuntu-latest runners on the same commit add
+      # little over one. So `harness` remains the sole job that exercises the full
+      # suite — its `make gate` has its own zero-test guard, so a broken
+      # `--features` flag fails loudly rather than this job silently covering for
+      # it. `make clippy` below still type-checks tests/it (see src/core/Makefile),
+      # so a compile error there still fails this job even though nothing here
+      # links or runs it.
+      #
       # …and make a skip a failure, so this can never hollow out silently again.
       - run: make test
         env:

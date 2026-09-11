@@ -33,9 +33,13 @@ make -C src/extensions all \
 
 export JK_REQUIRE_GUESTS=1
 
-# Not `make test`: that starts with the host workspace suite, which `make gate`
-# below re-runs in full (both are `cargo test --workspace` on src/core). The two
-# legs gate never reaches are the guests' native tests and the Go supervisor.
+# Not `make test`: that starts with the host workspace's *unit* tests
+# (`cargo nextest run` in src/core, unit-only since #79 — see src/core/Makefile),
+# which `make gate` below re-runs and then some: `gate` passes
+# `--features jan-klod-host/integration`, so it is a strict superset — every
+# unit test `make test` would run, plus the ~160-test host integration suite
+# (host/tests/it/) that `make test` no longer builds at all. The two legs
+# `gate` never reaches are the guests' native tests and the Go supervisor.
 make test-guests \
   && pass "make test-guests" \
   || { fail "make test-guests failed"; exit 1; }
