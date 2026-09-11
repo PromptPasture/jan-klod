@@ -4,7 +4,7 @@ title: Development Environment Setup
 description: Install and verify the toolchain needed to build the Rust core and TinyGo guest extensions for Phase 1.
 tags: [setup, toolchain, rust, tinygo, wasmtime, wit, component-model, phase-1]
 created: 2026-06-29
-updated: 2026-07-02
+updated: 2026-09-11
 ---
 
 # Development Environment Setup
@@ -71,6 +71,13 @@ cargo install wkg
 Prebuilt binaries are also on
 <https://github.com/bytecodealliance/wasm-pkg-tools/releases>.
 
+`make setup` (below) installs `wkg` for you, pinned to the version this repo is
+verified against, and uses it to fetch `wit/spike/deps` — a gitignored,
+committed-nowhere directory that `make gate`, `make harness`, and `make clippy`
+all need to resolve `wit/spike` through `bindgen!`. Skipping `setup` and running
+one of those by hand fails fast with a `wit/spike/deps is missing` message
+naming the fix, rather than `bindgen!`'s opaque WIT-resolution error.
+
 ### 4. wasm-tools (inspect / validate)
 
 ```shell
@@ -104,6 +111,22 @@ wasmtime --version     # optional (verified: 46.0.1)
 A green run of all six means the Slice 1a toolchain is ready. Then build per the
 project [Makefile](../../Makefile) (`cargo build` for core; `tinygo build` per
 guest — targets land in Slice 1b).
+
+## One-time setup, then the gate
+
+Once per clone, from the repo root:
+
+```shell
+make setup   # cargo supply-chain plugins + wkg, fetches wit/spike/deps, configures git hooks
+make gate    # full offline integration exit gate — the check that this all worked
+```
+
+`make setup` is what makes `make gate` (and `make harness`, `make clippy`)
+buildable on a fresh clone: without it, `wit/spike/deps` (`wasi:cli` and
+friends) does not exist, and those targets fail up front with a message naming
+`make setup` as the fix rather than a raw `bindgen!` WIT-resolution error.
+`make test`/`make test-core` do not need this step — they build unit tests
+only, never `tests/it/`'s `bindgen!` macro.
 
 ## Building a guest component (shape)
 

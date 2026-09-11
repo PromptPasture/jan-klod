@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup
+.PHONY: help wit all core extensions ext supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -35,7 +35,7 @@ help:
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
 	@echo "  wit         validate the WIT contracts"
-	@echo "  setup       install cargo plugins + configure git hooks"
+	@echo "  setup       install cargo plugins + wkg, fetch wit/spike/deps, configure hooks"
 	@echo "  install-hooks  configure git to use .github/hooks/"
 	@echo "  clean       remove build artifacts"
 
@@ -48,6 +48,21 @@ help:
 wit:
 	wasm-tools component wit wit/
 	sh scripts/wit-version-check.sh
+
+# wit/spike/deps (wasi:cli & co) is gitignored and only ever populated by `make
+# setup` (below) or `make -C src/extensions spike-deps` — nothing on the plain
+# build path fetches it. Without this check, a fresh clone that skipped setup
+# hits `bindgen!`'s compile-time WIT resolution instead: "failed to resolve
+# directory while parsing WIT for path .../wit/spike", which names no fix.
+# Checked, not fetched — an actual `wkg wit fetch` here would put a network
+# call on `gate`, which its own comment calls the offline suite.
+check-spike-deps:
+	@test -d wit/spike/deps || { \
+	  echo "error: wit/spike/deps is missing (gitignored, not from git checkout)." >&2; \
+	  echo "  Run 'make setup' once per clone, or if you already have wkg:" >&2; \
+	  echo "  make -C src/extensions spike-deps" >&2; \
+	  exit 1; \
+	}
 
 all: core extensions
 
@@ -84,7 +99,7 @@ bundle: extensions
 	cd $(CORE) && cargo build --release -p jan-klod-host -p jan-klod
 	sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT)
 
-clippy:
+clippy: check-spike-deps
 	$(MAKE) -C $(CORE) clippy
 
 # --- Supply-chain gates (CI enforces all of these) ---
@@ -125,7 +140,7 @@ supply-chain: deny audit sbom
 HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegram \
                    host_fs host_process tool_fleet tool_wiring
 harness: export JK_REQUIRE_GUESTS = 1
-harness: extensions
+harness: check-spike-deps extensions
 	@for m in $(HARNESS_MODULES); do \
 	  test -f $(CORE)/host/tests/it/$$m.rs \
 	    || { echo "harness: no module $$m.rs in $(CORE)/host/tests/it/" >&2; exit 1; }; \
@@ -166,7 +181,7 @@ harness: extensions
 # "<binary> <test-name>"; the `it` binary's lines start with
 # "jan-klod-host::it ".
 gate: export JK_REQUIRE_GUESTS = 1
-gate: extensions
+gate: check-spike-deps extensions
 	@n=$$(cd $(CORE) && cargo nextest list -p jan-klod-host --features jan-klod-host/integration --bins --tests 2>/dev/null | grep -c '^jan-klod-host::it '); \
 	  echo "gate: integration suite (jan-klod-host::it) resolves $$n test(s)"; \
 	  if [ "$$n" -eq 0 ]; then \
@@ -227,14 +242,23 @@ CARGO_NEXTEST_VERSION := 0.9.143
 # output to generate each guest's capability manifest, so a change to how it
 # prints a component's WIT lands on us.
 WASM_TOOLS_VERSION := 1.258.0
+# wkg resolves wit/spike/deps against the committed wit/wkg.lock (#77). Pinned
+# for the same reason as everything else here, and to the same value CI installs
+# it at (see the "Install wkg" steps in .github/workflows/ci.yml): a lockfile is
+# a resolution of *some* registry state at the time it was written, and a newer
+# wkg is not guaranteed to reproduce it.
+WKG_VERSION := 0.15.1
 
-# One-time developer setup: cargo supply-chain plugins + git hooks.
+# One-time developer setup: cargo supply-chain plugins, git hooks, and the WIT
+# deps that only `wkg` can fetch.
 setup:
 	cargo install cargo-audit --version $(CARGO_AUDIT_VERSION)
 	cargo install cargo-cyclonedx --version $(CARGO_CYCLONEDX_VERSION)
 	cargo install cargo-nextest --version $(CARGO_NEXTEST_VERSION)
 	cargo install cargo-deny --version $(CARGO_DENY_VERSION)
 	cargo install wasm-tools --version $(WASM_TOOLS_VERSION)
+	cargo install wkg --version $(WKG_VERSION)
+	$(MAKE) -C $(EXT) spike-deps
 	$(MAKE) install-hooks
 
 install-hooks:
