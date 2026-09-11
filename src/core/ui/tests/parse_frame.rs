@@ -5,30 +5,30 @@ use jan_klod::{parse_frame, StreamEvent};
 fn parse_frame_maps_each_event_kind() {
     assert_eq!(
         parse_frame("delta", r#"{"text":"hi"}"#),
-        StreamEvent::Delta("hi".into())
+        Some(StreamEvent::Delta("hi".into()))
     );
     assert_eq!(
         parse_frame("tool", r#"{"name":"bash","id":"1"}"#),
-        StreamEvent::Tool("bash".into())
+        Some(StreamEvent::Tool("bash".into()))
     );
     assert_eq!(
         parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#),
-        StreamEvent::ToolResult {
+        Some(StreamEvent::ToolResult {
             id: "c1".into(),
             content: "42".into()
-        }
+        })
     );
     assert_eq!(
         parse_frame("warning", r#"{"message":"falling back"}"#),
-        StreamEvent::Warning("falling back".into())
+        Some(StreamEvent::Warning("falling back".into()))
     );
     assert_eq!(
         parse_frame("done", r#"{"answer":"result","agentic":true}"#),
-        StreamEvent::Done("result".into())
+        Some(StreamEvent::Done("result".into()))
     );
     assert_eq!(
         parse_frame("error", r#"{"error":"boom"}"#),
-        StreamEvent::Error("boom".into())
+        Some(StreamEvent::Error("boom".into()))
     );
 }
 
@@ -41,24 +41,34 @@ fn parse_frame_maps_each_event_kind() {
 fn a_tool_result_is_never_reported_as_an_error() {
     let ev = parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#);
     assert!(
-        !matches!(ev, StreamEvent::Error(_)),
+        !matches!(ev, Some(StreamEvent::Error(_))),
         "a tool result is a normal turn's progress, not a failure: {ev:?}"
     );
 }
 
+/// A kind this client does not know is **dropped**, not reported. It means the
+/// core is newer than this client, or a frame was added without updating it —
+/// neither is a failed turn, and calling it one is what #81 was. Drift is caught
+/// by a test instead, which is where a claim about two files belongs.
 #[test]
-fn parse_frame_flags_unknown_kinds() {
-    assert!(matches!(parse_frame("weird", "{}"), StreamEvent::Error(_)));
+fn an_unknown_kind_is_dropped_rather_than_shown_as_a_failure() {
+    assert_eq!(parse_frame("weird", "{}"), None);
+    // Including one that looks plausible: this is the case that actually
+    // happens, a core one frame ahead of its client.
+    assert_eq!(
+        parse_frame("tool-progress", r#"{"id":"c1","pct":40}"#),
+        None
+    );
 }
 
 #[test]
 fn parse_frame_surfaces_malformed_json_as_error() {
     let ev = parse_frame("delta", "not json at all");
     assert!(
-        matches!(ev, StreamEvent::Error(_)),
+        matches!(ev, Some(StreamEvent::Error(_))),
         "expected Error, got {ev:?}"
     );
-    if let StreamEvent::Error(msg) = ev {
+    if let Some(StreamEvent::Error(msg)) = ev {
         assert!(msg.contains("malformed SSE frame"), "{msg}");
     }
 }
@@ -68,11 +78,11 @@ fn parse_frame_reads_a_prompt_with_its_options() {
     let data = r#"{"question":"Allow tool `bash`?","options":["yes","no","always","never"],"default":"no","session":"s1"}"#;
     assert_eq!(
         parse_frame("prompt", data),
-        StreamEvent::Prompt {
+        Some(StreamEvent::Prompt {
             question: "Allow tool `bash`?".into(),
             options: vec!["yes".into(), "no".into(), "always".into(), "never".into()],
             default: "no".into(),
-        }
+        })
     );
 }
 
@@ -81,10 +91,10 @@ fn a_prompt_without_options_still_parses() {
     // A future/odd prompt must not turn into an Error the user cannot answer.
     assert_eq!(
         parse_frame("prompt", r#"{"question":"Proceed?","default":"no"}"#),
-        StreamEvent::Prompt {
+        Some(StreamEvent::Prompt {
             question: "Proceed?".into(),
             options: vec![],
             default: "no".into()
-        }
+        })
     );
 }

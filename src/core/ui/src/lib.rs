@@ -90,12 +90,30 @@ pub enum StreamEvent {
     Error(String),
 }
 
-/// Parse one SSE frame (its `event` kind + `data` JSON) into a [`StreamEvent`].
+/// Parse one SSE frame (its `event` kind + `data` JSON) into a [`StreamEvent`],
+/// or `None` when this client has nowhere to put it.
+///
+/// Mirrors [`transport::event_for`] on the stdio path, deliberately: both
+/// answer "what does this client do with an event it was sent", and `None` is
+/// how each says *nothing*. That one could not say it is what made an unknown
+/// kind a user-visible error.
+///
+/// Two failures are told apart here, having previously shared one arm:
+///
+/// * **data that is not JSON** is a protocol violation whatever the kind is, so
+///   it is reported;
+/// * **a kind this client does not know** is not a failure at all — it means
+///   the core is newer, or a frame was added without updating this — so it is
+///   dropped. Catching *that* is a test's job, not a running client's.
 #[must_use]
-pub fn parse_frame(kind: &str, data: &str) -> StreamEvent {
+pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
     let value: serde_json::Value = match serde_json::from_str(data) {
         Ok(v) => v,
-        Err(err) => return StreamEvent::Error(format!("malformed SSE frame ({kind}): {err}")),
+        Err(err) => {
+            return Some(StreamEvent::Error(format!(
+                "malformed SSE frame ({kind}): {err}"
+            )))
+        }
     };
     let field = |k: &str| {
         value
@@ -104,7 +122,7 @@ pub fn parse_frame(kind: &str, data: &str) -> StreamEvent {
             .unwrap_or("")
             .to_string()
     };
-    match kind {
+    Some(match kind {
         "delta" => StreamEvent::Delta(field("text")),
         "tool" => StreamEvent::Tool(field("name")),
         // The field names are `serve::sse_frame`'s for `Event::ToolResult`.
@@ -130,12 +148,13 @@ pub fn parse_frame(kind: &str, data: &str) -> StreamEvent {
                 .unwrap_or_default(),
             default: field("default"),
         },
-        _ => StreamEvent::Error(if kind == "error" {
-            field("error")
-        } else {
-            format!("unknown event `{kind}`")
-        }),
-    }
+        // Its own arm now. A real turn failure and a frame this client has
+        // never heard of used to arrive by the same path and be told apart by
+        // comparing `kind` to a string — so the one case that genuinely is an
+        // error was reached only by failing to be anything else.
+        "error" => StreamEvent::Error(field("error")),
+        _ => return None,
+    })
 }
 
 /// Drive one turn with **streaming**: `POST` with `Accept: text/event-stream` and
@@ -184,7 +203,9 @@ pub fn stream_turn(
         }
         if line.is_empty() {
             if let (Some(k), Some(d)) = (kind.take(), data.take()) {
-                on_event(parse_frame(&k, &d));
+                if let Some(event) = parse_frame(&k, &d) {
+                    on_event(event);
+                }
             }
         } else if let Some(rest) = line.strip_prefix("event: ") {
             kind = Some(rest.to_string());
