@@ -69,7 +69,13 @@ impl FakeOllama {
     fn start(answer: &'static str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
-        listener.set_nonblocking(true).expect("nonblocking");
+        // The listener stays blocking, which decides two things at once. It ends
+        // the poll-with-a-sleep accept loop — `Drop` sets the stop flag and then
+        // connects, so the wake-up arrives as a connection rather than as a
+        // timer expiring — and it removes a platform difference: BSD `accept()`
+        // hands back a socket that inherited the listener's `O_NONBLOCK`
+        // (verified on this host), so a non-blocking listener silently made
+        // every accepted socket non-blocking on macOS and blocking on Linux.
         let requests = Arc::new(AtomicU32::new(0));
         let saw_authorization = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicU32::new(0));
@@ -86,23 +92,22 @@ impl FakeOllama {
             }
         };
         thread::spawn(move || {
-            while stopped.load(Ordering::Relaxed) == 0 {
+            loop {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
-                        counted.fetch_add(1, Ordering::Relaxed);
-                        // BSD `accept()` hands back a socket that inherited the
-                        // listener's O_NONBLOCK — verified on this host — so
-                        // this is non-blocking on macOS and blocking on Linux.
-                        // Make it blocking with a deadline, and read the request
-                        // to completion: a single non-blocking read can return
-                        // part of it or none of it, and answering early leaves
-                        // the rest unread, so the close sends RST instead of FIN
-                        // and the RST discards the response already written. The
-                        // client sees "could not be reached" for a turn the
-                        // endpoint answered correctly.
-                        if let Err(e) = socket.set_nonblocking(false) {
-                            fault("set_nonblocking", &e);
+                        // The connection `Drop` makes to release this accept
+                        // carries no request, so leave before counting it.
+                        if stopped.load(Ordering::Relaxed) != 0 {
+                            break;
                         }
+                        counted.fetch_add(1, Ordering::Relaxed);
+                        // Read the request to completion under a deadline. One
+                        // read can return part of it or none of it, and
+                        // answering early leaves the rest unread, so the close
+                        // sends RST instead of FIN and the RST discards the
+                        // response already written. The client sees "could not
+                        // be reached" for a turn the endpoint answered
+                        // correctly.
                         if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
                             fault("set_read_timeout", &e);
                         }
@@ -132,7 +137,13 @@ impl FakeOllama {
                             fault("write_all", &e);
                         }
                     }
-                    Err(_) => thread::sleep(Duration::from_millis(10)),
+                    // A listener that cannot accept serves nothing, so say so
+                    // rather than spinning: the test reads `faults` before it
+                    // trusts anything this endpoint saw.
+                    Err(e) => {
+                        fault("accept", &e);
+                        break;
+                    }
                 }
             }
         });
