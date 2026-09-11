@@ -65,6 +65,12 @@ fn event_loop(
                     Ok(Ok(StreamEvent::Tool(name))) => {
                         app.record_status(format!("· {name}"));
                     }
+                    // Deliberately not rendered. The status line already names
+                    // the running tool, and marking it finished would need the
+                    // call id on the invocation to pair them — `Tool` carries
+                    // none. #100 (tool blocks) is where a paired view belongs.
+                    // What matters here is that it is no longer an error.
+                    Ok(Ok(StreamEvent::ToolResult { .. })) => {}
                     Ok(Ok(StreamEvent::Warning(msg))) => {
                         app.record_status(format!("⚠ {msg}"));
                     }

@@ -62,6 +62,15 @@ pub enum StreamEvent {
     Delta(String),
     /// A tool is running.
     Tool(String),
+    /// A tool returned. `id` is the call this answers; [`StreamEvent::Tool`]
+    /// carries no id, so an invocation and its result cannot be paired yet —
+    /// #100 (tool blocks) is the slice that needs them paired.
+    ToolResult {
+        /// The call this answers.
+        id: String,
+        /// What the tool returned.
+        content: String,
+    },
     /// A non-fatal notice (provider fallback, retry).
     Warning(String),
     /// The turn finished with the authoritative answer.
@@ -98,6 +107,13 @@ pub fn parse_frame(kind: &str, data: &str) -> StreamEvent {
     match kind {
         "delta" => StreamEvent::Delta(field("text")),
         "tool" => StreamEvent::Tool(field("name")),
+        // The field names are `serve::sse_frame`'s for `Event::ToolResult`.
+        // Without this arm the frame took the fallback below and every tool
+        // result in a healthy turn reached the user as an error.
+        "tool-result" => StreamEvent::ToolResult {
+            id: field("id"),
+            content: field("content"),
+        },
         "warning" => StreamEvent::Warning(field("message")),
         "done" => StreamEvent::Done(field("answer")),
         "prompt" => StreamEvent::Prompt {

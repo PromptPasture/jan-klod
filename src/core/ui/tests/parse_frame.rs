@@ -12,6 +12,13 @@ fn parse_frame_maps_each_event_kind() {
         StreamEvent::Tool("bash".into())
     );
     assert_eq!(
+        parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#),
+        StreamEvent::ToolResult {
+            id: "c1".into(),
+            content: "42".into()
+        }
+    );
+    assert_eq!(
         parse_frame("warning", r#"{"message":"falling back"}"#),
         StreamEvent::Warning("falling back".into())
     );
@@ -22,6 +29,20 @@ fn parse_frame_maps_each_event_kind() {
     assert_eq!(
         parse_frame("error", r#"{"error":"boom"}"#),
         StreamEvent::Error("boom".into())
+    );
+}
+
+/// The regression this file exists to hold: the `tool-result` kind had no arm,
+/// so every tool result in a **healthy** turn took the fallback and reached the
+/// user as an "unknown event" error. Stated separately from the mapping test
+/// above because it is an invariant about the fallback rather than about a
+/// shape — it stays true if the variant's fields ever change.
+#[test]
+fn a_tool_result_is_never_reported_as_an_error() {
+    let ev = parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#);
+    assert!(
+        !matches!(ev, StreamEvent::Error(_)),
+        "a tool result is a normal turn's progress, not a failure: {ev:?}"
     );
 }
 

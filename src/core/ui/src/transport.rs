@@ -353,16 +353,13 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
             default: default.clone(),
         }),
         Notification::Error { message } => Some(StreamEvent::Error(message.clone())),
-        // The two this client has nowhere to put, for different reasons.
-        //
-        // `tool-result`: `StreamEvent` has no variant for it, which is the same
-        // missing variant that makes the REST path report every tool result as
-        // an error (#81). Adding one belongs with that fix; dropping it here at
-        // least does not claim a result is a failure.
-        //
+        Notification::ToolResult { id, content } => Some(StreamEvent::ToolResult {
+            id: id.clone(),
+            content: content.clone(),
+        }),
         // `session/updated`: this client shows one session at a time, so a list
         // that moved is nothing to refresh.
-        Notification::ToolResult { .. } | Notification::SessionUpdated { .. } => None,
+        Notification::SessionUpdated { .. } => None,
     }
 }
 
@@ -418,8 +415,8 @@ mod tests {
             .collect();
         assert_eq!(
             dropped,
-            vec![2, 7],
-            "only `tool-result` (#81) and `session/updated` are dropped"
+            vec![7],
+            "`session/updated` is the only notification this client drops"
         );
     }
 
