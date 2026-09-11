@@ -10,7 +10,7 @@ it: every capability a component can reach, what it gets by default, what an
 operator has to write to widen that, the single place the rule is enforced, and
 the test that fails if it stops being true.
 
-The last column is the point. Nine of the eleven rows below were written *after* a
+The last column is the point. Most of the rows below were written *after* a
 defect in that row, and in most cases the defect had been sitting in a green
 suite: the permission gate never confirmed the write tool, subprocesses inherited
 `OPENAI_API_KEY`, a grep returned `.env`, guests could read the host's stdin. Each
