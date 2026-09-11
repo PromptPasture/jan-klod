@@ -19,12 +19,18 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use jan_klod_core::Runtime;
 
 use crate::common;
+
+/// Long enough that a healthy request never reaches it, so it bounds only the
+/// failure case rather than pacing the test. Mirrors `local_model.rs`'s
+/// `FakeOllama`, which carries the same constant for the same reason.
+const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 
 /// A loopback server that counts requests and answers every one, so a guest that
 /// got through would see a plausible reply rather than a connection error.
@@ -32,37 +38,97 @@ struct Sentinel {
     port: u16,
     hits: Arc<AtomicU32>,
     stop: Arc<AtomicU32>,
+    /// I/O the sentinel could not complete. Discarding these is what let it
+    /// answer a request it had not read, so a test that trusts `hits()` has to
+    /// assert this is empty first — see #78 and #83, the local-model and
+    /// egress-boundary copies of the exact same defect.
+    faults: Arc<Mutex<Vec<String>>>,
 }
 
 impl Sentinel {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
-        listener.set_nonblocking(true).expect("nonblocking");
+        // The listener stays blocking: BSD `accept()` hands back a socket that
+        // inherited the listener's `O_NONBLOCK` (established under #78), so a
+        // non-blocking listener silently made every accepted socket
+        // non-blocking on macOS and blocking on Linux. `Drop` unblocks the
+        // accept loop itself by connecting, so there is no poll-with-a-sleep
+        // to race against.
         let hits = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicU32::new(0));
-        let counted = Arc::clone(&hits);
-        let stopped = Arc::clone(&stop);
+        let faults = Arc::new(Mutex::new(Vec::new()));
+        let (counted, stopped, faulted) =
+            (Arc::clone(&hits), Arc::clone(&stop), Arc::clone(&faults));
+        let fault = move |what: &str, e: &dyn std::fmt::Debug| {
+            if let Ok(mut log) = faulted.lock() {
+                log.push(format!("{what}: {e:?}"));
+            }
+        };
         thread::spawn(move || {
-            while stopped.load(Ordering::Relaxed) == 0 {
+            loop {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
+                        // The connection `Drop` makes to release this accept
+                        // carries no request, so leave before counting it.
+                        if stopped.load(Ordering::Relaxed) != 0 {
+                            break;
+                        }
                         counted.fetch_add(1, Ordering::Relaxed);
-                        let mut buf = [0_u8; 1024];
-                        let _ = socket.read(&mut buf);
-                        let _ = socket.write_all(
+                        // Read the whole request under a deadline before
+                        // answering: one `read` can return part of it or none
+                        // of it, and answering early leaves the rest unread,
+                        // so the close sends RST instead of FIN and the RST
+                        // discards the response already written — the client
+                        // then sees a failed request for a call this sentinel
+                        // already counted as a hit.
+                        if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
+                            fault("set_read_timeout", &e);
+                        }
+                        if let Err(e) = common::read_request(&mut socket) {
+                            fault("read_request", &e);
+                            continue;
+                        }
+                        if let Err(e) = socket.write_all(
                             b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret",
-                        );
+                        ) {
+                            fault("write_all", &e);
+                        }
                     }
-                    Err(_) => thread::sleep(std::time::Duration::from_millis(20)),
+                    // A listener that cannot accept serves nothing, so say so
+                    // rather than spinning: a test reads `faults` before it
+                    // trusts anything this sentinel saw.
+                    Err(e) => {
+                        fault("accept", &e);
+                        break;
+                    }
                 }
             }
         });
-        Self { port, hits, stop }
+        Self {
+            port,
+            hits,
+            stop,
+            faults,
+        }
     }
 
     fn hits(&self) -> u32 {
         self.hits.load(Ordering::Relaxed)
+    }
+
+    /// Asserts the sentinel's own I/O completed, so `hits()` reflects requests
+    /// it actually read rather than ones it answered blind. Call this before
+    /// trusting `hits()`, the same ordering `FakeOllama`'s test uses and for
+    /// the same reason: a silently discarded read is what let an endpoint
+    /// answer a request it had not read.
+    fn assert_no_faults(&self) {
+        let faults = self.faults.lock().expect("not poisoned").clone();
+        assert!(
+            faults.is_empty(),
+            "the sentinel could not complete its own I/O, so `hits()` cannot be \
+             trusted: {faults:?}"
+        );
     }
 }
 
@@ -123,6 +189,7 @@ fn a_live_local_service_is_not_reachable() {
         "the request is refused"
     );
 
+    sentinel.assert_no_faults();
     // The assertion that distinguishes a boundary from a courtesy: the server
     // itself never saw anything.
     assert_eq!(
@@ -155,6 +222,10 @@ fn an_endpoint_named_in_config_is_reachable() {
         request_through_the_host(&config, &url).is_ok(),
         "the named origin answers"
     );
+    // Before trusting `hits()`: a request the sentinel answered without fully
+    // reading it is exactly the shape of bug #83 records — it can pass this
+    // count while the assertion above genuinely failed for socket reasons.
+    sentinel.assert_no_faults();
     assert_eq!(sentinel.hits(), 1, "and the request actually arrived");
 }
 
@@ -191,6 +262,7 @@ extensions:
         request_through_the_host(&path, &url).is_ok(),
         "the configured model answers"
     );
+    sentinel.assert_no_faults();
     assert_eq!(sentinel.hits(), 1);
 }
 
@@ -210,6 +282,7 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
     let config = config_at(&dir, &allow);
 
     let _ = request_through_the_host(&config, &format!("http://127.0.0.1:{}/", neighbour.port));
+    neighbour.assert_no_faults();
     assert_eq!(
         neighbour.hits(),
         0,

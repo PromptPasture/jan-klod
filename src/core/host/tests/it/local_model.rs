@@ -8,7 +8,7 @@
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -34,35 +34,6 @@ struct FakeOllama {
     /// [`FakeOllama`] answer a request it had not read, so a test that trusts
     /// what the endpoint saw has to assert this is empty first.
     faults: Arc<Mutex<Vec<String>>>,
-}
-
-/// Read one whole HTTP request: the headers, then exactly `Content-Length` bytes
-/// of body. One `read` is not enough — either part can arrive in a later
-/// segment, and every byte still unread when the socket closes turns the reply
-/// into an RST that destroys the response already written.
-fn read_request(socket: &mut TcpStream) -> std::io::Result<String> {
-    let mut raw: Vec<u8> = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    loop {
-        let read = socket.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        raw.extend_from_slice(&chunk[..read]);
-        let Some(head_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
-            continue;
-        };
-        let head = String::from_utf8_lossy(&raw[..head_end]).to_lowercase();
-        let body_len: usize = head
-            .lines()
-            .find_map(|line| line.strip_prefix("content-length:"))
-            .and_then(|value| value.trim().parse().ok())
-            .unwrap_or(0);
-        if raw.len() >= head_end + 4 + body_len {
-            break;
-        }
-    }
-    Ok(String::from_utf8_lossy(&raw).into_owned())
 }
 
 impl FakeOllama {
@@ -111,7 +82,7 @@ impl FakeOllama {
                         if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
                             fault("set_read_timeout", &e);
                         }
-                        let request = match read_request(&mut socket) {
+                        let request = match common::read_request(&mut socket) {
                             Ok(request) => request.to_lowercase(),
                             Err(e) => {
                                 fault("read_request", &e);

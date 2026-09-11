@@ -119,15 +119,49 @@ pub fn canned_http(content: &'static str) -> HttpFn {
     })
 }
 
+/// Reads one whole HTTP request off `socket`: the headers, then exactly
+/// `Content-Length` bytes of body. One `read` is not enough — either part can
+/// arrive in a later segment, and every byte still unread when the socket
+/// closes turns the reply into an RST that destroys the response already
+/// written. Shared by `local_model.rs`'s `FakeOllama` and `egress_boundary.rs`'s
+/// `Sentinel`, which independently carried this exact defect (#78, #83).
+pub fn read_request(socket: &mut TcpStream) -> std::io::Result<String> {
+    let mut raw: Vec<u8> = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = socket.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        raw.extend_from_slice(&chunk[..read]);
+        let Some(head_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
+            continue;
+        };
+        let head = String::from_utf8_lossy(&raw[..head_end]).to_lowercase();
+        let body_len: usize = head
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(0);
+        if raw.len() >= head_end + 4 + body_len {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&raw).into_owned())
+}
+
 /// A loopback server whose request count can be asserted to be **zero**
 /// without a race.
 ///
-/// `egress_boundary.rs`'s own `Sentinel` cannot be used for that. It polls a
-/// non-blocking `accept()` with 20ms sleeps, so a connection that *was* made
-/// may not be counted yet when the assertion reads the counter — which turns
-/// "the server saw nothing" into a false pass, the exact class of defect
-/// [#83](https://github.com/PromptPasture/jan-klod/issues/83) records against
-/// it. Asserting a negative on a counter that can lag is asserting nothing.
+/// `egress_boundary.rs`'s own `Sentinel` cannot be used for that. It blocks on
+/// `accept()` with no self-probe to flush the queue, so a connection that
+/// *was* made may not be counted yet when the assertion reads the counter —
+/// which turns "the server saw nothing" into a false pass, the exact class of
+/// defect [#83](https://github.com/PromptPasture/jan-klod/issues/83) records
+/// against it (there under a stronger form: the *old* `Sentinel` polled a
+/// non-blocking `accept()` with 20ms sleeps, widening this same race enough to
+/// flip a positive assertion too). Asserting a negative on a counter that can
+/// lag is asserting nothing.
 ///
 /// Here rather than in one test module because two now need it, and a sentinel
 /// whose entire purpose is not lying is the last thing to keep two copies of.
