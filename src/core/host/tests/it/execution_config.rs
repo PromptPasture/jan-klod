@@ -13,9 +13,11 @@
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use jan_klod_core::sandbox;
 use jan_klod_core::Runtime;
 
 use crate::common;
@@ -381,6 +383,92 @@ fn an_unsatisfiable_require_denies_the_command() {
     assert!(
         !turn.produced("from-config"),
         "`require: true` with `mode: approval-only` must deny: {}",
+        turn.tool_result
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The confinement, which is the half an operator most needs to be true.
+//
+// `open_process_runner` ends in `match (effective.mode, backend)`, and the
+// comment above it claims "the runtime cannot report `Os` while running commands
+// unconfined". Nothing checked that: `sandbox_seatbelt.rs`, `sandbox_landlock.rs`
+// and `sandbox_boundary.rs` all build their runner by hand, so they prove a
+// `ProcessRunner` can be confined and say nothing about whether the boot path
+// confines the one it builds.
+//
+// The pair below is the same shape `sandbox_seatbelt.rs` uses, moved onto the
+// config path: an unconfined control first, because "the command failed" is
+// otherwise indistinguishable from a missing binary or a typo in the test.
+// ---------------------------------------------------------------------------
+
+/// A directory outside any workspace, with the escape target inside it.
+///
+/// Its own temp tree rather than a sibling of the harness's: `run_command_in`
+/// deletes everything it created when the turn ends, so a target under there
+/// would be gone before a test could reason about it.
+fn escape_target(tag: &str) -> (PathBuf, common::TempDir) {
+    let dir = std::env::temp_dir().join(format!("jk-execcfg-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("creates the directory outside the workspace");
+    (dir.join("leak"), common::TempDir(dir))
+}
+
+/// `sh -c "echo x > TARGET && echo wrote"` through the usual harness.
+///
+/// The observation is **`wrote` reaching the model**, not the file existing:
+/// `&&` makes the word conditional on the write, and a word on the wire survives
+/// the harness tearing its temp tree down, which a file does not.
+fn write_outside(execution: &str, target: &Path) -> ProbeTurn {
+    let script = format!("echo x > {} && echo wrote", target.display());
+    run_command(execution, "sh", &["-c", &script])
+}
+
+/// The control, and it runs everywhere: `mode: approval-only` wires no backend
+/// on any platform, so the escape write succeeds.
+///
+/// Platform-independent on purpose. The confined half below cannot run without a
+/// backend, but this half must, or a machine with no backend would report a
+/// green suite having checked neither side.
+#[test]
+fn an_approval_only_command_from_config_can_write_outside_the_workspace() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let (target, _guard) = escape_target("unconfined");
+    let turn = write_outside(
+        "execution:\n  enabled: true\n  sandbox:\n    mode: approval-only",
+        &target,
+    );
+    assert!(
+        turn.produced("wrote"),
+        "unconfined, the escape write must succeed — otherwise the denial below \
+         proves nothing: {}",
+        turn.tool_result
+    );
+}
+
+/// The claim itself: a runner built **from config** is confined by the backend
+/// the same config resolved.
+///
+/// Asked for by writing nothing — no `sandbox:` block at all, so `mode` is the
+/// `Os` default and `writable` is the workspace. That is what an operator gets
+/// for asking for nothing, which is the configuration most of them will run.
+///
+/// Gated on the host having a backend rather than on `#[cfg]`: `mode: os`
+/// downgrades to approval-only where there is none, so without a backend this
+/// asserts the opposite of what it says. The Linux backend can also be absent at
+/// runtime on a kernel without Landlock, which a `cfg` would not notice.
+#[test]
+fn a_config_built_runner_is_confined_by_the_backend_it_resolved() {
+    if !common::guests_staged(&GUESTS) || sandbox::host_backend().is_none() {
+        return;
+    }
+    let (target, _guard) = escape_target("confined");
+    let turn = write_outside("execution:\n  enabled: true", &target);
+    assert!(
+        !turn.produced("wrote"),
+        "a command from a default `execution:` block must be confined to the \
+         workspace: {}",
         turn.tool_result
     );
 }
