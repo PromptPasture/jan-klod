@@ -1,0 +1,132 @@
+name: CI (macOS sandbox)
+
+# The Seatbelt backend is `#[cfg(target_os = "macos")]`, so every test that
+# confines a command on macOS is invisible to `ci.yml` — all three of its jobs
+# are `ubuntu-latest`, and a Seatbelt regression lands green (#95). This job is
+# the other half of the matrix: Landlock is covered on every push by `ci.yml`'s
+# harness job, Seatbelt is covered here.
+#
+# **A separate workflow rather than a fourth job in `ci.yml`, and that is forced
+# rather than preferred.** `paths` is a trigger filter on the *workflow*
+# (`on.<push|pull_request>.<paths>`); there is no per-job equivalent. Putting the
+# filter in `ci.yml` would gate lint-test, harness and supply-chain behind it too,
+# which is the opposite of what any of them need.
+#
+# **Why it is filtered at all: this repository is private, and GitHub bills macOS
+# minutes at 10x Linux minutes against the private-repo allowance.** A full
+# `make gate` on a cold macOS runner is roughly 15-25 wall minutes, so 150-250
+# billed minutes per push — a free allowance gone in a handful of pushes. So this
+# runs the platform-gated tests and the core unit suite, on the paths that can
+# actually break them, plus on demand. Widening it to `make gate` or to every
+# push is a cost decision, not a coverage tweak: re-decide it on #95 first.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/core/core/src/sandbox*.rs'
+      - 'src/core/host/tests/it/sandbox_*.rs'
+      - 'wit/host-process.wit'
+      - '.github/workflows/ci-macos.yml'
+  pull_request:
+    paths:
+      - 'src/core/core/src/sandbox*.rs'
+      - 'src/core/host/tests/it/sandbox_*.rs'
+      - 'wit/host-process.wit'
+      - '.github/workflows/ci-macos.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  seatbelt:
+    name: Seatbelt sandbox (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # wasm32-wasip2 because the Seatbelt suite crosses the Component-Model
+      # boundary — one of its tests drives a confined command through a guest —
+      # so the guests have to be staged below.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/core
+
+      # Pinned exactly as in ci.yml: these Makefiles parse nextest's output, and
+      # the count guard below reads `nextest list`. Keep in step with
+      # CARGO_NEXTEST_VERSION in the root Makefile.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.143
+
+      # `make -C src/extensions all` generates each guest's manifest from the
+      # component's real imports via `wasm-tools component wit`. Keep in step
+      # with WASM_TOOLS_VERSION in the root Makefile.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools@1.258.0
+
+      # The `it` test binary's polyglot module resolves `wit/spike` through
+      # `bindgen!` at compile time, so building *any* test in that binary needs
+      # wit/spike/deps — including this job's, which runs only four of them.
+      # Gitignored and fetched from the committed wit/wkg.lock, same pinned
+      # install as ci.yml's two jobs.
+      - name: Install wkg
+        uses: jaxxstorm/action-install-gh-release@v1
+        with:
+          repo: bytecodealliance/wasm-pkg-tools
+          tag: v0.15.1
+          extension-matching: disable
+          rename-to: wkg
+          chmod: 0755
+          cache: enable
+
+      - name: Fetch spike WIT deps
+        run: make -C src/extensions spike-deps
+
+      - name: Stage guest components
+        run: make -C src/extensions all
+
+      # Assert the count, not the exit code — the same positive guard `make gate`
+      # uses for the integration suite, and for the same reason. These tests are
+      # `#[cfg(target_os = "macos")]`, so on any runner that is not macOS they
+      # compile to nothing and a run over them is green having checked nothing.
+      # nextest exits non-zero on a filter that matches nothing, but that catches
+      # only a mistyped filter; this catches the whole module vanishing.
+      - name: Guard — the Seatbelt tests must exist on this runner
+        run: |
+          n=$(cd src/core && cargo nextest list -p jan-klod-host \
+                --features jan-klod-host/integration --bins --tests 2>/dev/null \
+                | grep -c 'sandbox_seatbelt::')
+          echo "ci-macos: sandbox_seatbelt resolves $n test(s)"
+          if [ "$n" -eq 0 ]; then
+            echo "ci-macos: zero Seatbelt tests compiled — this job is checking nothing" >&2
+            exit 1
+          fi
+
+      # JK_REQUIRE_GUESTS turns a silently-skipped test into a failure: an absent
+      # component is a legitimate state locally, so without this the component
+      # -boundary test would skip and the job would still report success.
+      - name: Seatbelt sandbox tests
+        run: |
+          cd src/core && cargo nextest run -p jan-klod-host \
+            --features jan-klod-host/integration sandbox_seatbelt::
+        env:
+          JK_REQUIRE_GUESTS: "1"
+
+      # The core's own unit tests on macOS — cheap next to the above, and the
+      # half of `sandbox.rs` that picks a backend is itself per-OS.
+      - name: Core unit tests
+        run: cd src/core && cargo test -p jan-klod-core
