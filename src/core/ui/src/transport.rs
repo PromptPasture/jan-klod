@@ -45,6 +45,18 @@ pub trait Transport: Send + Sync {
     /// A human-readable message if the answer cannot be sent.
     fn answer(&self, session: &str, answer: &str) -> Result<(), String>;
 
+    /// Steer the turn that is running, without cancelling it (#159). Called
+    /// while [`Transport::stream_turn`] is still running, from another thread —
+    /// the same shape as [`Transport::answer`], and for the same reason.
+    ///
+    /// # Errors
+    /// A human-readable message if the steering cannot be sent. **Over REST
+    /// that is always**, and the message says why: the error is a value the
+    /// caller shows a user, not a log line, because a keystroke that vanishes
+    /// teaches somebody that steering does not work rather than that this
+    /// connection cannot carry it.
+    fn follow_up(&self, session: &str, message: &str) -> Result<(), String>;
+
     /// How to describe this connection in a status line.
     fn describe(&self) -> String;
 }
@@ -74,6 +86,21 @@ impl Transport for Rest {
 
     fn answer(&self, session: &str, answer: &str) -> Result<(), String> {
         crate::answer_prompt(&self.addr, session, answer)
+    }
+
+    fn follow_up(&self, _session: &str, _message: &str) -> Result<(), String> {
+        // Not "not implemented yet". The REST surface has no route that reaches
+        // a turn already in flight — 13b recorded that when it added the two
+        // mid-turn commands to the protocol, noting that over REST the only way
+        // to stop a turn is to drop the SSE connection and there is no way at
+        // all to steer one. So this is a property of the transport, and the
+        // client says which rather than dropping the keystroke.
+        Err(
+            "this connection is REST, which cannot steer a turn in flight — \
+             start the gateway over stdio to follow up, or wait for this turn \
+             to finish"
+                .to_owned(),
+        )
     }
 
     fn describe(&self) -> String {
@@ -311,6 +338,19 @@ impl Transport for Stdio {
         Ok(())
     }
 
+    fn follow_up(&self, session: &str, message: &str) -> Result<(), String> {
+        // Written and not waited for, exactly like `answer`: the turn thread
+        // owns the reader, so this one cannot read its own acknowledgement. The
+        // core queues the message on `state.follow_ups` and answers
+        // `{"queued": true}`; a refusal comes back as an error response with
+        // this id, which `read_until` surfaces as an event.
+        self.send(&Rpc::TurnFollowUp {
+            session: session.to_owned(),
+            message: message.to_owned(),
+        })?;
+        Ok(())
+    }
+
     fn describe(&self) -> String {
         self.described.clone()
     }
@@ -376,9 +416,9 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
 
 #[cfg(test)]
 mod tests {
-    use super::{event_for, Logs, Stdio};
+    use super::{event_for, Logs, Rest, Stdio, Transport};
     use crate::StreamEvent;
-    use jan_klod_protocol::Notification;
+    use jan_klod_protocol::{Notification, PROTOCOL_VERSION};
 
     /// The stdio half of #154: the id reaches the client, and so do the
     /// arguments, which this mapping used to throw away with `{ name, .. }`.
@@ -492,5 +532,119 @@ mod tests {
             panic!("there is no gateway at that path")
         };
         assert!(err.contains("--addr"), "names the alternative: {err}");
+    }
+
+    /// Acceptance line 3's transport half: the refusal carries a reason.
+    #[test]
+    fn rest_refuses_to_steer_and_says_why_rather_than_how() {
+        let rest = Rest::new("127.0.0.1:9".to_owned());
+        let refusal = rest
+            .follow_up("s1", "actually, use the other file")
+            .expect_err("REST cannot steer a turn in flight");
+        assert!(
+            refusal.contains("REST"),
+            "the reason does not name the transport: {refusal:?}"
+        );
+        assert!(
+            refusal.contains("stdio") || refusal.contains("finish"),
+            "a refusal a user can read says what to do instead: {refusal:?}"
+        );
+        // Nothing was sent: the address is the discard port, and this returned
+        // without touching it.
+    }
+
+    /// The method name is the whole contract with the core, and a wrong one
+    /// would be indistinguishable from a message that was simply ignored.
+    #[test]
+    fn steering_frames_as_the_method_the_core_matches_on() {
+        let framed = serde_json::to_value(jan_klod_protocol::Command::TurnFollowUp {
+            session: "s1".to_owned(),
+            message: "steer".to_owned(),
+        })
+        .expect("a command serializes");
+        assert_eq!(
+            framed.get("method").and_then(serde_json::Value::as_str),
+            Some("turn/follow-up"),
+            "`rpc.rs` matches on this string, and a turn that is running queues \
+             the message onto `state.follow_ups` when it sees it"
+        );
+        assert_eq!(
+            framed
+                .get("params")
+                .and_then(|p| p.get("message"))
+                .and_then(serde_json::Value::as_str),
+            Some("steer")
+        );
+    }
+
+    /// What actually leaves the client when a turn is steered.
+    ///
+    /// The serialization test above proves the *protocol* spells the method
+    /// the core matches on; it says nothing about which command `follow_up`
+    /// builds. A probe that made it send `turn/answer` instead passed every
+    /// other test in this file, and over a real pipe that mistake is silent —
+    /// the core answers "no confirmation is pending" into a reader that belongs
+    /// to the turn thread, and the steering simply never happens. So this
+    /// drives a fake gateway and reads back the bytes.
+    ///
+    /// A file rather than `sh -c`, because `spawn_from` puts its own `rpc`
+    /// argument in front of the caller's — which is a fact about the real
+    /// gateway's CLI, and one this test had to discover.
+    #[cfg(unix)]
+    #[test]
+    fn steering_over_stdio_writes_a_follow_up_frame() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir();
+        let sent = dir.join(format!("jk-steer-{}.jsonl", std::process::id()));
+        let bin = dir.join(format!("jk-gateway-{}.sh", std::process::id()));
+        let _ = std::fs::remove_file(&sent);
+
+        // Answer the handshake with the client's own id and a version it
+        // accepts, then record every frame after it.
+        let script = format!(
+            r#"#!/bin/sh
+IFS= read -r hello
+id=$(printf '%s' "$hello" | sed 's/.*"id":\([0-9]*\).*/\1/')
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"version":"{version}"}}}}\n' "$id"
+while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
+"#,
+            version = PROTOCOL_VERSION,
+            path = sent.display()
+        );
+        std::fs::write(&bin, script).expect("write the fake gateway");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let Ok(gateway) = Stdio::spawn_from(&bin, &[], Logs::Discard) else {
+            panic!("the fake gateway did not start or did not shake hands")
+        };
+        gateway
+            .follow_up("s1", "use the other file")
+            .expect("steering is written, not waited for");
+
+        // The write is another process's read, so this waits for it rather
+        // than asserting on a race.
+        let mut frame = String::new();
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(&sent) {
+                if !text.trim().is_empty() {
+                    frame = text;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        drop(gateway);
+        let _ = std::fs::remove_file(&sent);
+        let _ = std::fs::remove_file(&bin);
+
+        assert!(
+            frame.contains(r#""method":"turn/follow-up""#),
+            "the client sent something else: {frame:?}"
+        );
+        assert!(
+            frame.contains("use the other file"),
+            "the steering message did not go with it: {frame:?}"
+        );
     }
 }
