@@ -20,6 +20,22 @@ Most agents run extensions in the same process with full system access. jan-klod
 
 ## Install
 
+**Nothing has shipped yet — there is no release to download.** Build from a
+checkout until the first tag:
+
+```sh
+git clone https://github.com/PromptPasture/jan-klod
+cd jan-klod
+make setup                  # once: pinned cargo plugins, git hooks, WIT deps
+make bundle DIST=coding
+```
+
+That writes the same archive a release would publish, to `dist/`. Unpack it and
+put `jan-klod` and `jan-klod-gateway` on your PATH.
+
+The installer below is the path once there is a release; run today it reports
+`could not determine latest release tag` and exits non-zero.
+
 ```sh
 curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh
 ```

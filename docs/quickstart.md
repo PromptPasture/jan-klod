@@ -7,6 +7,32 @@ description: Install jan-klod, start the server, and run your first session in u
 
 ## 1. Install
 
+**There is no release yet**, so the installer has nothing to download. It says so
+rather than failing obscurely — `error: could not determine latest release tag`,
+exit 1 — but that is still a dead end at step one, so build from a checkout
+instead. The two routes are described below in that order: the one that works
+today, then the one that will.
+
+### Today: build from source
+
+```sh
+git clone https://github.com/PromptPasture/jan-klod
+cd jan-klod
+make setup                  # once: pinned cargo plugins, git hooks, WIT deps
+make bundle DIST=coding
+```
+
+`make bundle` produces exactly what a release publishes:
+`dist/jan-klod-<version>-<os>-<arch>-coding.tar.gz`, carrying `jan-klod`,
+`jan-klod-gateway`, a pre-filled `config.yaml` and the staged `ext/`. Unpack it
+wherever you keep tools and put the two binaries on your PATH. `DIST` takes
+`coding`, `headless-chat` or `minimal`; add `GUI=1` for the desktop window.
+
+To work in the checkout rather than install from it, see
+[development setup](guides/development-setup.md).
+
+### After the first release: the installer
+
 ```sh
 curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh
 ```
@@ -25,7 +51,7 @@ curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/
 
 [What each one carries](concepts/configurator.md#distributions).
 
-This installs `jan-klod` (TUI) and `jan-klod-gateway` (server) to `~/.local/bin`. Add it to your PATH if it isn't already:
+That installs `jan-klod` (TUI) and `jan-klod-gateway` (server) to `~/.local/bin`. Add it to your PATH if it isn't already:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"

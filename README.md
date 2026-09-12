@@ -16,6 +16,24 @@ asks for it; and every write is confirmed with you before it happens (answer
 
 ## Install
 
+**Nothing has shipped yet — there is no release to download.** Until the first
+tag, build from a checkout:
+
+```sh
+git clone https://github.com/PromptPasture/jan-klod
+cd jan-klod
+make setup                  # once: pinned cargo plugins, git hooks, WIT deps
+make bundle DIST=coding
+```
+
+That writes `dist/jan-klod-<version>-<os>-<arch>-coding.tar.gz`, the same archive
+a release would publish. Unpack it and put `jan-klod` and `jan-klod-gateway` on
+your PATH; `config.yaml` and `ext/` travel with them.
+
+The installer below is the path once there is a release. Run today it reports
+`could not determine latest release tag` and exits non-zero — it is correct, it
+simply has nothing to fetch yet.
+
 ```sh
 curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh
 ```
