@@ -818,6 +818,21 @@ search behind the existing jail, the guest only shapes the request), the
 guide), and **named distributions** in the Configurator (`coding`,
 `headless-chat`, `minimal`).
 
+**PDK 1 and 2 done 2026-09-12** ([#111](https://github.com/PromptPasture/jan-klod/issues/111),
+[#112](https://github.com/PromptPasture/jan-klod/issues/112)): `make ext-new
+NAME=… KIND=…` writes a crate that is registered in the workspace and in
+`GUESTS`, formatted, and compiles — one generator with a per-kind table, since
+what differs between kinds is a world, a trait and a type list and everything
+else is identical. `KIND` is `provider | tool | interceptor | registry-skills |
+registry-mcp`: `registry` was two worlds all along, and **`agent` is not a kind**
+— there is no agent guest world in `wit/` and no `("agent", _)` arm in
+`Runtime::boot`, so such a crate would compile against nothing and never load.
+`src/extensions/tool-hello` is the committed output, kept byte-identical to the
+generator by `scripts/ext-new-selftest.sh`, and
+`host/tests/it/generated_guest.rs` is the copyable test that loads it and calls
+it — probed three ways, because a harness that loads nothing passes as quietly
+as one that works. The guide (#113) is what remains of the PDK.
+
 **#59 done 2026-09-11:** `tool-*`/`registry-*`/`agent` guests compile at boot
 (unchanged) but instantiate (`Store` + `init` + `start`) only when the fleet
 is first asked for something — its metadata (`select-tools` advertising) or
