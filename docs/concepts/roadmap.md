@@ -832,7 +832,15 @@ archives each rather than a 4×3 matrix, because the expensive half of a release
 job is per platform and half the runners bill at 10×. The three places that
 name distributions — the definitions, the installer, the workflow — are held to
 one set by a test, since a disagreement between any two is a 404 at a user
-after a release. The docs rewrite (#116) is what remains.
+after a release. **Distributions 3 done the same day**
+([#116](https://github.com/PromptPasture/jan-klod/issues/116)):
+`configurator.md` describes the three as built rather than planned — the
+client-named `tui`/`gui`/`full` preset table is gone, since that is exactly what
+distributions replace — and the quickstart and landing page offer all three.
+**Named distributions are complete.** Running those pages' commands rather than
+transcribing them surfaced that the pre-existing `curl … | sh` instruction fails
+for want of any release at all, filed as
+[#126](https://github.com/PromptPasture/jan-klod/issues/126).
 
 **PDK 1 and 2 done 2026-09-12** ([#111](https://github.com/PromptPasture/jan-klod/issues/111),
 [#112](https://github.com/PromptPasture/jan-klod/issues/112)): `make ext-new
