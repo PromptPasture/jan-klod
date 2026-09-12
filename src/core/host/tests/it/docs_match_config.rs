@@ -9,11 +9,42 @@ use std::collections::BTreeSet;
 
 use crate::common;
 
-/// The `${VAR}` names the *enabled* providers in the shipped config expand.
+/// Every config this repository ships: the root one, and one per distribution.
+///
+/// Returned as `(label, contents)` so a failure names *which* config the doc is
+/// wrong about. Distributions are read from disk rather than listed here, so a
+/// fourth one is covered the day it is added rather than the day somebody
+/// remembers this file exists.
+fn shipped_configs() -> Vec<(String, String)> {
+    let root = common::repo_root();
+    let mut out = vec![(
+        "config.yaml".to_owned(),
+        std::fs::read_to_string(root.join("config.yaml"))
+            .expect("the shipped config.yaml is readable"),
+    )];
+    let dists = root.join("scripts/distributions");
+    let mut names: Vec<_> = std::fs::read_dir(&dists)
+        .expect("scripts/distributions is readable")
+        .flatten()
+        .filter(|e| e.path().join("config.yaml").is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    // Sorted so a failure reads the same way twice.
+    names.sort();
+    for name in names {
+        let path = dists.join(&name).join("config.yaml");
+        out.push((
+            format!("scripts/distributions/{name}/config.yaml"),
+            std::fs::read_to_string(&path).expect("a distribution config is readable"),
+        ));
+    }
+    out
+}
+
+/// The `${VAR}` names the *enabled* providers in one config expand.
 /// Parsed rather than hard-coded, so the list can't itself drift from the config.
-fn required_key_vars() -> BTreeSet<String> {
-    let config = std::fs::read_to_string(common::repo_root().join("config.yaml"))
-        .expect("the shipped config.yaml is readable");
+fn required_key_vars_in(config: &str) -> BTreeSet<String> {
+    let config = config.to_owned();
 
     let mut vars = BTreeSet::new();
     let mut in_providers = false;
@@ -98,17 +129,27 @@ fn exported_vars(doc: &str) -> BTreeSet<String> {
 /// A document that tells a reader to set a key must name at least the one the
 /// shipped config actually asks for (it may also name alternatives).
 fn assert_names_a_required_key(doc: &str) {
-    let required = required_key_vars();
     let exported = exported_vars(doc);
     assert!(
         !exported.is_empty(),
         "{doc} tells the reader to export something (it is the getting-started path)"
     );
-    assert!(
-        exported.iter().any(|var| required.contains(var)),
-        "{doc} exports {exported:?}, but the shipped config needs one of {required:?} — \
-         following it verbatim would fail at boot"
-    );
+    // **Per config, not pooled.** Pooling the keys would let this page name one
+    // provider's variable, pass, and still strand everyone who installed a
+    // distribution needing a different one — green exactly when the page had
+    // become wrong for a third of readers (#114, and #63's third Acceptance
+    // line asks for "all three configs").
+    for (label, config) in shipped_configs() {
+        let required = required_key_vars_in(&config);
+        if required.is_empty() {
+            continue; // a config with no enabled provider asks for no key
+        }
+        assert!(
+            exported.iter().any(|var| required.contains(var)),
+            "{doc} exports {exported:?}, but {label} needs one of {required:?} — \
+             following it verbatim would fail at boot for whoever installed that one"
+        );
+    }
 }
 
 #[test]
@@ -314,7 +355,11 @@ fn every_test_that_skips_does_so_through_the_shared_policy() {
 /// above pass for the wrong reason.
 #[test]
 fn only_enabled_providers_count_as_required() {
-    let required = required_key_vars();
+    // The root config specifically: it is the one with a disabled provider in
+    // it, which is what makes this test able to tell the two apart.
+    let root = std::fs::read_to_string(common::repo_root().join("config.yaml"))
+        .expect("the shipped config.yaml is readable");
+    let required = required_key_vars_in(&root);
     assert!(
         required.contains("OPENAI_API_KEY"),
         "the enabled provider's key is required: {required:?}"

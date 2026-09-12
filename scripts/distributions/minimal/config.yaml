@@ -1,0 +1,39 @@
+# jan-klod — minimal distribution.
+#
+# One provider and the interceptor set: the smallest thing that still
+# runs a turn. No tools, no registries, no execution.
+#
+# Export OPENAI_API_KEY before starting.
+
+# --- providers -------------------------------------------------------------
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY}
+      model: gpt-4o-mini
+
+  # --- the turn's shaping phases -------------------------------------------
+  interceptor:
+    intent-router:
+      enabled: true
+    task-router:
+      enabled: true
+    context:
+      enabled: true
+    system:
+      enabled: true
+    tool-selector:
+      enabled: true
+    permission:
+      enabled: true
+
+storage:
+  path: ./jan-klod.db
+
+registry:
+  trusted-keys: []
+
+execution:
+  enabled: false

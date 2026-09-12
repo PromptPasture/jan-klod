@@ -1,0 +1,9 @@
+# One provider and the interceptor set. No tools, no registries — the smallest
+# thing that still runs a turn.
+provider-openai
+interceptor-intent-router
+interceptor-task-router
+interceptor-context
+interceptor-system
+interceptor-tool-selector
+interceptor-permission

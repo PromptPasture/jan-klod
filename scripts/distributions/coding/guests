@@ -1,0 +1,15 @@
+# Everything a coding agent needs: models, the interceptor set, file and git
+# tools, and skills. UI client included.
+provider-openai
+provider-anthropic
+interceptor-intent-router
+interceptor-task-router
+interceptor-context
+interceptor-system
+interceptor-tool-selector
+interceptor-permission
+registry-skills
+tool-fs
+tool-edit
+tool-find
+tool-git

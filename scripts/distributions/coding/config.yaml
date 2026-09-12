@@ -1,0 +1,68 @@
+# jan-klod — coding distribution.
+#
+# A coding agent: models, the interceptor set, file and git tools, skills.
+# Commands are off until you turn them on; when you do, they are confined.
+#
+# Export OPENAI_API_KEY before starting.
+
+# --- providers -------------------------------------------------------------
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY}
+      model: gpt-4o-mini
+    anthropic:
+      enabled: false
+      type: anthropic
+      api-key: ${ANTHROPIC_API_KEY}
+      model: claude-sonnet-4-6
+
+  # --- the turn's shaping phases -------------------------------------------
+  interceptor:
+    intent-router:
+      enabled: true
+    task-router:
+      enabled: true
+    context:
+      enabled: true
+    system:
+      enabled: true
+    tool-selector:
+      enabled: true
+    permission:
+      enabled: true
+
+  # --- skills ---------------------------------------------------------------
+  registry:
+    skills:
+      enabled: true
+
+  # --- file and git tools ---------------------------------------------------
+  tool:
+    fs:
+      enabled: true
+    edit:
+      enabled: true
+    find:
+      enabled: true
+    git:
+      enabled: true
+
+storage:
+  path: ./jan-klod.db
+
+registry:
+  trusted-keys: []
+
+# Commands are denied. Turning this on is a deliberate act: read
+# docs/concepts/security-model.md's "Command effects" row first, because on
+# macOS and Linux a command is then confined, and elsewhere the confirmation
+# prompt is the only barrier.
+execution:
+  enabled: false
+  sandbox:
+    mode: os
+    writable: ["."]
+    network: false

@@ -1,0 +1,53 @@
+# jan-klod — headless-chat distribution.
+#
+# A chat channel, reached over Telegram (`jan-klod-gateway telegram`).
+# Nothing here touches the machine: no file tools, no registries, and
+# execution is off.
+#
+# Export OPENAI_API_KEY before starting.
+
+# --- providers -------------------------------------------------------------
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY}
+      model: gpt-4o-mini
+    anthropic:
+      enabled: false
+      type: anthropic
+      api-key: ${ANTHROPIC_API_KEY}
+      model: claude-sonnet-4-6
+
+  # --- the turn's shaping phases -------------------------------------------
+  interceptor:
+    intent-router:
+      enabled: true
+    task-router:
+      enabled: true
+    context:
+      enabled: true
+    system:
+      enabled: true
+    tool-selector:
+      enabled: true
+    permission:
+      enabled: true
+
+storage:
+  path: ./jan-klod.db
+
+registry:
+  trusted-keys: []
+
+# This distribution does not run commands, and says so rather than leaving the
+# key out. Absent would also deny — `enabled` defaults to false — but a reader
+# could not tell whether that was decided or forgotten, and a diff that turns
+# it on would show a key appearing rather than a value changing.
+#
+# `host/tests/it/bundle_distributions.rs` asserts this, which is a better guard
+# than a second lock: it fails loudly where a contradictory sandbox pair would
+# hold quietly and mislead the next reader about what this distribution wanted.
+execution:
+  enabled: false

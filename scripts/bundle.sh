@@ -14,7 +14,10 @@ OUT="$5"
 VERSION="${JK_VERSION:-0.1.0}"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
-NAME="jan-klod-${VERSION}-${OS}-${ARCH}"
+# A distribution's archive carries its name, or three `make bundle DIST=` runs
+# would overwrite one file and the third would look like all of them.
+SUFFIX="${JK_DIST:+-$JK_DIST}"
+NAME="jan-klod-${VERSION}-${OS}-${ARCH}${SUFFIX}"
 DIR="${OUT}/${NAME}"
 
 rm -rf "$DIR"

@@ -43,6 +43,7 @@ help:
 	@echo "  core        build the host workspace"
 	@echo "  extensions  build the Rust guests, staged in ext/ (alias: ext)"
 	@echo "  ext-new     scaffold a new extension crate: NAME=<name> KIND=<kind>"
+	@echo "  bundle      release archive; DIST=coding|headless-chat|minimal for one"
 	@echo "  test        run host-side unit tests only (core + guests + supervisor);"
 	@echo "              the integration suite needs 'gate' or 'harness' instead"
 	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
@@ -135,9 +136,16 @@ supervisor:
 # Self-contained release bundle: core binary + staged guests + config + README,
 # as dist/jan-klod-<version>-<os>-<arch>.tar.gz.
 BUNDLE_OUT ?= $(abspath dist)
+
+# `make bundle DIST=coding` builds from a named distribution — a guest list and
+# a config under scripts/distributions/. With no DIST this keeps doing exactly
+# what it did before: the repository's own config.yaml and the whole of ext/.
+# That default is asserted by host/tests/it/bundle_distributions.rs rather than
+# left as an intention.
+DIST ?=
 bundle: extensions
 	cd $(CORE) && cargo build --release -p jan-klod-host -p jan-klod
-	sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT)
+	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT); 	else 	  sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
 
 clippy: check-spike-deps
 	$(MAKE) -C $(CORE) clippy
