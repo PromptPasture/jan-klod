@@ -18,6 +18,7 @@
 pub mod app;
 pub mod theme;
 pub mod transport;
+pub mod wrap;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;

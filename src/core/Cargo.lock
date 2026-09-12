@@ -1361,6 +1361,8 @@ dependencies = [
  "ratatui",
  "serde_json",
  "tiny_http",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]
