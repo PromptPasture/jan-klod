@@ -523,35 +523,49 @@ impl LiveChild {
             Ok(Some(status)) => {
                 if !self.exit_reported {
                     self.exit_reported = true;
-                    // WARN even for a clean exit: a *long-lived* child is one
-                    // something is still expecting to talk to, so it going away
-                    // is unexpected whatever status it went away with.
-                    eprintln!(
-                        "WARN [core] host-process: long-lived child `{}` {}",
-                        self.name,
-                        describe_exit(status)
-                    );
-                    // The stderr thread sends its tail once, at EOF. Waiting
-                    // briefly rather than taking whatever is there right now is
-                    // the whole point of the channel: the child writes its
-                    // complaint and *then* exits, so at this instant the bytes
-                    // are usually still in the pipe. Bounded, because a
-                    // grandchild holding the write end open means EOF never
-                    // arrives, and a diagnostic must not be able to hang the
-                    // runtime it is diagnosing.
-                    let tail = self.stderr_tail();
-                    let tail = tail.trim();
-                    if !tail.is_empty() {
-                        eprintln!(
-                            "WARN [core] host-process: long-lived child `{}` last stderr: {tail}",
-                            self.name
-                        );
+                    for line in self.death_report(status) {
+                        eprintln!("{line}");
                     }
                 }
                 false
             }
             Err(_) => false,
         }
+    }
+
+    /// What the host log says about a child that has gone: the status, and its
+    /// last words if it had any.
+    ///
+    /// Built as lines rather than printed inline so a test can read exactly what
+    /// a reader would (#133). Capturing the process's own stderr would need
+    /// `dup2`, and this workspace denies `unsafe` — so the seam is here, and the
+    /// only thing on the far side of it is `eprintln!`.
+    ///
+    /// One line for a clean exit, two when there is a tail. That difference is
+    /// itself a signal: a child that said nothing on the way out is a different
+    /// event from one that explained itself.
+    fn death_report(&self, status: std::process::ExitStatus) -> Vec<String> {
+        // WARN even for a clean exit: a *long-lived* child is one something is
+        // still expecting to talk to, so it going away is unexpected whatever
+        // status it went away with.
+        let mut lines = vec![format!(
+            "WARN [core] host-process: long-lived child `{}` {}",
+            self.name,
+            describe_exit(status)
+        )];
+        // The stderr thread sends its tail once, at EOF. Waiting briefly rather
+        // than taking whatever is there right now is the whole point of the
+        // channel: the child writes its complaint and *then* exits, so at this
+        // instant the bytes are usually still in the pipe.
+        let tail = self.stderr_tail();
+        let tail = tail.trim();
+        if !tail.is_empty() {
+            lines.push(format!(
+                "WARN [core] host-process: long-lived child `{}` last stderr: {tail}",
+                self.name
+            ));
+        }
+        lines
     }
 
     /// The last words the child wrote to stderr, once its pipe has closed.
@@ -769,6 +783,106 @@ mod tests {
                 "a signalled child has no exit code, and saying so is the point"
             );
         }
+    }
+
+    /// The four deaths #133 tabulates are four different things in the log.
+    ///
+    /// This is the acceptance the other two boxes exist to serve. Before them,
+    /// every row here produced the same observable event — `server exited` —
+    /// and telling them apart is what cost #132 eight red runs on `main`.
+    ///
+    /// Asserted on the report a reader would see, pairwise, rather than on "a
+    /// line was printed": two deaths that both print something are still
+    /// indistinguishable if they print the same thing.
+    #[test]
+    fn the_four_deaths_are_four_different_reports() {
+        let (ws, _) = runner();
+        let rows = [
+            // The #132 shape: the wrapper started, rejected its arguments, and
+            // said so on the way out.
+            (
+                "bad-arguments",
+                "echo \"error: Unrecognized option: 'writable'\" >&2; exit 2",
+                "Unrecognized option",
+            ),
+            // The command inside it does not exist. `sh` says so and exits 127.
+            ("missing-command", "no-such-command-xyz", "127"),
+            // A script that does not parse. `sh` says so, and exits 2 — the
+            // *same code* as the row above, deliberately. Two different failures
+            // sharing an exit status is the case where the status alone is not
+            // enough, so this is what makes the stderr half load-bearing rather
+            // than decorative.
+            ("syntax-error", "if", "syntax error"),
+            // It started, did its job, and quit. Not a failure — but still the
+            // thing a caller is waiting to talk to, gone.
+            ("clean-exit", "exit 0", "code 0"),
+        ];
+
+        let runner = ProcessRunner::new(ws, Duration::from_secs(5), 64 * 1024).with_long_lived(
+            rows.iter()
+                .map(|(name, script, _)| LongLived {
+                    name: (*name).to_string(),
+                    command: "sh".to_string(),
+                    args: vec!["-c".to_string(), (*script).to_string()],
+                })
+                .collect(),
+        );
+
+        let mut reports: Vec<(&str, String)> = Vec::new();
+        for (name, _, marker) in rows {
+            let mut child = runner.spawn_long_lived(name).expect("it starts");
+            let status = child.child.wait().expect("it is reapable");
+            let report = child.death_report(status).join("\n");
+            assert!(
+                report.contains(marker),
+                "{name}: the log does not carry what makes this death that death \
+                 — wanted {marker:?}, got:\n{report}"
+            );
+            reports.push((name, report));
+        }
+
+        for (i, (name, report)) in reports.iter().enumerate() {
+            for (other_name, other) in &reports[i + 1..] {
+                assert_ne!(
+                    report, other,
+                    "`{name}` and `{other_name}` read identically — which is the \
+                     whole defect this issue is about"
+                );
+            }
+        }
+
+        // The two rows that share an exit code are the point of the stderr half:
+        // without it they are one event, which is the defect. Compared on the
+        // status itself, not the whole line — the line carries the child's name,
+        // which would make any two rows differ for the wrong reason.
+        let status_of = |name: &str| {
+            let report = &reports
+                .iter()
+                .find(|(n, _)| *n == name)
+                .expect("the row ran")
+                .1;
+            let head = report.lines().next().expect("a status line");
+            head.rsplit("` ").next().expect("a status").to_string()
+        };
+        assert_eq!(
+            status_of("bad-arguments"),
+            status_of("syntax-error"),
+            "this test is only meaningful while these two share a status — if a \
+             shell changes its exit code, pick another colliding pair rather than \
+             deleting the assertion"
+        );
+
+        // And the structural half: a child that said nothing on the way out is a
+        // different shape of report from one that explained itself.
+        let clean = &reports
+            .iter()
+            .find(|(name, _)| *name == "clean-exit")
+            .expect("the clean row ran")
+            .1;
+        assert!(
+            !clean.contains("last stderr"),
+            "a silent exit should not claim last words: {clean}"
+        );
     }
 
     /// A child's last words survive it, and the runner's cap bounds them (#133).
