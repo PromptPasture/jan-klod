@@ -77,6 +77,16 @@ fn run_spawn(execution: &str, name: &str) -> ProbeTurn {
     run_arguments_in(None, execution, &serde_json::json!({ "spawn": name }))
 }
 
+/// As [`run_spawn`], but the guest deliberately does **not** kill the child —
+/// the "guest that forgets" case the host's lifetime guarantee exists for.
+fn run_spawn_and_leak(execution: &str, name: &str) -> ProbeTurn {
+    run_arguments_in(
+        None,
+        execution,
+        &serde_json::json!({ "spawn": name, "leak": true }),
+    )
+}
+
 /// As [`run_spawn`], then write `send` to the child and read what comes back.
 fn run_spawn_echo(execution: &str, name: &str, send: &str) -> ProbeTurn {
     run_arguments_in(
@@ -685,4 +695,66 @@ fn a_long_lived_child_is_confined_like_a_one_shot_command() {
          command: {}",
         confined.tool_result
     );
+}
+
+/// Acceptance line 2: a child does not outlive the runtime that started it,
+/// **even when the guest never kills it**.
+///
+/// Asserted by looking for the process, not by reading the code: "we call kill"
+/// and "the child is dead" are different claims and only the second is the
+/// requirement. The child reports its own pid — `echo $$` — because the host
+/// never hands one to the guest and the test has no other way to learn it.
+///
+/// `run_arguments_in` drops the `AgentSession`, and with it the `Store` holding
+/// the instance's `ToolHost`, before it returns. So by the time this test reads
+/// `turn.tool_result` the runtime is already gone, and the pid either is or is
+/// not still there.
+///
+/// The **trapping** guest the box also names reduces to this same assertion: a
+/// trap poisons the instance but does not drop the `Store`, so the child
+/// survives exactly until the runtime goes — which is the moment this checks.
+#[test]
+fn a_long_lived_child_does_not_outlive_the_runtime() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    // `sleep`, not `cat`, and that choice is the test. A `cat` would exit on its
+    // own the moment the host dropped its stdin pipe — so the pid would be gone
+    // either way and this would pass without the host ever killing anything.
+    // `sleep` ignores stdin, so it is still there in thirty seconds unless
+    // something kills it.
+    //
+    // `exec` replaces the shell, so the pid printed is the pid that stays.
+    // Without it the shell would fork and the test would watch the wrong
+    // process.
+    let grant = "execution:\n  enabled: true\n  long-lived:\n    - name: reporter\n      \
+                 command: sh\n      args: [\"-c\", \"echo $$; exec sleep 30\"]\n";
+    let turn = run_spawn_and_leak(grant, "reporter");
+
+    let pid: u32 = turn
+        .tool_result
+        .split("out=")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split(|c: char| !c.is_ascii_digit())
+                .find(|s| !s.is_empty())
+        })
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or_else(|| panic!("the child must report its pid: {}", turn.tool_result));
+
+    assert!(
+        !pid_alive(pid),
+        "pid {pid} is still running after the runtime was dropped — the guest \
+         never killed it, so the host had to"
+    );
+}
+
+/// Whether a pid is still there, asked of the OS rather than of our own
+/// bookkeeping — the distinction acceptance line 2 turns on.
+fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("ps")
+        .arg("-p")
+        .arg(pid.to_string())
+        .output()
+        .is_ok_and(|out| out.status.success())
 }

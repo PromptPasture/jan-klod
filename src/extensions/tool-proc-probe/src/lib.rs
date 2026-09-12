@@ -67,7 +67,8 @@ mod component {
                         "command": { "type": "string" },
                         "args": { "type": "array", "items": { "type": "string" } },
                         "spawn": { "type": "string" },
-                        "send": { "type": "string" }
+                        "send": { "type": "string" },
+                        "leak": { "type": "boolean" }
                     }
                 })
                 .to_string(),
@@ -102,7 +103,17 @@ mod component {
                 }
                 let out = host_process::read_stdout(child, 4096, 2000).unwrap_or_default();
                 let running = host_process::is_running(child);
-                host_process::kill(child);
+                // `{"leak": true}` returns without killing — the ugly case the
+                // host's lifetime guarantee exists for. A guest that forgets, or
+                // that never gets the chance because it trapped, must not leave
+                // a process behind.
+                if !value
+                    .get("leak")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    host_process::kill(child);
+                }
                 return Ok(format!("spawned {name} running={running} out={out}"));
             }
 
