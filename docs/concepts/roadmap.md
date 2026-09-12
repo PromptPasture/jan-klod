@@ -5,7 +5,7 @@ description: Phased plan from the Rust + Wasmtime + Component Model foundation d
 tags: [roadmap, planning, rust, wasmtime, component-model, phases, vision]
 created: 2026-06-29
 updated: 2026-09-11
-status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Harness as a Platform under way — Phases 13, 14, 15 and 18 done (13c deferred to Phase 17, 15d to a Windows environment, 18c standing alone), 16 in progress, 17 not-started
+status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Harness as a Platform under way — Phases 13, 14, 15 and 18 done (13c deferred to Phase 17, 15d to a Windows environment, 18c standing alone), 16 and 17 in progress (17a done)
 ---
 
 # Roadmap
@@ -88,7 +88,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 14 — Event-sourced session log | `done` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. **Exit gate passed 2026-09-09** (`make gate`): the append-only `events` table with a versioned envelope (#44), and transcript/resume/fork as projections of it (#45) — a session resumed after a restart rebuilds from the log, and a fork at seq *N* runs independently. Nothing writes a transcript except through events; a pre-log database is converted at boot. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
 | 15 — OS-level effect sandbox | `done` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, the `SandboxBackend` seam, boot-time resolution that never downgrades quietly, and `require: true` denying execution rather than degrading. **15b done 2026-09-10** ([#47](https://github.com/PromptPasture/jan-klod/issues/47)): macOS commands run under a generated Seatbelt profile, so a write outside `writable` is refused by the kernel rather than by a prompt — and `require: true` now permits commands there instead of denying them. Linux is still approval-only until 15c. The per-turn warning is deferred to 16a. Half the gate is met: the macOS half is tested (with an unconfined control for every case, since a command that failed for another reason looks identical to a denial) and the Linux half needs Landlock. **15c done 2026-09-10** ([#48](https://github.com/PromptPasture/jan-klod/issues/48)): Linux commands run under a Landlock ruleset the gateway applies to itself before becoming the command — no `pre_exec`, so no hand-written `unsafe`, and no seccomp, because ABI 4 denies the network and an older kernel refuses the command rather than pretending. **The gate is met on both platforms.** The asymmetry it left is closed as of **2026-09-12** ([#95](https://github.com/PromptPasture/jan-klod/issues/95)): `ci-macos.yml` runs the Seatbelt suite on `macos-latest`, so both backends are now CI-verified. On different schedules, deliberately — Landlock on every push, Seatbelt when the sandbox sources or tests change and on demand, because macOS minutes bill at 10× on a private repository. **15d (Windows spike) is deferred** ([#49](https://github.com/PromptPasture/jan-klod/issues/49)) until a Windows environment exists to verify it in, and does not gate the phase — Windows resolves to approval-only, names the platform at boot, and refuses outright under `require: true`. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot; the security-model row cites the tests. The gate said "at boot and in the turn" until 2026-09-10, which no slice of this phase could ever have met: 15a deferred the per-turn warning to 16a, because nothing yet distinguishes a tool that uses `host-process` from one that only reads files, so it would fire on every tool-using turn. **Closed `done` 2026-09-11** on the convention that an umbrella closes when its exit criteria are met: the phase's work is finished, and what remains stands alone — #47 was open on the missing macOS runner (#95), which landed 2026-09-12, and 15d is deferred until a Windows environment exists (#49). Read `done` as "this phase's work is finished", not "every issue it ever tracked is closed". |
 | 16 — Capability manifest + signed registry | `in-progress` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. **16a done 2026-09-10** (#86, #87): every guest ships a manifest generated from its own imports, and the host refuses a component whose manifest is absent, under-declares what it imports, or names an incompatible interface version — cross-validated by two independent readers of the same artifacts. **16c-1 done 2026-09-11** ([#91](https://github.com/PromptPasture/jan-klod/issues/91)): `ext install` verifies before it copies — digest, minisign signature over the component **and** its manifest under a key from `registry.trusted-keys`, component validity, manifest consistency through the same `inspect` boot uses — staging in `ext/.staging/` so a refusal leaves `ext/` byte-identical. Signed is the default and `--allow-unsigned` requires `--sha256`, so no combination lands a component with no evidence; the list ships empty, so today every install needs that widening until 16c-3 publishes a key. **16b-1 and 16b-2 done 2026-09-10** (#88, #89): the versioning rules are written down, and `make wit` now warns when a `wit/*.wit` changed without the package version moving — resolving a baseline by tag, else merge-base with `origin/main`, else `HEAD~1`, and saying which, since nothing is tagged yet. That check also put `make wit` into CI for the first time; no job ran it before, so the contracts' own `wasm-tools` validation was not running either. 16b-3 (N-1 minor compatibility) is deferred to the freeze (#90). **16c-1 and 16c-2 done 2026-09-11** (#91, #92): `ext install` from a path or a URL, verified before anything lands. **16b and 16c closed 2026-09-11** (#51, #52), their deferred sub-slices standing alone. Remaining for the phase gate: **16d (#53)** — three of the four gate clauses are met, and the unmet one is "an install from a static index fixture works offline", which is 16d's. Also 16c-3 (#93), deferred until before the first release; until it lands `registry.trusted-keys` has nothing to put in it and every install needs `--allow-unsigned --sha256`. Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
-| 17 — Web client + GUI shell | `not-started` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. Needs 13. Gate: a browser and a Tauri window drive a turn with `ask` + cancel from one front-end codebase served by the core. |
+| 17 — Web client + GUI shell | `in-progress` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. **17a done 2026-09-12** ([#54](https://github.com/PromptPasture/jan-klod/issues/54)): a dependency-light TypeScript SPA served by the core at `/` over **REST + SSE**, not WebSocket — 13c was not a prerequisite after all, and [#43](https://github.com/PromptPasture/jan-klod/issues/43) stays deferred pending evidence that SSE teardown-as-cancel is the wrong shape for a browser. 17b (Tauri) not started. Gate: a browser **and** a Tauri window drive a turn with `ask` + cancel from one front-end codebase served by the core. |
 | 18 — Ecosystem ports | `done` | [#40](https://github.com/PromptPasture/jan-klod/issues/40). Vision decision 6. Needs 13 (done). **18a and 18b done 2026-09-11** (#56, #57): `jan-klod-gateway mcp` serves `ask`, `session_list` and `session_get` over MCP stdio, and `jan-klod-gateway acp` serves the ACP agent side — both method-name adapters over the envelope `rpc` already speaks, so no SDK and no new dependency between them. **The gate is met**: an MCP client lists and calls a core-exposed tool, and an ACP fixture runs a turn, both offline. 18b is the first surface where the core originates JSON-RPC requests as well as serving them — an editor *can* answer a confirmation, where an MCP client cannot. Note a turn over MCP cannot write or run commands — there is nobody to answer a confirmation, so each takes its default, which is a refusal. **Closed `done` 2026-09-11** on the same convention Phase 15 used — an umbrella closes when its exit criteria are met — re-proving both clauses first (`cargo nextest run -p jan-klod-host mcp:: acp::`, 13 passed) rather than inferring them from the slices being closed. What remains stands alone: **18c ([#58](https://github.com/PromptPasture/jan-klod/issues/58), split into [#109](https://github.com/PromptPasture/jan-klod/issues/109) and [#110](https://github.com/PromptPasture/jan-klod/issues/110), both **done 2026-09-12**)** gives `registry-mcp` a stdio transport over a long-lived child, which is the *inbound* direction — the core as an MCP client — and the gate only ever named the core as a server, so it never gated the phase. Gate: an ACP client fixture runs a turn against the core; an MCP client lists and calls a core-exposed tool — both offline. |
 
 Built-extension language assignments and their own status live in the
@@ -393,7 +393,11 @@ REST"; REST + SSE stay as one *projection* of the protocol.
   timeout, so serving this on the existing listener cannot do either. The
   alternatives — a second listener, or replacing the HTTP surface — are
   architecture decisions whose cost only the client that needs the socket can
-  justify, and 17a is not started. Measurements worth keeping: `tungstenite`
+  justify. **17a shipped without one** (2026-09-12): the existing REST + SSE
+  surface already pushes an `ask`, takes its answer and cancels, so the browser
+  client was built on that and 13c stayed deferred — it now waits on evidence
+  that the SSE teardown is the wrong shape for a browser, not on a slice.
+  Measurements worth keeping: `tungstenite`
   costs 6 packages without its `handshake` feature and ~10 with it; a hand-rolled
   RFC 6455 handshake costs `sha1` alone, 1 package.
 
@@ -693,20 +697,32 @@ works offline; a WIT major mismatch is a clear error.
 
 **Goal:** one front-end codebase serves both the browser and the desktop window.
 
-**Needs Phase 13c, and now owns the decision it was deferred for.** 13c stopped
-on a question only this client can answer: the WebSocket needs a socket that can
-time out a read and be read while written, `tiny_http` gives neither, and the
-ways out (a second listener, or a listener the core owns and serves both from)
-trade a bind address, an `Origin` check and a second place the token rule lives
-against a rewrite of the REST surface. 17a should pick one and unblock
-[#43](https://github.com/PromptPasture/jan-klod/issues/43); the measurements it
-needs are already on that issue.
+**13c turned out not to be a prerequisite, and that is the phase's first
+finding.** This section used to say 17a owned the WebSocket decision 13c was
+deferred for. 17a answered it differently: the existing **REST + SSE** surface
+already pushes an `ask`, takes its answer and cancels, so the client was built on
+that and no socket was needed.
+[#43](https://github.com/PromptPasture/jan-klod/issues/43) stays deferred, now
+waiting on evidence rather than on a slice — if the SSE teardown-as-cancel proves
+wrong for a browser (reconnect churn, lost event ordering, a cancel that must
+leave the connection up), that is what turns 13c from a refinement into a
+requirement.
 
-- **17a — Web client.** A static, dependency-light TypeScript SPA served by the
-  core at `/`, speaking the protocol over WebSocket: sessions, streaming, `ask`,
-  cancel — TUI parity. First first-party TypeScript in the repo: supply-chain
-  hygiene (lockfile, `cargo-deny`-equivalent audit, no build framework beyond a
-  bundler) is part of the slice.
+- **17a — Web client. Done 2026-09-12**
+  ([#54](https://github.com/PromptPasture/jan-klod/issues/54)). A static,
+  dependency-light TypeScript SPA served by the core at `/`, over **REST + SSE**:
+  sessions, streaming, `ask` answered on a second request, and cancel as a stream
+  teardown the conductor turns into `Flow::Stop`. Four children:
+  [#118](https://github.com/PromptPasture/jan-klod/issues/118) the SPA,
+  [#119](https://github.com/PromptPasture/jan-klod/issues/119) serving it at `/`
+  from `include_str!`-embedded assets,
+  [#120](https://github.com/PromptPasture/jan-klod/issues/120) the npm
+  supply-chain leg, and this record. First first-party TypeScript in the repo,
+  and the supply-chain hygiene the roadmap's ground rule demands is part of it:
+  an exactly-pinned `esbuild`, a committed lockfile, `npm ci --dry-run && npm
+  audit` in CI. The committed bundle gained the drift check its three precedents
+  already had ([#127](https://github.com/PromptPasture/jan-klod/issues/127)) —
+  `src/web`'s own suite runs in CI too, which nothing did when it shipped.
 - **17b — Tauri shell.** `jan-klod-ui --gui` opens a Tauri window over the same
   front-end; the `gui` bundle ships it. System webview, no bundled browser.
 
