@@ -75,6 +75,40 @@ pub enum Entry {
     Tool(ToolBlock),
 }
 
+/// Where the turn is (#158).
+///
+/// Four states, and only three of them are stored — see [`App::turn`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Turn {
+    /// Nothing running. The composer's text is a new message.
+    #[default]
+    Idle,
+    /// A turn is running and text is arriving.
+    Streaming,
+    /// A cancel has been *asked for*. Deliberately not "the turn stopped":
+    /// over stdio the client cannot send `turn/cancel` at all yet (#157), and
+    /// over REST + SSE the cancel is the dropped stream, which the conductor
+    /// notices in its own time. The state says what the user asked, and the
+    /// stream ending is a separate event.
+    Cancelling,
+    /// A confirmation is waiting. The turn underneath is still streaming.
+    Blocked,
+}
+
+/// The stored part of [`Turn`] — every state except `Blocked`.
+///
+/// `Blocked` is missing on purpose. `App::pending_prompt` already answers "is a
+/// confirmation waiting", so a stored `Blocked` would be a second field with an
+/// opinion about the same fact, free to disagree with the first. This is the
+/// shape `menu: Option<usize>` already uses: one field, and `Some` *means* open.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    #[default]
+    Idle,
+    Streaming,
+    Cancelling,
+}
+
 /// The REPL/TUI state: the input buffer and the scrollback transcript.
 #[derive(Debug, Default)]
 pub struct App {
@@ -130,6 +164,8 @@ pub struct App {
     /// uninvited — following the newest call, say — would mean a highlight
     /// moving down the screen on its own while the user types.
     cursor: Option<usize>,
+    /// The turn, minus the one state that is derived. See [`Phase`].
+    phase: Phase,
     /// Set while a turn is blocked on a confirmation. The next submission is that
     /// answer, not a new message — a turn is already running and typing a fresh
     /// message would go nowhere.
@@ -555,6 +591,64 @@ impl App {
         }
     }
 
+    /// Where the turn is.
+    ///
+    /// `Blocked` wins over whatever is stored, because it is a fact about a
+    /// question that has been asked rather than about the stream: the turn
+    /// underneath a confirmation is still streaming, and it goes back to being
+    /// visibly so the moment the question is answered.
+    #[must_use]
+    pub const fn turn(&self) -> Turn {
+        if self.pending_prompt.is_some() {
+            return Turn::Blocked;
+        }
+        match self.phase {
+            Phase::Idle => Turn::Idle,
+            Phase::Streaming => Turn::Streaming,
+            Phase::Cancelling => Turn::Cancelling,
+        }
+    }
+
+    /// A turn has started.
+    pub const fn begin_turn(&mut self) {
+        self.phase = Phase::Streaming;
+    }
+
+    /// Ask for the running turn to stop.
+    ///
+    /// Returns whether this is the **first** such ask, which is what the caller
+    /// uses to decide whether to act. A second `Ctrl+C` while already
+    /// `Cancelling` returns `false` and does nothing: cancelling is not
+    /// idempotent at the transport, and hammering the key must not queue
+    /// messages at a core that is already stopping.
+    ///
+    /// A pending confirmation is dropped, because a question about a turn that
+    /// is ending is one nobody is going to answer — and leaving it would leave
+    /// the client in `Blocked` with no turn behind it.
+    pub fn cancel(&mut self) -> bool {
+        if !matches!(self.phase, Phase::Streaming) {
+            return false;
+        }
+        self.phase = Phase::Cancelling;
+        self.pending_prompt = None;
+        // A tool block left `Running` forever is a spinner that never stops,
+        // which reads as a hung client rather than as a turn that was stopped.
+        self.interrupt_open_tools();
+        true
+    }
+
+    /// The stream ended without an authoritative answer.
+    ///
+    /// **The transcript is left exactly as it is**, and that is the whole point
+    /// of the state: whatever arrived before the cancel is what the user asked
+    /// to keep. Somebody who stops a turn wanted it to stop, not to lose what
+    /// it had already said.
+    pub fn end_turn(&mut self) {
+        self.phase = Phase::Idle;
+        self.pending_prompt = None;
+        self.interrupt_open_tools();
+    }
+
     /// Record core's answer.
     pub fn record_answer(&mut self, text: impl Into<String>) {
         self.record(Who::Klod, text);
@@ -575,6 +669,7 @@ impl App {
     /// Finish a streaming turn with the authoritative answer. Replaces the
     /// partial streamed entry if one exists, otherwise records it fresh.
     pub fn finish_turn(&mut self, answer: String) {
+        self.phase = Phase::Idle;
         match self.transcript.last_mut() {
             Some(Entry::Message {
                 who: Who::Klod,
@@ -638,7 +733,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Entry, ToolStatus, Who};
+    use super::{App, Entry, Prompt, ToolStatus, Turn, Who};
 
     fn tools(app: &App) -> Vec<&super::ToolBlock> {
         app.transcript
@@ -661,6 +756,120 @@ mod tests {
         assert_eq!(blocks.len(), 1, "the result did not open a second block");
         assert_eq!(blocks[0].status, ToolStatus::Done("contents".into()));
         assert_eq!(app.transcript.len(), 1, "and nothing else was recorded");
+    }
+
+    /// Acceptance: the whole cycle, and the partial answer survives it.
+    #[test]
+    fn a_cancelled_turn_ends_idle_and_keeps_what_it_had_already_said() {
+        let mut app = App::default();
+        assert_eq!(app.turn(), Turn::Idle, "nothing is running yet");
+
+        app.begin_turn();
+        assert_eq!(app.turn(), Turn::Streaming);
+        app.apply_delta("the answer so ");
+        app.apply_delta("far");
+        app.record_tool_invoked("c1".into(), "read".into(), None);
+
+        assert!(app.cancel(), "the first ask is the one that acts");
+        assert_eq!(app.turn(), Turn::Cancelling);
+
+        app.end_turn();
+        assert_eq!(app.turn(), Turn::Idle, "the stream ended");
+        match app.transcript.first() {
+            Some(Entry::Message { who, text }) => {
+                assert_eq!(*who, Who::Klod);
+                assert_eq!(
+                    text, "the answer so far",
+                    "a user who stops a turn wanted it to stop, not to lose it"
+                );
+            }
+            other => panic!("the partial answer is gone: {other:?}"),
+        }
+        assert_eq!(
+            tools(&app)[0].status,
+            ToolStatus::Interrupted,
+            "a block left running after a cancel is a spinner that never stops"
+        );
+    }
+
+    /// Acceptance: a second `Ctrl+C` while already cancelling does nothing.
+    #[test]
+    fn cancelling_twice_asks_once() {
+        let mut app = App::default();
+        assert!(!app.cancel(), "there is no turn to cancel");
+
+        app.begin_turn();
+        assert!(app.cancel());
+        assert!(
+            !app.cancel(),
+            "cancelling is not idempotent at the transport, so hammering the \
+             key must not queue a second message"
+        );
+        assert_eq!(app.turn(), Turn::Cancelling, "and the state did not move");
+
+        app.end_turn();
+        assert!(!app.cancel(), "nor after it ended");
+    }
+
+    /// Acceptance: `Blocked` is entered on a prompt and left when answered.
+    #[test]
+    fn a_confirmation_blocks_the_turn_and_answering_it_resumes() {
+        let mut app = App::default();
+        app.begin_turn();
+        app.ask(Prompt {
+            question: "run `rm -rf /`?".into(),
+            options: vec!["yes".into(), "no".into()],
+            default: "no".into(),
+        });
+        assert_eq!(app.turn(), Turn::Blocked);
+
+        assert_eq!(app.take_answer().as_deref(), Some("no"), "the default");
+        assert_eq!(
+            app.turn(),
+            Turn::Streaming,
+            "the turn underneath a confirmation never stopped streaming"
+        );
+    }
+
+    /// A confirmation nobody will answer must not outlive the turn it is about.
+    #[test]
+    fn cancelling_drops_the_question_rather_than_leaving_it_unanswerable() {
+        let mut app = App::default();
+        app.begin_turn();
+        app.ask(Prompt {
+            question: "proceed?".into(),
+            options: vec!["y".into(), "n".into()],
+            default: "n".into(),
+        });
+        assert_eq!(app.turn(), Turn::Blocked);
+
+        assert!(app.cancel(), "a blocked turn is still cancellable");
+        assert_eq!(
+            app.turn(),
+            Turn::Cancelling,
+            "a dropped prompt must not leave the client blocked on nothing"
+        );
+        assert!(app.take_answer().is_none(), "the question went with it");
+    }
+
+    /// The two states that can both claim "a confirmation is waiting" are one
+    /// field, so they cannot disagree.
+    #[test]
+    fn blocked_is_derived_from_the_prompt_and_not_stored_beside_it() {
+        let mut app = App::default();
+        app.begin_turn();
+        for _ in 0..2 {
+            app.ask(Prompt {
+                question: "again?".into(),
+                options: vec!["y".into()],
+                default: "y".into(),
+            });
+            assert_eq!(app.turn(), Turn::Blocked);
+            app.take_answer();
+            assert_eq!(app.turn(), Turn::Streaming);
+        }
+        app.finish_turn("done".into());
+        assert_eq!(app.turn(), Turn::Idle, "an answered turn is over");
     }
 
     /// The cursor only stops where there is something to open.
