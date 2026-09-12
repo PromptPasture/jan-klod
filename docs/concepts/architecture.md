@@ -219,15 +219,16 @@ question (a separate `api-rest` guest vs. a built-in endpoint) is closed.
 | Launch | Surface | Technology | Status |
 |---|---|---|---|
 | `jan-klod` (default) | Terminal UI | `ratatui`, over stdio JSON-RPC — it spawns the gateway; `--addr` drives a running one over REST + SSE instead | built |
-| browser → core `/` | Web UI | a static, dependency-light TypeScript front-end served by the core over **REST + SSE** (not WebSocket — see below) | client built (#118); serving it is #119 |
+| browser → core `/` | Web UI | a static, dependency-light TypeScript front-end served by the core over **REST + SSE** (not WebSocket — see below) | **built** (#118 client, #119 serving) |
 | `jan-klod-ui --gui` | Native window | a **Tauri shell around the same web front-end** — system webview, not a third client codebase | planned, Phase 17 |
 | editor | IDE integration | `jan-klod-gateway acp` — ACP agent side on stdio, mapped onto the same turn path | **built** (18a is MCP, 18b is this) |
+| other agents | MCP server | `jan-klod-gateway mcp` — `ask`, `session_list`, `session_get` over MCP stdio | **built** |
 
 #### The web client's bundle is committed, and the alternative costs more than it looks
 
-`src/web` builds to a 5.4 kB ES module with no runtime dependencies, and the
-core embeds it with `include_bytes!` so the binary carries the page — there is
-no directory to ship beside it. `include_bytes!` resolves at **compile time**,
+`src/web` builds to a 5.5 kB ES module with no runtime dependencies, and the
+core embeds it with `include_str!` so the binary carries the page — there is
+no directory to ship beside it. `include_str!` resolves at **compile time**,
 which is what makes this a decision rather than a detail: the bundle is either
 in the tree when `cargo build` runs, or it is not.
 
@@ -249,12 +250,18 @@ reason.
 
 **What the choice costs, stated rather than glossed.** A committed bundle can go
 stale: someone edits `src/web/src` and forgets to rebuild, and the binary serves
-the previous page. A drift test regenerates and compares, exactly as the schema's
-does — but unlike the schema's it needs **Node** to run, so it skips where Node
-is absent. The guard is therefore weaker than its three precedents, and that
-asymmetry is the real price of this decision. It is why the check belongs in a
-job that does have Node rather than only in `make gate`.
-| other agents | MCP server | `jan-klod-gateway mcp` — `ask`, `session_list`, `session_get` over MCP stdio | **built** |
+the previous page — silently, because `include_str!` is happy either way.
+`make web-dist-drift` closes that (#127): it rebuilds `src/web` into a temp tree
+and diffs against what is committed, the same regenerate-and-compare the schema's
+test uses. It works because esbuild's output turned out to be reproducible — the
+committed bundle is built on macOS and a Linux runner rebuilds it byte for byte.
+
+Unlike the schema's, though, it needs **Node**, so it is not on `make gate`'s
+path; it runs in CI's lint-test job, which has Node, and a contributor without
+Node is not asked to pass it locally. The guard is therefore narrower than its
+three precedents: it catches a stale bundle on every push and every pull
+request, but not at the moment someone commits one. That asymmetry is the real
+price of this decision.
 
 All are clients of one surface, share one backend, and carry no agent logic. A
 client holds no state the core does not: every view is a projection of the
