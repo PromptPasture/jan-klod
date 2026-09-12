@@ -117,6 +117,18 @@ pub fn serve_once_authed(
         return respond_json(request, error_reply(401, "missing or invalid bearer token"));
     }
 
+    // GET / and its one asset — the web client, embedded above.
+    //
+    // Two exact paths, not a prefix: `starts_with("/")` would match every route
+    // on this surface, and a static-file handler that shadows the API is a
+    // worse bug than no web client at all.
+    if method == Method::Get && path == "/" {
+        return respond_asset(request, WEB_INDEX, "text/html; charset=utf-8");
+    }
+    if method == Method::Get && path == "/app.js" {
+        return respond_asset(request, WEB_APP_JS, "text/javascript; charset=utf-8");
+    }
+
     // GET /health
     if method == Method::Get && path == "/health" {
         return respond_json(request, health());
@@ -523,7 +535,16 @@ impl PromptDriver<'_> {
 /// nothing.
 fn authorised(request: &Request, token: Option<&str>, path: &str) -> bool {
     let Some(expected) = token else { return true };
-    if path == "/health" {
+    // `/health` is probed by the blue/green supervisor without credentials.
+    //
+    // The page and its bundle are open for a different reason, and it is worth
+    // being precise about it: they carry no session data and grant nothing. The
+    // client they contain cannot read a session, send a message or answer a
+    // prompt without a token — every one of those goes through a route below
+    // this line. Handing out the page is handing out a login form, which is why
+    // `an_api_route_still_refuses_without_a_token` sits beside the test that
+    // the page is served: the second is only safe because the first holds.
+    if matches!(path, "/health" | "/" | "/app.js") {
         return true;
     }
     request
@@ -553,6 +574,24 @@ fn accepts_event_stream(request: &Request) -> bool {
 }
 
 /// Write a single JSON reply and finish the request.
+/// The web client, compiled into the binary.
+///
+/// `include_str!`, so the gateway carries the page and there is no directory to
+/// ship beside it. It resolves at **compile time**, which is why
+/// `src/web/dist/` is committed rather than built in CI — an absent bundle
+/// would make Node a dependency of every `cargo build`. The reasoning, and what
+/// that choice costs, is in
+/// `docs/concepts/architecture.md#user-interfaces-separate-clients` (#119).
+const WEB_INDEX: &str = include_str!("../../../web/dist/index.html");
+const WEB_APP_JS: &str = include_str!("../../../web/dist/app.js");
+
+/// Serve one embedded asset with its own content type.
+fn respond_asset(request: Request, body: &str, content_type: &str) -> std::io::Result<()> {
+    let header = Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes())
+        .expect("a static content type is valid");
+    request.respond(Response::from_string(body).with_header(header))
+}
+
 fn respond_json(request: Request, reply: Reply) -> std::io::Result<()> {
     request.respond(
         Response::from_string(reply.body)

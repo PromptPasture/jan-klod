@@ -57,3 +57,4 @@ mod tool_fleet;
 mod tool_git;
 mod tool_wiring;
 mod wasm_cache;
+mod web_client;
