@@ -26,12 +26,22 @@ on:
     paths:
       - 'src/core/core/src/sandbox*.rs'
       - 'src/core/host/tests/it/sandbox_*.rs'
+      # The boot-path confinement pair lives here, not in a sandbox_* file
+      # (#125). It is the only evidence that the runner
+      # `Runtime::open_process_runner` actually builds is confined, and
+      # security-model.md's command-effects row cites it as exactly that.
+      - 'src/core/host/tests/it/execution_config.rs'
       - 'wit/host-process.wit'
       - '.github/workflows/ci-macos.yml'
   pull_request:
     paths:
       - 'src/core/core/src/sandbox*.rs'
       - 'src/core/host/tests/it/sandbox_*.rs'
+      # The boot-path confinement pair lives here, not in a sandbox_* file
+      # (#125). It is the only evidence that the runner
+      # `Runtime::open_process_runner` actually builds is confined, and
+      # security-model.md's command-effects row cites it as exactly that.
+      - 'src/core/host/tests/it/execution_config.rs'
       - 'wit/host-process.wit'
       - '.github/workflows/ci-macos.yml'
   workflow_dispatch:
@@ -130,22 +140,37 @@ jobs:
           cargo nextest list -p jan-klod-host \
             --features jan-klod-host/integration --bins --tests \
             --color never > /tmp/nextest-list.txt
-          n=$(grep -c 'sandbox_seatbelt::' /tmp/nextest-list.txt || true)
-          echo "ci-macos: sandbox_seatbelt resolves $n test(s)"
-          if [ "$n" -eq 0 ]; then
-            echo "ci-macos: zero Seatbelt tests compiled — this job is checking nothing" >&2
-            echo "--- what nextest listed ---" >&2
-            head -40 /tmp/nextest-list.txt >&2
-            exit 1
-          fi
+          # Both modules the run step below filters on (#125). Checking only
+          # one would leave the other free to compile to zero tests and still
+          # report green, which is the failure this guard exists to prevent.
+          for module in sandbox_seatbelt:: execution_config::; do
+            n=$(grep -c "$module" /tmp/nextest-list.txt || true)
+            echo "ci-macos: $module resolves $n test(s)"
+            if [ "$n" -eq 0 ]; then
+              echo "ci-macos: zero tests compiled for $module — this job is checking nothing" >&2
+              echo "--- what nextest listed ---" >&2
+              head -40 /tmp/nextest-list.txt >&2
+              exit 1
+            fi
+          done
 
       # JK_REQUIRE_GUESTS turns a silently-skipped test into a failure: an absent
       # component is a legitimate state locally, so without this the component
       # -boundary test would skip and the job would still report success.
-      - name: Seatbelt sandbox tests
+      # `execution_config::` joins the filter rather than only the trigger
+      # (#125), and the measurement is why: waking the job costs a whole run —
+      # ~3.5 min, so ~35 billed minutes at 10× — while running these 17 tests
+      # on top of the 4 Seatbelt ones adds 5.5 s, about one billed minute.
+      # Adding the path without the filter would have paid ~97% of the cost to
+      # wake a job that still would not run the tests the edit touched.
+      #
+      # These are the pair gated on `sandbox::host_backend()` rather than
+      # `#[cfg]`, so here they exercise Seatbelt; on Linux the same assertions
+      # run against Landlock on every push via ci.yml's `harness` job.
+      - name: Seatbelt sandbox tests, and the boot path that resolves them
         run: |
           cd src/core && cargo nextest run -p jan-klod-host \
-            --features jan-klod-host/integration sandbox_seatbelt::
+            --features jan-klod-host/integration sandbox_seatbelt:: execution_config::
         env:
           JK_REQUIRE_GUESTS: "1"
 
