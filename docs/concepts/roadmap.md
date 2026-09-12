@@ -5,7 +5,7 @@ description: Phased plan from the Rust + Wasmtime + Component Model foundation d
 tags: [roadmap, planning, rust, wasmtime, component-model, phases, vision]
 created: 2026-06-29
 updated: 2026-09-11
-status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Harness as a Platform under way — Phases 13, 14, 15 and 18 done (13c deferred to Phase 17, 15d to a Windows environment, 18c standing alone), 16 and 17 in progress (17a done)
+status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Harness as a Platform under way — Phases 13, 14, 15 and 18 done (13c deferred to Phase 17, 15d to a Windows environment, 18c standing alone), 16, 17 and 19 in progress (17a and 19a done)
 ---
 
 # Roadmap
@@ -90,6 +90,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 16 — Capability manifest + signed registry | `in-progress` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. **16a done 2026-09-10** (#86, #87): every guest ships a manifest generated from its own imports, and the host refuses a component whose manifest is absent, under-declares what it imports, or names an incompatible interface version — cross-validated by two independent readers of the same artifacts. **16c-1 done 2026-09-11** ([#91](https://github.com/PromptPasture/jan-klod/issues/91)): `ext install` verifies before it copies — digest, minisign signature over the component **and** its manifest under a key from `registry.trusted-keys`, component validity, manifest consistency through the same `inspect` boot uses — staging in `ext/.staging/` so a refusal leaves `ext/` byte-identical. Signed is the default and `--allow-unsigned` requires `--sha256`, so no combination lands a component with no evidence; the list ships empty, so today every install needs that widening until 16c-3 publishes a key. **16b-1 and 16b-2 done 2026-09-10** (#88, #89): the versioning rules are written down, and `make wit` now warns when a `wit/*.wit` changed without the package version moving — resolving a baseline by tag, else merge-base with `origin/main`, else `HEAD~1`, and saying which, since nothing is tagged yet. That check also put `make wit` into CI for the first time; no job ran it before, so the contracts' own `wasm-tools` validation was not running either. 16b-3 (N-1 minor compatibility) is deferred to the freeze (#90). **16c-1 and 16c-2 done 2026-09-11** (#91, #92): `ext install` from a path or a URL, verified before anything lands. **16b and 16c closed 2026-09-11** (#51, #52), their deferred sub-slices standing alone. Remaining for the phase gate: **16d (#53)** — three of the four gate clauses are met, and the unmet one is "an install from a static index fixture works offline", which is 16d's. Also 16c-3 (#93), deferred until before the first release; until it lands `registry.trusted-keys` has nothing to put in it and every install needs `--allow-unsigned --sha256`. Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
 | 17 — Web client + GUI shell | `in-progress` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. **17a done 2026-09-12** ([#54](https://github.com/PromptPasture/jan-klod/issues/54)): a dependency-light TypeScript SPA served by the core at `/` over **REST + SSE**, not WebSocket — 13c was not a prerequisite after all, and [#43](https://github.com/PromptPasture/jan-klod/issues/43) stays deferred pending evidence that SSE teardown-as-cancel is the wrong shape for a browser. 17b (Tauri) not started. Gate: a browser **and** a Tauri window drive a turn with `ask` + cancel from one front-end codebase served by the core. |
 | 18 — Ecosystem ports | `done` | [#40](https://github.com/PromptPasture/jan-klod/issues/40). Vision decision 6. Needs 13 (done). **18a and 18b done 2026-09-11** (#56, #57): `jan-klod-gateway mcp` serves `ask`, `session_list` and `session_get` over MCP stdio, and `jan-klod-gateway acp` serves the ACP agent side — both method-name adapters over the envelope `rpc` already speaks, so no SDK and no new dependency between them. **The gate is met**: an MCP client lists and calls a core-exposed tool, and an ACP fixture runs a turn, both offline. 18b is the first surface where the core originates JSON-RPC requests as well as serving them — an editor *can* answer a confirmation, where an MCP client cannot. Note a turn over MCP cannot write or run commands — there is nobody to answer a confirmation, so each takes its default, which is a refusal. **Closed `done` 2026-09-11** on the same convention Phase 15 used — an umbrella closes when its exit criteria are met — re-proving both clauses first (`cargo nextest run -p jan-klod-host mcp:: acp::`, 13 passed) rather than inferring them from the slices being closed. What remains stands alone: **18c ([#58](https://github.com/PromptPasture/jan-klod/issues/58), split into [#109](https://github.com/PromptPasture/jan-klod/issues/109) and [#110](https://github.com/PromptPasture/jan-klod/issues/110), both **done 2026-09-12**)** gives `registry-mcp` a stdio transport over a long-lived child, which is the *inbound* direction — the core as an MCP client — and the gate only ever named the core as a server, so it never gated the phase. Gate: an ACP client fixture runs a turn against the core; an MCP client lists and calls a core-exposed tool — both offline. |
+| 19 — Terminal client experience | `in-progress` | [#97](https://github.com/PromptPasture/jan-klod/issues/97). Not one of the vision's six decisions — the client-experience phase that follows them. **19a done 2026-09-12** ([#98](https://github.com/PromptPasture/jan-klod/issues/98)): `src/core/ui/src/theme.rs` owns colour, glyphs and terminal capability, and a test greps the crate so no `Color` literal can reappear outside it. 19b–19h not started; 19a gated them and no longer does. Gate: a full turn renders correctly on a 120×32 terminal and a 60×20 one, and the same run under `NO_COLOR=1` in a 16-colour terminal loses no information. |
 
 Built-extension language assignments and their own status live in the
 [Extension Technologies brainstorm](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md#near-term-assignments-provisional--confirmed-at-the-phase-1-gate).
@@ -820,6 +821,68 @@ lists and calls a core-exposed tool — both offline. **Met 2026-09-11**, proven
 by `acp::a_prompt_streams_an_update_and_ends_the_turn` and
 `mcp::an_editor_initializes_lists_tools_and_calls_ask` in the host integration
 suite, which has no network.
+
+## Phase 19 — Terminal client experience
+
+**Goal:** the terminal client stops being a proof that the protocol works and
+becomes the thing people use. [#97](https://github.com/PromptPasture/jan-klod/issues/97).
+
+Not one of the vision's six decisions — this phase follows them, and its
+premise is narrower: `tui.rs` is 182 lines of a 1689-line client, and the rest
+is transport, protocol and CLI. That ratio is also why a rewrite in another
+toolkit was rejected; #97 records the measurement.
+
+- **19a — Design system. Done 2026-09-12**
+  ([#98](https://github.com/PromptPasture/jan-klod/issues/98), split into
+  [#128](https://github.com/PromptPasture/jan-klod/issues/128) and
+  [#129](https://github.com/PromptPasture/jan-klod/issues/129)).
+  `src/core/ui/src/theme.rs`: one ten-step grey ramp read from either end, four
+  accents with one meaning each, the glyph vocabulary as a type, and capability
+  detection from an **injected** environment rather than `std::env`. It ships no
+  visible feature; it ships the vocabulary the other seven slices are written
+  in. The tables live on #97 and the authority is `theme.rs`.
+- **19b — Chat surface.** Scrolling viewport, message blocks, markdown, syntax
+  highlighting ([#99](https://github.com/PromptPasture/jan-klod/issues/99)).
+- **19c — Tool blocks.** Invoked/result pairing, collapse, unified diff
+  ([#100](https://github.com/PromptPasture/jan-klod/issues/100)). Needs 19b.
+- **19d — Composer.** Multi-line editing, history, `/` commands, `@` path
+  completion ([#101](https://github.com/PromptPasture/jan-klod/issues/101)).
+- **19e — Turn lifecycle.** Streaming indicator, `Ctrl+C` cancel,
+  Enter-to-steer follow-up
+  ([#102](https://github.com/PromptPasture/jan-klod/issues/102)). Needs 19d.
+- **19f — The ask dialog.** The permission modal, with nothing pre-approved
+  ([#103](https://github.com/PromptPasture/jan-klod/issues/103)). Needs 19e.
+- **19g — Frame.** Header, sidebar, status bar, toasts, responsive rules
+  ([#104](https://github.com/PromptPasture/jan-klod/issues/104)). Needs 19b, 19c.
+- **19h — Dialogs.** Session switcher, help overlay, quit confirm
+  ([#105](https://github.com/PromptPasture/jan-klod/issues/105)). Needs 19g, 19d.
+
+19a gated the rest; after it, 19b→19c and 19d→19e→19f are two chains that can
+run in parallel, and 19g/19h close over both.
+
+**Three things 19a settled that the later slices inherit**, each found by
+building it rather than by planning it:
+
+- **There is no terminal background query.** #97's detection chain lists one
+  "where the backend supports it". crossterm 0.29, which ratatui 0.30 bundles,
+  has no such API — its only OSC sequences are for the clipboard — so the chain
+  falls through to dark, which was the documented default anyway.
+- **The light theme carries two AA text tiers, not three.** `muted` cannot meet
+  4.5:1 as a step shared between both directions of the ramp, and the arithmetic
+  says no single step can: 4.5:1 against `chalk` needs a luminance ≤ 0.116,
+  against `ink-2` it needs ≥ 0.227. It is therefore not held to a contrast
+  floor, and [#135](https://github.com/PromptPasture/jan-klod/issues/135) carries
+  the decision about what to do instead.
+- **Grey carries structure; colour carries meaning.** The contrast target is
+  "any border or glyph *that carries meaning* ≥ 3:1", so the accents and the
+  focused border are gated and the grey separators are not — holding an idle
+  rule to 3:1 against its own surface would light up every line on a screen that
+  is supposed to be quiet.
+
+**Exit gate:** on a 120×32 terminal and on a 60×20 one, a full turn — user
+message, streamed answer, two tool calls one of which edits a file, an `ask`
+answered, a follow-up sent mid-turn, and a cancel — renders correctly, and the
+same run with `NO_COLOR=1` in a 16-colour terminal loses no information.
 
 ## Cross-cutting (continuous, not a phase)
 
