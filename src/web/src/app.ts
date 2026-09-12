@@ -1,0 +1,175 @@
+/**
+ * The client: a session list, a transcript, an input, and a prompt dialog.
+ *
+ * Plain DOM. `src/core/ui/src/app.rs` is the reference for *what* a client must
+ * handle — this is the same set of responsibilities with a different surface.
+ */
+
+import * as api from "./api.js";
+import type { Frame } from "./frames.js";
+
+export interface View {
+  sessions: HTMLElement;
+  transcript: HTMLElement;
+  status: HTMLElement;
+  prompt: HTMLElement;
+}
+
+export class App {
+  private session: string | null = null;
+  private turn: AbortController | null = null;
+  /** The assistant bubble being streamed into, if a turn is running. */
+  private streaming: HTMLElement | null = null;
+
+  constructor(private readonly view: View) {}
+
+  async refreshSessions(): Promise<void> {
+    const sessions = await api.listSessions();
+    this.view.sessions.replaceChildren(
+      ...sessions.map((s) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.textContent = s.preview ? `${s.id} — ${s.preview}` : s.id;
+        item.dataset["session"] = s.id;
+        item.addEventListener("click", () => void this.open(s.id));
+        return item;
+      }),
+    );
+  }
+
+  async create(): Promise<void> {
+    await this.open(await api.createSession());
+    await this.refreshSessions();
+  }
+
+  /** Resume: replay what the session already holds before anything new. */
+  async open(id: string): Promise<void> {
+    this.session = id;
+    this.view.transcript.replaceChildren();
+    for (const message of await api.getSession(id)) {
+      this.append(message.role, message.content);
+    }
+    this.status(`session ${id}`);
+  }
+
+  async send(message: string): Promise<void> {
+    if (!this.session) throw new Error("no session is open");
+    this.append("user", message);
+    this.streaming = this.append("assistant", "");
+    this.turn = new AbortController();
+    this.status("…");
+    try {
+      await api.send(
+        this.session,
+        message,
+        (frame) => this.onFrame(frame),
+        this.turn.signal,
+        (kind) => this.status(`unknown frame from the core: ${kind}`),
+      );
+    } catch (err) {
+      // An abort is this client cancelling, not a failure — the conductor is
+      // told by the disconnect itself, so there is nothing else to report.
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        this.status(`turn failed: ${String(err)}`);
+      }
+    } finally {
+      this.turn = null;
+      this.streaming = null;
+    }
+  }
+
+  /**
+   * Cancel by dropping the connection. There is no cancel route: the conductor
+   * reads the disconnect as `Flow::Stop`.
+   */
+  cancel(): void {
+    this.turn?.abort();
+    this.status("cancelled");
+  }
+
+  /**
+   * One arm per frame kind, with an exhaustiveness assertion after the switch
+   * so a frame added to the core and not handled here is a **compile error**
+   * rather than a silent drop. See the note at the bottom: the `switch` on its
+   * own does not give that, which is easy to believe and wrong.
+   */
+  private onFrame(frame: Frame): void {
+    switch (frame.kind) {
+      case "delta":
+        if (this.streaming) this.streaming.textContent += frame.text;
+        return;
+      case "tool":
+        this.append("tool", `→ ${frame.name}`);
+        return;
+      case "tool-result":
+        this.append("tool", frame.content);
+        return;
+      case "warning":
+        this.status(`warning: ${frame.message}`);
+        return;
+      case "prompt":
+        this.ask(frame.question, frame.options, frame.default);
+        return;
+      case "done":
+        if (this.streaming && !this.streaming.textContent) {
+          this.streaming.textContent = frame.answer;
+        }
+        this.status(frame.agentic ? "done" : "done (answered inline)");
+        return;
+      case "error":
+        this.status(`error: ${frame.error}`);
+        return;
+    }
+    // Reached only if `Frame` grows a kind with no arm above — and then
+    // `frame` is that kind rather than `never`, so this line does not compile.
+    //
+    // The `switch` alone does **not** give this: every arm returns, so a
+    // missing case is simply a function that falls through, which TypeScript
+    // accepts. Asserting it here is what turns "we handle them all" from a
+    // comment into something the build checks — and the comment was wrong
+    // until this line existed.
+    const unhandled: never = frame;
+    throw new Error(`unhandled frame: ${JSON.stringify(unhandled)}`);
+  }
+
+  /**
+   * A confirmation, answered on a second request while the turn is parked.
+   *
+   * The buttons are the options the interceptor sent — not a fixed
+   * yes/no — because the option set is the gate's to choose, and an "always"
+   * that this client did not offer would be a grant the user never saw.
+   */
+  private ask(question: string, options: string[], fallback: string): void {
+    const session = this.session;
+    if (!session) return;
+    const box = document.createElement("div");
+    box.dataset["prompt"] = "1";
+    const text = document.createElement("p");
+    text.textContent = question;
+    box.append(text);
+    for (const option of options.length ? options : [fallback]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = option;
+      button.dataset["answer"] = option;
+      button.addEventListener("click", () => {
+        void api.answer(session, option);
+        this.view.prompt.replaceChildren();
+      });
+      box.append(button);
+    }
+    this.view.prompt.replaceChildren(box);
+  }
+
+  private append(role: string, content: string): HTMLElement {
+    const line = document.createElement("div");
+    line.dataset["role"] = role;
+    line.textContent = content;
+    this.view.transcript.append(line);
+    return line;
+  }
+
+  private status(text: string): void {
+    this.view.status.textContent = text;
+  }
+}

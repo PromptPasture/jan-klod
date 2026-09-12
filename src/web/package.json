@@ -5,7 +5,7 @@
   "description": "The browser client: a dependency-light TypeScript SPA served by the core over REST + SSE.",
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit && esbuild src/main.ts --bundle --minify --format=esm --target=es2022 --outfile=dist/app.js",
+    "build": "tsc --noEmit && esbuild src/main.ts --bundle --minify --format=esm --target=es2022 --outfile=dist/app.js && cp src/index.html dist/index.html",
     "check": "tsc --noEmit"
   },
   "devDependencies": {

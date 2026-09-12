@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>jan-klod</title>
+    <style>
+      body { font: 15px/1.5 system-ui, sans-serif; margin: 0; display: grid;
+             grid-template-columns: 16rem 1fr; height: 100vh; }
+      #sidebar { border-right: 1px solid #ddd; padding: .75rem; overflow: auto; }
+      #sessions button { display: block; width: 100%; text-align: left;
+                         margin-bottom: .25rem; }
+      main { display: flex; flex-direction: column; min-width: 0; }
+      #transcript { flex: 1; overflow: auto; padding: .75rem; }
+      #transcript div { margin-bottom: .5rem; white-space: pre-wrap; }
+      #transcript [data-role="user"] { font-weight: 600; }
+      #transcript [data-role="tool"] { color: #555; font-family: ui-monospace, monospace; }
+      #status { padding: 0 .75rem; color: #666; min-height: 1.5rem; }
+      #composer { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid #ddd; }
+      #message { flex: 1; }
+    </style>
+  </head>
+  <body id="app">
+    <div id="sidebar">
+      <button type="button" id="new-session">New session</button>
+      <div id="sessions"></div>
+    </div>
+    <main>
+      <div id="transcript"></div>
+      <div id="prompt"></div>
+      <div id="status"></div>
+      <form id="composer">
+        <input id="message" autocomplete="off" placeholder="Message…" />
+        <button type="submit">Send</button>
+        <button type="button" id="cancel">Cancel</button>
+      </form>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
