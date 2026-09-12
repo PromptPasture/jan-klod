@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests test-web harness gate clippy audit deny sbom supply-chain web-supply-chain lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests test-web harness gate clippy audit deny sbom supply-chain web-supply-chain web-dist-drift lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -50,6 +50,7 @@ help:
 	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
 	@echo "  test-web    run the browser client's suite (src/web; needs Node, not in 'test')"
+	@echo "  web-dist-drift  check src/web/dist/ is still what src/web/src/ builds"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
@@ -149,6 +150,15 @@ test-guests:
 # --experimental-strip-types, which needs Node >= 22.6.
 test-web:
 	cd $(WEB) && npm test
+
+# The committed bundle is still what the sources build (#127). Kept out of
+# `test-web` on cost: that leg needs Node on PATH and installs nothing, while
+# this one runs `npm ci` against the pinned toolchain, so folding them together
+# would make the cheap check pay for the expensive one. CI-only for the same
+# reason `test-web` is — see the comment above it. The script carries why the
+# rebuild happens in a temp tree and why `npm ci` is not `npm install`.
+web-dist-drift:
+	sh scripts/web-dist-drift.sh
 
 # Tiny Go blue/green supervisor (static, dependency-free binary).
 supervisor:

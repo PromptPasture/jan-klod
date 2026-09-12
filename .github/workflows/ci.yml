@@ -152,14 +152,35 @@ jobs:
       # node-version pinned, and pinned to the same string the `supply-chain`
       # job uses; keep the two in step. Quoted, because an unquoted 22.23.2
       # would be fine but an unquoted 22.10 parses as a float and silently
-      # selects 22.1. No `cache: npm` and no `npm ci`: the suite imports only
-      # node: builtins and a local module, so there is nothing to install.
+      # selects 22.1.
+      #
+      # `cache: npm` here and deliberately not in the `supply-chain` job: that
+      # job's leg resolves without installing and leaves 8 KB behind, which is
+      # why its comment says to add a cache the day a step installs. The drift
+      # check below is that day — it runs `npm ci`, which fetches esbuild's
+      # platform binary on every run.
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: src/web/package-lock.json
 
       - name: Web client tests (src/web)
         run: make test-web
+
+      # The committed `src/web/dist/` is still what `src/web/src/` builds
+      # (#127). #119 box 1 committed the bundle on the argument that this
+      # repository's other generated artifacts — protocol.schema.json,
+      # ext/*.manifest.toml, wit/wkg.lock — each carry a drift check; dist/ was
+      # the first one without. `serve.rs` embeds it with include_str!, so
+      # without this an edit to src/web/src/*.ts that is never rebuilt makes the
+      # core serve a stale client with the whole of CI green.
+      #
+      # Rebuilds in a temp tree and diffs, so the step cannot "fix" the drift by
+      # leaving a rebuilt dist/ in the runner's checkout. The script says why it
+      # uses `npm ci` rather than `npm install`.
+      - name: Web dist drift (src/web/dist is what src builds)
+        run: make web-dist-drift
 
       - run: make clippy
 
