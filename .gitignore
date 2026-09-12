@@ -638,3 +638,7 @@ wasmtime-cache/
 # Agent working notes, local to a checkout
 /.agents/TODO.md
 /.agents/LOOP.md
+
+# The web client's build output. The core embedding it is a separate slice
+# (#119); until then nothing consumes it and it is rebuilt from src/.
+src/web/dist/
