@@ -263,6 +263,22 @@ An answer that arrives when nothing asked is refused on both — `409` over REST
 | `turn/cancel` | `session` | — (today: drop the SSE connection) |
 | `turn/follow-up` | `session`, `message` | — (no steering over REST) |
 
+**Two of those results are declared**, in the protocol crate and so in the
+schema: `protocol/hello` answers `HelloResult`, and `session/get` answers
+`SessionGetResult` — `{ id, messages }`, each message
+`{ seq, role, content, tool-call-id? }`. The rest are still shapes the core
+assembles and no client can generate from, which is a gap rather than a design.
+
+`seq` is the one worth reading twice. It is the log position the message was
+projected from, and it is exactly what `session/fork` takes as `at-seq` —
+inclusive, so forking at a message's seq yields a session whose transcript ends
+with that message. **It is not an index**: events that project to no message (an
+ask, an answer, a text delta) still consume a position, so the numbers are
+sparse and the gaps are not loss. Until
+[#106](https://github.com/PromptPasture/jan-klod/issues/106) the read side
+carried no position at all, so `session/fork` was reachable only by a caller that
+already knew the log's internals — which no client does.
+
 **Notifications** (core → client). The first five are `conductor::Event` one for
 one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable
 command, `session/updated` a transcript that moved:
