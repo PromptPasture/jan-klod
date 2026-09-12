@@ -35,33 +35,57 @@ jan-klod-<version>-<os>-<arch>/
   README.md
 ```
 
-## Bundle presets
+## Distributions
 
-All bundles ship the same `jan-klod` **core** binary (built with Cargo) plus a
-selected `.wasm` extension set. The core's **REST surface is built in** (host-side,
-`jan-klod serve`), so UI-oriented bundles simply add the separate **UI client**
-binary that connects to it — no `api-rest` guest to include. Presets differ only in
-which `.wasm` extensions are included, whether the UI client is bundled, and what
-`config.yaml` is pre-filled with.
+A distribution says what an install is **for**. It is not a client choice —
+whether you look at the runtime through a terminal, a window or a browser is
+decided at launch and is orthogonal to what the runtime carries. Naming bundles
+`tui`/`gui`/`full`, as this page used to, mixed those two questions under one
+word.
 
-| Bundle | Included guests | UI client |
+Every distribution ships the same `jan-klod` **core** binary plus a selected
+`.wasm` extension set. The core's **REST surface is built in** (host-side,
+`jan-klod-gateway serve`), so there is no `api-rest` guest to include; a UI
+client is a separate binary that connects to it.
+
+| Distribution | What it carries | For |
 |---|---|---|
-| `tui` | providers + interceptors + registries + tools | included (launches in TUI mode) |
-| `gui` | same | included (launches with `--gui`) |
-| `full` | everything | included |
+| `coding` | providers, the interceptor set, `tool-fs`/`tool-edit`/`tool-find`/`tool-git`, skills | working on a codebase; the default |
+| `headless-chat` | providers and the interceptor set, nothing that touches the machine | a chat channel over Telegram — a Raspberry Pi or a container |
+| `minimal` | one provider and the interceptor set | the smallest thing that still runs a turn |
 
-Core runs headless and serves REST itself; the UI client selects its mode at
-launch: `jan-klod-ui` (TUI), `jan-klod-ui --gui`, or a browser pointed at the core's
-REST surface.
+Install one with the installer's `--dist`:
 
-**Planned — distributions.** The [vision](../decisions/2026-09-08-harness-platform-vision/Vision.md#product-shape--kernel-distributions-clients)
-names bundles by *what they are for*, not by which client they carry — the Linux
-distribution analogy. The presets become `coding` (providers + interceptors +
-the file/edit/find/git tool fleet + skills; UI client included), `headless-chat`
-(providers + interceptors + a chat channel; no UI client — Raspberry Pi and
-container), and `minimal` (one provider, the interceptor set, no tools). Client
-choice (TUI, GUI, web) is orthogonal and made at launch. Tracked as a
-cross-cutting issue, not a phase.
+```console
+$ curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh -s -- --dist headless-chat
+```
+
+With no `--dist` you get `coding`.
+
+### They are data, not code
+
+Each distribution is a directory under `scripts/distributions/<name>/`: a
+`guests` list and a `config.yaml`. `make bundle DIST=<name>` builds an archive
+from the pair, and the release publishes all three per platform.
+
+Three places name them — the definitions, `scripts/install.sh`, and
+`.github/workflows/release.yml` — and none can see the others, so
+`docs_match_config::the_installer_offers_the_distributions_the_release_builds`
+holds them to one set. A disagreement between any two would be a 404 at whoever
+ran the installer, and it would not surface until after a release.
+
+**Adding a fourth is adding a directory.** Nothing here enumerates them: the
+tests read `scripts/distributions/` from disk, so a new one is covered the day
+it lands rather than the day somebody remembers this page exists.
+
+### When a Configurator UI arrives
+
+There is no interactive Configurator yet — the landing page is static. When one
+is built it reads these same definitions rather than carrying its own list, and
+the client choice (TUI, GUI, browser) is a separate toggle beside the
+distribution picker, because it is a separate question. That is why this section
+describes distributions as data and not as a menu: the menu is a view of the
+data, and the data is already here.
 
 ## Extension registry
 

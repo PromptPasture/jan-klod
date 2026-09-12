@@ -11,6 +11,20 @@ description: Install jan-klod, start the server, and run your first session in u
 curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh
 ```
 
+That gives you **`coding`** — models, the interceptor set, and the file and git
+tools. Two other distributions exist, and a distribution is about what the
+install is *for* rather than which client it carries:
+
+```sh
+# a chat channel over Telegram; nothing that touches the machine
+curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh -s -- --dist headless-chat
+
+# one provider and the interceptor set, and nothing else
+curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh -s -- --dist minimal
+```
+
+[What each one carries](concepts/configurator.md#distributions).
+
 This installs `jan-klod` (TUI) and `jan-klod-gateway` (server) to `~/.local/bin`. Add it to your PATH if it isn't already:
 
 ```sh
