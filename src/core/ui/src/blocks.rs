@@ -20,6 +20,29 @@
 //! ▍ the answer
 //! ```
 //!
+//! # A tool call is a block too, and it is one row until it is not (#155)
+//!
+//! It has no role label. The row *is* the label: an open/closed marker, a
+//! status glyph, the tool's name, and what the call did — a path, not its JSON,
+//! because the collapsed form exists to be scanned down.
+//!
+//! ```text
+//! ▍ ▸ ✓ edit  src/core/ui/src/blocks.rs
+//! ▍ ▾ ✗ read  missing.txt
+//! ▍   {
+//! ▍     "path": "missing.txt"
+//! ▍   }
+//! ▍
+//! ▍   tool `read` error: NotFound
+//! ```
+//!
+//! **A failure opens itself.** Everything else stays shut, because a transcript
+//! of twelve successful reads is not improved by twelve screens of JSON, and
+//! the one block a user certainly wants to read is the one that went wrong —
+//! putting its reason behind a keystroke they may not know about is the wrong
+//! way round. What "open" *means* as state, and how a user opens one by hand,
+//! is the next box of #155.
+//!
 //! # Every distinction survives monochrome
 //!
 //! Under [`Mode::Mono`](crate::theme::Mode::Mono) every role resolves to
@@ -32,7 +55,7 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::app::{Entry, ToolStatus, Who};
+use crate::app::{Entry, ToolBlock, ToolStatus, Who};
 use crate::theme::{Glyph, Theme};
 use crate::wrap::wrap;
 
@@ -60,29 +83,249 @@ const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
     }
 }
 
-/// Render one entry into lines, wrapped to `width` cells including the gutter.
+/// Whether a tool result reads as a failure.
+///
+/// **A convention, not a contract, and that distinction is the point.** Nothing
+/// on the wire says a tool call failed: `ToolOutcome` is `{ id, content }`,
+/// `ToolInvoker::invoke` returns `Option<String>`, and both frames carry only
+/// the content. So a client cannot be *told* that a call failed; it can only
+/// recognise the sentences the core writes when one does, which is what this
+/// does — and it will stop working the day somebody rephrases an error without
+/// touching this file.
+///
+/// The whole corpus, at the time of writing:
+///
+/// | sentence | written by |
+/// | --- | --- |
+/// | ``tool `X` error: …`` | `tool_host.rs` |
+/// | ``tool `X` trapped`` | `tool_host.rs` |
+/// | ``tool `X` meta trapped`` | `tool_host.rs` |
+/// | `tool fleet failed to instantiate: …` | `tool_host.rs` |
+/// | `tool call denied: …` | `conductor.rs` |
+/// | ``no tool named `X` `` | `conductor.rs` |
+///
+/// It lives in one named function for exactly that reason:
+/// [#162](https://github.com/PromptPasture/jan-klod/issues/162) puts the flag on
+/// the wire and deletes this, and there should be one place to delete rather
+/// than a scatter of `contains` calls behind a rendering decision.
+#[must_use]
+pub fn reads_as_failure(content: &str) -> bool {
+    let head = content.trim_start();
+    // These stand alone.
+    for opener in [
+        "tool call denied:",
+        "no tool named `",
+        "tool fleet failed to instantiate:",
+    ] {
+        if head.starts_with(opener) {
+            return true;
+        }
+    }
+    // These need the ``tool `name` `` opener, because "error:" on its own is a
+    // word a successful tool could easily have printed.
+    head.starts_with("tool `")
+        && ["` error:", "` trapped", "` meta trapped"]
+            .iter()
+            .any(|tail| head.contains(tail))
+}
+
+/// The one-line summary: what the call *did*, not its JSON.
+///
+/// A path if the arguments name one, because that is what the reader of an
+/// `edit` or a `read` came for. Anything else returns nothing and the line is
+/// just the tool's name — the collapsed form exists to be scanned, and a JSON
+/// blob squeezed onto one row is not scannable.
+fn summary(tool: &ToolBlock) -> String {
+    let Some(raw) = tool.arguments.as_deref() else {
+        // Not the same thing as "no arguments". The SSE `tool` frame does not
+        // carry them at all ([#161]), so over REST this is *missing*
+        // information, and a line that rendered `{}` here would be telling a
+        // user something false that they have no way to check.
+        //
+        // [#161]: https://github.com/PromptPasture/jan-klod/issues/161
+        return "arguments not sent over this transport (#161)".to_string();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return String::new();
+    };
+    // In precedence order, not the JSON's order: a call with both a `path` and
+    // a `pattern` is a search *in* that file, and the file is the noun.
+    for key in ["path", "file", "pattern", "query", "command"] {
+        if let Some(found) = value.get(key).and_then(serde_json::Value::as_str) {
+            return found.to_string();
+        }
+    }
+    String::new()
+}
+
+/// The status glyph and the colour it carries.
+fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
+    match &tool.status {
+        // The first spinner frame, standing still. `block` is a pure function
+        // of the model and has no tick to animate against; #160 is the slice
+        // that gives the client one, and this is the frame it starts from.
+        ToolStatus::Running => (
+            (*theme.spinner().first().unwrap_or(&"-")).to_string(),
+            theme.secondary(),
+        ),
+        ToolStatus::Done(content) if reads_as_failure(content) => {
+            (theme.glyph(Glyph::ToolFailed).to_string(), theme.removed())
+        }
+        ToolStatus::Done(_) => (theme.glyph(Glyph::ToolDone).to_string(), theme.added()),
+        ToolStatus::Interrupted => (theme.glyph(Glyph::ToolFailed).to_string(), theme.warning()),
+    }
+}
+
+/// A tool call: one scannable line, or that line plus its work.
+///
+/// This does **not** go through [`block`]'s message path, and the reason is
+/// mechanical rather than stylistic — [`crate::wrap::wrap`] collapses runs of
+/// whitespace, which is right for prose and would silently flatten every
+/// indent out of the pretty-printed arguments below.
+fn tool_block(tool: &ToolBlock, width: usize, theme: Theme) -> Vec<Line<'static>> {
+    let glyph = theme.glyph(Glyph::MessageGutter);
+    let rail = Style::default().fg(theme.muted());
+    let body_width = width.saturating_sub(gutter_width(theme));
+    let rule = || Span::styled(format!("{glyph} "), rail);
+
+    let (status, tint) = mark(tool, theme);
+    let open = format!(
+        "{} ",
+        theme.glyph(if tool.expanded {
+            Glyph::Expanded
+        } else {
+            Glyph::Collapsed
+        })
+    );
+    let status = format!("{status} ");
+    let mut head = vec![
+        rule(),
+        Span::styled(open.clone(), Style::default().fg(theme.muted())),
+        Span::styled(status.clone(), Style::default().fg(tint)),
+        Span::styled(tool.name.clone(), Style::default().fg(theme.body())),
+    ];
+
+    // The collapsed form is **one row**, so what does not fit is cut rather than
+    // wrapped: a call that needed three rows to say it was a call would defeat
+    // the point of collapsing it. The name and the status are never the thing
+    // cut — they are what the row is for — so only the summary is squeezed, and
+    // it is cut from the *left*, because the informative end of a path is the
+    // filename and the informative end of a command is rarely the binary.
+    let mut spent = gutter_width(theme)
+        + crate::wrap::width(&open)
+        + crate::wrap::width(&status)
+        + crate::wrap::width(&tool.name);
+    let interrupted = tool.status == ToolStatus::Interrupted;
+    if interrupted {
+        spent += crate::wrap::width("  interrupted");
+    }
+    let did = summary(tool);
+    let room = width.saturating_sub(spent + 2);
+    if !did.is_empty() && room >= 4 {
+        head.push(Span::styled(
+            format!("  {}", elide(&did, room, theme.glyph(Glyph::Elided))),
+            Style::default().fg(theme.secondary()),
+        ));
+    }
+    if interrupted {
+        head.push(Span::styled(
+            "  interrupted".to_string(),
+            Style::default().fg(theme.warning()),
+        ));
+    }
+    let mut lines = vec![Line::from(head)];
+    if !tool.expanded {
+        return lines;
+    }
+
+    // Indented **and** on `code_surface`, because the surface alone is
+    // `Color::Reset` under `Mode::Mono` — a block that separated itself by
+    // background would vanish on the one mode that has no colour to spend.
+    // The same pairing is why fenced code reads as code in `markdown.rs`.
+    let surface = Style::default().fg(theme.body()).bg(theme.code_surface());
+    if let Some(raw) = tool.arguments.as_deref() {
+        lines.extend(
+            crate::markdown::verbatim(&pretty(raw), body_width, "  ", surface)
+                .into_iter()
+                .map(|row| prefix(rule(), row)),
+        );
+    }
+    if let ToolStatus::Done(content) = &tool.status {
+        let style = if reads_as_failure(content) {
+            // The reason a failure opens itself is that it is *read*, not
+            // glanced at, so it gets the failure colour rather than the
+            // recessive one every other result has.
+            Style::default()
+                .fg(theme.removed())
+                .bg(theme.code_surface())
+        } else {
+            surface
+        };
+        lines.push(Line::from(rule()));
+        lines.extend(
+            crate::markdown::verbatim(content.trim_end(), body_width, "  ", style)
+                .into_iter()
+                .map(|row| prefix(rule(), row)),
+        );
+    }
+    lines
+}
+
+/// The arguments as a human reads them, or unchanged when they are not JSON.
+///
+/// Pretty-printed and **not** highlighted: 19b priced four highlighters against
+/// this crate's dependency budget and declined all of them, and one tool block
+/// is not the argument that reopens it.
+fn pretty(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .as_ref()
+        .map_or_else(
+            |_| raw.to_string(),
+            |v| serde_json::to_string_pretty(v).unwrap_or_else(|_| raw.to_string()),
+        )
+}
+
+/// `text` cut to `max` cells from the left, marked so the cut is visible.
+///
+/// Grapheme by grapheme rather than by byte or by `char`, for the same reason
+/// `wrap` is: a cut inside a cluster is a broken glyph, and a cut counted in
+/// `char`s puts a wide character half off the pane.
+fn elide(text: &str, max: usize, mark: &str) -> String {
+    if crate::wrap::width(text) <= max {
+        return text.to_string();
+    }
+    let room = max.saturating_sub(crate::wrap::width(mark));
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0;
+    for cluster in unicode_segmentation::UnicodeSegmentation::graphemes(text, true)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        let cells = crate::wrap::width(cluster);
+        if used + cells > room {
+            break;
+        }
+        used += cells;
+        kept.push(cluster);
+    }
+    kept.reverse();
+    format!("{mark}{}", kept.concat())
+}
+
+/// Put the gutter back in front of an already-styled row.
+fn prefix(rail: Span<'static>, row: Line<'static>) -> Line<'static> {
+    let mut spans = vec![rail];
+    spans.extend(row.spans);
+    Line::from(spans)
+}
+
+/// Render one entry into lines/// Render one entry into lines, wrapped to `width` cells including the gutter.
 #[must_use]
 pub fn block(entry: &Entry, width: usize, theme: Theme) -> Vec<Line<'static>> {
     let (who, text) = match entry {
         Entry::Message { who, text } => (*who, text.clone()),
-        // Minimal for now, and deliberately: #155 owns the collapsed line that
-        // names what the call *did* rather than its JSON, the `Ctrl+O` toggle
-        // and the expanded form. This keeps a tool block visible and paired in
-        // the meantime rather than leaving it unrendered, which would make
-        // #154's model untestable through the thing that draws it.
-        Entry::Tool(tool) => {
-            let mark = match &tool.status {
-                ToolStatus::Running => theme.glyph(Glyph::Collapsed).to_string(),
-                ToolStatus::Done(_) => theme.glyph(Glyph::ToolDone).to_string(),
-                ToolStatus::Interrupted => theme.glyph(Glyph::ToolFailed).to_string(),
-            };
-            let suffix = match &tool.status {
-                ToolStatus::Running => String::new(),
-                ToolStatus::Done(content) => format!(" {content}"),
-                ToolStatus::Interrupted => " interrupted".to_string(),
-            };
-            (Who::Status, format!("{mark} {}{suffix}", tool.name))
-        }
+        Entry::Tool(tool) => return tool_block(tool, width, theme),
     };
     let (label, accent) = role(who, theme);
     let glyph = theme.glyph(Glyph::MessageGutter);
@@ -139,8 +382,8 @@ pub fn transcript(entries: &[Entry], width: usize, theme: Theme) -> Vec<Line<'st
 
 #[cfg(test)]
 mod tests {
-    use super::{block, transcript};
-    use crate::app::{Entry, Who};
+    use super::{block, reads_as_failure, transcript};
+    use crate::app::{Entry, ToolBlock, ToolStatus, Who};
     use crate::theme::{Depth, Glyph, GlyphSet, Mode, Theme};
     use crate::wrap::width;
 
@@ -252,5 +495,205 @@ mod tests {
             transcript(&[], 40, theme).is_empty(),
             "no entries, no lines"
         );
+    }
+
+    fn call(name: &str, arguments: Option<&str>, status: ToolStatus) -> Entry {
+        Entry::Tool(ToolBlock {
+            id: "c1".to_string(),
+            name: name.to_string(),
+            arguments: arguments.map(str::to_string),
+            status,
+            expanded: false,
+        })
+    }
+
+    fn opened(entry: Entry) -> Entry {
+        let Entry::Tool(mut tool) = entry else {
+            unreachable!("not a tool block")
+        };
+        tool.expanded = true;
+        Entry::Tool(tool)
+    }
+
+    /// Acceptance: the collapsed line names what the call *did*.
+    #[test]
+    fn the_collapsed_line_names_the_path_and_never_the_json() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let edit = call(
+            "edit",
+            Some(r#"{"path":"src/core/ui/src/blocks.rs","old":"a","new":"b"}"#),
+            ToolStatus::Done("ok".to_string()),
+        );
+        let lines = block(&edit, 80, theme);
+        assert_eq!(lines.len(), 1, "collapsed is one row");
+        let head = plain(&lines[0]);
+        assert!(head.contains("edit"), "the tool is not named: {head:?}");
+        assert!(
+            head.contains("src/core/ui/src/blocks.rs"),
+            "the path is what the reader came for: {head:?}"
+        );
+        assert!(
+            !head.contains('{') && !head.contains("\"old\""),
+            "the collapsed line is showing raw JSON: {head:?}"
+        );
+        assert!(
+            head.contains(theme.glyph(Glyph::ToolDone)),
+            "no status glyph: {head:?}"
+        );
+
+        // Nothing to name, so the line is just the call.
+        let bare = call("list_sessions", Some("{}"), ToolStatus::Done("ok".into()));
+        let bare = plain(&block(&bare, 80, theme)[0]);
+        assert!(
+            bare.contains("list_sessions") && !bare.contains("{}"),
+            "{bare:?}"
+        );
+    }
+
+    /// #161: over REST the frame carries no arguments at all, and the line has
+    /// to say that rather than render an empty call.
+    #[test]
+    fn missing_arguments_say_so_instead_of_reading_as_none() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let head = plain(&block(&call("read", None, ToolStatus::Running), 80, theme)[0]);
+        assert!(
+            head.contains("#161"),
+            "a user cannot tell missing from absent without the reason: {head:?}"
+        );
+    }
+
+    /// Acceptance: a failure opens itself, and the reason is in the block.
+    #[test]
+    fn a_failed_call_shows_its_reason_without_a_keystroke() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let failed = opened(call(
+            "read",
+            Some(r#"{"path":"missing.txt"}"#),
+            ToolStatus::Done("tool `read` error: NotFound".to_string()),
+        ));
+        let rendered: Vec<String> = block(&failed, 80, theme).iter().map(plain).collect();
+        assert!(
+            rendered[0].contains(theme.glyph(Glyph::ToolFailed)),
+            "a failure wears the success glyph: {:?}",
+            rendered[0]
+        );
+        assert!(
+            rendered.iter().any(|r| r.contains("NotFound")),
+            "the reason is not in the block: {rendered:?}"
+        );
+    }
+
+    /// The wording this recognises belongs to another crate, so the day it
+    /// changes there, this is the test that says so.
+    #[test]
+    fn every_failure_the_core_writes_is_recognised() {
+        for content in [
+            "tool `read` error: NotFound",
+            "tool `read` trapped",
+            "tool `read` meta trapped",
+            "tool fleet failed to instantiate: no such file",
+            "tool call denied: the user said no",
+            "no tool named `edti`",
+        ] {
+            assert!(
+                reads_as_failure(content),
+                "{content:?} is a failure the core emits and this did not see it \
+                 — check `tool_host.rs` and `conductor.rs` before editing the list"
+            );
+        }
+        for content in [
+            "ok",
+            "",
+            "error: 1 test failed",
+            "the file mentions tool call denied: in a comment",
+        ] {
+            assert!(
+                !reads_as_failure(content),
+                "{content:?} is a tool's own output and was read as the tool failing"
+            );
+        }
+    }
+
+    /// The reason `tool_block` does not go through the message path: `wrap`
+    /// collapses whitespace, so the arguments would arrive with their structure
+    /// silently pressed flat.
+    #[test]
+    fn expanded_arguments_keep_their_shape_and_the_result_follows() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let entry = opened(call(
+            "edit",
+            Some(r#"{"path":"a.rs","new":"b"}"#),
+            ToolStatus::Done("wrote 1 line".to_string()),
+        ));
+        let rendered: Vec<String> = block(&entry, 80, theme).iter().map(plain).collect();
+        assert!(rendered.len() > 4, "expanded shows its work: {rendered:?}");
+        assert!(
+            rendered.iter().any(|r| r.contains("\"path\": \"a.rs\"")),
+            "the arguments are not pretty-printed: {rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|r| r.contains("wrote 1 line")),
+            "the result is missing: {rendered:?}"
+        );
+        assert!(
+            plain(&block(&call("edit", Some("{}"), ToolStatus::Running), 80, theme)[0])
+                .contains(theme.glyph(Glyph::Collapsed)),
+            "collapsed and expanded read the same"
+        );
+    }
+
+    /// Acceptance: with colour gone, done and failed are still two things.
+    ///
+    /// The whole reason status is a glyph rather than a tint — and a case the
+    /// *message* blocks' `Mono` test cannot cover, because a tool block has no
+    /// role label to fall back on. The row is the label.
+    #[test]
+    fn monochrome_still_separates_a_done_call_from_a_failed_one() {
+        for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
+            let theme = Theme::new(Mode::Mono, Depth::TrueColor, set);
+            let args = Some(r#"{"path":"a.rs"}"#);
+            let done = plain(
+                &block(
+                    &call("read", args, ToolStatus::Done("ok".into())),
+                    60,
+                    theme,
+                )[0],
+            );
+            let failed = plain(
+                &block(
+                    &call("read", args, ToolStatus::Done("tool `read` trapped".into())),
+                    60,
+                    theme,
+                )[0],
+            );
+            let running = plain(&block(&call("read", args, ToolStatus::Running), 60, theme)[0]);
+            assert_ne!(done, failed, "{set:?}: a failed call reads as a done one");
+            assert_ne!(done, running, "{set:?}: a running call reads as a done one");
+            assert!(
+                failed.contains(theme.glyph(Glyph::ToolFailed)),
+                "{set:?}: {failed:?}"
+            );
+        }
+    }
+
+    /// The gutter and the indent are part of the row here too.
+    #[test]
+    fn an_expanded_block_stays_inside_the_pane() {
+        for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
+            let theme = Theme::new(Mode::Dark, Depth::TrueColor, set);
+            let entry = opened(call(
+                "grep",
+                Some(r#"{"pattern":"a very long pattern that will not fit on one row at all"}"#),
+                ToolStatus::Done("日本語のテキストです ".repeat(4)),
+            ));
+            for line in block(&entry, 24, theme) {
+                let row = plain(&line);
+                assert!(
+                    width(&row) <= 24,
+                    "{set:?}: {row:?} is {} cells, pane is 24",
+                    width(&row)
+                );
+            }
+        }
     }
 }

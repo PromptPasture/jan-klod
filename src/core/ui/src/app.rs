@@ -47,6 +47,11 @@ pub struct ToolBlock {
     pub arguments: Option<String>,
     /// Running, done, or interrupted.
     pub status: ToolStatus,
+    /// Whether the full arguments and result are shown.
+    ///
+    /// Collapsed by default; a **failure opens itself**, because hiding the
+    /// reason one keystroke away is the opposite of what a failure needs.
+    pub expanded: bool,
 }
 
 /// One entry in the transcript.
@@ -259,6 +264,7 @@ impl App {
             name,
             arguments,
             status: ToolStatus::Running,
+            expanded: false,
         }));
     }
 
@@ -280,7 +286,10 @@ impl App {
                 _ => None,
             });
         match open {
-            Some(block) => block.status = ToolStatus::Done(content),
+            Some(block) => {
+                block.expanded = crate::blocks::reads_as_failure(&content);
+                block.status = ToolStatus::Done(content);
+            }
             None => self.record_status(format!("tool result for an unknown call `{id}`")),
         }
     }
@@ -570,6 +579,28 @@ mod tests {
         assert_eq!(blocks.len(), 1, "the result did not open a second block");
         assert_eq!(blocks[0].status, ToolStatus::Done("contents".into()));
         assert_eq!(app.transcript.len(), 1, "and nothing else was recorded");
+    }
+
+    /// Acceptance: **a failure opens itself.** A tool that failed is the one
+    /// block whose contents a user certainly wants, so hiding the reason behind
+    /// a keystroke they have to know about is the wrong default — and a
+    /// successful call is the opposite, or a transcript of twelve reads is
+    /// twelve screens of JSON nobody asked for.
+    #[test]
+    fn a_failed_call_arrives_expanded_and_a_successful_one_does_not() {
+        let mut app = App::default();
+        app.record_tool_invoked("c1".into(), "fs.read".into(), Some("{}".into()));
+        app.record_tool_result("c1", "contents".into());
+        app.record_tool_invoked("c2".into(), "fs.read".into(), Some("{}".into()));
+        app.record_tool_result("c2", "tool `fs.read` error: NotFound".into());
+
+        let blocks = tools(&app);
+        assert!(!blocks[0].expanded, "a result nobody needs to read opened");
+        assert!(
+            blocks[1].expanded,
+            "the reason a call failed is one keystroke away, and the user does \
+             not know which keystroke"
+        );
     }
 
     /// The second: an unmatched result is visible, not dropped.

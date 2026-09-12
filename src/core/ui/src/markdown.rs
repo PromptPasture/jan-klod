@@ -122,7 +122,7 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
 /// which under `Mode::Mono` resolves to `Color::Reset` — so a block identified
 /// only by its background is a block that vanishes on a monochrome terminal.
 /// Indentation is structure, and structure is what survives there.
-fn verbatim(text: &str, max: usize, indent: &str, style: Style) -> Vec<Line<'static>> {
+pub(crate) fn verbatim(text: &str, max: usize, indent: &str, style: Style) -> Vec<Line<'static>> {
     let inner = max.saturating_sub(width(indent)).max(1);
     text.lines()
         .flat_map(|line| crate::wrap::wrap(line, inner))

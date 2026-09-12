@@ -223,6 +223,8 @@ pub enum Glyph {
     Caret,
     /// The transcript is scrolled up and there is more below (#148).
     MoreBelow,
+    /// Text that did not fit and was cut short (#155).
+    Elided,
 }
 
 impl Glyph {
@@ -230,7 +232,7 @@ impl Glyph {
     ///
     /// A `match` in [`Glyph::forms`] keeps this honest in the other direction:
     /// adding a variant without a form is a compile error.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::MessageGutter,
         Self::ToolDone,
         Self::ToolFailed,
@@ -241,6 +243,7 @@ impl Glyph {
         Self::DiffRemoved,
         Self::Caret,
         Self::MoreBelow,
+        Self::Elided,
     ];
 
     /// The Unicode form and the ASCII one, in that order.
@@ -267,6 +270,7 @@ impl Glyph {
             // at the transcript's edge with a count beside it — and the
             // distinctness rule is what stops the pair collapsing into one.
             Self::MoreBelow => ("⇣", "V"),
+            Self::Elided => ("…", "..."),
         }
     }
 }
