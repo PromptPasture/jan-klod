@@ -229,6 +229,7 @@ mod tests {
                 &Event::ToolResult(ToolOutcome {
                     tool_call_id: "call-1".to_owned(),
                     content: "# Jan-Klod".to_owned(),
+                    failed: false,
                 }),
             ),
             event_row(
@@ -434,6 +435,7 @@ mod bound_tests {
             let (kind, payload) = encode(&Event::ToolResult(ToolOutcome {
                 tool_call_id: "c".to_owned(),
                 content: format!("t{turn}"),
+                failed: false,
             }));
             push(kind, payload);
             let (kind, payload) = encode(&Event::Done {

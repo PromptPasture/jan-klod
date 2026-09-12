@@ -428,13 +428,26 @@ impl ToolFleet {
 }
 
 impl crate::conductor::ToolInvoker for ToolFleet {
-    fn invoke(&mut self, call: &crate::intercept::ToolCall) -> Option<String> {
+    fn invoke(
+        &mut self,
+        call: &crate::intercept::ToolCall,
+    ) -> Option<crate::conductor::ToolInvocation> {
         let entry = self
             .tools
             .iter_mut()
             .find(|(meta, _)| meta.name == call.name)?;
-        // A tool error is fed back to the model as the result, not an abort.
-        Some(entry.1.invoke(&call.arguments).unwrap_or_else(|err| err))
+        // A tool error is fed back to the model as the result, not an abort —
+        // but it is still, per #162, a failure the wire is told about.
+        Some(match entry.1.invoke(&call.arguments) {
+            Ok(content) => crate::conductor::ToolInvocation {
+                content,
+                failed: false,
+            },
+            Err(content) => crate::conductor::ToolInvocation {
+                content,
+                failed: true,
+            },
+        })
     }
 }
 
@@ -569,14 +582,20 @@ impl LazyToolFleet {
 }
 
 impl crate::conductor::ToolInvoker for LazyToolFleet {
-    fn invoke(&mut self, call: &crate::intercept::ToolCall) -> Option<String> {
+    fn invoke(
+        &mut self,
+        call: &crate::intercept::ToolCall,
+    ) -> Option<crate::conductor::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
             // Consistent with a live tool's own error handling (`ToolFleet::invoke`,
             // `ToolExtension::invoke`): fed back to the model as the call's result,
             // not an abort — a lazily-failing guest costs this one tool call, not
             // the turn.
-            Err(err) => Some(format!("tool fleet failed to instantiate: {err}")),
+            Err(err) => Some(crate::conductor::ToolInvocation {
+                content: format!("tool fleet failed to instantiate: {err}"),
+                failed: true,
+            }),
         }
     }
 }

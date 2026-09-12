@@ -93,11 +93,14 @@ pub enum StreamEvent {
     Delta(String),
     /// A tool is about to run.
     ///
-    /// `arguments` is `Option` rather than `String` because the two surfaces do
-    /// not agree: `Notification::ToolInvoked` carries it, and the SSE `tool`
-    /// frame does not (#161). Pretending it is always present would make a
-    /// client that silently shows less over REST than over stdio, which is the
-    /// defect rather than the workaround.
+    /// `arguments` is `Option` rather than `String`: before #161 the SSE `tool`
+    /// frame carried no `arguments` at all, so `None` said "this transport did
+    /// not send them" rather than "the call took none" — pretending it was
+    /// always present would have made a client that silently showed less over
+    /// REST than over stdio. Both `parse_frame` and `transport::event_for` now
+    /// populate it from the wire, so in practice it is always `Some`; kept as
+    /// `Option` rather than narrowed to `String` so a caller still cannot
+    /// mistake "no arguments" for the data not having arrived.
     Tool {
         /// Call id, matched by the [`StreamEvent::ToolResult`] that answers it.
         id: String,
@@ -113,6 +116,15 @@ pub enum StreamEvent {
         id: String,
         /// What the tool returned.
         content: String,
+        /// Whether the call failed — a denial, a trap, an error the tool
+        /// reported, or no tool by that name.
+        ///
+        /// A fact the core establishes and both surfaces now carry (#162).
+        /// Before that this client recognised a failure by matching the
+        /// sentences the core happens to write into `content`, which is a
+        /// coupling to wording nobody owned: renaming "trapped" to "panicked"
+        /// would have turned a failure green with no test failing anywhere.
+        failed: bool,
     },
     /// A non-fatal notice (provider fallback, retry).
     Warning(String),
@@ -169,18 +181,32 @@ pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
         "delta" => StreamEvent::Delta(field("text")),
         // The frame has carried `id` all along — `serve::sse_frame` emits
         // `{ id, name }` — and this client threw it away, which is why an
-        // invocation and its result could not be paired (#154).
+        // invocation and its result could not be paired (#154). `arguments`
+        // used to be genuinely absent from the frame (#161); `serve::sse_frame`
+        // now sends it, so this reads it rather than hard-coding `None`.
         "tool" => StreamEvent::Tool {
             id: field("id"),
             name: field("name"),
-            arguments: None,
+            arguments: Some(field("arguments")),
         },
         // The field names are `serve::sse_frame`'s for `Event::ToolResult`.
         // Without this arm the frame took the fallback below and every tool
         // result in a healthy turn reached the user as an error.
+        //
+        // `failed` defaults to `false` when absent rather than being treated as
+        // a malformed frame (#162): a core older than the flag sends no such
+        // key, and refusing its results would turn a compatible mismatch into a
+        // broken turn. The cost is that an old core's failures render as
+        // successes — which is exactly what happened *before* the flag existed,
+        // so nothing regresses, and `hello` is where a version disagreement is
+        // supposed to be caught.
         "tool-result" => StreamEvent::ToolResult {
             id: field("id"),
             content: field("content"),
+            failed: value
+                .get("failed")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
         },
         "warning" => StreamEvent::Warning(field("message")),
         "done" => StreamEvent::Done(field("answer")),

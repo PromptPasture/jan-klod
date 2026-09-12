@@ -618,11 +618,22 @@ pub fn sse_frame(event: &Event) -> (&'static str, serde_json::Value) {
         Event::TextDelta(text) => ("delta", serde_json::json!({ "text": text })),
         Event::ToolInvoked(call) => (
             "tool",
-            serde_json::json!({ "id": call.id, "name": call.name }),
+            // `arguments` used to be dropped here, so REST+SSE could not render
+            // what a client's collapsed tool-block line names (the edited path,
+            // say) while stdio could — `--addr` is a connection detail, and it
+            // was changing what the transcript could say (#161).
+            serde_json::json!({ "id": call.id, "name": call.name, "arguments": call.arguments }),
         ),
         Event::ToolResult(outcome) => (
             "tool-result",
-            serde_json::json!({ "id": outcome.tool_call_id, "content": outcome.content }),
+            // `failed` (#162): a client used to be able to tell a failure from
+            // a success only by sniffing the prose the core wrote into
+            // `content` — this is the fact itself.
+            serde_json::json!({
+                "id": outcome.tool_call_id,
+                "content": outcome.content,
+                "failed": outcome.failed,
+            }),
         ),
         Event::Warning(message) => ("warning", serde_json::json!({ "message": message })),
         Event::Done { text, agentic } => (

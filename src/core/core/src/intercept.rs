@@ -164,6 +164,12 @@ pub struct ToolOutcome {
     pub tool_call_id: String,
     /// Tool result content (may be modified).
     pub content: String,
+    /// Whether the call failed (#162). **Not** part of `wit/interceptor.wit`'s
+    /// `tool-outcome` record — a wasm `tool-result` interceptor may replace
+    /// `content`, but whether the call failed is not its call to make, so the
+    /// wasm adapter (`interceptor_host.rs`) restores this field across such a
+    /// replace rather than letting the guest set it.
+    pub failed: bool,
 }
 
 /// The assembled final answer (handed at `finalize`).

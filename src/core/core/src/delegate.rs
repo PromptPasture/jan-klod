@@ -78,7 +78,7 @@ impl<T: AgentTransport> AgentDelegate<T> {
 }
 
 impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
-    fn invoke(&mut self, call: &ToolCall) -> Option<String> {
+    fn invoke(&mut self, call: &ToolCall) -> Option<crate::conductor::ToolInvocation> {
         if call.name != DELEGATE_TOOL {
             return None; // not ours — skip-if-absent
         }
@@ -88,11 +88,20 @@ impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
         let context = args.get("context").and_then(serde_json::Value::as_str);
 
         let Some(endpoint) = self.agents.get(agent) else {
-            return Some(format!("unknown agent `{agent}`"));
+            return Some(crate::conductor::ToolInvocation {
+                content: format!("unknown agent `{agent}`"),
+                failed: true,
+            });
         };
         Some(match self.transport.delegate(endpoint, task, context) {
-            Ok(result) => result,
-            Err(err) => format!("delegation to `{agent}` failed: {err}"),
+            Ok(answer) => crate::conductor::ToolInvocation {
+                content: answer,
+                failed: false,
+            },
+            Err(err) => crate::conductor::ToolInvocation {
+                content: format!("delegation to `{agent}` failed: {err}"),
+                failed: true,
+            },
         })
     }
 }
@@ -148,7 +157,9 @@ mod tests {
             "delegate",
             r#"{"agent":"claude-code","task":"write a test"}"#,
         ));
-        assert_eq!(result.as_deref(), Some("subtask done"));
+        let invocation = result.expect("delegate handled its own tool call");
+        assert_eq!(invocation.content, "subtask done");
+        assert!(!invocation.failed);
         assert_eq!(
             delegate.transport.seen.borrow().as_slice(),
             &[(
@@ -175,8 +186,11 @@ mod tests {
             reply: Ok("x".into()),
         };
         let mut delegate = AgentDelegate::new(transport, agents());
-        let result = delegate.invoke(&call("delegate", r#"{"agent":"nope","task":"t"}"#));
-        assert!(result.unwrap().contains("unknown agent `nope`"));
+        let invocation = delegate
+            .invoke(&call("delegate", r#"{"agent":"nope","task":"t"}"#))
+            .expect("delegate handled its own tool call");
+        assert!(invocation.content.contains("unknown agent `nope`"));
+        assert!(invocation.failed);
     }
 
     #[test]
@@ -186,8 +200,11 @@ mod tests {
             reply: Err("unreachable".into()),
         };
         let mut delegate = AgentDelegate::new(transport, agents());
-        let result = delegate.invoke(&call("delegate", r#"{"agent":"claude-code","task":"t"}"#));
-        assert!(result.unwrap().contains("failed: unreachable"));
+        let invocation = delegate
+            .invoke(&call("delegate", r#"{"agent":"claude-code","task":"t"}"#))
+            .expect("delegate handled its own tool call");
+        assert!(invocation.content.contains("failed: unreachable"));
+        assert!(invocation.failed);
     }
 
     #[test]

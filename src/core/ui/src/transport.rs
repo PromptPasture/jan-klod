@@ -404,9 +404,14 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
             default: default.clone(),
         }),
         Notification::Error { message } => Some(StreamEvent::Error(message.clone())),
-        Notification::ToolResult { id, content } => Some(StreamEvent::ToolResult {
+        Notification::ToolResult {
+            id,
+            content,
+            failed,
+        } => Some(StreamEvent::ToolResult {
             id: id.clone(),
             content: content.clone(),
+            failed: *failed,
         }),
         // `session/updated`: this client shows one session at a time, so a list
         // that moved is nothing to refresh.
@@ -461,6 +466,7 @@ mod tests {
             Notification::ToolResult {
                 id: "c1".to_owned(),
                 content: "ok".to_owned(),
+                failed: false,
             },
             Notification::Warning {
                 message: "w".to_owned(),

@@ -515,10 +515,32 @@ impl Interceptor for WasmInterceptor {
             .jan_klod_interfaces_interceptor()
             .call_intercept(&mut self.store, &gen_input)
         {
-            Ok(Ok(decision)) => Ok(from_gen_decision(decision)),
+            Ok(Ok(decision)) => Ok(preserve_tool_result_failed(
+                from_gen_decision(decision),
+                &input.state,
+            )),
             Ok(Err(err)) => Err(from_gen_error(err)),
             Err(_) => Err(InterceptorError::Internal),
         }
+    }
+}
+
+/// Restore `tool-result`'s `failed` flag across a guest's `Replace` (#162).
+///
+/// `wit/interceptor.wit`'s `tool-outcome` has no `failed` field, so a guest
+/// that replaces the `tool-result` state can only ever produce `failed:
+/// false` via `from_gen_state` — whether or not the call actually failed. A
+/// guest interceptor's business is rewriting `content` (e.g. redacting a
+/// secret from a result); whether the call failed is a fact the host already
+/// established before dispatching, and this puts it back rather than letting
+/// the round trip through the guest silently clear it.
+fn preserve_tool_result_failed(decision: Decision, dispatched: &HookState) -> Decision {
+    match (decision, dispatched) {
+        (Decision::Replace(HookState::ToolResult(mut outcome)), HookState::ToolResult(before)) => {
+            outcome.failed = before.failed;
+            Decision::Replace(HookState::ToolResult(outcome))
+        }
+        (decision, _) => decision,
     }
 }
 
@@ -677,6 +699,8 @@ fn to_gen_state(state: &HookState) -> g_icept::HookState {
             finish_reason: r.finish_reason.clone(),
         }),
         HookState::ToolCall(c) => g_icept::HookState::ToolCall(to_gen_call(c)),
+        // `failed` (#162) has no counterpart in `wit/interceptor.wit`'s
+        // `tool-outcome` — it is host-only, so it does not cross into the guest.
         HookState::ToolResult(o) => g_icept::HookState::ToolResult(g_icept::ToolOutcome {
             tool_call_id: o.tool_call_id.clone(),
             content: o.content.clone(),
@@ -702,9 +726,14 @@ fn from_gen_state(state: g_icept::HookState) -> HookState {
             finish_reason: r.finish_reason,
         }),
         g_icept::HookState::ToolCall(c) => HookState::ToolCall(from_gen_call(c)),
+        // `failed` defaults here because the guest never had it (see
+        // `to_gen_state`); `WasmInterceptor::intercept` restores the real value
+        // from the state it dispatched, since a guest replacing `content` does
+        // not get to decide whether the call failed.
         g_icept::HookState::ToolResult(o) => HookState::ToolResult(intercept::ToolOutcome {
             tool_call_id: o.tool_call_id,
             content: o.content,
+            failed: false,
         }),
         g_icept::HookState::Finalize(a) => {
             HookState::Finalize(intercept::FinalAnswer { text: a.text })
@@ -750,6 +779,50 @@ mod tests {
         [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."]
             .iter()
             .collect()
+    }
+
+    /// #162: a guest `tool-result` interceptor can rewrite `content` (there is
+    /// no wire for it to say otherwise), but `failed` has to survive the round
+    /// trip through `wit`'s `tool-outcome`, which does not carry it at all.
+    #[test]
+    fn a_guest_replace_cannot_flip_the_failed_flag() {
+        let dispatched = HookState::ToolResult(intercept::ToolOutcome {
+            tool_call_id: "c1".to_owned(),
+            content: "tool `read` error: NotFound".to_owned(),
+            failed: true,
+        });
+        // What `from_gen_state` produces for any guest `Replace`: the content
+        // it rewrote, and `failed: false` because the guest never had the
+        // real value to begin with.
+        let guest_replace = Decision::Replace(HookState::ToolResult(intercept::ToolOutcome {
+            tool_call_id: "c1".to_owned(),
+            content: "redacted".to_owned(),
+            failed: false,
+        }));
+        let restored = preserve_tool_result_failed(guest_replace, &dispatched);
+        let Decision::Replace(HookState::ToolResult(outcome)) = restored else {
+            panic!("expected a `tool-result` Replace");
+        };
+        assert_eq!(outcome.content, "redacted", "the guest's content wins");
+        assert!(
+            outcome.failed,
+            "the host's failure fact must not vanish through the guest"
+        );
+    }
+
+    /// A decision that is not a `tool-result` `Replace` passes through
+    /// unchanged — this only patches the one case it exists for.
+    #[test]
+    fn other_decisions_are_left_alone() {
+        let dispatched = HookState::ToolResult(intercept::ToolOutcome {
+            tool_call_id: "c1".to_owned(),
+            content: "ok".to_owned(),
+            failed: false,
+        });
+        assert!(matches!(
+            preserve_tool_result_failed(Decision::Proceed, &dispatched),
+            Decision::Proceed
+        ));
     }
 
     /// A driver that never expects to be asked (the intent router does not `ask`).

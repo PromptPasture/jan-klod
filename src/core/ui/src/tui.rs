@@ -376,7 +376,11 @@ fn apply_event(app: &mut App, receiver: &mpsc::Receiver<Result<StreamEvent, Stri
             name,
             arguments,
         })) => app.record_tool_invoked(id, name, arguments),
-        Ok(Ok(StreamEvent::ToolResult { id, content })) => app.record_tool_result(&id, content),
+        Ok(Ok(StreamEvent::ToolResult {
+            id,
+            content,
+            failed,
+        })) => app.record_tool_result(&id, content, failed),
         Ok(Ok(StreamEvent::Warning(msg))) => app.record_status(format!("⚠ {msg}")),
         Ok(Ok(StreamEvent::Prompt {
             question,

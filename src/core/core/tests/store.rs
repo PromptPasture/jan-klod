@@ -424,6 +424,7 @@ fn append_turn(store: &Store, session: &str, turn: usize, tool_calls: usize) {
         let (kind, payload) = encode(&Event::ToolResult(ToolOutcome {
             tool_call_id: id,
             content: format!("result{turn}-{call}"),
+            failed: false,
         }));
         store.append_event(session, kind, &payload).unwrap();
     }

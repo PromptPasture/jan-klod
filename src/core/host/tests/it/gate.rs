@@ -15,7 +15,7 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use jan_klod_core::conductor::{RunResult, ToolInvoker};
+use jan_klod_core::conductor::{RunResult, ToolInvocation, ToolInvoker};
 use jan_klod_core::http::{WireError, WireResponse};
 use jan_klod_core::intercept::{Driver, ToolCall, UserPrompt};
 use jan_klod_core::route::HttpFn;
@@ -88,9 +88,12 @@ impl Driver for CountingApprovingDriver {
 /// A tool backend that returns a canned result and counts invocations.
 struct CountingTools(Arc<AtomicU32>);
 impl ToolInvoker for CountingTools {
-    fn invoke(&mut self, _call: &ToolCall) -> Option<String> {
+    fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
         self.0.fetch_add(1, Ordering::Relaxed);
-        Some("bash: ok".to_string())
+        Some(ToolInvocation {
+            content: "bash: ok".to_string(),
+            failed: false,
+        })
     }
 }
 

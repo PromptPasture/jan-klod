@@ -1237,7 +1237,7 @@ struct CombinedFleet {
 }
 
 impl conductor::ToolInvoker for CombinedFleet {
-    fn invoke(&mut self, call: &intercept::ToolCall) -> Option<String> {
+    fn invoke(&mut self, call: &intercept::ToolCall) -> Option<conductor::ToolInvocation> {
         self.tools
             .invoke(call)
             .or_else(|| self.registry.invoke(call))

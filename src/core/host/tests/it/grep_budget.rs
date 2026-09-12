@@ -172,6 +172,7 @@ impl Bench {
                 arguments: format!(r#"{{"op":"grep","pattern":"{NEEDLE}"}}"#),
             })
             .expect("fs dispatched")
+            .content
     }
 
     fn native(&self) -> String {

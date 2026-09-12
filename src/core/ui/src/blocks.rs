@@ -87,52 +87,6 @@ const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
     }
 }
 
-/// Whether a tool result reads as a failure.
-///
-/// **A convention, not a contract, and that distinction is the point.** Nothing
-/// on the wire says a tool call failed: `ToolOutcome` is `{ id, content }`,
-/// `ToolInvoker::invoke` returns `Option<String>`, and both frames carry only
-/// the content. So a client cannot be *told* that a call failed; it can only
-/// recognise the sentences the core writes when one does, which is what this
-/// does — and it will stop working the day somebody rephrases an error without
-/// touching this file.
-///
-/// The whole corpus, at the time of writing:
-///
-/// | sentence | written by |
-/// | --- | --- |
-/// | ``tool `X` error: …`` | `tool_host.rs` |
-/// | ``tool `X` trapped`` | `tool_host.rs` |
-/// | ``tool `X` meta trapped`` | `tool_host.rs` |
-/// | `tool fleet failed to instantiate: …` | `tool_host.rs` |
-/// | `tool call denied: …` | `conductor.rs` |
-/// | ``no tool named `X` `` | `conductor.rs` |
-///
-/// It lives in one named function for exactly that reason:
-/// [#162](https://github.com/PromptPasture/jan-klod/issues/162) puts the flag on
-/// the wire and deletes this, and there should be one place to delete rather
-/// than a scatter of `contains` calls behind a rendering decision.
-#[must_use]
-pub fn reads_as_failure(content: &str) -> bool {
-    let head = content.trim_start();
-    // These stand alone.
-    for opener in [
-        "tool call denied:",
-        "no tool named `",
-        "tool fleet failed to instantiate:",
-    ] {
-        if head.starts_with(opener) {
-            return true;
-        }
-    }
-    // These need the ``tool `name` `` opener, because "error:" on its own is a
-    // word a successful tool could easily have printed.
-    head.starts_with("tool `")
-        && ["` error:", "` trapped", "` meta trapped"]
-            .iter()
-            .any(|tail| head.contains(tail))
-}
-
 /// The one-line summary: what the call *did*, not its JSON.
 ///
 /// A path if the arguments name one, because that is what the reader of an
@@ -141,13 +95,17 @@ pub fn reads_as_failure(content: &str) -> bool {
 /// blob squeezed onto one row is not scannable.
 fn summary(tool: &ToolBlock) -> String {
     let Some(raw) = tool.arguments.as_deref() else {
-        // Not the same thing as "no arguments". The SSE `tool` frame does not
-        // carry them at all ([#161]), so over REST this is *missing*
-        // information, and a line that rendered `{}` here would be telling a
-        // user something false that they have no way to check.
+        // Not the same thing as "no arguments" — it means nothing arrived, and
+        // a line that rendered `{}` here would tell a user something false they
+        // have no way to check.
+        //
+        // Both surfaces carry `arguments` since [#161], so this is now only
+        // reachable against a core older than that fix. It is kept rather than
+        // made unrepresentable because that core still exists in the world, and
+        // the honest rendering of "I was not told" is not `{}`.
         //
         // [#161]: https://github.com/PromptPasture/jan-klod/issues/161
-        return "arguments not sent over this transport (#161)".to_string();
+        return "arguments not sent over this transport".to_string();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
         return String::new();
@@ -172,10 +130,16 @@ fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
             (*theme.spinner().first().unwrap_or(&"-")).to_string(),
             theme.secondary(),
         ),
-        ToolStatus::Done(content) if reads_as_failure(content) => {
+        // The core says whether the call failed (#162). This used to match the
+        // sentences it happens to write into `content`, which meant renaming
+        // "trapped" to "panicked" would have drawn a failure green with no test
+        // failing anywhere.
+        ToolStatus::Done { failed: true, .. } => {
             (theme.glyph(Glyph::ToolFailed).to_string(), theme.removed())
         }
-        ToolStatus::Done(_) => (theme.glyph(Glyph::ToolDone).to_string(), theme.added()),
+        ToolStatus::Done { failed: false, .. } => {
+            (theme.glyph(Glyph::ToolDone).to_string(), theme.added())
+        }
         ToolStatus::Interrupted => (theme.glyph(Glyph::ToolFailed).to_string(), theme.warning()),
     }
 }
@@ -268,8 +232,8 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
                 .map(|row| prefix(rule(), row)),
         );
     }
-    if let ToolStatus::Done(content) = &tool.status {
-        let style = if reads_as_failure(content) {
+    if let ToolStatus::Done { content, failed } = &tool.status {
+        let style = if *failed {
             // The reason a failure opens itself is that it is *read*, not
             // glanced at, so it gets the failure colour rather than the
             // recessive one every other result has.
@@ -443,12 +407,34 @@ pub fn span_of(entries: &[Entry], index: usize, width: usize, theme: Theme) -> (
 
 #[cfg(test)]
 mod tests {
-    use super::{block, reads_as_failure, span_of, transcript};
+    use super::{block, span_of, transcript};
     use crate::app::{Entry, ToolBlock, ToolStatus, Who};
     use crate::theme::{Depth, Glyph, GlyphSet, Mode, Theme};
     use crate::wrap::width;
 
     const ALL: [Who; 4] = [Who::You, Who::Klod, Who::Error, Who::Status];
+
+    /// A result the core reported as succeeding.
+    fn done(content: &str) -> ToolStatus {
+        ToolStatus::Done {
+            content: content.to_string(),
+            failed: false,
+        }
+    }
+
+    /// A result the core reported as failing.
+    ///
+    /// The content of these fixtures still reads like one of the sentences the
+    /// core writes, because that is what a real failure looks like — but since
+    /// #162 nothing reads it. `failed` is what decides, which is why
+    /// `what_the_content_looks_like_no_longer_decides_whether_a_call_failed`
+    /// pulls the two apart on purpose.
+    fn failure(content: &str) -> ToolStatus {
+        ToolStatus::Done {
+            content: content.to_string(),
+            failed: true,
+        }
+    }
 
     fn entry(who: Who, text: &str) -> Entry {
         Entry::Message {
@@ -585,7 +571,7 @@ mod tests {
         let edit = call(
             "edit",
             Some(r#"{"path":"src/core/ui/src/blocks.rs","old":"a","new":"b"}"#),
-            ToolStatus::Done("ok".to_string()),
+            done("ok"),
         );
         let lines = block(&edit, false, 80, theme);
         assert_eq!(lines.len(), 1, "collapsed is one row");
@@ -605,7 +591,7 @@ mod tests {
         );
 
         // Nothing to name, so the line is just the call.
-        let bare = call("list_sessions", Some("{}"), ToolStatus::Done("ok".into()));
+        let bare = call("list_sessions", Some("{}"), done("ok"));
         let bare = plain(&block(&bare, false, 80, theme)[0]);
         assert!(
             bare.contains("list_sessions") && !bare.contains("{}"),
@@ -619,8 +605,14 @@ mod tests {
     fn missing_arguments_say_so_instead_of_reading_as_none() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
         let head = plain(&block(&call("read", None, ToolStatus::Running), false, 80, theme)[0]);
+        // It used to assert the line carried the string `#161`. That was right
+        // while the gap was live and the number was the only place a user could
+        // read what had happened; now that both surfaces send `arguments`, an
+        // issue number on screen is a reference to a closed ticket. What has to
+        // survive is the distinction it existed for: nothing arrived, which is
+        // not the same as the call having taken no arguments.
         assert!(
-            head.contains("#161"),
+            head.contains("not sent"),
             "a user cannot tell missing from absent without the reason: {head:?}"
         );
     }
@@ -632,7 +624,7 @@ mod tests {
         let failed = opened(call(
             "read",
             Some(r#"{"path":"missing.txt"}"#),
-            ToolStatus::Done("tool `read` error: NotFound".to_string()),
+            failure("tool `read` error: NotFound"),
         ));
         let rendered: Vec<String> = block(&failed, false, 80, theme).iter().map(plain).collect();
         assert!(
@@ -646,35 +638,38 @@ mod tests {
         );
     }
 
-    /// The wording this recognises belongs to another crate, so the day it
-    /// changes there, this is the test that says so.
+    /// What the `failed` flag bought, stated as the two cases it fixes (#162).
+    ///
+    /// This replaces `every_failure_the_core_writes_is_recognised`, which
+    /// pinned a list of six sentences `blocks::reads_as_failure` matched
+    /// against — `` tool `X` error: ``, `tool call denied:` and so on. That test
+    /// was honest about being a *convention*: the wording belonged to
+    /// `tool_host.rs` and `conductor.rs`, and rephrasing an error there would
+    /// have drawn a failure green with nothing failing anywhere.
+    ///
+    /// Both of its worries are now unreachable rather than guarded, so the
+    /// fixtures deliberately point the *opposite* way to the flag: content that
+    /// reads like a failure but succeeded, and content that reads like success
+    /// but failed. A prose matcher gets both of these wrong; reading the flag
+    /// cannot get either wrong.
     #[test]
-    fn every_failure_the_core_writes_is_recognised() {
-        for content in [
-            "tool `read` error: NotFound",
-            "tool `read` trapped",
-            "tool `read` meta trapped",
-            "tool fleet failed to instantiate: no such file",
-            "tool call denied: the user said no",
-            "no tool named `edti`",
-        ] {
-            assert!(
-                reads_as_failure(content),
-                "{content:?} is a failure the core emits and this did not see it \
-                 — check `tool_host.rs` and `conductor.rs` before editing the list"
-            );
-        }
-        for content in [
-            "ok",
-            "",
-            "error: 1 test failed",
-            "the file mentions tool call denied: in a comment",
-        ] {
-            assert!(
-                !reads_as_failure(content),
-                "{content:?} is a tool's own output and was read as the tool failing"
-            );
-        }
+    fn what_the_content_looks_like_no_longer_decides_whether_a_call_failed() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let head = |status| plain(&block(&call("read", None, status), false, 80, theme)[0]);
+
+        let innocent = head(done("the file mentions tool call denied: in a comment"));
+        assert!(
+            innocent.contains(theme.glyph(Glyph::ToolDone)),
+            "a tool's own output that merely quotes a denial was drawn as a \
+             failure: {innocent:?}"
+        );
+
+        let reworded = head(failure("the sandbox said no"));
+        assert!(
+            reworded.contains(theme.glyph(Glyph::ToolFailed)),
+            "a failure the core phrased in words no matcher would have listed \
+             was drawn as a success: {reworded:?}"
+        );
     }
 
     /// The reason `tool_block` does not go through the message path: `wrap`
@@ -686,7 +681,7 @@ mod tests {
         let entry = opened(call(
             "edit",
             Some(r#"{"path":"a.rs","new":"b"}"#),
-            ToolStatus::Done("wrote 1 line".to_string()),
+            done("wrote 1 line"),
         ));
         let rendered: Vec<String> = block(&entry, false, 80, theme).iter().map(plain).collect();
         assert!(rendered.len() > 4, "expanded shows its work: {rendered:?}");
@@ -722,17 +717,10 @@ mod tests {
         for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
             let theme = Theme::new(Mode::Mono, Depth::TrueColor, set);
             let args = Some(r#"{"path":"a.rs"}"#);
-            let done = plain(
-                &block(
-                    &call("read", args, ToolStatus::Done("ok".into())),
-                    false,
-                    60,
-                    theme,
-                )[0],
-            );
+            let done = plain(&block(&call("read", args, done("ok")), false, 60, theme)[0]);
             let failed = plain(
                 &block(
-                    &call("read", args, ToolStatus::Done("tool `read` trapped".into())),
+                    &call("read", args, failure("tool `read` trapped")),
                     false,
                     60,
                     theme,
@@ -755,11 +743,7 @@ mod tests {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
         let patch = "@@ -1,2 +1,2 @@\n context\n-gone\n+new";
         let rendered: Vec<String> = block(
-            &opened(call(
-                "git",
-                Some(r#"{"op":"diff"}"#),
-                ToolStatus::Done(patch.into()),
-            )),
+            &opened(call("git", Some(r#"{"op":"diff"}"#), done(patch))),
             false,
             60,
             theme,
@@ -787,7 +771,7 @@ mod tests {
         let failed = opened(call(
             "git",
             Some("{}"),
-            ToolStatus::Done(format!("tool `git` error: {patch}")),
+            failure(&format!("tool `git` error: {patch}")),
         ));
         let head = plain(&block(&failed, false, 60, theme)[0]);
         assert!(head.contains(theme.glyph(Glyph::ToolFailed)), "{head:?}");
@@ -849,7 +833,7 @@ mod tests {
             let entry = opened(call(
                 "grep",
                 Some(r#"{"pattern":"a very long pattern that will not fit on one row at all"}"#),
-                ToolStatus::Done("日本語のテキストです ".repeat(4)),
+                done(&"日本語のテキストです ".repeat(4)),
             ));
             for line in block(&entry, false, 24, theme) {
                 let row = plain(&line);

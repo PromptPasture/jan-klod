@@ -26,8 +26,19 @@ pub enum Who {
 pub enum ToolStatus {
     /// Invoked, no result yet.
     Running,
-    /// Answered, with what it returned.
-    Done(String),
+    /// Answered, with what it returned and whether it failed.
+    ///
+    /// A struct variant rather than `Done(String)` plus a flag on
+    /// [`ToolBlock`], because "did it fail" is only a question once a result
+    /// exists: `Running` has no answer yet and `Interrupted` never got one, and
+    /// a field beside the status would have invited both to carry one anyway.
+    Done {
+        /// What the tool returned.
+        content: String,
+        /// Whether the core reported the call as failed (#162), rather than
+        /// this client inferring it from `content`'s wording.
+        failed: bool,
+    },
     /// The turn ended with this call still open.
     ///
     /// A block left `Running` forever is a spinner that never stops, which
@@ -42,8 +53,13 @@ pub struct ToolBlock {
     pub id: String,
     /// Tool name.
     pub name: String,
-    /// JSON arguments, where the transport carried them — the SSE `tool` frame
-    /// does not (#161), so this is `None` over REST.
+    /// JSON arguments, where the transport carried them.
+    ///
+    /// The SSE `tool` frame used to drop them, which is what made this an
+    /// `Option`; #161 fixed that, so both surfaces send them now and `None`
+    /// means an older core rather than a transport that cannot. Still an
+    /// `Option`, because "not sent" and "the call took none" are different
+    /// facts and the collapsed line says so differently.
     pub arguments: Option<String>,
     /// Running, done, or interrupted.
     pub status: ToolStatus,
@@ -392,7 +408,7 @@ impl App {
     /// means the client and the core disagree about what is open, and a user
     /// watching a turn should see that something arrived — a result dropped
     /// silently is indistinguishable from one that never came.
-    pub fn record_tool_result(&mut self, id: &str, content: String) {
+    pub fn record_tool_result(&mut self, id: &str, content: String, failed: bool) {
         let open = self
             .transcript
             .iter_mut()
@@ -405,8 +421,12 @@ impl App {
             });
         match open {
             Some(block) => {
-                block.expanded = crate::blocks::reads_as_failure(&content);
-                block.status = ToolStatus::Done(content);
+                // A failure opens itself. This used to ask
+                // `blocks::reads_as_failure(&content)`, which matched the
+                // sentences the core happens to write; since #162 the core says
+                // so and this reads the fact.
+                block.expanded = failed;
+                block.status = ToolStatus::Done { content, failed };
             }
             None => self.record_status(format!("tool result for an unknown call `{id}`")),
         }
@@ -750,11 +770,17 @@ mod tests {
     fn an_invocation_and_its_result_are_one_block() {
         let mut app = App::default();
         app.record_tool_invoked("c1".into(), "fs.read".into(), Some("{}".into()));
-        app.record_tool_result("c1", "contents".into());
+        app.record_tool_result("c1", "contents".into(), false);
 
         let blocks = tools(&app);
         assert_eq!(blocks.len(), 1, "the result did not open a second block");
-        assert_eq!(blocks[0].status, ToolStatus::Done("contents".into()));
+        assert_eq!(
+            blocks[0].status,
+            ToolStatus::Done {
+                content: "contents".into(),
+                failed: false
+            }
+        );
         assert_eq!(app.transcript.len(), 1, "and nothing else was recorded");
     }
 
@@ -947,9 +973,9 @@ mod tests {
     fn a_failed_call_arrives_expanded_and_a_successful_one_does_not() {
         let mut app = App::default();
         app.record_tool_invoked("c1".into(), "fs.read".into(), Some("{}".into()));
-        app.record_tool_result("c1", "contents".into());
+        app.record_tool_result("c1", "contents".into(), false);
         app.record_tool_invoked("c2".into(), "fs.read".into(), Some("{}".into()));
-        app.record_tool_result("c2", "tool `fs.read` error: NotFound".into());
+        app.record_tool_result("c2", "tool `fs.read` error: NotFound".into(), true);
 
         let blocks = tools(&app);
         assert!(!blocks[0].expanded, "a result nobody needs to read opened");
@@ -964,7 +990,7 @@ mod tests {
     #[test]
     fn a_result_for_an_unknown_call_is_a_muted_line_and_not_a_panic() {
         let mut app = App::default();
-        app.record_tool_result("nobody", "orphan".into());
+        app.record_tool_result("nobody", "orphan".into(), false);
 
         assert!(tools(&app).is_empty(), "no block was invented for it");
         match app.transcript.last() {
@@ -985,14 +1011,17 @@ mod tests {
         let mut app = App::default();
         app.record_tool_invoked("c1".into(), "slow".into(), None);
         app.record_tool_invoked("c2".into(), "fast".into(), None);
-        app.record_tool_result("c2", "done".into());
+        app.record_tool_result("c2", "done".into(), false);
 
         app.interrupt_open_tools();
         let blocks = tools(&app);
         assert_eq!(blocks[0].status, ToolStatus::Interrupted, "the open one");
         assert_eq!(
             blocks[1].status,
-            ToolStatus::Done("done".into()),
+            ToolStatus::Done {
+                content: "done".into(),
+                failed: false
+            },
             "a finished block is not retroactively interrupted"
         );
     }
@@ -1004,11 +1033,23 @@ mod tests {
         let mut app = App::default();
         app.record_tool_invoked("a".into(), "first".into(), None);
         app.record_tool_invoked("b".into(), "second".into(), None);
-        app.record_tool_result("b", "B".into());
-        app.record_tool_result("a", "A".into());
+        app.record_tool_result("b", "B".into(), false);
+        app.record_tool_result("a", "A".into(), false);
 
         let blocks = tools(&app);
-        assert_eq!(blocks[0].status, ToolStatus::Done("A".into()));
-        assert_eq!(blocks[1].status, ToolStatus::Done("B".into()));
+        assert_eq!(
+            blocks[0].status,
+            ToolStatus::Done {
+                content: "A".into(),
+                failed: false
+            }
+        );
+        assert_eq!(
+            blocks[1].status,
+            ToolStatus::Done {
+                content: "B".into(),
+                failed: false
+            }
+        );
     }
 }

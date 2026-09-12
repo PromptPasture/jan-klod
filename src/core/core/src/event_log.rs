@@ -108,7 +108,11 @@ pub fn encode(event: &Event) -> (&'static str, String) {
         ),
         Event::ToolResult(outcome) => (
             "tool-result",
-            json!({ "id": outcome.tool_call_id, "content": outcome.content }),
+            json!({
+                "id": outcome.tool_call_id,
+                "content": outcome.content,
+                "failed": outcome.failed,
+            }),
         ),
         Event::Warning(message) => ("warning", json!({ "message": message })),
         Event::Done { text, agentic } => ("done", json!({ "answer": text, "agentic": agentic })),
@@ -209,6 +213,10 @@ pub fn decode_record(kind: &str, payload: &str) -> Result<Record, DecodeError> {
         "tool-result" => Ok(Record::Event(Event::ToolResult(ToolOutcome {
             tool_call_id: text(kind, &data, "id")?,
             content: text(kind, &data, "content")?,
+            // Absent on a row written before #162 added the field; `false` is
+            // the right read for those, since every one of them predates the
+            // flag existing at all, not just predates it being set.
+            failed: data.get("failed").and_then(Value::as_bool).unwrap_or(false),
         }))),
         "warning" => Ok(Record::Event(Event::Warning(text(kind, &data, "message")?))),
         "done" => Ok(Record::Event(Event::Done {
@@ -533,6 +541,7 @@ mod tests {
             Event::ToolResult(ToolOutcome {
                 tool_call_id: "call-1".to_owned(),
                 content: "# Jan-Klod".to_owned(),
+                failed: true,
             }),
             Event::Warning("provider fell back".to_owned()),
             Event::Done {
@@ -566,6 +575,22 @@ mod tests {
         kinds.sort_unstable();
         kinds.dedup();
         assert_eq!(kinds.len(), total, "two events share a kind: {kinds:?}");
+    }
+
+    /// A `tool-result` row written before #162 added `failed` has no such key
+    /// at all — not `false`, absent — and has to stay readable rather than
+    /// refusing every log written before this build.
+    #[test]
+    fn a_tool_result_written_before_the_failed_field_existed_decodes_as_not_failed() {
+        let payload = envelope(&json!({ "id": "call-1", "content": "# Jan-Klod" }));
+        assert_eq!(
+            decode("tool-result", &payload).unwrap(),
+            Event::ToolResult(ToolOutcome {
+                tool_call_id: "call-1".to_owned(),
+                content: "# Jan-Klod".to_owned(),
+                failed: false,
+            })
+        );
     }
 
     #[test]

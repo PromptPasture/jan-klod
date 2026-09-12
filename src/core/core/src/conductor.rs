@@ -94,19 +94,33 @@ pub trait Completer {
     fn complete(&mut self, request: &PendingRequest) -> Result<Completion, String>;
 }
 
+/// What invoking a tool produced: its result content, and whether it failed.
+///
+/// Before #162, [`ToolInvoker::invoke`] returned only `Option<String>`, so a
+/// caller had no way to know the call had failed except by reading the
+/// sentence in the content — which is prose the core wrote for a human, not a
+/// fact for a client to depend on. This is the fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolInvocation {
+    /// The tool's result, or a human-readable description of why it failed.
+    pub content: String,
+    /// Whether the call failed.
+    pub failed: bool,
+}
+
 /// A tool backend: routes a tool call to the extension that implements it.
 pub trait ToolInvoker {
-    /// Invoke `call`, returning its result content. `None` means no tool matched
-    /// (skip-if-absent) — the conductor feeds that back to the model as an error
-    /// result rather than aborting the turn.
-    fn invoke(&mut self, call: &ToolCall) -> Option<String>;
+    /// Invoke `call`, returning its result. `None` means no tool matched
+    /// (skip-if-absent) — the conductor feeds that back to the model as a
+    /// failed result rather than aborting the turn.
+    fn invoke(&mut self, call: &ToolCall) -> Option<ToolInvocation>;
 }
 
 /// A [`ToolInvoker`] with no tools — every call is absent. Used for turns that
 /// offer no tools (e.g. the simple/inline path).
 pub struct NoTools;
 impl ToolInvoker for NoTools {
-    fn invoke(&mut self, _call: &ToolCall) -> Option<String> {
+    fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
         None
     }
 }
@@ -482,13 +496,16 @@ fn run_tool_calls(
         // tool-call gate (e.g. permission). A block denies just this call; the
         // model is told, and the loop continues.
         let mut call_state = HookState::ToolCall(call.clone());
-        let content = match dispatcher.dispatch(Phase::ToolCall, &mut call_state, driver) {
+        let invocation = match dispatcher.dispatch(Phase::ToolCall, &mut call_state, driver) {
             Outcome::Blocked(reason) => {
                 let _ = sink.emit(&Event::Warning(format!(
                     "tool `{}` denied: {}",
                     call.name, reason.message
                 )));
-                format!("tool call denied: {}", reason.message)
+                ToolInvocation {
+                    content: format!("tool call denied: {}", reason.message),
+                    failed: true,
+                }
             }
             Outcome::Proceeded => {
                 let effective = match &call_state {
@@ -498,16 +515,18 @@ fn run_tool_calls(
                 if sink.emit(&Event::ToolInvoked(effective.clone())) == Flow::Stop {
                     stop = ToolPass::Cancelled;
                 }
-                tools
-                    .invoke(&effective)
-                    .unwrap_or_else(|| format!("no tool named `{}`", effective.name))
+                tools.invoke(&effective).unwrap_or_else(|| ToolInvocation {
+                    content: format!("no tool named `{}`", effective.name),
+                    failed: true,
+                })
             }
         };
 
         // tool-result: may rewrite the result; a block terminates the loop.
         let mut result_state = HookState::ToolResult(ToolOutcome {
             tool_call_id: call.id.clone(),
-            content,
+            content: invocation.content,
+            failed: invocation.failed,
         });
         if matches!(
             dispatcher.dispatch(Phase::ToolResult, &mut result_state, driver),
@@ -518,9 +537,13 @@ fn run_tool_calls(
         }
         let outcome = match result_state {
             HookState::ToolResult(outcome) => outcome,
+            // An interceptor replaced the state with the wrong case — should
+            // not happen, and `failed: true` says so rather than reporting a
+            // silently successful call nobody actually ran.
             _ => ToolOutcome {
                 tool_call_id: call.id.clone(),
                 content: String::new(),
+                failed: true,
             },
         };
         if sink.emit(&Event::ToolResult(outcome.clone())) == Flow::Stop {
@@ -795,9 +818,12 @@ mod tests {
         count: Rc<RefCell<u32>>,
     }
     impl ToolInvoker for CountingTools {
-        fn invoke(&mut self, _call: &ToolCall) -> Option<String> {
+        fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
             *self.count.borrow_mut() += 1;
-            Some(self.result.clone())
+            Some(ToolInvocation {
+                content: self.result.clone(),
+                failed: false,
+            })
         }
     }
 
@@ -1354,7 +1380,8 @@ mod tests {
                 Event::ToolInvoked(call("1", "search")),
                 Event::ToolResult(ToolOutcome {
                     tool_call_id: "1".into(),
-                    content: "hit".into()
+                    content: "hit".into(),
+                    failed: false
                 }),
                 Event::TextDelta("final answer".into()),
                 Event::Done {

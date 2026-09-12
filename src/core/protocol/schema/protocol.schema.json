@@ -442,12 +442,16 @@
                 "content": {
                   "type": "string"
                 },
+                "failed": {
+                  "type": "boolean"
+                },
                 "id": {
                   "type": "string"
                 }
               },
               "required": [
                 "content",
+                "failed",
                 "id"
               ],
               "type": "object"
@@ -796,12 +800,16 @@
                 "content": {
                   "type": "string"
                 },
+                "failed": {
+                  "type": "boolean"
+                },
                 "id": {
                   "type": "string"
                 }
               },
               "required": [
                 "content",
+                "failed",
                 "id"
               ],
               "type": "object"

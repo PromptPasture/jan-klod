@@ -98,7 +98,9 @@ fn a_pending_tool_is_not_instantiated_until_invoked() {
         "fs",
         r#"{"op":"write","path":"a.txt","contents":"hi"}"#,
     ));
-    assert!(result.expect("fs dispatched").contains("wrote a.txt"));
+    let result = result.expect("fs dispatched");
+    assert!(result.content.contains("wrote a.txt"));
+    assert!(!result.failed, "a successful write is not `failed`");
     assert!(
         fleet.is_instantiated(),
         "invoking a pending tool must instantiate it"

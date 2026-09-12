@@ -591,6 +591,7 @@ pub fn notification_for(event: &Event) -> Notification {
         Event::ToolResult(outcome) => Notification::ToolResult {
             id: outcome.tool_call_id.clone(),
             content: outcome.content.clone(),
+            failed: outcome.failed,
         },
         Event::Warning(message) => Notification::Warning {
             message: message.clone(),

@@ -30,6 +30,7 @@ fn every_event() -> Vec<Event> {
         Event::ToolResult(ToolOutcome {
             tool_call_id: "call-1".to_owned(),
             content: "# Jan-Klod".to_owned(),
+            failed: true,
         }),
         Event::Warning("provider fell back".to_owned()),
         Event::Done {
@@ -67,8 +68,6 @@ fn every_event_maps_to_a_notification() {
 }
 
 /// The mapping must be lossless: everything an event carries has to survive.
-/// `arguments` is the one to watch — the SSE projection drops it, so a
-/// notification built by copying that projection would lose it too.
 #[test]
 fn nothing_an_event_carries_is_dropped() {
     assert_eq!(
@@ -88,17 +87,20 @@ fn nothing_an_event_carries_is_dropped() {
             name: "fs.read".to_owned(),
             arguments: r#"{"path":"README.md"}"#.to_owned(),
         },
-        "the call's arguments must survive, unlike in the SSE `tool` frame"
+        "the call's arguments must survive"
     );
     assert_eq!(
         notification_for(&Event::ToolResult(ToolOutcome {
             tool_call_id: "call-1".to_owned(),
             content: "# Jan-Klod".to_owned(),
+            failed: true,
         })),
         Notification::ToolResult {
             id: "call-1".to_owned(),
             content: "# Jan-Klod".to_owned(),
-        }
+            failed: true,
+        },
+        "whether the call failed (#162) must survive"
     );
     assert_eq!(
         notification_for(&Event::Warning("fell back".to_owned())),
@@ -148,9 +150,12 @@ fn the_notifications_without_an_event_are_accounted_for() {
 // REST + SSE becomes one projection of the protocol rather than a second
 // contract, which only holds if the projection says nothing the protocol cannot
 // say. So: every key an SSE frame carries must reach the notification with an
-// equal value. The reverse is deliberately not asserted — a notification may
-// carry more, and `tool-invoked` does, since the SSE `tool` frame drops the
-// call's arguments.
+// equal value. The reverse used to not be asserted, on the grounds that a
+// notification may carry more than its frame — `tool-invoked` was the one
+// example, since the SSE `tool` frame dropped the call's `arguments` (#161).
+// That asymmetry is gone: `tool` and `tool-result` now carry exactly what
+// their notifications do, which `every_turn_event_frame_and_notification_agree`
+// checks directly rather than leaving to the one-directional check below.
 
 /// A frame's payload keys the protocol spells differently.
 ///
@@ -186,6 +191,36 @@ fn every_turn_event_frame_fits_its_notification() {
     for event in every_event() {
         let (kind, data) = serve::sse_frame(&event);
         assert_frame_fits(kind, &data, &notification_for(&event));
+    }
+}
+
+/// The two invocation-carrying frames have each drifted from their
+/// notification once — `tool` dropped `arguments` (#161) and `tool-result`
+/// had nowhere to put `failed` before it existed (#162) — so this checks the
+/// stronger claim `assert_frame_fits` deliberately does not: not just that
+/// every frame key reaches the notification, but that neither side carries a
+/// key the other does not. Restricted to `tool`/`tool-result` rather than
+/// every kind, because `prompt`/`error`/`done` carry `session`/`agentic` that
+/// belong to the transport or the turn rather than to an invocation, and
+/// asserting exact equality there would be re-litigating a design this file
+/// is not about.
+#[test]
+fn tool_invocation_frames_and_notifications_carry_exactly_the_same_fields() {
+    for event in every_event() {
+        let (kind, data) = serve::sse_frame(&event);
+        if kind != "tool" && kind != "tool-result" {
+            continue;
+        }
+        let envelope = serde_json::to_value(notification_for(&event)).expect("serializes");
+        let params = envelope["params"]
+            .as_object()
+            .expect("every notification carries params");
+        let frame = data.as_object().expect("frame data is a JSON object");
+        assert_eq!(
+            frame.len(),
+            params.len(),
+            "`{kind}` and its notification disagree on field count: {frame:?} vs {params:?}"
+        );
     }
 }
 

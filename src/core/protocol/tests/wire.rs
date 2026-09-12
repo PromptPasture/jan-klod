@@ -140,6 +140,7 @@ fn every_notification() -> Vec<Notification> {
         Notification::ToolResult {
             id: "c1".to_owned(),
             content: "# Jan-Klod".to_owned(),
+            failed: true,
         },
         Notification::Warning {
             message: "provider fell back".to_owned(),

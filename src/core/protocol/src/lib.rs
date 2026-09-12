@@ -230,8 +230,11 @@ pub const SSE_FRAME_KINDS: [&str; 7] = [
 /// and `prompt` for `ask`. `tool-result`, `warning`, `done` and `error` match.
 /// Do not "fix" either side to agree with the other — the projection is allowed
 /// its own spelling, and the compatibility test is what holds them together.
-/// `ToolInvoked` is also a strict superset: the SSE `tool` frame carries only
-/// `id` and `name`, dropping the call's `arguments`.
+///
+/// The `tool` frame used to be a strict subset of `ToolInvoked` — it carried
+/// only `id` and `name`, dropping the call's `arguments` — so a REST+SSE
+/// client could not render what stdio could. Fixed by #161: the frame now
+/// carries every field the notification does.
 ///
 /// Those names are [`SSE_FRAME_KINDS`], so the paragraph above is prose beside
 /// the data rather than a second copy of it.
@@ -263,6 +266,12 @@ pub enum Notification {
         id: String,
         /// Result content.
         content: String,
+        /// Whether the call failed — a permission denial, a trap, an error the
+        /// tool itself reported, or no tool by that name. Until #162 nothing on
+        /// the wire said this; a client could only guess by matching the
+        /// sentences the core happens to write into `content`, which coupled a
+        /// client to wording it does not own.
+        failed: bool,
     },
     /// `warning` — a non-fatal notice, e.g. a provider fallback.
     #[serde(rename = "warning")]

@@ -619,23 +619,38 @@ impl RegistryFleet {
 }
 
 impl crate::conductor::ToolInvoker for RegistryFleet {
-    fn invoke(&mut self, call: &crate::intercept::ToolCall) -> Option<String> {
+    fn invoke(
+        &mut self,
+        call: &crate::intercept::ToolCall,
+    ) -> Option<crate::conductor::ToolInvocation> {
         // Check skills first.
         if let Some((_, idx)) = self.skill_names.iter().find(|(n, _)| n == &call.name) {
             let idx = *idx;
-            return Some(
-                self.skills[idx]
-                    .invoke(&call.name, &call.arguments)
-                    .unwrap_or_else(|err| err),
-            );
+            return Some(match self.skills[idx].invoke(&call.name, &call.arguments) {
+                Ok(content) => crate::conductor::ToolInvocation {
+                    content,
+                    failed: false,
+                },
+                Err(content) => crate::conductor::ToolInvocation {
+                    content,
+                    failed: true,
+                },
+            });
         }
         // Then MCP tools.
         if let Some((_, idx)) = self.mcp_names.iter().find(|(n, _)| n == &call.name) {
             let idx = *idx;
             return Some(
-                self.mcp[idx]
-                    .invoke_tool(&call.name, &call.arguments)
-                    .unwrap_or_else(|err| err),
+                match self.mcp[idx].invoke_tool(&call.name, &call.arguments) {
+                    Ok(content) => crate::conductor::ToolInvocation {
+                        content,
+                        failed: false,
+                    },
+                    Err(content) => crate::conductor::ToolInvocation {
+                        content,
+                        failed: true,
+                    },
+                },
             );
         }
         None
@@ -773,12 +788,18 @@ impl LazyRegistryFleet {
 }
 
 impl crate::conductor::ToolInvoker for LazyRegistryFleet {
-    fn invoke(&mut self, call: &crate::intercept::ToolCall) -> Option<String> {
+    fn invoke(
+        &mut self,
+        call: &crate::intercept::ToolCall,
+    ) -> Option<crate::conductor::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
             // Same rationale as `LazyToolFleet::invoke`: a lazy instantiation
             // failure is fed back as this call's result, not an abort.
-            Err(err) => Some(format!("registry fleet failed to instantiate: {err}")),
+            Err(err) => Some(crate::conductor::ToolInvocation {
+                content: format!("registry fleet failed to instantiate: {err}"),
+                failed: true,
+            }),
         }
     }
 }

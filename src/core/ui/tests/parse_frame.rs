@@ -30,18 +30,48 @@ fn parse_frame_maps_each_event_kind() {
         Some(StreamEvent::Delta("hi".into()))
     );
     assert_eq!(
-        parse_frame("tool", r#"{"name":"bash","id":"1"}"#),
+        parse_frame("tool", r#"{"name":"bash","id":"1","arguments":"{}"}"#),
         Some(StreamEvent::Tool {
             id: "1".into(),
             name: "bash".into(),
-            arguments: None,
+            arguments: Some("{}".into()),
         })
     );
+    assert_eq!(
+        parse_frame(
+            "tool-result",
+            r#"{"id":"c1","content":"42","failed":false}"#
+        ),
+        Some(StreamEvent::ToolResult {
+            id: "c1".into(),
+            content: "42".into(),
+            failed: false,
+        })
+    );
+    // The flag is read, not merely carried (#162) — a frame saying the call
+    // failed must not arrive as one that succeeded.
+    assert_eq!(
+        parse_frame(
+            "tool-result",
+            r#"{"id":"c1","content":"the sandbox said no","failed":true}"#
+        ),
+        Some(StreamEvent::ToolResult {
+            id: "c1".into(),
+            content: "the sandbox said no".into(),
+            failed: true,
+        })
+    );
+    // A core older than the flag sends no `failed` key. That is a compatible
+    // mismatch, not a malformed frame: refusing it would turn a version
+    // disagreement into a broken turn, and `hello` is where versions are
+    // supposed to be settled. Its failures then render as successes, which is
+    // exactly what happened before the flag existed.
     assert_eq!(
         parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#),
         Some(StreamEvent::ToolResult {
             id: "c1".into(),
-            content: "42".into()
+            content: "42".into(),
+            failed: false,
         })
     );
     assert_eq!(
