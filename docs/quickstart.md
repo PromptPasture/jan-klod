@@ -57,6 +57,31 @@ That installs `jan-klod` (TUI) and `jan-klod-gateway` (server) to `~/.local/bin`
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+### Verifying what you downloaded
+
+`install.sh` checks the bundle against `SHA256SUMS.txt` from the same release.
+**That proves the download was not corrupted; it does not prove the bundle is
+ours** — the checksums travel with the bundle, so whoever can serve you one can
+serve you both and the pair will agree.
+
+A minisign signature is what closes that, because the key is published where the
+release cannot rewrite it. The installer does not check it, deliberately:
+minisign is not on most machines, and an installer that verified only when the
+tool happened to be present would report success for two quite different
+situations. Verifying is one command:
+
+```sh
+minisign -Vm jan-klod-<version>-<os>-<arch>-coding.tar.gz -P <public key>
+```
+
+**No release has been signed yet**, because no release has been cut — see
+[#93](https://github.com/PromptPasture/jan-klod/issues/93). The public key will
+be on the [landing page](https://promptpasture.github.io/jan-klod/) and in this
+repository when the first signed release exists; until then there is nothing to
+verify against, and `registry.trusted-keys` in `config.yaml` ships empty, so
+`ext install` refuses first-party components as untrusted rather than pretending
+otherwise.
+
 ## 2. Set your API key
 
 jan-klod ships with an Anthropic provider (native Claude) and an OpenAI-compatible provider.

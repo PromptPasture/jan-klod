@@ -172,6 +172,56 @@ jobs:
       # `release` job has deployed them — the `ext/` path under the Pages site
       # — and it must stay in step with `registry.url` in config.yaml, which
       # names `index.json` at that site's root.
+      # ---- Signing the components (#93) ----
+      #
+      # **Before the index, necessarily.** `registry_index::signature_beside`
+      # reads `<component>.minisig` off disk as it builds each entry, so a
+      # component signed after this point would be described by an entry saying
+      # `"signature": ""` — the index would publish "nothing vouches for these
+      # bytes" about bytes that are in fact signed.
+      #
+      # **Per file, never per archive.** `ext install` verifies a `.minisig`
+      # beside each of a component *and* its manifest, so a component someone
+      # extracts from a signed tarball arrives in `ext/` with no signature of
+      # its own and is refused. Signing only the archives would leave
+      # first-party components uninstallable by this project's own installer —
+      # 16c-3 box 2's decision, and the reason both files get their own.
+      #
+      # Skipped, loudly, when the key is not configured: a key is the
+      # repository owner's to generate and its private half must never pass
+      # through a build log. Until then this produces an **unsigned release
+      # that says it is unsigned**, and an index that honestly reports
+      # `"signature": ""`.
+      #
+      # Pinned by version *and* digest, unlike everything else here (which
+      # versions.mk pins by version alone). This is the tool that establishes
+      # provenance for every other artefact; fetching it over TLS and checking
+      # nothing would trust the CA system for exactly the thing the signature
+      # exists to stop trusting.
+      - name: Sign the components
+        if: matrix.os == 'linux' && matrix.arch == 'x86_64'
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            echo "::warning::MINISIGN_SECRET_KEY is not set — components will be published UNSIGNED and the index will say so (#93)"
+            exit 0
+          fi
+          curl -sSLo /tmp/minisign.tar.gz \
+            https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+          echo "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  /tmp/minisign.tar.gz" \
+            | sha256sum -c -
+          tar -xzf /tmp/minisign.tar.gz -C /tmp
+          install -m 0755 /tmp/minisign-linux/x86_64/minisign /usr/local/bin/minisign
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > /tmp/minisign.key
+          chmod 0600 /tmp/minisign.key
+          for f in ext/*.wasm ext/*.manifest.toml; do
+            printf '\n' | minisign -S -H -s /tmp/minisign.key -m "$f" -t "jan-klod $GITHUB_REF_NAME"
+          done
+          shred -u /tmp/minisign.key
+          ls -1 ext/*.minisig
+
       - name: Generate the registry index
         if: matrix.os == 'linux' && matrix.arch == 'x86_64'
         run: |
@@ -196,6 +246,7 @@ jobs:
             dist/index.json
             ext/*.wasm
             ext/*.manifest.toml
+            ext/*.minisig
           if-no-files-found: error
 
   release:
@@ -228,6 +279,77 @@ jobs:
           sha256sum *.tar.gz > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      # ---- Signing (#93) ----
+      #
+      # **What a signature adds over the checksums above.** `SHA256SUMS.txt`
+      # proves the download was not corrupted; it does not prove the bundle is
+      # ours, because the checksums come from the same release as the bundle and
+      # whoever can serve one can serve both. Only a signature under a key
+      # published somewhere else closes that.
+      #
+      # Skipped, loudly, when `MINISIGN_SECRET_KEY` is not configured — which is
+      # the state until the repository owner generates a signing identity, since
+      # a key is theirs to make and the private half must never pass through a
+      # build log. A missing key therefore produces an **unsigned release that
+      # says it is unsigned**, rather than a failed one or a silently unsigned
+      # one.
+      #
+      # Pinned by version *and* digest. Everything else here is pinned by
+      # version (versions.mk, #131); this one is also digest-checked because it
+      # is the tool that establishes provenance for everything else, and a
+      # signing tool fetched over TLS and otherwise unchecked would be trusting
+      # the CA system for the one thing this whole step exists to stop trusting.
+      # The secret reaches the script as an **environment variable**, never as
+      # `${{ secrets.… }}` interpolated into the script text: interpolation
+      # splices the key's own bytes into a shell program, where a newline or a
+      # quote changes what runs, and puts it somewhere `set -x` would echo.
+      - name: Install minisign
+        id: minisign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            echo "::warning::MINISIGN_SECRET_KEY is not set — this release will be UNSIGNED (#93)"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          curl -sSLo /tmp/minisign.tar.gz \
+            https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+          echo "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  /tmp/minisign.tar.gz" \
+            | sha256sum -c -
+          tar -xzf /tmp/minisign.tar.gz -C /tmp
+          install -m 0755 /tmp/minisign-linux/x86_64/minisign /usr/local/bin/minisign
+          minisign -v
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      # The archives only. The **components** are signed in the `build` job
+      # instead, and that is an ordering constraint rather than a preference:
+      # `registry_index::signature_beside` reads `<component>.minisig` off disk
+      # while generating the index, so a component signed here — after the index
+      # exists — would be described by an entry saying `"signature": ""`.
+      #
+      # `-H` is the prehashed form. Not optional: the verifier
+      # (`minisign-verify`) refuses the legacy `Ed` algorithm, which
+      # `a_legacy_format_signature_is_refused` pins.
+      - name: Sign the release archives
+        if: steps.minisign.outputs.available == 'true'
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > /tmp/minisign.key
+          chmod 0600 /tmp/minisign.key
+          for f in dist/*.tar.gz dist/SHA256SUMS.txt; do
+            # An empty password on stdin: the key is a repository secret, so it
+            # is generated with `minisign -G -W` (no password). A password would
+            # need a second secret and buys nothing — the protection is that the
+            # secret is a secret.
+            printf '\n' | minisign -S -H -s /tmp/minisign.key -m "$f" -t "jan-klod $GITHUB_REF_NAME"
+          done
+          shred -u /tmp/minisign.key
+          ls -1 dist/*.minisig
+
       - name: Extract changelog section
         id: changelog
         run: |
@@ -249,7 +371,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "jan-klod $GITHUB_REF_NAME" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
-            dist/*.tar.gz dist/SHA256SUMS.txt
+            dist/*.tar.gz dist/SHA256SUMS.txt dist/*.minisig
 
       # ---- The registry, published where `registry.url` points (#139) ----
       #
@@ -295,6 +417,12 @@ jobs:
           cp registry/dist/index.json _site/index.json
           mkdir -p _site/ext
           cp registry/ext/*.wasm registry/ext/*.manifest.toml _site/ext/
+          # The signatures, which `ext install` resolves as siblings of the
+          # component's URL. Without them a signed index describes files whose
+          # `.minisig` 404s, and every first-party install is refused as
+          # unsigned. A glob that matches nothing is not fatal: an unsigned
+          # release is a state this workflow supports (#93).
+          cp registry/ext/*.minisig _site/ext/ 2>/dev/null || true
           ls -l _site/ext | head
 
       # `enablement: true` turns Pages on via the API if it is not on already,

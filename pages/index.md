@@ -66,6 +66,22 @@ jan-klod my-session
 
 See the [quickstart guide](https://github.com/PromptPasture/jan-klod/blob/main/docs/quickstart.md) for a full walkthrough.
 
+## Verifying a download
+
+The installer checks a SHA-256 from the same release as the bundle, which proves
+the download was not corrupted and **not** that it is ours. A minisign signature
+is what proves that, and this page is where its public key belongs — a key
+nobody can find is a signature nobody can check.
+
+**Nothing is signed yet**: there is no release, so there is no key here and
+`registry.trusted-keys` ships empty, which means `ext install` refuses
+first-party components as untrusted rather than pretending. When the first
+signed release is cut, the key appears here and verifying is:
+
+```sh
+minisign -Vm <bundle> -P <the key above>
+```
+
 ## Links
 
 - [GitHub repository](https://github.com/PromptPasture/jan-klod)

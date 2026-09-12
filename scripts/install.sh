@@ -104,6 +104,26 @@ trap 'rm -rf "${TMP}"' EXIT
 curl -sSfL "${URL}" -o "${TMP}/${BUNDLE}"
 curl -sSfL "${CHECKSUMS_URL}" -o "${TMP}/SHA256SUMS.txt"
 
+# What this check proves, and what it does not (#93).
+#
+# It proves the download was not corrupted or truncated in transit. It does
+# **not** prove the bundle is ours: SHA256SUMS.txt comes from the same release
+# as the bundle, so anyone who can serve you one can serve you both, and the
+# pair would agree. All the integrity this establishes is relative to a file
+# fetched from the same place by the same means.
+#
+# The signature is what closes that, because the key it verifies against is
+# published somewhere the release cannot rewrite. This script deliberately does
+# not check it: minisign is not installed on most machines, and an installer
+# that silently required a tool nobody has would fail for the wrong reason —
+# while one that "checked" a signature only when a binary happened to be
+# present would report success on two quite different situations.
+#
+# So the check stays a checksum and says so, and verifying by hand is one
+# command, documented in docs/quickstart.md beside the public key:
+#
+#   minisign -Vm <bundle> -P <the key published on the landing page>
+#
 # macOS ships `shasum`, not `sha256sum` — fall back to it.
 if command -v sha256sum > /dev/null 2>&1; then
   SHA_CHECK="sha256sum -c -"
