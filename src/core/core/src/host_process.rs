@@ -812,6 +812,13 @@ mod tests {
             // sharing an exit status is the case where the status alone is not
             // enough, so this is what makes the stderr half load-bearing rather
             // than decorative.
+            //
+            // Matched case-insensitively (see below), because `sh` is not one
+            // program: bash-as-sh writes "syntax error near unexpected token"
+            // and dash writes "Syntax error: end of file unexpected". What this
+            // row asserts is that the parse failure *says* it is one and so
+            // reads differently from the other three — the capitalisation is the
+            // shell's business, not a property under test.
             ("syntax-error", "if", "syntax error"),
             // It started, did its job, and quit. Not a failure — but still the
             // thing a caller is waiting to talk to, gone.
@@ -833,10 +840,16 @@ mod tests {
             let mut child = runner.spawn_long_lived(name).expect("it starts");
             let status = child.child.wait().expect("it is reapable");
             let report = child.death_report(status).join("\n");
+            // Case-insensitive: every marker here is either our own text, a
+            // number, or a phrase whose capitalisation belongs to whichever
+            // `sh` the platform ships. Comparing exactly made this test a
+            // bash-only test that passed on macOS and failed on every Ubuntu
+            // runner, which is a worse failure than it looks — it is green
+            // where it is developed and red where it is gated.
             assert!(
-                report.contains(marker),
+                report.to_lowercase().contains(&marker.to_lowercase()),
                 "{name}: the log does not carry what makes this death that death \
-                 — wanted {marker:?}, got:\n{report}"
+                 — wanted {marker:?} (case-insensitively), got:\n{report}"
             );
             reports.push((name, report));
         }
