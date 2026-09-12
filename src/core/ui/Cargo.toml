@@ -30,6 +30,12 @@ ratatui = "0.30"
 # one grapheme, several chars, several bytes and two cells.
 unicode-width = "0.2"
 unicode-segmentation = "1"
+# Markdown for the transcript. Default features off: the extras are HTML output
+# and a `getopts`-driven binary, neither of which a terminal client wants.
+# Chosen over `tui-markdown` in #146, which fails the root `deny.toml`
+# unmodified — it depends on `syntect`, which carries RUSTSEC-2025-0141 and
+# RUSTSEC-2024-0320 with no safe upgrade. The cost of both is in README.md.
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 # The round-trip test stands up a canned HTTP server to drive the client against.

@@ -76,11 +76,26 @@ pub fn block(entry: &Entry, width: usize, theme: Theme) -> Vec<Line<'static>> {
         Span::styled(label.to_string(), Style::default().fg(theme.muted())),
     ])];
 
-    for row in wrap(&entry.text, body_width) {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{glyph} "), Style::default().fg(accent)),
-            Span::styled(row, Style::default().fg(theme.body())),
-        ]));
+    // Markdown for the assistant and nobody else (#149). A user's own message is
+    // shown as they typed it — rendering it would mean their backticks and
+    // asterisks disappearing from their own transcript — and an error or a
+    // status note is not a document.
+    let body: Vec<Line<'static>> = if entry.who == Who::Klod {
+        crate::markdown::render(&entry.text, body_width, theme)
+    } else {
+        wrap(&entry.text, body_width)
+            .into_iter()
+            .map(|row| Line::from(Span::styled(row, Style::default().fg(theme.body()))))
+            .collect()
+    };
+
+    for row in body {
+        let mut spans = vec![Span::styled(
+            format!("{glyph} "),
+            Style::default().fg(accent),
+        )];
+        spans.extend(row.spans);
+        lines.push(Line::from(spans));
     }
     lines
 }
