@@ -66,7 +66,8 @@ mod component {
                     "properties": {
                         "command": { "type": "string" },
                         "args": { "type": "array", "items": { "type": "string" } },
-                        "spawn": { "type": "string" }
+                        "spawn": { "type": "string" },
+                        "send": { "type": "string" }
                     }
                 })
                 .to_string(),
@@ -84,13 +85,25 @@ mod component {
             // by the time it reaches the model — and the refusal is the thing
             // under test here.
             if let Some(name) = value.get("spawn").and_then(serde_json::Value::as_str) {
-                return Ok(match host_process::spawn(name) {
-                    Ok(child) => format!("spawned {name} handle={child}"),
+                let child = match host_process::spawn(name) {
+                    Ok(child) => child,
                     Err(err) => {
                         log(LogLevel::Warn, &format!("spawn {name} refused ({err:?})"));
-                        format!("spawn-refused {name} {err:?}")
+                        return Ok(format!("spawn-refused {name} {err:?}"));
                     }
-                });
+                };
+                // The whole round trip, because a handle alone proves only that
+                // a number was issued. Writing and reading back is what says a
+                // process is on the other end of it.
+                if let Some(send) = value.get("send").and_then(serde_json::Value::as_str) {
+                    if let Err(err) = host_process::write_stdin(child, send) {
+                        log(LogLevel::Warn, &format!("write-stdin failed ({err:?})"));
+                    }
+                }
+                let out = host_process::read_stdout(child, 4096, 2000).unwrap_or_default();
+                let running = host_process::is_running(child);
+                host_process::kill(child);
+                return Ok(format!("spawned {name} running={running} out={out}"));
             }
 
             let command = value

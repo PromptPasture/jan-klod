@@ -77,6 +77,15 @@ fn run_spawn(execution: &str, name: &str) -> ProbeTurn {
     run_arguments_in(None, execution, &serde_json::json!({ "spawn": name }))
 }
 
+/// As [`run_spawn`], then write `send` to the child and read what comes back.
+fn run_spawn_echo(execution: &str, name: &str, send: &str) -> ProbeTurn {
+    run_arguments_in(
+        None,
+        execution,
+        &serde_json::json!({ "spawn": name, "send": send }),
+    )
+}
+
 /// [`run_command_in`], with the tool's arguments written out in full.
 ///
 /// The probe takes more than one shape of request now — a command to run, or a
@@ -562,12 +571,10 @@ const GRANTED: &str =
 
 /// A name the operator did not write down cannot be spawned.
 ///
-/// **Not yet discriminating, and the comment is here so nobody reads it as
-/// though it were.** Box 3 of #109 starts a granted child; until it lands a
-/// granted name is refused too, so this passes against a host that refuses
-/// everything — which is what it did before the config was read at all. The
-/// grant's other half is asserted at the Rust seam below, and this test gets
-/// its control when there is a success to contrast with.
+/// Its control is `a_granted_long_lived_child_starts_and_answers` below, and it
+/// is not optional: without a granted name that *works*, this passes against a
+/// host that refuses everything — which is exactly what it did while box 3 was
+/// unwritten.
 #[test]
 fn an_unnamed_long_lived_child_is_refused() {
     if !common::guests_staged(&GUESTS) {
@@ -608,5 +615,74 @@ fn the_long_lived_grant_is_read_from_config() {
     assert!(
         policy.long_lived_grant("not-in-the-config").is_none(),
         "and an unnamed one is not"
+    );
+}
+
+/// The control the refusal test needs: a **granted** name starts a real
+/// process, is written to, and answers.
+///
+/// Without this, `an_unnamed_long_lived_child_is_refused` passes against a host
+/// that refuses everything — which is what it did for the whole of box 2. A
+/// handle alone would not be enough either: it proves a number was issued, not
+/// that anything is on the other end of it. So the child is `cat`, the test
+/// writes a line, and the assertion is that the line comes back.
+#[test]
+fn a_granted_long_lived_child_starts_and_answers() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_spawn_echo(GRANTED, "echoer", "ping-back\n");
+    assert!(
+        turn.produced("ping-back"),
+        "a granted child must start and echo what it was sent: {}",
+        turn.tool_result
+    );
+    assert!(
+        !turn.produced("spawn-refused"),
+        "and must not be refused: {}",
+        turn.tool_result
+    );
+}
+
+/// Acceptance line 3: the child is confined by the same backend as a one-shot
+/// command.
+///
+/// A long-lived child outlives its call, so it is *more* exposed than a
+/// one-shot one — this must not be inherited by assumption. Same escape-write
+/// shape as the one-shot pair above, with `mode: approval-only` as the control,
+/// because a confined child that cannot start at all would satisfy the denial
+/// on its own.
+#[test]
+fn a_long_lived_child_is_confined_like_a_one_shot_command() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let (target, _guard) = escape_target("long-lived");
+    let escape = format!("echo x > {} && echo wrote", target.display());
+    let grant = |sandbox: &str| {
+        format!(
+            "execution:\n  enabled: true\n{sandbox}  long-lived:\n    - name: escaper\n      \
+             command: sh\n      args: [\"-c\", \"{escape}\"]\n"
+        )
+    };
+
+    // Control first: unconfined, the escape write succeeds.
+    let unconfined = run_spawn(&grant("  sandbox:\n    mode: approval-only\n"), "escaper");
+    assert!(
+        unconfined.produced("wrote"),
+        "unconfined, the child's escape write must succeed — otherwise the \
+         denial below proves nothing: {}",
+        unconfined.tool_result
+    );
+
+    if sandbox::host_backend().is_none() {
+        return;
+    }
+    let confined = run_spawn(&grant(""), "escaper");
+    assert!(
+        !confined.produced("wrote"),
+        "a long-lived child must be confined to the workspace like any other \
+         command: {}",
+        confined.tool_result
     );
 }

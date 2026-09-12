@@ -42,6 +42,18 @@ struct ToolHost {
     /// things — a file tool suddenly making network calls is what the sandbox
     /// guards against. `None` unless the instance's config opts in.
     http: Option<crate::route::HttpFn>,
+    /// Long-lived children this instance started, by handle (#109).
+    ///
+    /// **Owned here, not in `ProcessRunner`, because this is the lifetime.**
+    /// `ToolHost` is per-instance and dies with it, so the children die with it
+    /// too — `LiveChild`'s `Drop` kills what it holds, and that runs whether the
+    /// instance stops cleanly, errors, or goes down with the runtime. Keeping
+    /// them in the runner would not have that property: the runner is `Clone`,
+    /// and a child in a clone belongs to nothing in particular.
+    children: std::collections::HashMap<u32, crate::host_process::LiveChild>,
+    /// Next handle. Monotonic, so a killed handle is never reissued and a stale
+    /// one fails rather than addressing somebody else's child.
+    next_child: u32,
 }
 
 impl WasiView for ToolHost {
@@ -186,16 +198,11 @@ impl g_proc::Host for ToolHost {
 
     // ── Long-lived children (Slice 18c-1, #109) ──────────────────────────────
     //
-    // Declared in the interface, denied by the host. The capability is
-    // **default-deny before it is anything else**: the contract exists so the
-    // shape can be reviewed and a guest can be compiled against it, and until
-    // `execution.long-lived` is read and enforced there is no name any guest
-    // could be granted — so every call refuses.
-    //
-    // Deliberately not `todo!()`. A panic here would trap the guest's whole
-    // instance, which reads as a runtime fault rather than as the refusal it is,
-    // and a capability that is not granted yet should answer the way a
-    // capability that is not granted answers.
+    // Every call goes through `self.children`, which is keyed by a handle this
+    // host issued. An unknown handle is `Denied` rather than a panic or a
+    // silent success: a guest can pass any integer, and the answer to one it
+    // was never given is the same answer it gets for a child it was never
+    // granted.
 
     fn spawn(&mut self, name: String) -> Result<u32, g_proc::ProcError> {
         // The admission decision, and it happens **before** anything is
@@ -205,44 +212,54 @@ impl g_proc::Host for ToolHost {
         //
         // `proc-error` carries no payload, so the reason goes to the host log —
         // the same answer `exec` gives, and the reason the interface says so.
-        let Some(grant) = self.process.long_lived_grant(&name) else {
-            eprintln!(
-                "WARN [core] host-process: no long-lived child named `{name}` — \
-                 add it to `execution.long-lived` to grant it"
-            );
-            return Err(g_proc::ProcError::Denied);
-        };
-        // Box 3 (#109) starts it. Until then a granted name is still refused,
-        // and says which of the two refusals this was — so the log distinguishes
-        // "you may not" from "not built yet" even while the guest cannot.
-        eprintln!(
-            "WARN [core] host-process: `{name}` is granted (`{}`) but spawning is not \
-             implemented yet (#109)",
-            grant.command
-        );
-        Err(g_proc::ProcError::Denied)
+        let live = self
+            .process
+            .spawn_long_lived(&name)
+            .map_err(to_gen_proc_error)?;
+        let handle = self.next_child;
+        self.next_child += 1;
+        self.children.insert(handle, live);
+        Ok(handle)
     }
 
-    fn write_stdin(&mut self, _child: u32, _data: String) -> Result<(), g_proc::ProcError> {
-        Err(g_proc::ProcError::Denied)
+    fn write_stdin(&mut self, child: u32, data: String) -> Result<(), g_proc::ProcError> {
+        self.children
+            .get_mut(&child)
+            .ok_or(g_proc::ProcError::Denied)?
+            .write_stdin(&data)
+            .map_err(to_gen_proc_error)
     }
 
     fn read_stdout(
         &mut self,
-        _child: u32,
-        _max_bytes: u32,
-        _timeout_ms: u32,
+        child: u32,
+        max_bytes: u32,
+        timeout_ms: u32,
     ) -> Result<String, g_proc::ProcError> {
-        Err(g_proc::ProcError::Denied)
+        let live = self
+            .children
+            .get_mut(&child)
+            .ok_or(g_proc::ProcError::Denied)?;
+        Ok(live.read_stdout(
+            max_bytes as usize,
+            std::time::Duration::from_millis(u64::from(timeout_ms)),
+        ))
     }
 
-    /// No child can exist while `spawn` refuses, so no handle is running.
-    fn is_running(&mut self, _child: u32) -> bool {
-        false
+    /// `false` for a handle that was never issued, so a caller polling a child
+    /// it does not have terminates rather than erroring forever.
+    fn is_running(&mut self, child: u32) -> bool {
+        self.children
+            .get_mut(&child)
+            .is_some_and(crate::host_process::LiveChild::is_running)
     }
 
-    /// Idempotent by contract, and there is nothing to kill.
-    fn kill(&mut self, _child: u32) {}
+    /// Kill and forget. Dropping the `LiveChild` is what actually kills it, so
+    /// removing it from the map is the whole implementation — and the same
+    /// thing happens to every remaining child when this host is dropped.
+    fn kill(&mut self, child: u32) {
+        self.children.remove(&child);
+    }
 }
 
 const fn to_gen_proc_error(err: ProcError) -> g_proc::ProcError {
@@ -309,6 +326,8 @@ impl ToolExtension {
             workspace,
             process,
             http,
+            children: std::collections::HashMap::new(),
+            next_child: 1,
         };
         let mut store = Store::new(engine, host);
         let world = bind::ToolWorld::instantiate(&mut store, component, &linker)

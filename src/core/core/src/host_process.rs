@@ -214,6 +214,94 @@ impl ProcessRunner {
         out
     }
 
+    /// A `Command` confined and configured, ready to spawn.
+    ///
+    /// Shared by [`Self::exec`] and [`Self::spawn_long_lived`] so confinement is
+    /// **reused rather than restated**: a long-lived child that outlives its
+    /// call is more exposed than a one-shot command, not less, so the one place
+    /// that decides how a command is bounded has to be the one place both go
+    /// through. Everything here is identical for both; they differ only in what
+    /// they do with the `Child`.
+    ///
+    /// Confined *before* being configured: a backend can only carry the program
+    /// and its arguments across (there is no getter for stdio, and `get_envs`
+    /// cannot say whether `env_clear` was called), so cwd, the scrubbed
+    /// environment and the pipes are applied to whatever it hands back — which
+    /// for a wrapping mechanism is a different process.
+    ///
+    /// # Errors
+    /// [`ProcError::Denied`] if the backend refuses to confine the command.
+    fn prepared(
+        &self,
+        command: &str,
+        args: &[String],
+        dir: &std::path::Path,
+    ) -> Result<Command, ProcError> {
+        let mut base = Command::new(command);
+        base.args(args);
+        let mut spawnable = match &self.confinement {
+            None => base,
+            Some(confinement) => confinement
+                .backend
+                .confine(base, &confinement.policy)
+                .map_err(|err| {
+                    // The guest-facing `proc-error` is a bare enum with no room
+                    // for a reason, so the reason goes to the host's log and the
+                    // guest gets a denial. Denied rather than run unconfined:
+                    // the operator asked for confinement and the runtime said it
+                    // had it.
+                    eprintln!(
+                        "WARN [core] {} refused to confine `{command}` ({err:?}); the command \
+                         is denied rather than run unconfined",
+                        confinement.backend.name()
+                    );
+                    ProcError::Denied
+                })?,
+        };
+        spawnable
+            .current_dir(dir)
+            .env_clear()
+            .envs(self.environment())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        Ok(spawnable)
+    }
+
+    /// Start the long-lived child granted under `name`, confined exactly as a
+    /// one-shot command is.
+    ///
+    /// The command and its arguments come from the grant, never from the
+    /// caller — see [`LongLived`].
+    ///
+    /// # Errors
+    /// [`ProcError::Denied`] when no grant carries `name`, when there is no
+    /// workspace to run in, or when the backend refuses to confine it;
+    /// [`ProcError::SpawnFailed`] if it cannot be started.
+    pub fn spawn_long_lived(&self, name: &str) -> Result<LiveChild, ProcError> {
+        let Some(workspace) = &self.workspace else {
+            return Err(ProcError::Denied);
+        };
+        // The admission decision, and it happens **before** anything starts. An
+        // implementation that spawned and then checked would have a window in
+        // which it had done neither, and a window is all a capability like this
+        // needs to stop being default-deny.
+        //
+        // `proc-error` carries no payload, so the reason goes to the host log —
+        // the same answer `exec` gives when a backend refuses to confine.
+        let Some(grant) = self.long_lived_grant(name) else {
+            eprintln!(
+                "WARN [core] host-process: no long-lived child named `{name}` — \
+                 add it to `execution.long-lived` to grant it"
+            );
+            return Err(ProcError::Denied);
+        };
+        let child = self
+            .prepared(&grant.command, &grant.args, workspace.root())
+            .and_then(|mut c| c.spawn().map_err(|_| ProcError::SpawnFailed))?;
+        Ok(LiveChild::new(child, self.output_cap))
+    }
+
     /// Run `command` with `args`, an optional workspace-relative `cwd`, and optional
     /// `stdin`.
     ///
@@ -235,39 +323,8 @@ impl ProcessRunner {
             None => workspace.root().to_path_buf(),
         };
 
-        let mut base = Command::new(command);
-        base.args(args);
-        // Confined *before* being configured: a backend can only carry the
-        // program and its arguments across (there is no getter for stdio, and
-        // `get_envs` cannot say whether `env_clear` was called), so cwd, the
-        // scrubbed environment and the pipes are applied to whatever it hands
-        // back — which for a wrapping mechanism is a different process.
-        let mut spawnable = match &self.confinement {
-            None => base,
-            Some(confinement) => confinement
-                .backend
-                .confine(base, &confinement.policy)
-                .map_err(|err| {
-                    // The guest-facing `proc-error` is a bare enum with no room
-                    // for a reason, so the reason goes to the host's log and the
-                    // guest gets a denial. Denied rather than run unconfined:
-                    // the operator asked for confinement and the runtime said it
-                    // had it.
-                    eprintln!(
-                        "WARN [core] {} refused to confine `{command}` ({err:?}); the command \
-                         is denied rather than run unconfined",
-                        confinement.backend.name()
-                    );
-                    ProcError::Denied
-                })?,
-        };
-        let mut child = spawnable
-            .current_dir(&dir)
-            .env_clear()
-            .envs(self.environment())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+        let mut child = self
+            .prepared(command, args, &dir)?
             .spawn()
             .map_err(|_| ProcError::SpawnFailed)?;
 
@@ -300,6 +357,112 @@ impl ProcessRunner {
             stdout: read_capped(child.stdout.take(), self.output_cap),
             stderr: read_capped(child.stderr.take(), self.output_cap),
         })
+    }
+}
+
+/// A long-lived child the host is holding open for a guest (#109).
+///
+/// # Why a reader thread rather than a poll
+///
+/// The core is single-threaded, and `read` on a pipe blocks until there is
+/// something to read. A child that says nothing — which a stdio server does
+/// whenever it has no reply yet — would therefore hang the runtime, taking the
+/// turn, the transport and every other instance with it. So one thread per child
+/// does the blocking read and hands whole chunks over a channel, and the guest
+/// -facing read is a `recv_timeout` that always returns. The same shape
+/// `core::acp`'s `drain` uses for the editor's pipe, and for the same reason.
+///
+/// The thread ends when the pipe closes, which is when the child exits, so
+/// nothing has to stop it.
+pub struct LiveChild {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    /// Chunks the reader thread has pulled off stdout.
+    stdout: std::sync::mpsc::Receiver<Vec<u8>>,
+    /// What a previous read did not take, kept so `max_bytes` bounds the
+    /// *answer* rather than discarding the remainder of a chunk.
+    pending: Vec<u8>,
+    /// The runner's output cap, applied per read.
+    cap: usize,
+}
+
+impl LiveChild {
+    /// Take the pipes and start the reader thread.
+    fn new(mut child: std::process::Child, cap: usize) -> Self {
+        let stdin = child.stdin.take();
+        let (tx, stdout) = std::sync::mpsc::channel();
+        if let Some(mut out) = child.stdout.take() {
+            std::thread::spawn(move || {
+                let mut buf = [0_u8; 8192];
+                while let Ok(n) = out.read(&mut buf) {
+                    if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        Self {
+            child,
+            stdin,
+            stdout,
+            pending: Vec::new(),
+            cap,
+        }
+    }
+
+    /// Write to the child's stdin.
+    ///
+    /// # Errors
+    /// [`ProcError::SpawnFailed`] if the pipe is gone or the write fails — the
+    /// child is not listening, whatever the reason.
+    pub fn write_stdin(&mut self, data: &str) -> Result<(), ProcError> {
+        let Some(pipe) = self.stdin.as_mut() else {
+            return Err(ProcError::SpawnFailed);
+        };
+        pipe.write_all(data.as_bytes())
+            .and_then(|()| pipe.flush())
+            .map_err(|_| ProcError::SpawnFailed)
+    }
+
+    /// Read at most `max_bytes`, waiting up to `timeout` for the first chunk.
+    ///
+    /// An empty string means nothing arrived in that window — **not** that the
+    /// child is finished. [`Self::is_running`] answers that, and the two are
+    /// different questions.
+    pub fn read_stdout(&mut self, max_bytes: usize, timeout: Duration) -> String {
+        if self.pending.is_empty() {
+            if let Ok(chunk) = self.stdout.recv_timeout(timeout) {
+                self.pending = chunk;
+            }
+        }
+        // The runner's cap bounds a single read the way it bounds `exec`'s
+        // captured output: a guest asking for more than the operator allows gets
+        // the operator's number.
+        let take = max_bytes.min(self.cap).min(self.pending.len());
+        let rest = self.pending.split_off(take);
+        let taken = std::mem::replace(&mut self.pending, rest);
+        String::from_utf8_lossy(&taken).into_owned()
+    }
+
+    /// Whether the child is still alive.
+    pub fn is_running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Kill it and reap it. Idempotent.
+    pub fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for LiveChild {
+    /// **The lifetime guarantee, and it is here rather than in a shutdown
+    /// path.** A child must not outlive the instance that owns it, and the only
+    /// thing guaranteed to run when that instance goes — normally, on error, or
+    /// when the whole runtime drops — is this.
+    fn drop(&mut self) {
+        self.kill();
     }
 }
 
