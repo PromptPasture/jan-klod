@@ -16,6 +16,7 @@
 //! exactly this reason.
 
 pub mod app;
+pub mod theme;
 pub mod transport;
 
 use std::io::{BufRead, BufReader, Read, Write};
