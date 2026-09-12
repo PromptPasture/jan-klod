@@ -25,6 +25,14 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
+/// One wrapped row of the composer: where it starts, its text, and whether its
+/// end is a newline (or the buffer's end) rather than a soft wrap.
+struct Row {
+    start: usize,
+    text: String,
+    hard_end: bool,
+}
+
 /// A multi-line message being written, and where the caret is in it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Composer {
@@ -194,6 +202,60 @@ impl Composer {
     /// The most rows the composer occupies before it scrolls instead of growing.
     pub const MAX_ROWS: usize = 8;
 
+    /// One wrapped row: where it starts, its text, and whether its end is a
+    /// **hard** one — a newline or the end of the buffer.
+    ///
+    /// The byte offset is what makes vertical motion possible: a row on screen
+    /// has to be turned back into a position in the text, and a `Vec<String>`
+    /// has thrown that away.
+    ///
+    /// The hard/soft flag is subtler and was found by a failing test. Where a
+    /// row is *soft*-wrapped, its last byte and the next row's first byte are
+    /// **the same offset** — there is no character between them — so a caret
+    /// placed at "the end of row 1" is indistinguishable from one at "the start
+    /// of row 2", and `up` from row 2 would land back on row 2. Vertical motion
+    /// therefore stops one grapheme short on a soft-wrapped row.
+    fn layout(&self, width: usize) -> (Vec<Row>, (usize, usize)) {
+        let width = width.max(1);
+        let mut rows: Vec<Row> = Vec::new();
+        let mut caret = (0, 0);
+        let mut base = 0;
+
+        for logical in self.text.split('\n') {
+            let mut row = String::new();
+            let mut row_start = base;
+            let mut used = 0;
+
+            for (off, cluster) in logical.grapheme_indices(true) {
+                let w = crate::wrap::width(cluster);
+                if used + w > width && !row.is_empty() {
+                    rows.push(Row {
+                        start: row_start,
+                        text: std::mem::take(&mut row),
+                        hard_end: false,
+                    });
+                    row_start = base + off;
+                    used = 0;
+                }
+                if base + off == self.caret {
+                    caret = (rows.len(), used);
+                }
+                row.push_str(cluster);
+                used += w;
+            }
+            if base + logical.len() == self.caret {
+                caret = (rows.len(), used);
+            }
+            rows.push(Row {
+                start: row_start,
+                text: row,
+                hard_end: true,
+            });
+            base += logical.len() + 1;
+        }
+        (rows, caret)
+    }
+
     /// The wrapped rows, and the caret's `(row, column)` within them.
     ///
     /// **Not [`crate::wrap::wrap`].** That one is for display text: it breaks on
@@ -207,39 +269,71 @@ impl Composer {
     /// columns along rather than one.
     #[must_use]
     pub fn rows(&self, width: usize) -> (Vec<String>, (usize, usize)) {
-        let width = width.max(1);
-        let mut rows: Vec<String> = Vec::new();
-        let mut caret = (0, 0);
+        let (rows, caret) = self.layout(width);
+        (rows.into_iter().map(|r| r.text).collect(), caret)
+    }
 
-        for (n, logical) in self.text.split('\n').enumerate() {
-            // Where this logical line starts in `self.text`.
-            let base = self
-                .text
-                .split('\n')
-                .take(n)
-                .map(|l| l.len() + 1)
-                .sum::<usize>();
-            let mut row = String::new();
-            let mut used = 0;
-
-            for (off, cluster) in logical.grapheme_indices(true) {
-                let w = crate::wrap::width(cluster);
-                if used + w > width && !row.is_empty() {
-                    rows.push(std::mem::take(&mut row));
-                    used = 0;
-                }
-                if base + off == self.caret {
-                    caret = (rows.len(), used);
-                }
-                row.push_str(cluster);
-                used += w;
+    /// The byte offset at `column` cells into `row`.
+    ///
+    /// A soft-wrapped row's end is the next row's start, so landing there would
+    /// silently move the caret a row further than asked; on those rows the
+    /// column clamps to the last grapheme instead.
+    fn offset_in_row(row: &Row, column: usize) -> usize {
+        let mut used = 0;
+        let mut last = row.start;
+        for (off, cluster) in row.text.grapheme_indices(true) {
+            if used >= column {
+                return row.start + off;
             }
-            if base + logical.len() == self.caret {
-                caret = (rows.len(), used);
-            }
-            rows.push(row);
+            last = row.start + off;
+            used += crate::wrap::width(cluster);
         }
-        (rows, caret)
+        if row.hard_end || row.text.is_empty() {
+            row.start + row.text.len()
+        } else {
+            last
+        }
+    }
+
+    /// One wrapped row of the composer. See [`Composer::layout`].
+    /// Whether the caret is on the first visual row.
+    #[must_use]
+    pub fn on_first_row(&self, width: usize) -> bool {
+        self.layout(width).1 .0 == 0
+    }
+
+    /// Whether the caret is on the last visual row.
+    #[must_use]
+    pub fn on_last_row(&self, width: usize) -> bool {
+        let (rows, (row, _)) = self.layout(width);
+        row + 1 >= rows.len()
+    }
+
+    /// Move the caret one **visual row** up, keeping its column where it can.
+    ///
+    /// Visual rather than logical: the composer wraps, and somebody pressing
+    /// `↑` on the second row of a wrapped line means the first row of that line,
+    /// not the previous message line.
+    ///
+    /// The column is taken from where the caret is now rather than remembered
+    /// across presses. A remembered column is nicer in a long editing session
+    /// and is not what this slice is for; if it is added later, this is the one
+    /// place it belongs.
+    pub fn up(&mut self, width: usize) {
+        let (rows, (row, col)) = self.layout(width);
+        if row == 0 {
+            return;
+        }
+        self.caret = Self::offset_in_row(&rows[row - 1], col);
+    }
+
+    /// Move the caret one visual row down. See [`Composer::up`].
+    pub fn down(&mut self, width: usize) {
+        let (rows, (row, col)) = self.layout(width);
+        if row + 1 >= rows.len() {
+            return;
+        }
+        self.caret = Self::offset_in_row(&rows[row + 1], col);
     }
 
     /// The rows actually on screen, and the caret within them.
@@ -427,6 +521,69 @@ mod tests {
         c.left();
         let (_, (_, col)) = c.rows(40);
         assert_eq!(col, 2);
+    }
+
+    #[test]
+    fn vertical_motion_moves_by_visual_row_not_logical_line() {
+        // One logical line, wrapped into three rows of four cells.
+        let mut c = typed("abcdefghijkl");
+        assert_eq!(c.rows(4).0.len(), 3);
+        assert!(c.on_last_row(4) && !c.on_first_row(4));
+
+        c.up(4);
+        assert_eq!(c.rows(4).1 .0, 1, "up reached the middle row of one line");
+        c.up(4);
+        assert!(c.on_first_row(4), "and then the first");
+        c.up(4);
+        assert!(
+            c.on_first_row(4),
+            "up from the first row is a no-op, not a wrap"
+        );
+
+        c.down(4);
+        c.down(4);
+        assert!(c.on_last_row(4));
+        c.down(4);
+        assert!(c.on_last_row(4), "down from the last row is a no-op");
+    }
+
+    #[test]
+    fn vertical_motion_keeps_the_column_and_clamps_to_a_short_row() {
+        let mut c = typed("alpha\nxy\nbravo");
+        c.end();
+        assert_eq!(&c.text()[c.caret()..], "", "started at the end of `bravo`");
+
+        c.up(40);
+        assert_eq!(
+            &c.text()[c.caret()..],
+            "\nbravo",
+            "column 5 on a two-character row clamps to its end"
+        );
+        // The column carried up is the one the caret has *now* — 2, the end of
+        // `xy` — not the 5 it started with. `Composer::up` takes the column
+        // fresh each press rather than remembering it across them, and this is
+        // what that reads like from outside.
+        c.up(40);
+        assert_eq!(
+            &c.text()[c.caret()..],
+            "pha\nxy\nbravo",
+            "column 2 of `alpha`, carried from where the caret sat on `xy`"
+        );
+    }
+
+    /// Columns are cells, so a caret above a CJK row lands where it looks like
+    /// it should rather than two characters early.
+    #[test]
+    fn vertical_motion_counts_cells() {
+        let mut c = typed("日本語\nabcdef");
+        c.end();
+        c.up(40);
+        // `日本語` is six cells; the caret was at column 6 on `abcdef`.
+        assert_eq!(
+            c.caret(),
+            "日本語".len(),
+            "clamped to the end of the wide row"
+        );
     }
 
     #[test]
