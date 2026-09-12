@@ -149,7 +149,27 @@ fn booted_against(
     )
     .expect("writes the config");
 
-    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
+    // Name the real wrapper binary, exactly as `execution_config.rs` does and
+    // for exactly the same reason. `LandlockBackend` confines by re-executing
+    // `current_exe()` — in production `jan-klod-gateway`, which handles the
+    // `confine` subcommand, but under nextest *this test binary*, which answers
+    // `error: Unrecognized option: 'writable'` and exits. The fixture server
+    // then dies before reading a byte, which surfaces as `initialize failed:
+    // server exited` and is indistinguishable from a broken server.
+    //
+    // That is not hypothetical: it is [#132](https://github.com/PromptPasture/jan-klod/issues/132),
+    // which held `main` red for eight runs, and it is the second time this
+    // repository has paid for it — [#124](https://github.com/PromptPasture/jan-klod/issues/124)
+    // was the first, in `execution_config.rs`. These tests were written and
+    // verified on macOS, where Seatbelt shells out to `/usr/bin/sandbox-exec`
+    // and re-executes nothing, so the defect is invisible on the platform that
+    // wrote them.
+    //
+    // Named unconditionally rather than behind a `cfg`: one code path for both
+    // platforms, and on macOS it is simply unused.
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext"))
+        .expect("runtime boots")
+        .with_sandbox_wrapper(env!("CARGO_BIN_EXE_jan-klod-gateway"));
     let agent = runtime.build_agent(&http).expect("agent boots");
     Some((guard, agent))
 }
@@ -318,6 +338,18 @@ fn a_malformed_reply_leaves_the_server_down_rather_than_breaking_the_turn() {
         return;
     };
     let metas = agent.all_metas_json().expect("metadata still resolves");
+    // **"Down" has to mean alive-but-unparseable, not never-started.** Both
+    // this test and the silent one below assert an *absence*, and an absence is
+    // what a test proves when nothing works at all — on Linux both passed
+    // happily while #132 meant the child was being eaten by the sandbox wrapper
+    // before it ran, which is a completely different thing from the one they
+    // describe. This fixture ends in `sleep 30` precisely so it is still there
+    // to be asked about.
+    assert!(
+        fixture_running("malformed"),
+        "the fixture must be running and merely unparseable — if it is gone, \
+         this test is asserting the absence of a server that never started"
+    );
     assert!(
         !metas.to_string().contains("echo-fixture"),
         "a server that cannot be parsed offers no tools: {metas}"
@@ -351,6 +383,14 @@ fn a_silent_child_gives_up_instead_of_pinning_the_core() {
         return;
     };
     let metas = agent.all_metas_json().expect("metadata still resolves");
+    // Silent means *alive and saying nothing* — the whole point of `sleep 60`.
+    // A child that exited is not silent, it is absent, and the give-up path
+    // this test describes is never reached. See the note in the malformed test.
+    assert!(
+        fixture_running("silent"),
+        "the fixture must be alive and merely silent — a child that exited \
+         never exercises the budget this test is about"
+    );
     assert!(
         !metas.to_string().contains("echo-fixture"),
         "a silent server offers no tools: {metas}"
