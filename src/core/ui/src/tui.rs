@@ -13,15 +13,14 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use jan_klod::app::{App, Prompt, Who};
+use jan_klod::app::{App, Prompt};
+use jan_klod::blocks;
 use jan_klod::theme::Theme;
 use jan_klod::transport::Transport;
 use jan_klod::StreamEvent;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 const POLL_MS: u64 = 50;
@@ -166,31 +165,18 @@ fn render(frame: &mut Frame, app: &App, theme: Theme) {
     let [transcript_area, input_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).areas(frame.area());
 
-    let items: Vec<ListItem> = app
-        .transcript
-        .iter()
-        .map(|entry| {
-            // Routed through the theme rather than named here (#128). Two of
-            // these are exact — an error is `removed`, a status line is `muted`
-            // — and two are the nearest role rather than the same pixels:
-            // `you` was `Cyan` and takes `focus`, the blue-family accent, and
-            // `klod` was `Green` and takes `body`, since the assistant's output
-            // *is* the body text. #97 eventually wants the two speakers told
-            // apart by gutter and indent rather than by tint at all, but that
-            // is 19b's redesign, not this slice's routing.
-            let (label, color) = match entry.who {
-                Who::You => ("you", theme.focus()),
-                Who::Klod => ("klod", theme.body()),
-                Who::Error => ("err", theme.removed()),
-                Who::Status => ("··", theme.muted()),
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{label} › "), Style::default().fg(color)),
-                Span::raw(entry.text.as_str()),
-            ]))
-        })
-        .collect();
-    let transcript = List::new(items).block(Block::bordered().title("jan-klod"));
+    // The transcript is rendered by `blocks::transcript` (#147), which is a
+    // pure function of the entries plus a width — so the layout is tested
+    // without a terminal and this function only places the result. The gutter,
+    // the role label and the wrapping all live there; what is left here is
+    // where it goes on screen, which is #148's concern next.
+    //
+    // `- 2` for the block's own border, which is not part of the pane the text
+    // may use. Getting that wrong is how a wrap that passes its own test still
+    // overflows on screen.
+    let inner_width = usize::from(transcript_area.width).saturating_sub(2);
+    let transcript = Paragraph::new(blocks::transcript(&app.transcript, inner_width, theme))
+        .block(Block::bordered().title("jan-klod"));
     frame.render_widget(transcript, transcript_area);
 
     let title = app.pending_prompt.as_ref().map_or_else(
