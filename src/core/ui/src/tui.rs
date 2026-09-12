@@ -64,6 +64,10 @@ fn event_loop(
     // and the pane's height, and only `render` knows either — it is the thing
     // that wraps the text to the width the terminal currently has.
     let mut pane = Pane::default();
+    // Resolved once: the completion root is where the client was started, and a
+    // list that moved because something called `chdir` would be worse than one
+    // that is simply wrong about a directory that no longer exists.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     app.record_status(format!(
         "connected to {} (session `{session}`); Esc to quit",
         transport.describe()
@@ -136,6 +140,10 @@ fn event_loop(
         // composer and the viewport, and separating them keeps this loop about
         // the one thing it alone can do — drive a turn.
         if edit_or_scroll(&key, &mut app, &mut view, pane) {
+            // The completion list is a function of the buffer, so it is
+            // refreshed after whatever just changed it rather than in each arm
+            // that might have.
+            app.refresh_completion(&cwd);
             continue;
         }
         match key.code {
@@ -202,6 +210,27 @@ fn edit_or_scroll(
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    // `@` completion first: the two lists are mutually exclusive — one needs a
+    // slash at column 0, the other an `@` anywhere — but ordering them makes
+    // that a property of the code rather than of the data.
+    if app.completion_open() {
+        match key.code {
+            KeyCode::Esc => {
+                app.completion_dismiss();
+                return true;
+            }
+            KeyCode::Up => {
+                app.completion_move(-1);
+                return true;
+            }
+            KeyCode::Down => {
+                app.completion_move(1);
+                return true;
+            }
+            KeyCode::Enter | KeyCode::Tab if app.completion_accept() => return true,
+            _ => {}
+        }
+    }
     // The `/` menu takes the keys it needs while it is open, and only those.
     if app.menu_query().is_some() {
         match key.code {
@@ -362,6 +391,7 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
         input_area.y + 1 + u16::try_from(caret_row).unwrap_or(0),
     ));
     render_menu(frame, app, theme, input_area);
+    render_completion(frame, app, theme, input_area);
 }
 
 /// Draw the `/` menu over the transcript, just above the composer.
@@ -369,6 +399,79 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
 /// Its own function because `render` was past clippy's line limit, and because
 /// this is a self-contained overlay: it reads the menu and draws it, and knows
 /// nothing about the transcript it floats over.
+/// Draw `rows` in a bordered overlay just above the composer.
+fn render_overlay(
+    frame: &mut Frame,
+    title: &'static str,
+    rows: Vec<Line<'static>>,
+    input_area: Rect,
+) {
+    let height = u16::try_from(rows.len()).unwrap_or(1) + 2;
+    let area = Rect {
+        x: input_area.x,
+        y: input_area.y.saturating_sub(height),
+        width: input_area.width,
+        height: height.min(input_area.y),
+    };
+    if area.height > 2 {
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new(rows).block(Block::bordered().title(title)),
+            area,
+        );
+    }
+}
+
+/// The `@` completion list.
+fn render_completion(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
+    if !app.completion_open() {
+        return;
+    }
+    let entries = app.completion_entries();
+    let mut rows: Vec<Line<'static>> = if entries.is_empty() {
+        vec![Line::from(Span::styled(
+            " no path matches".to_string(),
+            Style::default().fg(theme.muted()),
+        ))]
+    } else {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(i, path)| {
+                let selected = i == app.completion_selected();
+                let style = Style::default().fg(if selected {
+                    theme.focus()
+                } else {
+                    theme.body()
+                });
+                Line::from(vec![
+                    Span::styled(
+                        if selected {
+                            format!("{} ", theme.glyph(Glyph::Collapsed))
+                        } else {
+                            "  ".to_string()
+                        },
+                        style,
+                    ),
+                    Span::styled(path.clone(), style),
+                ])
+            })
+            .collect()
+    };
+    if app.completion_truncated() {
+        // A glyph and words, not a colour: under `Mode::Mono` a tinted marker is
+        // nothing, and a list that stops without saying so is #145 again.
+        rows.push(Line::from(Span::styled(
+            format!(
+                " {} more, keep typing to narrow",
+                theme.glyph(Glyph::MoreBelow)
+            ),
+            Style::default().fg(theme.warning()),
+        )));
+    }
+    render_overlay(frame, "paths", rows, input_area);
+}
+
 fn render_menu(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
     // The menu floats over the transcript, immediately above the composer, so
     // the line being typed stays where the user is looking.
@@ -422,20 +525,7 @@ fn render_menu(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
                 })
                 .collect()
         };
-        let height = u16::try_from(rows.len()).unwrap_or(1) + 2;
-        let area = Rect {
-            x: input_area.x,
-            y: input_area.y.saturating_sub(height),
-            width: input_area.width,
-            height: height.min(input_area.y),
-        };
-        if area.height > 2 {
-            frame.render_widget(Clear, area);
-            frame.render_widget(
-                Paragraph::new(rows).block(Block::bordered().title("commands")),
-                area,
-            );
-        }
+        render_overlay(frame, "commands", rows, input_area);
     }
 }
 
@@ -680,6 +770,91 @@ mod tests {
             !app.should_quit,
             "Esc closed the menu rather than the client"
         );
+    }
+
+    /// A temp tree with one ignored path, for the completion tests.
+    fn completion_tree() -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "jk-complete-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("src")).expect("tree");
+        std::fs::write(root.join(".gitignore"), "ignored.txt\n").expect("gitignore");
+        std::fs::write(root.join("src/main.rs"), "").expect("file");
+        std::fs::write(root.join("ignored.txt"), "").expect("file");
+        root
+    }
+
+    /// Type `text`, refreshing the completion against `root` as a real run does.
+    fn type_into(app: &mut App, root: &std::path::Path, text: &str) {
+        for c in text.chars() {
+            app.push_char(c);
+            app.refresh_completion(root);
+        }
+    }
+
+    #[test]
+    fn at_completion_offers_paths_and_accepting_reads_nothing() {
+        let root = completion_tree();
+        let mut app = App::default();
+        type_into(&mut app, &root, "look at @main");
+
+        assert!(app.completion_open(), "`@` mid-message opens the list");
+        assert_eq!(app.completion_entries(), ["src/main.rs".to_string()]);
+        assert!(
+            !app.completion_entries()
+                .iter()
+                .any(|e| e.contains("ignored")),
+            "an ignored path was offered"
+        );
+
+        assert!(key(&mut app, KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(
+            app.input(),
+            "look at src/main.rs",
+            "the fragment was replaced by the path, mid-message"
+        );
+        assert!(!app.completion_open(), "accepting closes the list");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_space_ends_the_reference_and_esc_leaves_the_text() {
+        let root = completion_tree();
+
+        let mut spaced = App::default();
+        type_into(&mut spaced, &root, "@src ");
+        assert!(!spaced.completion_open(), "a space ended the reference");
+
+        let mut dismissed = App::default();
+        type_into(&mut dismissed, &root, "@src");
+        assert!(dismissed.completion_open());
+        assert!(key(&mut dismissed, KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!dismissed.completion_open());
+        assert_eq!(dismissed.input(), "@src", "dismissing is not deleting");
+        assert!(
+            !dismissed.should_quit,
+            "Esc closed the list, not the client"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_fragment_matching_no_path_keeps_the_list_open_and_enter_still_submits() {
+        let root = completion_tree();
+        let mut app = App::default();
+        type_into(&mut app, &root, "@zzzz");
+        assert!(app.completion_open(), "the list stays open on no match");
+        assert!(app.completion_entries().is_empty());
+        assert!(
+            !key(&mut app, KeyCode::Enter, KeyModifiers::NONE),
+            "Enter falls through to submit rather than being swallowed"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

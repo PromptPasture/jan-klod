@@ -6,6 +6,7 @@
 
 use crate::commands::{Availability, Command};
 use crate::composer::Composer;
+use crate::paths;
 
 /// Who authored a transcript line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +65,14 @@ pub struct App {
     /// stored (see [`Self::menu_query`]), which is what stops the list and the
     /// text disagreeing; only the highlight needs remembering.
     menu: Option<usize>,
+    /// The open `@` completion: the fragment it was computed for, the
+    /// highlight, and the result.
+    ///
+    /// The result is cached rather than recomputed per frame, because computing
+    /// it walks the filesystem. The fragment it was computed *for* is stored
+    /// beside it so a stale list cannot be shown against a newer fragment —
+    /// which is the failure a cache of this shape invites.
+    completion: Option<(String, usize, paths::Completion)>,
     /// Set while a turn is blocked on a confirmation. The next submission is that
     /// answer, not a new message — a turn is already running and typing a fresh
     /// message would go nowhere.
@@ -93,6 +102,11 @@ impl App {
     pub fn push_char(&mut self, c: char) {
         self.composer.push(c);
         self.maybe_open_menu();
+        if c == '@' {
+            // Opened here and nowhere else, so that deleting back to an older
+            // `@` does not reopen a list the user dismissed.
+            self.completion = Some((String::new(), 0, paths::Completion::default()));
+        }
     }
 
     /// Delete the grapheme before the caret.
@@ -195,6 +209,108 @@ impl App {
                 self.record(Who::Status, format!("{} — {reason}", command.name));
             }
         }
+        true
+    }
+
+    /// Whether the `@` completion list is open.
+    #[must_use]
+    pub const fn completion_open(&self) -> bool {
+        self.completion.is_some()
+    }
+
+    /// The paths on offer. Empty means the empty state, not a closed list.
+    #[must_use]
+    pub fn completion_entries(&self) -> &[String] {
+        self.completion
+            .as_ref()
+            .map_or(&[], |(_, _, found)| found.entries.as_slice())
+    }
+
+    /// Whether the list stopped at the cap. Shown, never silent — see #145.
+    #[must_use]
+    pub fn completion_truncated(&self) -> bool {
+        self.completion
+            .as_ref()
+            .is_some_and(|(_, _, found)| found.truncated)
+    }
+
+    /// Which path is highlighted, clamped to what is on offer.
+    #[must_use]
+    pub fn completion_selected(&self) -> usize {
+        let len = self.completion_entries().len();
+        self.completion
+            .as_ref()
+            .map_or(0, |(_, i, _)| *i)
+            .min(len.saturating_sub(1))
+    }
+
+    /// Recompute the list if the fragment moved, and close it if there is no
+    /// fragment left.
+    ///
+    /// `root` is an argument rather than `std::env::current_dir()` so a test can
+    /// state the tree it means — the same reason `theme::Theme::detect` takes
+    /// its environment.
+    pub fn refresh_completion(&mut self, root: &std::path::Path) {
+        if self.completion.is_none() {
+            return;
+        }
+        let Some(fragment) = paths::fragment(self.composer.text(), self.composer.caret()) else {
+            self.completion = None;
+            return;
+        };
+        let fragment = fragment.to_string();
+        match &self.completion {
+            Some((cached, _, _)) if *cached == fragment => {}
+            _ => self.completion = Some((fragment.clone(), 0, paths::complete(root, &fragment))),
+        }
+    }
+
+    /// Close the list and leave the text alone.
+    pub fn completion_dismiss(&mut self) {
+        self.completion = None;
+    }
+
+    /// Move the highlight, wrapping like the `/` menu's.
+    pub fn completion_move(&mut self, delta: isize) {
+        let len = self.completion_entries().len();
+        if len == 0 {
+            return;
+        }
+        let current = self.completion_selected();
+        let len_i = isize::try_from(len).unwrap_or(1);
+        let next = (isize::try_from(current).unwrap_or(0) + delta).rem_euclid(len_i);
+        if let Some((_, selected, _)) = self.completion.as_mut() {
+            *selected = usize::try_from(next).unwrap_or(0);
+        }
+    }
+
+    /// Insert the highlighted path in place of the typed fragment.
+    ///
+    /// **No file is read.** The path is text in a message; what to do with it is
+    /// the core's business, and a client that opened it would have grown policy.
+    ///
+    /// Returns whether anything was accepted, so the caller knows whether
+    /// `Enter` still means submit.
+    pub fn completion_accept(&mut self) -> bool {
+        let Some(path) = self
+            .completion_entries()
+            .get(self.completion_selected())
+            .cloned()
+        else {
+            return false;
+        };
+        // The `@` goes too: #101 asks for the accepted text to be "a plain path
+        // in the message". Keeping the marker would leave the core a hint it has
+        // no contract for — and this client's whole position is that it inserts
+        // text and reads nothing, so the message should say what the user means
+        // rather than carry a convention nobody has agreed to. `'@'` is one
+        // byte, hence the `+ 1`.
+        let typed = self
+            .completion
+            .as_ref()
+            .map_or(0, |(fragment, _, _)| fragment.len() + 1);
+        self.composer.replace_before(typed, &path);
+        self.completion = None;
         true
     }
 

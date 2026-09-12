@@ -85,6 +85,17 @@ impl Composer {
         self.caret = self.text.len();
     }
 
+    /// Replace the `count` bytes immediately before the caret with `text`.
+    ///
+    /// For accepting a completion (#153), which swaps the typed fragment for the
+    /// path it matched and leaves the caret after it — mid-message, so
+    /// [`Composer::set`] is the wrong tool.
+    pub fn replace_before(&mut self, count: usize, text: &str) {
+        let start = self.caret.saturating_sub(count);
+        self.text.replace_range(start..self.caret, text);
+        self.caret = start + text.len();
+    }
+
     /// Insert text at the caret and leave the caret after it.
     pub fn insert(&mut self, s: &str) {
         self.text.insert_str(self.caret, s);
