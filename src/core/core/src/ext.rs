@@ -331,9 +331,15 @@ pub fn install_from_url(
     http: &crate::route::HttpFn,
 ) -> Result<Installed, ExtError> {
     let wanted = wanted(url, checks.allow_unsigned)?;
-    let incoming = std::env::temp_dir().join(format!("jk-ext-fetch-{}", std::process::id()));
+    let incoming = staging_dir();
     let _ = std::fs::remove_dir_all(&incoming);
-    std::fs::create_dir_all(&incoming).map_err(|source| ExtError::Staging {
+    // Private, because what lands here is a component and its signature
+    // **before either has been verified**, read back out of this directory to
+    // be checked. `create_dir_all` alone leaves it world-readable at a
+    // guessable path in a shared `/tmp`. `security-model.md` already makes this
+    // argument for the compile cache, whose contents this process at least
+    // produced itself.
+    crate::wasm_cache::ensure_private_dir(&incoming).map_err(|source| ExtError::Staging {
         path: incoming.display().to_string(),
         source,
     })?;
@@ -342,6 +348,28 @@ pub fn install_from_url(
         .and_then(|component| install(dir, &incoming.join(component), checks));
     let _ = std::fs::remove_dir_all(&incoming);
     outcome
+}
+
+/// Distinguishes one `install_from_url`'s staging directory from another's.
+///
+/// A counter rather than a timestamp: macOS's clock has microsecond
+/// granularity, so two calls in the same microsecond would collide again — the
+/// exact way #165 did, which is where this defect was noticed.
+static NEXT_STAGING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Where one `install_from_url` stages its downloads before they are verified.
+///
+/// Per **call**, not per process (#168). The name used to be
+/// `jk-ext-fetch-<pid>`, and `install_from_url` `remove_dir_all`s it at both
+/// ends — so two installs in one process wiped each other's half-fetched files.
+/// The integration suite showed it as a `.minisig` that had been downloaded and
+/// then deleted by a neighbouring test.
+fn staging_dir() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "jk-ext-fetch-{}-{}",
+        std::process::id(),
+        NEXT_STAGING.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ))
 }
 
 /// Fetch each wanted file into `incoming`, returning the component's name.
@@ -1075,7 +1103,7 @@ fn stage_and_check(
 
 #[cfg(test)]
 mod tests {
-    use super::{install, list, remove, Checks, Declaration, ExtError, Removed};
+    use super::{install, list, remove, staging_dir, Checks, Declaration, ExtError, Removed};
     use std::path::{Path, PathBuf};
 
     /// Removes the directory on drop, panic or not.
@@ -1423,5 +1451,54 @@ mod tests {
             panic!("nothing to remove must be an error, not a silent success")
         };
         assert_eq!(name, "tool-nope");
+    }
+
+    /// #168: the staging directory is per call and private.
+    ///
+    /// Both halves matter and neither is observable from `install_from_url`'s
+    /// return value, so this drives the naming and the mode directly rather
+    /// than through a fetch.
+    ///
+    /// The name used to be `jk-ext-fetch-<pid>`, and `install_from_url`
+    /// `remove_dir_all`s it at both ends — so two installs in one process
+    /// deleted each other's half-fetched files. That is what made
+    /// `ext_install::a_remote_install_fetches_the_pair_and_both_signatures`
+    /// fail intermittently with a `.minisig` that had been downloaded and then
+    /// removed by a neighbour.
+    #[test]
+    fn two_installs_in_one_process_do_not_share_a_staging_directory() {
+        let first = staging_dir();
+        let second = staging_dir();
+        assert_ne!(
+            first, second,
+            "two calls staged into one directory, and each wipes it at both \
+             ends — the second install would delete the first's downloads"
+        );
+
+        // And what lands there is a component and its signature *before*
+        // verification, so the directory must not be a world-readable drop box
+        // at a guessable path.
+        for dir in [&first, &second] {
+            crate::wasm_cache::ensure_private_dir(dir).expect("staging dir is creatable");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&first)
+                .expect("created")
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o777,
+                0o700,
+                "staging is {:o}, so another user on this machine can read an \
+                 unverified component and its signature while they are being \
+                 checked",
+                mode & 0o777
+            );
+        }
+        for dir in [first, second] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
