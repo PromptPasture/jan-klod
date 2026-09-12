@@ -818,6 +818,15 @@ search behind the existing jail, the guest only shapes the request), the
 guide), and **named distributions** in the Configurator (`coding`,
 `headless-chat`, `minimal`).
 
+**Distributions 1 done 2026-09-12** ([#114](https://github.com/PromptPasture/jan-klod/issues/114)):
+`scripts/distributions/{coding,headless-chat,minimal}/` is a guest list and a
+`config.yaml` each, and `make bundle DIST=<name>` builds an archive from the
+pair — with no `DIST` the target is unchanged. Distributions name what an
+install is *for*, which the old `tui`/`gui`/`full` presets mixed with how the
+user looks at the runtime. `docs_match_config` now checks every shipped config
+rather than only the root one, per config rather than pooled. The installer and
+release (#115) and the docs rewrite (#116) are what remain.
+
 **PDK 1 and 2 done 2026-09-12** ([#111](https://github.com/PromptPasture/jan-klod/issues/111),
 [#112](https://github.com/PromptPasture/jan-klod/issues/112)): `make ext-new
 NAME=… KIND=…` writes a crate that is registered in the workspace and in

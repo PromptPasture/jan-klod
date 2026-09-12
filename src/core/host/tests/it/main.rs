@@ -19,6 +19,7 @@ mod agent_loop;
 mod api_prompt;
 mod api_rest;
 mod auth;
+mod bundle_distributions;
 mod classifier;
 mod component_harness;
 mod docs_match_config;
