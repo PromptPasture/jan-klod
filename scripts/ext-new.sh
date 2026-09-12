@@ -28,7 +28,9 @@ set -eu
 NAME="${1:-}"
 KIND="${2:-}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-EXT="$ROOT/src/extensions"
+# Overridable so the self-test can generate into a scratch directory and
+# compare, rather than writing into the workspace to check what it writes.
+EXT="${EXT_ROOT:-$ROOT/src/extensions}"
 
 usage() {
     echo "usage: ext-new.sh <name> <kind>" >&2
@@ -280,7 +282,10 @@ EOF
 # Both lists are flat text. Idempotent: re-registering an existing name would
 # build it twice and `manifests.sh` would stage it twice, so each edit checks
 # first.
-if ! grep -q "^    \"$NAME\"," "$EXT/Cargo.toml"; then
+# Registration is skipped where there is no workspace to register into — which
+# is how the self-test generates into a scratch directory without needing to
+# fabricate one.
+if [ -f "$EXT/Cargo.toml" ] && ! grep -q "^    \"$NAME\"," "$EXT/Cargo.toml"; then
     # After the last existing member, so the list stays where it was.
     awk -v name="$NAME" '
         /^]/ && !done { print "    \"" name "\","; done = 1 }
@@ -288,7 +293,7 @@ if ! grep -q "^    \"$NAME\"," "$EXT/Cargo.toml"; then
     ' "$EXT/Cargo.toml" > "$EXT/Cargo.toml.tmp" && mv "$EXT/Cargo.toml.tmp" "$EXT/Cargo.toml"
 fi
 
-if ! grep -q "GUESTS :=.*[ =]$NAME\( \|$\)" "$EXT/Makefile"; then
+if [ -f "$EXT/Makefile" ] && ! grep -q "GUESTS :=.*[ =]$NAME\( \|$\)" "$EXT/Makefile"; then
     awk -v name="$NAME" '
         /^GUESTS :=/ && !done { print $0 " " name; done = 1; next }
         { print }
@@ -302,7 +307,13 @@ fi
 # Formatting here makes that guarantee hold for kinds nobody has added yet.
 #
 # After registration, because `-p` needs the crate to be a workspace member.
-cargo fmt --manifest-path "$EXT/Cargo.toml" -p "$NAME"
+if [ -f "$EXT/Cargo.toml" ]; then
+    cargo fmt --manifest-path "$EXT/Cargo.toml" -p "$NAME"
+else
+    # No workspace: format the file directly, so a scratch generation is
+    # byte-comparable with a registered one.
+    rustfmt --edition 2021 "$EXT/$NAME/src/lib.rs"
+fi
 
 echo "ext-new: wrote $EXT/$NAME ($KIND, $WORLD)"
 echo "ext-new: registered in the extensions workspace and GUESTS"

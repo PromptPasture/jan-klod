@@ -66,6 +66,8 @@ test:
 	@for g in $(LIBS) $(TESTABLE_GUESTS); do echo "== test $$g =="; cargo test -p $$g || exit 1; done
 	@echo "== manifest guards =="
 	sh $(ROOT)/scripts/manifests-selftest.sh $(EXT_DIR)
+	@echo "== ext-new template =="
+	sh $(ROOT)/scripts/ext-new-selftest.sh
 
 # Build a single guest and stage it in ext/ (`make tool-fs`, e.g., for
 # targeted dev iteration — `all` above builds every guest at once). Rust guests

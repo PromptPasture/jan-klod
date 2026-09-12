@@ -42,6 +42,7 @@ help:
 	@echo "  all         build the host workspace + Rust guests (default)"
 	@echo "  core        build the host workspace"
 	@echo "  extensions  build the Rust guests, staged in ext/ (alias: ext)"
+	@echo "  ext-new     scaffold a new extension crate: NAME=<name> KIND=<kind>"
 	@echo "  test        run host-side unit tests only (core + guests + supervisor);"
 	@echo "              the integration suite needs 'gate' or 'harness' instead"
 	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
