@@ -20,6 +20,35 @@
 //! Bodies are asserted, not just status codes — an empty `dist/` would answer
 //! `200` to both routes and prove nothing about the bundle.
 //!
+//! # What proves Acceptance line 1, and what does not
+//!
+//! [#119](https://github.com/PromptPasture/jan-klod/issues/119) asks that a
+//! browser at `/` run a full turn with `ask` and cancel. No browser runs in
+//! this suite, and pretending otherwise by ticking the line on a served file is
+//! what the plan for this box forbade. The honest split:
+//!
+//! **Asserted, in this gate.** The core serves the real bundle at the two paths
+//! above and refuses the API without a token (this file). The routes that
+//! bundle calls answer over a real socket against a booted agent — `api_rest`
+//! for sessions and messages, `api_prompt` for the `ask` round trip,
+//! `prompt_disconnect` for cancel, which on this surface *is* a dropped SSE
+//! connection rather than a route. And
+//! [`the_web_client_answers_every_frame_the_core_emits`] pins the one seam the
+//! other two halves cannot see between them.
+//!
+//! **Asserted, but not here.** `src/web/tests/turn.test.ts` drives the client's
+//! own logic — every frame kind rendered, an `ask` answered on a second
+//! request, cancel dropping the connection — against a stub. It is a real test
+//! and it passes, but nothing in `make gate` runs it, so this file does not
+//! lean on it. Wiring it in is
+//! [#127](https://github.com/PromptPasture/jan-klod/issues/127).
+//!
+//! **Inferred.** That a browser's JavaScript engine, executing these exact
+//! bytes, makes those exact calls. Closing that needs a real browser, which
+//! [#118](https://github.com/PromptPasture/jan-klod/issues/118) costed and
+//! declined — and the decision there is worth keeping: a stub grown to imitate
+//! a DOM is the thing that passes while the client is broken.
+//!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
 use std::io::{Read, Write};
@@ -120,6 +149,68 @@ fn the_web_client_is_served_without_a_token() {
     assert!(
         script.contains("/session/"),
         "the script served is the client, which calls the session API: {script}"
+    );
+}
+
+/// The web client has an answer for every frame the core can send.
+///
+/// `SSE_FRAME_KINDS`' own docs name the two tests that hold its ends:
+/// `core/tests/protocol_events.rs` proves the core emits exactly these, and
+/// `ui/tests/parse_frame.rs` proves *a* client handles each. That second test
+/// is the **TUI**. The web client is a second client carrying its own copy of
+/// the list in TypeScript, and until this test it was outside both — so adding
+/// a frame to the core would fail neither while the browser quietly rendered it
+/// as unknown.
+///
+/// That is not a hypothetical failure mode in this repository: it is one that
+/// already shipped. The TUI called every `tool-result` an unknown frame while
+/// the stdio transport dropped them without a word.
+///
+/// This reads the TypeScript as text rather than running Node, because
+/// [#119](https://github.com/PromptPasture/jan-klod/issues/119) box 1 decided
+/// the core must build without Node on the path. A seven-string list is within
+/// what a grep can check honestly; anything more would be a parser, and a
+/// parser that silently matches nothing is the failure this test exists to
+/// prevent — hence the count assertion before the comparison.
+#[test]
+fn the_web_client_answers_every_frame_the_core_emits() {
+    let path = common::repo_root().join("src/web/src/frames.ts");
+    let source = std::fs::read_to_string(&path).expect("frames.ts is readable");
+
+    let list = source
+        .split_once("export const FRAME_KINDS = [")
+        .map_or_else(
+            || panic!("{} must export FRAME_KINDS", path.display()),
+            |(_, rest)| rest,
+        )
+        .split_once("] as const;")
+        .map_or_else(
+            || panic!("FRAME_KINDS must be closed by `] as const;`"),
+            |(inside, _)| inside,
+        );
+    let kinds: Vec<&str> = list
+        .split(['"', '\n'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != ",")
+        .collect();
+
+    // Before comparing: a grep that matched nothing would make the comparison
+    // below read "the client handles no frames", and an empty-vs-empty bug is
+    // exactly how a text check passes while proving nothing.
+    assert_eq!(
+        kinds.len(),
+        jan_klod_protocol::SSE_FRAME_KINDS.len(),
+        "parsed {kinds:?} out of {} — if that list looks wrong, the parse broke, \
+         not the client",
+        path.display()
+    );
+    assert_eq!(
+        kinds,
+        jan_klod_protocol::SSE_FRAME_KINDS.to_vec(),
+        "the web client's FRAME_KINDS has drifted from the core's \
+         SSE_FRAME_KINDS — a frame the core emits and the browser renders as \
+         unknown. Update {} to match.",
+        path.display()
     );
 }
 
