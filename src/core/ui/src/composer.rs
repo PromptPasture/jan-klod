@@ -75,6 +75,16 @@ impl Composer {
         Some(std::mem::take(&mut self.text).trim().to_string())
     }
 
+    /// Replace the whole buffer, caret at the end.
+    ///
+    /// For recall (#151), which swaps one message for another wholesale rather
+    /// than editing the one that is there.
+    pub fn set(&mut self, text: &str) {
+        self.text.clear();
+        self.text.push_str(text);
+        self.caret = self.text.len();
+    }
+
     /// Insert text at the caret and leave the caret after it.
     pub fn insert(&mut self, s: &str) {
         self.text.insert_str(self.caret, s);

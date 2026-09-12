@@ -180,6 +180,10 @@ struct Pane {
     total: usize,
     /// Rows the transcript pane can show.
     height: usize,
+    /// Cells the composer's text may use, for the vertical motion and history
+    /// arms — both are written in terms of *visual* rows, so neither can be
+    /// answered without knowing where the text wraps.
+    composer_width: usize,
 }
 
 /// Keys that only move a caret or a viewport.
@@ -227,6 +231,10 @@ fn edit_or_scroll(
         // does. Leaving a user with no way to type a newline is not an
         // option a client gets to choose.
         KeyCode::Enter if shift || alt => app.composer.push('\n'),
+        // History, or the caret — `App` decides which, because the condition is
+        // two facts about its own state and a key arm should ask one question.
+        KeyCode::Up => app.history_up(pane.composer_width),
+        KeyCode::Down => app.history_down(pane.composer_width),
         KeyCode::Backspace => app.backspace(),
         KeyCode::Char(c) if !ctrl => app.push_char(c),
         _ => return false,
@@ -241,6 +249,7 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
     let caret = format!("{} ", theme.glyph(Glyph::Caret));
     let caret_cells = jan_klod::wrap::width(&caret);
     let composer_width = usize::from(frame.area().width).saturating_sub(2 + caret_cells);
+
     let (composer_rows, (caret_row, caret_col)) = app.composer.visible(composer_width);
     let composer_height = u16::try_from(composer_rows.len().max(1)).unwrap_or(1);
 
@@ -271,6 +280,7 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
     *pane = Pane {
         total: lines.len(),
         height: inner_height,
+        composer_width,
     };
 
     // The detach marker: a glyph and a count, never a tint. Under `Mode::Mono`
@@ -350,6 +360,7 @@ mod tests {
             Pane {
                 total: 100,
                 height: 10,
+                composer_width: 40,
             },
         )
     }
@@ -395,6 +406,7 @@ mod tests {
             Pane {
                 total: 100,
                 height: 10,
+                composer_width: 40,
             },
         );
         assert!(consumed, "the scroll arm handles it");
@@ -411,6 +423,57 @@ mod tests {
         // what the catch-all did before the guard.
         assert!(!key(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL));
         assert_eq!(app.input(), "");
+    }
+
+    /// #151's Acceptance, driven through the mapping rather than the model.
+    #[test]
+    fn arrows_walk_history_only_when_the_caret_cannot_move() {
+        let mut app = App::default();
+        for message in ["first", "second"] {
+            message.chars().for_each(|c| app.push_char(c));
+            app.take_submission();
+        }
+
+        // Empty composer, caret on the only row: history.
+        assert!(key(&mut app, KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.input(), "second");
+        assert!(key(&mut app, KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.input(), "first", "a second press keeps walking back");
+
+        // Past the oldest: stop rather than wrap to the newest.
+        assert!(key(&mut app, KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.input(), "first", "the oldest is a wall, not a loop");
+
+        // Back down, and past the newest is the empty line again.
+        key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.input(), "second");
+        key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.input(), "", "past the newest is where you started");
+    }
+
+    #[test]
+    fn editing_a_recalled_entry_moves_the_caret_and_leaves_history_alone() {
+        let mut app = App::default();
+        "original".chars().for_each(|c| app.push_char(c));
+        app.take_submission();
+
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.input(), "original");
+
+        // Typing makes it modified, so the arrows stop recalling.
+        app.push_char('!');
+        assert_eq!(app.input(), "original!");
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(
+            app.input(),
+            "original!",
+            "a modified composer moves the caret instead of recalling"
+        );
+
+        // And the stored entry was never touched.
+        app.composer.set("");
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(app.input(), "original", "history holds what was sent");
     }
 
     #[test]

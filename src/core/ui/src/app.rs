@@ -40,6 +40,22 @@ pub struct App {
     pub transcript: Vec<Entry>,
     /// Set when the user asked to quit.
     pub should_quit: bool,
+    /// Submitted messages, oldest first (#151).
+    ///
+    /// Appended to on submit and **never mutated**, so a recalled entry that is
+    /// then edited leaves the stored one alone: history holds what was sent, not
+    /// what was later half-typed over it.
+    ///
+    /// Not persisted. The event log already holds every user message and reading
+    /// it back is a `session/get` concern — a client keeping its own copy is a
+    /// second source of truth for the one thing the log exists to be.
+    history: Vec<String>,
+    /// Where recall is in [`Self::history`], and the text it put in the
+    /// composer.
+    ///
+    /// The text is what makes "unmodified" answerable: the composer is
+    /// unmodified while it still holds exactly what recall placed there.
+    recall: Option<(usize, String)>,
     /// Set while a turn is blocked on a confirmation. The next submission is that
     /// answer, not a new message — a turn is already running and typing a fresh
     /// message would go nowhere.
@@ -80,8 +96,72 @@ impl App {
     /// yields `None` (nothing to send).
     pub fn take_submission(&mut self) -> Option<String> {
         let message = self.composer.take()?;
+        self.history.push(message.clone());
+        self.recall = None;
         self.record(Who::You, message.clone());
         Some(message)
+    }
+
+    /// Whether `↑`/`↓` should walk history rather than move the caret.
+    ///
+    /// Two states count as unmodified, and the second is the one that is easy to
+    /// miss: a fresh empty composer, **and** one still holding exactly what
+    /// recall put there. Without the second, pressing `↑` twice would recall
+    /// once and then start moving the caret.
+    fn composer_unmodified(&self) -> bool {
+        self.composer.is_empty()
+            || self
+                .recall
+                .as_ref()
+                .is_some_and(|(_, text)| text == self.composer.text())
+    }
+
+    /// `↑`: the previous message, or the caret up if history is not what this
+    /// keypress means.
+    pub fn history_up(&mut self, width: usize) {
+        if !(self.composer.on_first_row(width) && self.composer_unmodified()) {
+            self.composer.up(width);
+            return;
+        }
+        // A cleared composer starts the walk over, rather than resuming from
+        // wherever recall had reached. Otherwise clearing the line and pressing
+        // `↑` would land on the entry *before* the one just discarded, which is
+        // not what emptying a prompt means anywhere else.
+        if self.composer.is_empty() {
+            self.recall = None;
+        }
+        let next = match self.recall {
+            // At the oldest already: stop rather than wrap. Wrapping hands the
+            // user the newest message at the moment they asked for the oldest.
+            Some((0, _)) => return,
+            Some((i, _)) => i - 1,
+            None => match self.history.len().checked_sub(1) {
+                Some(last) => last,
+                None => return,
+            },
+        };
+        let text = self.history[next].clone();
+        self.composer.set(&text);
+        self.recall = Some((next, text));
+    }
+
+    /// `↓`: the next message, back to the empty line, or the caret down.
+    pub fn history_down(&mut self, width: usize) {
+        if !(self.composer.on_last_row(width) && self.composer_unmodified()) {
+            self.composer.down(width);
+            return;
+        }
+        let Some((i, _)) = self.recall else { return };
+        if i + 1 < self.history.len() {
+            let text = self.history[i + 1].clone();
+            self.composer.set(&text);
+            self.recall = Some((i + 1, text));
+        } else {
+            // Past the newest is the line the user was writing before they
+            // started recalling, which is empty — they submitted the last one.
+            self.composer.set("");
+            self.recall = None;
+        }
     }
 
     /// Record core's answer.
