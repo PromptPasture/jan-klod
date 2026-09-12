@@ -19,8 +19,12 @@ the reason the last section exists.
 ## 1. Generate the crate
 
 ```console
-$ make ext-new NAME=tool-hello KIND=tool
+$ make ext-new NAME=tool-greet KIND=tool
 ```
+
+Pick your own name — `tool-hello` is taken. It is the committed example this
+repository keeps byte-identical to the generator's output, so `ext-new` refuses
+to overwrite it.
 
 `KIND` is one of:
 
@@ -56,7 +60,7 @@ import, because it is read out of the artefact rather than written beside it.
 Look at what yours declared:
 
 ```console
-$ cat ext/tool-hello.manifest.toml
+$ cat ext/tool-greet.manifest.toml
 ```
 
 A freshly generated tool declares `host-log` and nothing else, because logging
@@ -95,12 +99,12 @@ A staged component does nothing until `config.yaml` names it:
 ```yaml
 extensions:
   tool:
-    hello:
+    greet:
       enabled: true
 ```
 
 The category and the name are how the host finds the component — `tool` +
-`hello` resolves to `ext/tool-hello.wasm`.
+`greet` resolves to `ext/tool-greet.wasm`.
 
 ## 5. Install one somebody else built
 
@@ -111,17 +115,23 @@ from elsewhere:
 $ jan-klod-gateway ext install ./tool-theirs.wasm
 ```
 
-**This will refuse, and the refusal is the point.** An install is verified
-against a minisign signature over *both* the component and its manifest, from a
-key named in `registry.trusted-keys` — and that list ships **empty**. So until a
-key is published, every signed install is refused because there is nobody
-trusted to have signed it.
+**This will refuse, and the refusal is the point:**
+
+```text
+jan-klod: no signature at ./tool-theirs.wasm.minisig. Sign it, name the key in
+`registry.trusted-keys`, or pass --allow-unsigned with --sha256
+```
+
+An install is verified against a minisign signature over *both* the component
+and its manifest, from a key named in `registry.trusted-keys` — and that list
+ships **empty**. So until a key is published, every signed install is refused
+because there is nobody trusted to have signed it.
 
 The way through today is to say plainly that you are not verifying a signature,
 and to pin what you are installing instead:
 
 ```console
-$ shasum -a 256 ./tool-theirs.wasm
+$ shasum -a 256 ./tool-theirs.wasm        # sha256sum on Linux
 $ jan-klod-gateway ext install ./tool-theirs.wasm --allow-unsigned --sha256 <hex>
 ```
 

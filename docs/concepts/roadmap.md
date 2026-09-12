@@ -831,7 +831,13 @@ registry-mcp`: `registry` was two worlds all along, and **`agent` is not a kind*
 generator by `scripts/ext-new-selftest.sh`, and
 `host/tests/it/generated_guest.rs` is the copyable test that loads it and calls
 it — probed three ways, because a harness that loads nothing passes as quietly
-as one that works. The guide (#113) is what remains of the PDK.
+as one that works. **PDK 3 done the same day** ([#113](https://github.com/PromptPasture/jan-klod/issues/113)):
+`docs/guides/writing-an-extension.md` walks the path end to end, including the
+install refusal an author hits first — signatures verify against
+`registry.trusted-keys`, which ships empty, so `--allow-unsigned --sha256` is
+the way through until #93 publishes a key. Every command on that page was run
+rather than transcribed, which is how its own first command turned out to fail.
+**The PDK is complete.**
 
 **#59 done 2026-09-11:** `tool-*`/`registry-*`/`agent` guests compile at boot
 (unchanged) but instantiate (`Store` + `init` + `start`) only when the fleet
