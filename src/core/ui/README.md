@@ -59,10 +59,42 @@ Three further findings, none of which are visible from a crate page:
 **What is used instead:** `pulldown-cmark` with default features off, and the
 subset #99 names — headings, bold/italic, inline code, bullet and ordered lists,
 block quotes, fenced blocks, links. That is the same parser `tui-markdown`
-itself uses, without the 48 crates wrapped around it. Syntax highlighting is a
-separate question with no answer yet; nothing measured here passes the policy,
-so [#149](https://github.com/PromptPasture/jan-klod/issues/149) decides it on
-its own terms rather than inheriting an assumption from this one.
+itself uses, without the 48 crates wrapped around it. Syntax highlighting was
+left as a separate question, since nothing measured here passed the policy —
+[#149](https://github.com/PromptPasture/jan-klod/issues/149) answered it on its
+own terms, and the next section is that answer.
+
+## Declined again: syntax highlighting
+
+Phase 19 asked for fenced code blocks with a language tag to be highlighted
+([#99](https://github.com/PromptPasture/jan-klod/issues/99)). **They are not**,
+and the reason is cost rather than difficulty
+([#149](https://github.com/PromptPasture/jan-klod/issues/149)). Measured against
+a baseline of `ratatui` + `serde_json` + `pulldown-cmark` — 186 packages,
+191 MB of `target/`:
+
+| Candidate | Packages | Δ | `target/` | `cargo deny`, root policy unmodified |
+|---|---:|---:|---:|---|
+| `syntect` 5.3 | 208 | +24 | — | **advisories FAILED** (RUSTSEC-2025-0141, RUSTSEC-2024-0320) |
+| `synoptic` 2 | 190 | +4 | — | **licences FAILED** — `char_index` is MPL-2.0 |
+| `tree-sitter-highlight` 0.25 | 194 | +8 | 327 MB | ok |
+| `inkjet` 0.11 | 204 | +18 | **731 MB** | ok |
+
+The two that pass the policy are the two that cost the most to build.
+`tree-sitter-highlight` adds **136 MB** of build output *before a single
+grammar* — it highlights nothing on its own, and every language is another
+vendored C grammar on top. `inkjet` bundles the grammars, which is why it is one
+dependency rather than a dozen, and why it is **540 MB** and 156 CPU-seconds.
+
+For a terminal chat client whose entire crate carries three runtime
+dependencies, that is not a trade worth making for colour in a code block. This
+repository has treated build footprint as first-class before.
+
+**So a fenced block is marked by its surface and its indent, and by nothing
+else** — tagged or untagged, the same. `markdown::tests::
+no_fence_carries_syntax_colour_tagged_or_not` pins that, so a future slice that
+wants highlighting has to come back and change it deliberately rather than
+discover the decision by its absence.
 
 ## Colour and glyphs come from `theme.rs`, and only from there
 

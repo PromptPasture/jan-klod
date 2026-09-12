@@ -354,6 +354,37 @@ mod tests {
         }
     }
 
+    /// Acceptance line 3, and the shape of the answer #149 box 2 reached.
+    ///
+    /// No fence is highlighted — tagged or not. Every policy-clean highlighter
+    /// measured cost between 136 MB and 540 MB of build output for a terminal
+    /// chat client, and the cheap one failed the licence policy; `src/core/ui`'s
+    /// reasoning is in README.md. So a code block is marked by its surface and
+    /// its indent and by nothing else, and this test is what a future
+    /// highlighting slice has to come back and change deliberately.
+    #[test]
+    fn no_fence_carries_syntax_colour_tagged_or_not() {
+        let t = theme(Mode::Dark);
+        for md in [
+            "```rust\nfn main() { let x: u8 = 1; }\n```",
+            "```\nfn main() { let x: u8 = 1; }\n```",
+        ] {
+            let lines = render(md, 60, t);
+            let colours: std::collections::BTreeSet<String> = lines
+                .iter()
+                .flat_map(|l| &l.spans)
+                .filter(|s| !s.content.trim().is_empty())
+                .map(|s| format!("{:?}", s.style.fg))
+                .collect();
+            assert_eq!(
+                colours.len(),
+                1,
+                "a code block took more than one foreground, which is syntax \
+                 colour by another name: {colours:?}"
+            );
+        }
+    }
+
     #[test]
     fn structure_survives_the_round_trip() {
         let t = theme(Mode::Dark);
