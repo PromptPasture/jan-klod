@@ -6,10 +6,42 @@
 #
 # Installs to ~/.local/bin/jan-klod by default.
 # Set INSTALL_DIR to override (e.g. INSTALL_DIR=/usr/local/bin ... | sh).
+#
+# Pick a distribution with --dist:
+#   curl -sSL .../install.sh | sh -s -- --dist headless-chat
+#
+#   coding         (default) models, the interceptor set, file and git tools
+#   headless-chat  a chat channel; nothing that touches the machine
+#   minimal        one provider and the interceptor set
 set -eu
 
 REPO="PromptPasture/jan-klod"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
+
+# The distributions the release publishes. Kept in step with
+# scripts/distributions/ and .github/workflows/release.yml by
+# `docs_match_config::the_installer_offers_the_distributions_the_release_builds`
+# — a name here that the release does not build is a 404 at the user, and the
+# test is what turns that into a failing build instead.
+DISTRIBUTIONS="coding headless-chat minimal"
+DIST="coding"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dist) DIST="${2:?--dist needs a name}"; shift 2 ;;
+    --dist=*) DIST="${1#--dist=}"; shift ;;
+    -h|--help)
+      echo "usage: install.sh [--dist <name>]"
+      echo "  name: ${DISTRIBUTIONS}"
+      exit 0 ;;
+    *) echo "error: unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+case " ${DISTRIBUTIONS} " in
+  *" ${DIST} "*) ;;
+  *) echo "error: unknown distribution: ${DIST} (want one of: ${DISTRIBUTIONS})" >&2; exit 2 ;;
+esac
 
 # Detect OS and architecture.
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -40,11 +72,18 @@ if [ -z "${TAG}" ]; then
   exit 1
 fi
 
-BUNDLE="jan-klod-${TAG}-${OS}-${ARCH}.tar.gz"
+# The archive carries the distribution, as `make bundle DIST=` names it.
+#
+# There is no unsuffixed fallback, and that is safe rather than brave: nothing
+# is tagged or released yet, so no published asset has the old name. Making the
+# same change *after* a release would have needed one — an installer that asks
+# for an archive no existing tag has turns every previous version into a 404,
+# which is the one failure a user cannot work around.
+BUNDLE="jan-klod-${TAG}-${OS}-${ARCH}-${DIST}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${TAG}/${BUNDLE}"
 CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS.txt"
 
-echo "Installing jan-klod ${TAG} (${OS}-${ARCH}) …"
+echo "Installing jan-klod ${TAG} (${OS}-${ARCH}, ${DIST}) …"
 
 # Download bundle + checksums to a temp dir.
 TMP="$(mktemp -d)"
@@ -69,7 +108,7 @@ cd - > /dev/null
 # Extract and install everything the bundle carries — not just the binaries,
 # or the installed agent boots with no extensions and no tools.
 tar -xzf "${TMP}/${BUNDLE}" -C "${TMP}"
-EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}"
+EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}-${DIST}"
 DATA_DIR="${DATA_DIR:-$(dirname "${INSTALL_DIR}")/share/jan-klod}"
 
 mkdir -p "${INSTALL_DIR}" "${DATA_DIR}"
