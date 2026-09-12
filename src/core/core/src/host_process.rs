@@ -360,6 +360,13 @@ impl ProcessRunner {
     }
 }
 
+/// How long the death report waits for the stderr tail to arrive (#133).
+///
+/// Long enough that a thread which has already read the bytes gets scheduled,
+/// short enough that nobody notices it on the path where a child was killed
+/// deliberately and said nothing.
+const STDERR_DRAIN: Duration = Duration::from_millis(200);
+
 /// A long-lived child the host is holding open for a guest (#109).
 ///
 /// # Why a reader thread rather than a poll
@@ -374,11 +381,25 @@ impl ProcessRunner {
 ///
 /// The thread ends when the pipe closes, which is when the child exits, so
 /// nothing has to stop it.
+///
+/// There are two such threads: one for stdout, which the guest reads, and one
+/// for stderr, which only the host log ever sees (#133).
 pub struct LiveChild {
     child: std::process::Child,
     stdin: Option<std::process::ChildStdin>,
     /// Chunks the reader thread has pulled off stdout.
     stdout: std::sync::mpsc::Receiver<Vec<u8>>,
+    /// The tail of stderr, delivered once when that pipe reaches EOF (#133).
+    ///
+    /// A whole channel for one message, because the alternative — a shared
+    /// buffer read at the moment the exit is noticed — loses the race it most
+    /// needs to win. A child writes its complaint and *then* exits, so the bytes
+    /// are still in the pipe when `try_wait` first reports the death, and a
+    /// reader thread that has not been scheduled yet leaves the buffer empty at
+    /// exactly the moment the buffer is worth reading. EOF is the only signal
+    /// that says "this stream is finished", and the thread is the only thing
+    /// that sees it.
+    stderr: std::sync::mpsc::Receiver<String>,
     /// What a previous read did not take, kept so `max_bytes` bounds the
     /// *answer* rather than discarding the remainder of a chunk.
     pending: Vec<u8>,
@@ -396,7 +417,7 @@ pub struct LiveChild {
 }
 
 impl LiveChild {
-    /// Take the pipes and start the reader thread.
+    /// Take the pipes and start the reader threads.
     fn new(mut child: std::process::Child, cap: usize, name: String) -> Self {
         let stdin = child.stdin.take();
         let (tx, stdout) = std::sync::mpsc::channel();
@@ -410,10 +431,39 @@ impl LiveChild {
                 }
             });
         }
+        // stderr had a thread of its own added by #133, and draining it is worth
+        // as much as reading it: `prepared()` pipes stderr for every child, and
+        // nothing here read a long-lived one. A pipe nobody drains fills at the
+        // OS buffer — about 64 KiB — and then the child *blocks on write*. So
+        // this loop keeps a chatty server running as much as it keeps its last
+        // words.
+        let (tx_err, stderr) = std::sync::mpsc::channel();
+        if let Some(mut err) = child.stderr.take() {
+            std::thread::spawn(move || {
+                // The last `cap` bytes, not the first: a process explains itself
+                // on the way out, so the tail is the half worth keeping. The
+                // runner's own output cap bounds it, the same number that bounds
+                // `exec`'s captured streams and a guest's single read — a second
+                // limit invented here would be one more thing to keep in step.
+                let mut tail: Vec<u8> = Vec::new();
+                let mut buf = [0_u8; 8192];
+                while let Ok(n) = err.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    tail.extend_from_slice(&buf[..n]);
+                    if tail.len() > cap {
+                        tail.drain(..tail.len() - cap);
+                    }
+                }
+                let _ = tx_err.send(String::from_utf8_lossy(&tail).into_owned());
+            });
+        }
         Self {
             child,
             stdin,
             stdout,
+            stderr,
             pending: Vec::new(),
             cap,
             name,
@@ -481,11 +531,39 @@ impl LiveChild {
                         self.name,
                         describe_exit(status)
                     );
+                    // The stderr thread sends its tail once, at EOF. Waiting
+                    // briefly rather than taking whatever is there right now is
+                    // the whole point of the channel: the child writes its
+                    // complaint and *then* exits, so at this instant the bytes
+                    // are usually still in the pipe. Bounded, because a
+                    // grandchild holding the write end open means EOF never
+                    // arrives, and a diagnostic must not be able to hang the
+                    // runtime it is diagnosing.
+                    let tail = self.stderr_tail();
+                    let tail = tail.trim();
+                    if !tail.is_empty() {
+                        eprintln!(
+                            "WARN [core] host-process: long-lived child `{}` last stderr: {tail}",
+                            self.name
+                        );
+                    }
                 }
                 false
             }
             Err(_) => false,
         }
+    }
+
+    /// The last words the child wrote to stderr, once its pipe has closed.
+    ///
+    /// Empty when there was nothing, when the pipe is still open after
+    /// [`STDERR_DRAIN`], or when the child had no stderr to begin with — a
+    /// disconnected channel returns immediately, so none of those wait.
+    ///
+    /// Consuming: the thread sends exactly one message, so this answers once.
+    /// That is all the death report needs, and it is why nothing else calls it.
+    fn stderr_tail(&self) -> String {
+        self.stderr.recv_timeout(STDERR_DRAIN).unwrap_or_default()
     }
 
     /// Kill it and reap it. Idempotent.
@@ -691,6 +769,64 @@ mod tests {
                 "a signalled child has no exit code, and saying so is the point"
             );
         }
+    }
+
+    /// A child's last words survive it, and the runner's cap bounds them (#133).
+    ///
+    /// The size assertion is the one that matters. `prepared()` pipes stderr for
+    /// every child and, before this, nothing read a long-lived one's — so a
+    /// server chatty enough to fill the OS pipe buffer would have *blocked on
+    /// write* with no diagnosis available anywhere. Draining it is worth as much
+    /// as reading it, and an undrained pipe and an unbounded buffer are the two
+    /// ways to get that wrong.
+    #[test]
+    fn a_dead_childs_last_stderr_is_kept_and_bounded_by_the_output_cap() {
+        let cap = 256;
+        let (ws, _) = runner();
+        let runner = ProcessRunner::new(ws, Duration::from_secs(5), cap).with_long_lived(vec![
+            LongLived {
+                name: "complains".to_string(),
+                command: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "echo \"error: Unrecognized option: 'writable'\" >&2; exit 2".to_string(),
+                ],
+            },
+            LongLived {
+                name: "floods".to_string(),
+                command: "sh".to_string(),
+                // Ends with a line naming itself, so "the tail, not the head" is
+                // checkable rather than merely asserted.
+                args: vec![
+                    "-c".to_string(),
+                    "i=0; while [ $i -lt 400 ]; do echo padding-padding-padding >&2; \
+                     i=$((i+1)); done; echo THE-LAST-WORD >&2; exit 1"
+                        .to_string(),
+                ],
+            },
+        ]);
+
+        let mut complains = runner.spawn_long_lived("complains").expect("it starts");
+        let _ = complains.child.wait();
+        assert!(
+            complains.stderr_tail().contains("Unrecognized option"),
+            "the name of the bug, in the failing process's own words, is exactly \
+             what #132 spent eight runs not having"
+        );
+
+        let mut floods = runner.spawn_long_lived("floods").expect("it starts");
+        let _ = floods.child.wait();
+        let tail = floods.stderr_tail();
+        assert!(
+            tail.len() <= cap,
+            "an unbounded reader on a long-lived child is a memory leak with a \
+             good excuse; got {} bytes against a {cap}-byte cap",
+            tail.len()
+        );
+        assert!(
+            tail.contains("THE-LAST-WORD"),
+            "the *last* cap bytes: a process explains itself on the way out"
+        );
     }
 
     fn runner() -> (Workspace, ProcessRunner) {
