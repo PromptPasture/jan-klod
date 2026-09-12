@@ -775,3 +775,68 @@ fn no_shell_block_recommends_positional_serve_paths() {
         }
     }
 }
+
+/// Where the release publishes the registry, against where `config.yaml` says
+/// it is (#139).
+///
+/// `release.yml` generates the index with `REGISTRY_URL=<site>/ext` and then
+/// copies it to `_site/index.json` with the components at `_site/ext/`. Nothing
+/// but a comment tied those three to `registry.url`, which is the shape #130 and
+/// #131 both cost this repository: a rule recorded as prose is a rule that gets
+/// out of step in the one file nobody re-reads.
+///
+/// It matters here more than most, because the mistake is unobservable until a
+/// tag exists. #139's Acceptance says this half can only be "probed on a runner,
+/// not only read" — true of the deploy itself, and this is the part of it that
+/// does not have to be: an index published at a path `ext install` does not look
+/// at, or naming component URLs that 404, is a broken registry that every test
+/// in this repository would otherwise pass.
+#[test]
+fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
+    let root = common::repo_root();
+    let config = std::fs::read_to_string(root.join("config.yaml")).expect("config.yaml");
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
+        .expect("release.yml is readable");
+
+    // `registry.url` names the index itself; its parent is the site root.
+    let url = config
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("url: "))
+        .expect("config.yaml names a registry.url")
+        .trim()
+        .to_owned();
+    let (site, index_file) = url
+        .rsplit_once('/')
+        .expect("registry.url has a path, so it has a parent");
+
+    // What the workflow told the generator to write into every entry's `url`.
+    let generated_base = workflow
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("REGISTRY_URL=\""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("release.yml sets REGISTRY_URL for `make registry-index`")
+        .to_owned();
+
+    assert_eq!(
+        generated_base,
+        format!("{site}/ext"),
+        "release.yml builds component URLs under {generated_base}, but \
+         config.yaml serves the index from {site}/ — so every entry in the \
+         published index would name a path the site does not have"
+    );
+
+    // And the copies that put the files at those paths.
+    assert!(
+        workflow.contains(&format!("_site/{index_file}")),
+        "registry.url names `{index_file}` at the site root, and release.yml \
+         does not copy the index there — `ext search` would 404 against the \
+         site it just published"
+    );
+    assert!(
+        workflow.contains("_site/ext/"),
+        "the index's entries point at <site>/ext/, and release.yml does not \
+         assemble that directory — the index would name components that 404"
+    );
+}
