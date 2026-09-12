@@ -21,6 +21,7 @@ members = [
     "tool-find",
     "tool-git",
     "tool-fetch",
+    "tool-hello",
 ]
 
 [workspace.package]

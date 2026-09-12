@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -101,6 +101,20 @@ extensions:
 # Alias: `ext` is the name every skip notice tells developers to run, but
 # `ext/` is also a directory, so plain make no-ops on it without .PHONY.
 ext: extensions
+
+# Scaffold a new extension crate, registered and ready to build.
+#
+#   make ext-new NAME=tool-hello KIND=tool
+#
+# KIND ∈ provider | tool | interceptor | registry-skills | registry-mcp. Not
+# `agent`: there is no agent world in wit/ and `Runtime::boot` has no arm for
+# one, so a generated agent crate could compile against nothing and never load
+# (#111).
+ext-new:
+	@test -n "$(NAME)" || { echo "usage: make ext-new NAME=<name> KIND=<kind>" >&2; exit 2; }
+	@test -n "$(KIND)" || { echo "usage: make ext-new NAME=<name> KIND=<kind>" >&2; exit 2; }
+	sh scripts/ext-new.sh "$(NAME)" "$(KIND)"
+
 
 # Host-side unit tests: the core workspace plus the guests' native tests.
 test: test-core test-guests

@@ -356,6 +356,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tool-hello"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "tool-proc-probe"
 version = "0.1.0"
 dependencies = [
