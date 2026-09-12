@@ -8,17 +8,29 @@
 //!
 //! # Present and honest beats absent
 //!
-//! Four of the six commands cannot act yet. They are here anyway, each carrying
+//! Three of the six commands cannot act yet. They are here anyway, each carrying
 //! the reason, because **absent is not a state a user can tell from never
 //! planned**. A `/` menu that silently lacks `/cancel` teaches someone that
 //! cancelling is not a thing; one that lists it and says what it is waiting on
 //! teaches them when to look again.
 //!
-//! What each is waiting on is a fact about this crate rather than a guess:
-//! `Transport` carries exactly `stream_turn`, `answer` and `describe`. The
-//! protocol defines `Command::SessionCreate` and `Command::TurnCancel`, but the
-//! client cannot send either — see
-//! [#157](https://github.com/PromptPasture/jan-klod/issues/157).
+//! What each is waiting on is a fact about this crate rather than a guess.
+//! `/sessions` and `/help` wait on dialogs 19h has not built
+//! ([#105](https://github.com/PromptPasture/jan-klod/issues/105)). `/new` is a
+//! narrower case: `Transport` can send `session/create` since
+//! [#157](https://github.com/PromptPasture/jan-klod/issues/157), but *switching
+//! to* the created session is the session switcher's ownership change, which is
+//! also #105. Marking one `Ready` before its wiring exists would be exactly the
+//! lie this module is built to avoid: a command that claims to act and does not.
+//!
+//! # `Ready` means "acts", not "needs no transport"
+//!
+//! It used to mean both, because the two commands that acted needed nothing.
+//! `/cancel` broke the coincidence: it acts, and it needs a transport. Rather
+//! than let `App::run_command` reach for one — this type has never known what a
+//! transport is, and that is load-bearing — `/cancel` raises the same kind of
+//! flag `/quit` does, and the caller performs it. The model records intent; the
+//! event loop, which is the only thing holding a transport, sends it.
 
 /// Whether a command can act, and if not, what it is waiting on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,13 +68,16 @@ pub const COMMANDS: [Command; 6] = [
     Command {
         name: "/cancel",
         summary: "stop the running turn",
-        availability: Availability::Pending("the client cannot send `turn/cancel` yet — see #157"),
+        availability: Availability::Ready,
     },
     Command {
         name: "/new",
         summary: "start a new session",
+        // The transport can send `session/create` (#157); switching to the
+        // created session needs the session-owner change 19h's switcher makes,
+        // #105.
         availability: Availability::Pending(
-            "the client cannot send `session/create` yet — see #157",
+            "the menu does not switch to a created session yet — see #105",
         ),
     },
     Command {
@@ -173,10 +188,18 @@ mod tests {
         );
     }
 
-    /// The two that act need nothing this crate does not have; if that stops
-    /// being true, this test is where it surfaces.
+    /// Which commands claim to act, pinned so one cannot start or stop
+    /// claiming it quietly.
+    ///
+    /// This was `exactly_the_commands_that_need_no_transport_are_ready`, and
+    /// the rename is the finding rather than tidying. `Ready` and "needs
+    /// nothing but the composer" were the same set by coincidence — the only
+    /// two that acted happened to need neither a transport nor a dialog.
+    /// `/cancel` separates them: it acts, and it needs a transport. It does not
+    /// get one *here*, which is the part worth keeping — it raises a flag the
+    /// event loop drains, the same way `/quit` sets `should_quit`.
     #[test]
-    fn exactly_the_commands_that_need_no_transport_are_ready() {
+    fn exactly_the_commands_that_act_are_ready() {
         let ready: Vec<&str> = COMMANDS
             .iter()
             .filter(|c| c.availability == Availability::Ready)
@@ -184,7 +207,7 @@ mod tests {
             .collect();
         assert_eq!(
             ready,
-            vec!["/newline", "/quit"],
+            vec!["/newline", "/cancel", "/quit"],
             "a command became ready or stopped being so — say which, and why, \
              rather than editing this list to match"
         );

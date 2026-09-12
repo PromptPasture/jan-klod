@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use jan_klod::app::{App, Prompt};
+use jan_klod::app::{App, Prompt, Turn};
 use jan_klod::blocks;
 use jan_klod::commands::Availability;
 use jan_klod::theme::{Glyph, Theme};
@@ -75,6 +75,10 @@ fn event_loop(
 
     // Channel carrying stream events from a background turn thread.
     let mut rx: Option<mpsc::Receiver<Result<StreamEvent, String>>> = None;
+    // How many poll periods have elapsed, which is what drives the spinner.
+    // `wrapping_add` because this only ever feeds a modulo — an overflow after
+    // ~29 000 years of streaming should not be a panic.
+    let mut tick: usize = 0;
 
     while !app.should_quit {
         // Drain all pending stream events before redrawing.
@@ -97,10 +101,25 @@ fn event_loop(
             }
         }
 
-        terminal.draw(|frame| render(frame, &app, theme, &mut view, &mut pane))?;
+        // One place sends a cancel, whoever asked for it — `Ctrl+C` or the `/`
+        // menu. `App::cancel` raises the ask and refuses to raise it twice, so
+        // this cannot send two to a core that is already stopping, and the menu
+        // gets to act without `App` ever learning what a transport is.
+        if app.take_cancel_request() {
+            match transport.cancel(session) {
+                Ok(()) => app.record_status("cancelling — the answer so far is kept"),
+                Err(err) => app.record_status(format!("cancel could not be sent: {err}")),
+            }
+        }
+
+        terminal.draw(|frame| render(frame, &app, theme, &mut view, &mut pane, tick))?;
 
         // Short poll so we redraw incrementally during streaming.
         if !event::poll(Duration::from_millis(POLL_MS))? {
+            // A poll that timed out is the spinner's heartbeat (#160). The
+            // frame advances here rather than where a delta arrives, so a turn
+            // that is thinking rather than emitting still looks alive.
+            tick = tick.wrapping_add(1);
             continue;
         }
         let Event::Key(key) = event::read()? else {
@@ -121,46 +140,124 @@ fn event_loop(
         }
         match key.code {
             KeyCode::Esc => app.quit(),
-            // A pending confirmation is answered even though a turn is running —
-            // that turn is precisely what is blocked waiting for it.
-            KeyCode::Enter if app.pending_prompt.is_some() => {
-                if let Some(answer) = app.take_answer() {
-                    let transport = Arc::clone(transport);
-                    let session = session.to_string();
-                    // Off-thread: sending the answer can block on the core, and
-                    // the UI must keep drawing the stream meanwhile.
-                    thread::spawn(move || {
-                        let _ = transport.answer(&session, &answer);
-                    });
-                }
-            }
-            // `Ctrl+C` asks the turn to stop. Whether anything *can* be sent is
-            // a question about the transport, and `request_cancel` answers it
-            // out loud rather than leaving a key that appears to do nothing.
+            // `Ctrl+C` stops the running turn. *How* is the transport's
+            // business — a `turn/cancel` over stdio, a stream teardown over
+            // REST — and this does not know which it got.
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 request_cancel(&mut app);
             }
-            KeyCode::Enter if rx.is_none() => {
-                if let Some(message) = app.take_submission() {
-                    app.begin_turn();
-                    let transport = Arc::clone(transport);
-                    let session = session.to_string();
-                    let (tx, new_rx) = mpsc::channel();
-                    thread::spawn(move || {
-                        let result = transport.stream_turn(&session, &message, &mut |event| {
-                            let _ = tx.send(Ok(event));
+            KeyCode::Enter => match enter_means(&app) {
+                // A pending confirmation is answered even though a turn is
+                // running — that turn is precisely what is blocked waiting for
+                // it, which is why `Blocked` comes first in `enter_means`.
+                Enter::Answer => {
+                    if let Some(answer) = app.take_answer() {
+                        let transport = Arc::clone(transport);
+                        let session = session.to_string();
+                        // Off-thread: sending the answer can block on the core
+                        // — over REST it is a whole HTTP round trip — and the
+                        // UI must keep drawing the stream meanwhile.
+                        thread::spawn(move || {
+                            let _ = transport.answer(&session, &answer);
                         });
-                        if let Err(err) = result {
-                            let _ = tx.send(Err(err));
-                        }
-                    });
-                    rx = Some(new_rx);
+                    }
                 }
-            }
+                Enter::Steer => steer(transport.as_ref(), session, &mut app),
+                Enter::Send if rx.is_none() => {
+                    if let Some(message) = app.take_submission() {
+                        app.begin_turn();
+                        let transport = Arc::clone(transport);
+                        let session = session.to_string();
+                        let (tx, new_rx) = mpsc::channel();
+                        thread::spawn(move || {
+                            let result = transport.stream_turn(&session, &message, &mut |event| {
+                                let _ = tx.send(Ok(event));
+                            });
+                            if let Err(err) = result {
+                                let _ = tx.send(Err(err));
+                            }
+                        });
+                        rx = Some(new_rx);
+                    }
+                }
+                Enter::Send | Enter::Nothing => {}
+            },
             _ => {}
         }
     }
     Ok(())
+}
+
+/// What `Enter` does right now (#159).
+///
+/// `Enter` has four claims on it and the state picks between them. Extracted
+/// from the event loop rather than left as a chain of match guards for one
+/// reason: the loop needs a terminal, so a guard chain is a table nothing can
+/// assert. This is a pure function of the model, and
+/// `enter::the_state_decides_what_enter_means` reads it as the table it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Enter {
+    /// Answer the pending confirmation. **Does not steer**: a question about a
+    /// turn is not a message to it.
+    Answer,
+    /// Steer the turn already running — `turn/follow-up`.
+    Steer,
+    /// Start a turn — `session/message`.
+    Send,
+    /// Nothing, because the turn is stopping and steering a turn that is being
+    /// cancelled is not a thing to offer.
+    Nothing,
+}
+
+/// Which meaning the state gives `Enter`.
+///
+/// Order matters and is the table from #159. `Blocked` is checked first because
+/// `App::turn()` derives it from `pending_prompt`, and a turn that is blocked is
+/// also streaming underneath — so testing for `Streaming` first would steer
+/// instead of answering.
+///
+/// Read from `App::turn()` rather than from the event loop's `rx`. Both answer
+/// "is a turn running" and they are reconciled at `Step::Ended`, but they are
+/// two fields with one opinion and the model's accessor is the one #158 made
+/// authoritative; a steering arm that tested the other would work until the
+/// first turn that ended early.
+///
+/// Note the `/` menu and the `@` completion take `Enter` *before* this is ever
+/// reached (19d), and both fall through on an empty list so a list showing
+/// nothing cannot make the composer unsendable. This layers after that order
+/// rather than joining it.
+const fn enter_means(app: &App) -> Enter {
+    match app.turn() {
+        Turn::Blocked => Enter::Answer,
+        Turn::Streaming => Enter::Steer,
+        Turn::Idle => Enter::Send,
+        Turn::Cancelling => Enter::Nothing,
+    }
+}
+
+/// Send the composer's text as a follow-up, and show a refusal rather than
+/// swallowing it (#159).
+///
+/// **Synchronous**, unlike `answer`, and the difference is deliberate.
+/// `Rest::follow_up` is a refusal with no I/O at all, and `Stdio::follow_up` is
+/// one write to a pipe whose *reader* is another thread — neither can block the
+/// draw loop meaningfully. A spawned thread would instead throw away the error,
+/// which over REST is the entire answer: 13b recorded that the REST surface has
+/// no route reaching a turn in flight, so a keystroke that vanished there would
+/// teach a user that steering is broken rather than that this connection cannot
+/// carry it.
+///
+/// The message is taken from the composer either way, so a refused follow-up
+/// still clears what was typed and records it — the user said it, and a
+/// transcript that showed the refusal without the thing refused would be
+/// missing half the exchange.
+fn steer(transport: &dyn Transport, session: &str, app: &mut App) {
+    let Some(message) = app.take_submission() else {
+        return;
+    };
+    if let Err(refusal) = transport.follow_up(session, &message) {
+        app.record_status(refusal);
+    }
 }
 
 /// `Ctrl+C`: ask the running turn to stop, and say what that actually does.
@@ -170,22 +267,24 @@ fn event_loop(
 /// second `Ctrl+C` of a pair must not produce a second line saying the same
 /// thing, for the same reason it must not send a second message.
 ///
-/// **The sentence is the point of the function.** The client cannot send
-/// `turn/cancel` on any transport today ([#157]), so a `Ctrl+C` that quietly
-/// set a state and changed nothing visible would teach a user that cancelling
-/// is broken rather than that it is unfinished. Saying which it is costs one
-/// line and is the difference between the two.
+/// **The partial answer stays.** `App::cancel` does not erase what has already
+/// arrived, and it must not: cancelling finalizes with what is in hand, and
+/// deleting it would misreport what the core actually did before it stopped.
+///
+/// This used to only *say* a cancel had been asked for, because the client had
+/// no way to send one ([#157]). It can now, and does — over stdio a real
+/// `turn/cancel`, over REST the stream teardown the conductor reads as
+/// `Flow::Stop`. One method, two honest implementations, and this does not know
+/// which it got.
+///
+/// It does not send anything itself. `App::cancel` raises the ask and the event
+/// loop drains it, so `Ctrl+C` and the `/cancel` command go out by one path —
+/// the menu is dispatched inside `App`, which holds no transport, and giving it
+/// one to make this key simpler would have been the wrong trade.
 ///
 /// [#157]: https://github.com/PromptPasture/jan-klod/issues/157
 fn request_cancel(app: &mut App) -> bool {
-    if !app.cancel() {
-        return false;
-    }
-    app.record_status(
-        "cancel requested — the client cannot send `turn/cancel` yet (#157), \
-         so this turn will run to its end",
-    );
-    true
+    app.cancel()
 }
 
 /// What the last frame drew, so the scroll keys have dimensions to work with.
@@ -403,11 +502,90 @@ fn apply_event(app: &mut App, receiver: &mpsc::Receiver<Result<StreamEvent, Stri
     Step::Applied
 }
 
-fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane: &mut Pane) {
+/// Which caret the composer wears — the first of #160's three signals.
+///
+/// `Enter` means something different while a turn is running, and this is the
+/// mark that says so. A `Glyph` rather than a tint, because under `Mode::Mono`
+/// every role is `Color::Reset` and a tinted caret would be no signal at all.
+const fn caret_glyph(turn: Turn) -> Glyph {
+    match turn {
+        Turn::Streaming => Glyph::CaretSteering,
+        // `Cancelling` keeps the idle caret on purpose: the turn is stopping,
+        // so steering it is not a thing to advertise. `Blocked` likewise — what
+        // `Enter` does there is answer the confirmation, which the title says
+        // in words rather than by reusing the steering mark for a third meaning.
+        Turn::Idle | Turn::Cancelling | Turn::Blocked => Glyph::Caret,
+    }
+}
+
+/// What the composer is *for* right now — the second of #160's three signals.
+///
+/// The border title, which is the closest thing a `ratatui` input has to a
+/// placeholder. Separate from [`status_hint`] deliberately: this says what the
+/// field is, that says which keys act, and #160 asks for both because one
+/// signal is one thing to miss.
+fn composer_label(app: &App) -> String {
+    app.pending_prompt.as_ref().map_or_else(
+        || {
+            match app.turn() {
+                Turn::Streaming => "steer this turn",
+                Turn::Cancelling => "cancelling",
+                // `Blocked` is unreachable here — `pending_prompt` is what
+                // makes a turn `Blocked`, and this arm is the `None` branch.
+                Turn::Idle | Turn::Blocked => "message",
+            }
+            .to_string()
+        },
+        |prompt| format!("answer [{}]", prompt.options.join("/")),
+    )
+}
+
+/// Which keys act right now — the third of #160's three signals.
+///
+/// Written from the state rather than from a fixed string, because the whole
+/// point of the trio is that `Enter` does not always mean the same thing and a
+/// hint that said "Enter to send" during a turn would be the lie the signals
+/// exist to prevent.
+fn status_hint(app: &App) -> String {
+    if let Some(prompt) = app.pending_prompt.as_ref() {
+        return format!("Enter for `{}` · Esc to quit", prompt.default);
+    }
+    match app.turn() {
+        Turn::Streaming => "Enter to steer · Ctrl+C to cancel".to_string(),
+        Turn::Cancelling => "stopping · Ctrl+C already sent".to_string(),
+        Turn::Idle | Turn::Blocked => "Enter to send · Esc to quit".to_string(),
+    }
+}
+
+/// The spinner frame for `tick`, or nothing when no turn is running.
+///
+/// **Advanced by the caller's poll tick, not by an arriving delta** (#160).
+/// `text-delta` is documented as one per completion rather than one per token,
+/// so an animation driven by arrivals would sit frozen through exactly the long
+/// wait it exists to reassure someone about — a spinner that stops looks like a
+/// client that has hung.
+fn spinner_frame(theme: Theme, turn: Turn, tick: usize) -> Option<&'static str> {
+    match turn {
+        Turn::Idle => None,
+        Turn::Streaming | Turn::Cancelling | Turn::Blocked => {
+            let frames = theme.spinner();
+            frames.get(tick % frames.len()).copied()
+        }
+    }
+}
+
+fn render(
+    frame: &mut Frame,
+    app: &App,
+    theme: Theme,
+    view: &mut Viewport,
+    pane: &mut Pane,
+    tick: usize,
+) {
     // The composer grows with its content and then scrolls, so the split is
     // computed from the buffer rather than fixed at three rows. `- 2` for the
     // block border, and again for the caret glyph and the space after it.
-    let caret = format!("{} ", theme.glyph(Glyph::Caret));
+    let caret = format!("{} ", theme.glyph(caret_glyph(app.turn())));
     let caret_cells = jan_klod::wrap::width(&caret);
     let composer_width = usize::from(frame.area().width).saturating_sub(2 + caret_cells);
 
@@ -449,6 +627,17 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
     // every role resolves to `Color::Reset`, so a marker that were only a colour
     // would vanish exactly when the user most needs to know the view is stale.
     let mut block = Block::bordered().title("jan-klod");
+    // The streaming indicator, top right. It advances on the caller's poll tick
+    // (#160), so it keeps moving through a long wait in which no delta arrives.
+    if let Some(frame_glyph) = spinner_frame(theme, app.turn(), tick) {
+        block = block.title(
+            Line::from(Span::styled(
+                format!(" {frame_glyph} "),
+                Style::default().fg(theme.focus()),
+            ))
+            .right_aligned(),
+        );
+    }
     let below = view.below(lines.len(), inner_height);
     if below > 0 {
         block = block.title_bottom(
@@ -464,16 +653,12 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
     let transcript = Paragraph::new(lines).block(block).scroll((offset, 0));
     frame.render_widget(transcript, transcript_area);
 
-    let title = app.pending_prompt.as_ref().map_or_else(
-        || "message — Enter to send, Esc to quit".to_string(),
-        |prompt| {
-            format!(
-                "answer [{}] — Enter for `{}`",
-                prompt.options.join("/"),
-                prompt.default
-            )
-        },
-    );
+    // Two of #160's three signals: what this field is (the title) and which
+    // keys act (the hint, along the bottom edge). The third is the caret above.
+    // Three separate marks rather than one sentence, because the cost of
+    // missing the change is sending a message to a turn that is still running.
+    let title = composer_label(app);
+    let hint = status_hint(app);
     // The caret glyph is the prompt marker, and it is a `Glyph` so it degrades;
     // the *cursor* is the terminal's own, placed below, because a drawn block
     // does not blink and does not move with the user's own expectations.
@@ -492,7 +677,15 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
             ])
         })
         .collect();
-    let input = Paragraph::new(composer).block(Block::bordered().title(title));
+    let input = Paragraph::new(composer).block(
+        Block::bordered().title(title).title_bottom(
+            Line::from(Span::styled(
+                format!(" {hint} "),
+                Style::default().fg(theme.muted()),
+            ))
+            .right_aligned(),
+        ),
+    );
     frame.render_widget(input, input_area);
     // +1 for the border, and the caret column is already in display cells.
     frame.set_cursor_position((
@@ -641,7 +834,7 @@ fn render_menu(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::{edit_or_scroll, request_cancel, Pane};
-    use jan_klod::app::{App, Entry as JanKlodEntry, Turn, Who};
+    use jan_klod::app::{App, Entry as JanKlodEntry, Turn};
     use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
     use jan_klod::viewport::Viewport;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -846,6 +1039,21 @@ mod tests {
                 jan_klod::commands::Availability::Ready => match command.name {
                     "/newline" => assert_eq!(app.input(), "\n"),
                     "/quit" => assert!(app.should_quit),
+                    // No turn is running in this loop's fresh `App`, so
+                    // `/cancel` has nothing to stop and says so rather than
+                    // raising an ask nobody will send. The case where it *does*
+                    // act is `a_menu_cancel_raises_the_same_ask_ctrl_c_does`.
+                    "/cancel" => {
+                        assert!(
+                            !app.take_cancel_request(),
+                            "/cancel queued a cancel with no turn running"
+                        );
+                        assert!(
+                            format!("{:?}", app.transcript).contains("no turn is running"),
+                            "/cancel did nothing and said nothing: {:?}",
+                            app.transcript
+                        );
+                    }
                     other => panic!("{other} is Ready and untested — add it here"),
                 },
                 jan_klod::commands::Availability::Pending(reason) => match app.transcript.last() {
@@ -1025,14 +1233,29 @@ mod tests {
         );
     }
 
-    /// Box 2's whole job: the key says what it cannot do.
+    /// `Ctrl+C` now raises a real cancel, where it used to only apologise.
+    ///
+    /// This test asserted the status line contained `#157` — the issue number
+    /// for "the client cannot send `turn/cancel`". #157 is built, so that
+    /// assertion would be pinning an apology for a limitation that no longer
+    /// exists. What is asserted instead is the behaviour the apology stood in
+    /// for: the ask is raised exactly once, and the partial answer survives it.
+    ///
+    /// The *sending* is the event loop's, not this function's, so it is not
+    /// asserted here — `enter::a_cancel_is_asked_for_once_however_it_was_asked`
+    /// covers the drain, which is the part that could send twice.
     #[test]
-    fn ctrl_c_asks_once_and_says_what_it_is_waiting_on() {
+    fn ctrl_c_asks_once_and_keeps_the_partial_answer() {
         let mut app = App::default();
+
         assert!(!request_cancel(&mut app), "there is no turn to stop");
         assert!(
             app.transcript.is_empty(),
             "a key with nothing to cancel must not narrate"
+        );
+        assert!(
+            !app.take_cancel_request(),
+            "a cancel was queued for a turn that was not running"
         );
 
         app.begin_turn();
@@ -1040,24 +1263,369 @@ mod tests {
         assert!(request_cancel(&mut app), "the first ask acts");
         assert_eq!(app.turn(), Turn::Cancelling);
 
-        let note = app.transcript.last().expect("a status line");
-        match note {
-            JanKlodEntry::Message { who, text } => {
-                assert_eq!(*who, Who::Status);
-                assert!(
-                    text.contains("#157"),
-                    "the line does not say what it is waiting on: {text:?}"
-                );
-            }
-            other @ JanKlodEntry::Tool(_) => panic!("expected a status line, got {other:?}"),
-        }
+        // The partial answer stays: cancelling finalizes with what is in hand,
+        // and erasing it would misreport what the core did before it stopped.
+        assert!(
+            format!("{:?}", app.transcript).contains("half an answer"),
+            "cancelling erased the answer that had already arrived"
+        );
 
-        let lines = app.transcript.len();
         assert!(!request_cancel(&mut app), "the second ask does not act");
+        assert!(
+            app.take_cancel_request(),
+            "the ask was raised and then lost"
+        );
+        assert!(
+            !app.take_cancel_request(),
+            "draining twice would send a second cancel to a core already stopping"
+        );
+    }
+}
+
+#[cfg(test)]
+mod signals {
+    use super::{caret_glyph, composer_label, spinner_frame, status_hint};
+    use jan_klod::app::{App, Prompt, Turn};
+    use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
+
+    fn streaming() -> App {
+        let mut app = App::default();
+        app.begin_turn();
+        app
+    }
+
+    /// #160's first Acceptance line: **all three** differ between `Idle` and
+    /// `Streaming`.
+    ///
+    /// All three, not any one, because this is the only warning a user gets
+    /// that `Enter` has stopped starting a turn and started steering one. A
+    /// single signal is a single thing to miss, and the consequence of missing
+    /// it is a message sent into a turn that is still running.
+    #[test]
+    fn the_caret_the_label_and_the_hint_all_change_when_a_turn_starts() {
+        let idle = App::default();
+        let busy = streaming();
+        assert_eq!(idle.turn(), Turn::Idle);
+        assert_eq!(busy.turn(), Turn::Streaming);
+
+        assert_ne!(
+            caret_glyph(idle.turn()),
+            caret_glyph(busy.turn()),
+            "the caret is the same in both states"
+        );
+        assert_ne!(
+            composer_label(&idle),
+            composer_label(&busy),
+            "the composer claims to be the same field in both states"
+        );
+        assert_ne!(
+            status_hint(&idle),
+            status_hint(&busy),
+            "the hint names the same keys in both states"
+        );
+    }
+
+    /// #160's third Acceptance line. `Mode::Mono` resolves every role to
+    /// `Color::Reset`, so any of the three that were only a tint would be
+    /// nothing at all — which is exactly the failure the trio exists to avoid.
+    #[test]
+    fn under_monochrome_the_three_still_differ() {
+        let idle = App::default();
+        let busy = streaming();
+        for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
+            let theme = Theme::new(Mode::Mono, Depth::TrueColor, set);
+            assert_ne!(
+                theme.glyph(caret_glyph(idle.turn())),
+                theme.glyph(caret_glyph(busy.turn())),
+                "{set:?}: the two carets render alike with colour gone"
+            );
+        }
+        // The other two are text, so they carry in mono by construction — but
+        // asserting it keeps the trio honest if either ever becomes a style.
+        assert_ne!(composer_label(&idle), composer_label(&busy));
+        assert_ne!(status_hint(&idle), status_hint(&busy));
+    }
+
+    /// #160's second Acceptance line: the frame advances on a **poll tick**,
+    /// with no delta received.
+    ///
+    /// `text-delta` is one per completion rather than one per token, so a
+    /// spinner tied to arrivals would freeze through the long wait it exists to
+    /// reassure someone about. Driving it from `tick` is what makes "the model
+    /// is thinking" look different from "the client has hung", and this asserts
+    /// the difference without a terminal or a turn.
+    #[test]
+    fn the_spinner_advances_on_a_tick_with_no_delta() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let busy = streaming();
+
+        let first = spinner_frame(theme, busy.turn(), 0).expect("a running turn spins");
+        let second = spinner_frame(theme, busy.turn(), 1).expect("a running turn spins");
+        assert_ne!(
+            first, second,
+            "the frame did not move between two poll ticks, so a thinking \
+             model is indistinguishable from a hung client"
+        );
+
+        // And it stops when there is nothing to wait for.
+        assert!(
+            spinner_frame(theme, App::default().turn(), 3).is_none(),
+            "an idle client spins, which says a turn is running when none is"
+        );
+    }
+
+    /// A pending confirmation is the third meaning of `Enter`, and it says so
+    /// in words rather than by reusing the steering caret (#159's table).
+    #[test]
+    fn a_pending_prompt_names_the_answer_enter_will_send() {
+        let mut app = streaming();
+        app.pending_prompt = Some(Prompt {
+            question: "write src/main.rs?".to_string(),
+            options: vec!["yes".to_string(), "no".to_string(), "always".to_string()],
+            default: "no".to_string(),
+        });
+        assert_eq!(app.turn(), Turn::Blocked);
+        assert!(composer_label(&app).contains("yes/no/always"));
+        assert!(
+            status_hint(&app).contains("`no`"),
+            "the hint must name the default, because that is what silence sends"
+        );
         assert_eq!(
-            app.transcript.len(),
-            lines,
-            "and it did not say the same thing twice"
+            caret_glyph(app.turn()),
+            caret_glyph(Turn::Idle),
+            "blocked reuses the steering caret, giving one mark two meanings"
+        );
+    }
+}
+
+#[cfg(test)]
+mod enter {
+    use super::{enter_means, steer, Enter};
+    use jan_klod::app::{App, Prompt, Turn};
+    use jan_klod::transport::{Rest, Transport};
+    use jan_klod::StreamEvent;
+    use std::sync::Mutex;
+
+    /// Records what the client asked of a transport, and nothing else.
+    ///
+    /// The point of #159's first Acceptance line is *which command was sent*,
+    /// not what came back — a test that asserted a reply would be testing the
+    /// fake. `tests/roundtrip.rs` stands up a canned server where the wire
+    /// matters; here it does not.
+    #[derive(Default)]
+    pub struct Recorder {
+        pub sent: Mutex<Vec<String>>,
+    }
+
+    impl Transport for Recorder {
+        fn stream_turn(
+            &self,
+            session: &str,
+            message: &str,
+            _on_event: &mut dyn FnMut(StreamEvent),
+        ) -> Result<(), String> {
+            self.sent
+                .lock()
+                .expect("lock")
+                .push(format!("session/message {session} {message}"));
+            Ok(())
+        }
+        fn answer(&self, session: &str, answer: &str) -> Result<(), String> {
+            self.sent
+                .lock()
+                .expect("lock")
+                .push(format!("turn/answer {session} {answer}"));
+            Ok(())
+        }
+        fn follow_up(&self, session: &str, message: &str) -> Result<(), String> {
+            self.sent
+                .lock()
+                .expect("lock")
+                .push(format!("turn/follow-up {session} {message}"));
+            Ok(())
+        }
+        fn create_session(&self) -> Result<String, String> {
+            self.sent
+                .lock()
+                .expect("lock")
+                .push("session/create".to_string());
+            Ok("new".to_string())
+        }
+        fn cancel(&self, session: &str) -> Result<(), String> {
+            self.sent
+                .lock()
+                .expect("lock")
+                .push(format!("turn/cancel {session}"));
+            Ok(())
+        }
+        fn describe(&self) -> String {
+            "a recorder".to_string()
+        }
+    }
+
+    fn typed(app: &mut App, text: &str) {
+        app.composer.insert(text);
+    }
+
+    fn prompt() -> Prompt {
+        Prompt {
+            question: "write src/main.rs?".to_string(),
+            options: vec!["yes".to_string(), "no".to_string()],
+            default: "no".to_string(),
+        }
+    }
+
+    /// #159's table, as a table. `Enter` has four meanings and the state is
+    /// what picks one.
+    #[test]
+    fn the_state_decides_what_enter_means() {
+        let idle = App::default();
+        assert_eq!(idle.turn(), Turn::Idle);
+        assert_eq!(enter_means(&idle), Enter::Send);
+
+        let mut busy = App::default();
+        busy.begin_turn();
+        assert_eq!(busy.turn(), Turn::Streaming);
+        assert_eq!(enter_means(&busy), Enter::Steer);
+
+        // Blocked is checked before Streaming, and has to be: a blocked turn is
+        // still streaming underneath, so the other order would steer instead of
+        // answering — and the answer is what the turn is waiting for.
+        let mut blocked = App::default();
+        blocked.begin_turn();
+        blocked.pending_prompt = Some(prompt());
+        assert_eq!(blocked.turn(), Turn::Blocked);
+        assert_eq!(
+            enter_means(&blocked),
+            Enter::Answer,
+            "a pending confirmation must take Enter ahead of steering"
+        );
+
+        let mut stopping = App::default();
+        stopping.begin_turn();
+        assert!(stopping.cancel());
+        assert_eq!(stopping.turn(), Turn::Cancelling);
+        assert_eq!(
+            enter_means(&stopping),
+            Enter::Nothing,
+            "steering a turn that is being cancelled is not a thing to offer"
+        );
+    }
+
+    /// #159 Acceptance 1: `Streaming` sends `turn/follow-up`, `Idle` does not.
+    #[test]
+    fn steering_sends_a_follow_up_and_not_a_new_message() {
+        let recorder = Recorder::default();
+        let mut app = App::default();
+        app.begin_turn();
+        typed(&mut app, "actually use serde");
+
+        steer(&recorder, "s1", &mut app);
+
+        let sent = recorder.sent.lock().expect("lock").clone();
+        assert_eq!(
+            sent,
+            vec!["turn/follow-up s1 actually use serde".to_string()]
+        );
+        assert!(
+            !sent.iter().any(|s| s.starts_with("session/message")),
+            "steering started a second turn instead of steering the first"
+        );
+    }
+
+    /// #159 Acceptance 2: `Blocked` answers the prompt and **does not steer**.
+    ///
+    /// Mostly an assertion about behaviour that already existed — nothing
+    /// pinned the ordering before, which is exactly how it would have been
+    /// reversed by someone tidying the match arms.
+    #[test]
+    fn a_blocked_turn_answers_and_does_not_steer() {
+        let mut app = App::default();
+        app.begin_turn();
+        app.pending_prompt = Some(prompt());
+        typed(&mut app, "yes");
+
+        assert_eq!(enter_means(&app), Enter::Answer);
+
+        let recorder = Recorder::default();
+        let answer = app.take_answer().expect("the composer holds the answer");
+        recorder.answer("s1", &answer).expect("recorded");
+
+        assert_eq!(
+            recorder.sent.lock().expect("lock").clone(),
+            vec!["turn/answer s1 yes".to_string()]
+        );
+        assert!(
+            app.pending_prompt.is_none(),
+            "answering left the prompt pending, so the next Enter answers it again"
+        );
+    }
+
+    /// `/cancel` and `Ctrl+C` raise the **same** ask, and it is sent once.
+    ///
+    /// The two enter by different doors — one through `App::run_command` inside
+    /// `edit_or_scroll`, the other through the key match in the event loop —
+    /// and neither can send anything itself, because `App` holds no transport.
+    /// They meet at the flag the loop drains, which is what makes "a second
+    /// `Ctrl+C` does not send a second cancel" true of the menu as well without
+    /// either path knowing about the other.
+    #[test]
+    fn a_menu_cancel_raises_the_same_ask_ctrl_c_does() {
+        for opened_by_menu in [false, true] {
+            let mut app = App::default();
+            app.begin_turn();
+
+            if opened_by_menu {
+                // Through `push_char`, which is what opens the menu — a
+                // direct composer insert would leave it closed and
+                // `menu_accept` with nothing highlighted.
+                "/cancel".chars().for_each(|c| app.push_char(c));
+                assert!(app.menu_accept(), "the menu did not take the command");
+            } else {
+                assert!(app.cancel(), "Ctrl+C did not act");
+            }
+
+            assert_eq!(app.turn(), Turn::Cancelling, "menu={opened_by_menu}");
+            assert!(
+                app.take_cancel_request(),
+                "menu={opened_by_menu}: nothing was queued for the loop to send"
+            );
+            assert!(
+                !app.take_cancel_request(),
+                "menu={opened_by_menu}: the ask survived its own drain"
+            );
+        }
+    }
+
+    /// #159 Acceptance 3: over REST, steering is refused **with a reason in the
+    /// transcript** rather than silently.
+    ///
+    /// 13b recorded that the REST surface has no route reaching a turn in
+    /// flight. That is a property of the connection, not a missing feature, and
+    /// the difference between the two is the sentence a user gets to read.
+    #[test]
+    fn rest_refuses_to_steer_and_the_user_can_read_why() {
+        let rest = Rest::new("127.0.0.1:1".to_string());
+        let mut app = App::default();
+        app.begin_turn();
+        typed(&mut app, "actually use serde");
+
+        steer(&rest, "s1", &mut app);
+
+        let transcript = format!("{:?}", app.transcript);
+        assert!(
+            transcript.contains("REST"),
+            "the refusal is not in the transcript, so the keystroke vanished: \
+             {transcript}"
+        );
+        assert!(
+            transcript.contains("stdio"),
+            "the refusal does not say what to do instead: {transcript}"
+        );
+        assert!(
+            transcript.contains("actually use serde"),
+            "the refused message is not shown, so the transcript has the \
+             refusal without the thing refused"
         );
     }
 }

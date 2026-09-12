@@ -182,6 +182,15 @@ pub struct App {
     cursor: Option<usize>,
     /// The turn, minus the one state that is derived. See [`Phase`].
     phase: Phase,
+    /// Set when something asked for the running turn to stop and nothing has
+    /// sent that ask to the core yet.
+    ///
+    /// The same shape as [`Self::should_quit`], and for the same reason: the
+    /// model records the intent and the caller performs it, because the caller
+    /// is the only thing holding a transport. Without it `/cancel` could not
+    /// act at all — commands are dispatched here, and this type has never known
+    /// what a transport is.
+    cancel_requested: bool,
     /// Set while a turn is blocked on a confirmation. The next submission is that
     /// answer, not a new message — a turn is already running and typing a fresh
     /// message would go nowhere.
@@ -379,6 +388,13 @@ impl App {
             Availability::Ready => match command.name {
                 "/newline" => self.composer.push('\n'),
                 "/quit" => self.should_quit = true,
+                // Sets the ask; the caller sends it, because commands are
+                // dispatched here and this type holds no transport.
+                "/cancel" => {
+                    if !self.cancel() {
+                        self.record(Who::Status, "no turn is running".to_string());
+                    }
+                }
                 // Unreachable while the table and this match agree, and a status
                 // line rather than a panic if they ever stop: a client that
                 // aborts on its own menu is worse than one that says so.
@@ -650,11 +666,24 @@ impl App {
             return false;
         }
         self.phase = Phase::Cancelling;
+        self.cancel_requested = true;
         self.pending_prompt = None;
         // A tool block left `Running` forever is a spinner that never stops,
         // which reads as a hung client rather than as a turn that was stopped.
         self.interrupt_open_tools();
         true
+    }
+
+    /// Take the pending "stop this turn" ask, if there is one.
+    ///
+    /// Drains, so a cancel is sent **once**: cancelling is not idempotent at
+    /// the transport, and a second message to a core that is already stopping
+    /// is noise at best. [`Self::cancel`] is what sets it, and it already
+    /// refuses to act twice.
+    pub const fn take_cancel_request(&mut self) -> bool {
+        let asked = self.cancel_requested;
+        self.cancel_requested = false;
+        asked
     }
 
     /// The stream ended without an authoritative answer.

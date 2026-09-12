@@ -219,8 +219,15 @@ pub enum Glyph {
     DiffAdded,
     /// A `-` line in a diff.
     DiffRemoved,
-    /// The composer's caret.
+    /// The composer's caret, idle: what you type becomes a new message.
     Caret,
+    /// The composer's caret while a turn is running (#160): what you type
+    /// **steers the turn in flight** rather than starting one.
+    ///
+    /// A second caret rather than a tint on the first, because this is the only
+    /// warning a user gets that `Enter` has changed meaning, and under
+    /// `Mode::Mono` a tint is nothing at all.
+    CaretSteering,
     /// The transcript is scrolled up and there is more below (#148).
     MoreBelow,
     /// Text that did not fit and was cut short (#155).
@@ -232,7 +239,7 @@ impl Glyph {
     ///
     /// A `match` in [`Glyph::forms`] keeps this honest in the other direction:
     /// adding a variant without a form is a compile error.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::MessageGutter,
         Self::ToolDone,
         Self::ToolFailed,
@@ -242,6 +249,7 @@ impl Glyph {
         Self::DiffAdded,
         Self::DiffRemoved,
         Self::Caret,
+        Self::CaretSteering,
         Self::MoreBelow,
         Self::Elided,
     ];
@@ -264,6 +272,13 @@ impl Glyph {
             Self::DiffAdded => ("+", "+"),
             Self::DiffRemoved => ("-", "-"),
             Self::Caret => ("›", ">"),
+            // `»`/`>>`, deliberately the doubled form of the idle caret rather
+            // than an unrelated mark: the two mean the same kind of thing —
+            // "type here" — and differ in what `Enter` will then do, so a
+            // reader should see a relationship and a difference at once.
+            // `the_two_carets_are_told_apart_in_both_vocabularies` is what
+            // stops the pair collapsing.
+            Self::CaretSteering => ("»", ">>"),
             // `V` rather than `v`, which `Expanded` has. The two are close, and
             // deliberately: both mean "there is more this way". They are told
             // apart by where they appear — `Expanded` opens a block, this sits
@@ -1055,12 +1070,20 @@ mod tests {
 
     #[test]
     fn monochrome_still_tells_every_state_apart() {
-        // The caret is the composer's cursor rather than a state, and it is the
-        // one mark whose position already says what it is; it shares `>` with
-        // `Collapsed` in ASCII, which is #97's table as drawn. Every actual
-        // state has to stand alone, in both vocabularies, because under
+        // The carets are the composer's cursor rather than states, and they are
+        // the marks whose *position* already says what they are; `Caret` shares
+        // `>` with `Collapsed` in ASCII, which is #97's table as drawn. Every
+        // actual state has to stand alone, in both vocabularies, because under
         // `Mode::Mono` the glyph is the entire signal.
-        let states = Glyph::ALL.iter().filter(|g| **g != Glyph::Caret);
+        //
+        // Excluding them here is why
+        // `the_two_carets_are_told_apart_in_both_vocabularies` exists: the pair
+        // has to differ from *each other* even though neither has to differ
+        // from the states, and without that assertion this exclusion would be
+        // a hole rather than a judgement.
+        let states = Glyph::ALL
+            .iter()
+            .filter(|g| !matches!(**g, Glyph::Caret | Glyph::CaretSteering));
 
         for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
             let theme = Theme::new(Mode::Mono, Depth::TrueColor, set);
@@ -1075,6 +1098,27 @@ mod tests {
                 );
                 seen.push(mark);
             }
+        }
+    }
+
+    /// The two carets carry #160's first signal, so they must differ (#160).
+    ///
+    /// `monochrome_still_tells_every_state_apart` excludes both, on the grounds
+    /// that a caret is located rather than read. That exclusion is only sound
+    /// while the pair is distinct from each other: the caret is the mark that
+    /// says whether `Enter` sends a new message or steers the turn already
+    /// running, and two carets that rendered alike would make the composer
+    /// silent about the one thing it most needs to say.
+    #[test]
+    fn the_two_carets_are_told_apart_in_both_vocabularies() {
+        for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
+            let theme = Theme::new(Mode::Mono, Depth::TrueColor, set);
+            assert_ne!(
+                theme.glyph(Glyph::Caret),
+                theme.glyph(Glyph::CaretSteering),
+                "{set:?}: idle and steering draw the same caret, so nothing on \
+                 the composer says `Enter` has changed meaning"
+            );
         }
     }
 
