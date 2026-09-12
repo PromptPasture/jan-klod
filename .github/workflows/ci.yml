@@ -292,6 +292,26 @@ jobs:
       - name: Go supply-chain (mod verify + govulncheck)
         run: make -C src/extensions go-supply-chain
 
+      # The supervisor's own Go leg (#130). It was the last line of the root
+      # `supply-chain` target, and this job calls the legs by name and never
+      # calls `supply-chain` itself — so the vulnerability scan for the
+      # repository's only production Go binary had never run on a runner, while
+      # the step above scanned what this file's own comment calls "currently
+      # only the Slice 1a canary". Nothing failed, because a gate that does not
+      # run looks exactly like a gate that passes.
+      #
+      # A separate step rather than folded into the one above: they are
+      # different modules with different makefiles, and naming it here is the
+      # half that stops it going missing again.
+      #
+      # No cache key for it. `setup-go` above globs `src/extensions/*/go.sum`,
+      # and src/supervisor has no go.sum at all — it is a dependency-free
+      # binary, so `go mod verify` passes trivially and the work is
+      # govulncheck's standard-library scan, which is where a Go toolchain CVE
+      # would land.
+      - name: Supervisor supply-chain (mod verify + govulncheck)
+        run: make supervisor-supply-chain
+
       # The npm tree under src/web — the repository's third ecosystem, joining
       # this job rather than becoming an exception to it (#120).
       #

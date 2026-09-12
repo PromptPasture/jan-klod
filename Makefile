@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests test-web harness gate clippy audit deny sbom supply-chain web-supply-chain web-dist-drift lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests test-web harness gate clippy audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -62,6 +62,7 @@ help:
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
 	@echo "  sbom        generate sbom.cdx.json for Rust workspace (cargo-cyclonedx)"
 	@echo "  web-supply-chain  npm lockfile sync + npm audit for src/web"
+	@echo "  supervisor-supply-chain  go mod verify + govulncheck for src/supervisor"
 	@echo "  run         boot the core against config.yaml + ext/"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
@@ -237,11 +238,34 @@ sbom:
 web-supply-chain:
 	cd $(WEB) && npm ci --dry-run && npm audit
 
+# The supervisor's own Go leg (#130). A named target, and the name is the whole
+# fix: this was the last line of `supply-chain` below, and CI calls the legs by
+# name and never calls `supply-chain` itself — so the vulnerability scan for the
+# repository's only production Go binary ran exactly when somebody typed
+# `make supply-chain` by hand. Inlining made it invisible to the workflow and
+# nothing failed, because a gate that does not run looks exactly like a gate
+# that passes. Extracting it without also calling it by name in `ci.yml` would
+# have reproduced the same bug in tidier form, which is why the two happen
+# together.
+#
+# `go run …@latest` rather than a `govulncheck` off `PATH`, matching
+# src/extensions' `go-supply-chain`: no runner has govulncheck installed, and
+# the neighbouring leg already resolves the tool this way. That answers #131's
+# second question — the supervisor does use the same call — and leaves it the
+# first one, the `@latest` float, which is now two call sites in one shape
+# rather than two shapes.
+#
+# `src/supervisor` has no `go.sum`: it is a dependency-free binary, so
+# `go mod verify` passes trivially and the real work here is govulncheck's
+# **standard library** scan, which is what a Go toolchain CVE would land in.
+supervisor-supply-chain: export GOFLAGS = -mod=readonly
+supervisor-supply-chain:
+	cd $(SUPERVISOR) && go mod verify && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 # License/advisory/source policy + RUSTSEC audit (host + guests), Go vuln
 # scan (guests + supervisor), the npm advisory scan, and the SBOM.
-supply-chain: deny audit sbom web-supply-chain
+supply-chain: deny audit sbom web-supply-chain supervisor-supply-chain
 	$(MAKE) -C $(EXT) go-supply-chain
-	cd $(SUPERVISOR) && GOFLAGS=-mod=readonly go mod verify && govulncheck ./...
 
 # --- Integration (host + staged extensions; spans both subtrees) ---
 
