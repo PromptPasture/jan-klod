@@ -202,6 +202,69 @@ fn the_installer_asks_for_arch_names_the_release_actually_builds() {
     }
 }
 
+/// The distributions the installer offers, the release builds, and the
+/// repository defines are one set — checked, not trusted.
+///
+/// Three places name them and none of them can see the others:
+/// `scripts/distributions/` is the definitions, `scripts/install.sh` is what a
+/// user can ask for, and `.github/workflows/release.yml` is what actually gets
+/// published. A disagreement between any two is a **404 at the user** — the
+/// installer asking for an archive no job built — and it would not show up
+/// until after a release, at the one moment nobody can fix it quickly.
+///
+/// Compared as sets rather than pairwise, so the failure names which side is
+/// missing what rather than only that they differ.
+#[test]
+fn the_installer_offers_the_distributions_the_release_builds() {
+    let root = common::repo_root();
+
+    let defined: BTreeSet<String> = std::fs::read_dir(root.join("scripts/distributions"))
+        .expect("scripts/distributions is readable")
+        .flatten()
+        .filter(|e| e.path().join("config.yaml").is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !defined.is_empty(),
+        "no distributions defined — this check would pass by comparing three \
+         empty sets"
+    );
+
+    let installer =
+        std::fs::read_to_string(root.join("scripts/install.sh")).expect("install.sh is readable");
+    let offered: BTreeSet<String> = installer
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("DISTRIBUTIONS="))
+        .map(|list| {
+            list.trim_matches('"')
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect()
+        })
+        .expect("install.sh names the distributions it offers in DISTRIBUTIONS=");
+
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
+        .expect("the release workflow is readable");
+    let built: BTreeSet<String> = workflow
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("make bundle DIST="))
+        .map(|name| name.trim().to_owned())
+        .collect();
+
+    assert_eq!(
+        offered, defined,
+        "install.sh offers {offered:?} but scripts/distributions/ defines \
+         {defined:?} — a name the installer accepts that nothing defines cannot \
+         be built"
+    );
+    assert_eq!(
+        built, defined,
+        "release.yml builds {built:?} but scripts/distributions/ defines \
+         {defined:?} — a distribution nobody publishes is a 404 for whoever \
+         asks the installer for it"
+    );
+}
+
 /// Every key in the shipped config must have code that reads it.
 ///
 /// A manual audit of "which code reads this block?" missed dead blocks and an

@@ -824,8 +824,15 @@ guide), and **named distributions** in the Configurator (`coding`,
 pair — with no `DIST` the target is unchanged. Distributions name what an
 install is *for*, which the old `tui`/`gui`/`full` presets mixed with how the
 user looks at the runtime. `docs_match_config` now checks every shipped config
-rather than only the root one, per config rather than pooled. The installer and
-release (#115) and the docs rewrite (#116) are what remain.
+rather than only the root one, per config rather than pooled. **Distributions 2 done the same day**
+([#115](https://github.com/PromptPasture/jan-klod/issues/115)):
+`scripts/install.sh --dist <name>` picks one, defaulting to `coding`, and
+`release.yml` publishes all three per platform — four jobs producing three
+archives each rather than a 4×3 matrix, because the expensive half of a release
+job is per platform and half the runners bill at 10×. The three places that
+name distributions — the definitions, the installer, the workflow — are held to
+one set by a test, since a disagreement between any two is a 404 at a user
+after a release. The docs rewrite (#116) is what remains.
 
 **PDK 1 and 2 done 2026-09-12** ([#111](https://github.com/PromptPasture/jan-klod/issues/111),
 [#112](https://github.com/PromptPasture/jan-klod/issues/112)): `make ext-new
