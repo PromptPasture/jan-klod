@@ -65,10 +65,33 @@ use crate::store::LoggedEvent;
 /// anything that wants to audit what was dropped.
 #[must_use]
 pub fn transcript(events: &[LoggedEvent]) -> Vec<Message> {
+    placed_transcript(events)
+        .into_iter()
+        .map(|(_, message)| message)
+        .collect()
+}
+
+/// [`transcript`], with each message paired to the log position it came from.
+///
+/// **Every message is projected from exactly one event**, so the seq is that
+/// event's and needs no rule about which of several it means — `message_for`
+/// takes one `Record` and returns at most one `Message`, never folding. That is
+/// what lets a client name a fork point: `session/fork`'s `at-seq` is inclusive,
+/// so forking at the seq beside a message yields a session whose transcript ends
+/// with that message
+/// ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
+///
+/// The seqs are **sparse**. An `Ask`, an `Answer`, a `TextDelta`, a
+/// `ToolInvoked` and a `Warning` all project to no message, so a seq is a
+/// position in the log and not an index into this list.
+#[must_use]
+pub fn placed_transcript(events: &[LoggedEvent]) -> Vec<(u64, Message)> {
     events
         .iter()
-        .filter_map(|row| decode_record(&row.kind, &row.payload).ok())
-        .filter_map(message_for)
+        .filter_map(|row| {
+            let record = decode_record(&row.kind, &row.payload).ok()?;
+            message_for(record).map(|message| (row.seq, message))
+        })
         .collect()
 }
 

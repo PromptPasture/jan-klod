@@ -313,7 +313,11 @@ fn parse_at_seq(body: &str) -> Result<u64, String> {
 /// reason [`sessions_payload`] is.
 #[must_use]
 pub fn session_payload(agent: &AgentSession, id: &str) -> serde_json::Value {
-    let messages: Vec<serde_json::Value> = agent.transcript(id).iter().map(as_json).collect();
+    let messages: Vec<serde_json::Value> = agent
+        .placed_transcript(id)
+        .iter()
+        .map(|(seq, message)| as_json(*seq, message))
+        .collect();
     serde_json::json!({ "id": id, "messages": messages })
 }
 
@@ -333,14 +337,22 @@ fn handle_get_session(agent: &AgentSession, id: &str) -> Reply {
 /// too, and pairing those back into turns would have to either drop them or
 /// invent a shape for them. A message list is what the projection produces and
 /// what a client can render without guessing.
-fn as_json(message: &Message) -> serde_json::Value {
+fn as_json(seq: u64, message: &Message) -> serde_json::Value {
     let role = match message.role {
         Role::System => "system",
         Role::User => "user",
         Role::Assistant => "assistant",
         Role::Tool => "tool",
     };
-    let mut object = serde_json::json!({ "role": role, "content": message.content });
+    // `seq` is the log position this message was projected from, and it is what
+    // `session/fork` takes as `at-seq`. Without it a client holds the messages
+    // and not their places, so "fork from here" cannot be spelled at all
+    // ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
+    //
+    // Sparse on purpose: events that project to no message (an ask, an answer,
+    // a text delta) still consume a seq, so this is a position in the log and
+    // not an index into `messages`.
+    let mut object = serde_json::json!({ "seq": seq, "role": role, "content": message.content });
     // Present only where it means something — on a tool result, tying it to the
     // call it answers.
     if let Some(id) = &message.tool_call_id {
@@ -731,11 +743,14 @@ mod tests {
             (Role::Assistant, "assistant"),
             (Role::Tool, "tool"),
         ] {
-            let json = as_json(&Message {
-                role,
-                content: "x".to_owned(),
-                tool_call_id: None,
-            });
+            let json = as_json(
+                7,
+                &Message {
+                    role,
+                    content: "x".to_owned(),
+                    tool_call_id: None,
+                },
+            );
             assert_eq!(json["role"], serde_json::json!(expected));
         }
     }
@@ -745,20 +760,31 @@ mod tests {
     /// that is sometimes empty rather than sometimes absent.
     #[test]
     fn only_a_tool_result_carries_a_call_id() {
-        let plain = as_json(&Message {
-            role: Role::User,
-            content: "hello".to_owned(),
-            tool_call_id: None,
-        });
+        let plain = as_json(
+            1,
+            &Message {
+                role: Role::User,
+                content: "hello".to_owned(),
+                tool_call_id: None,
+            },
+        );
         assert!(plain.get("tool-call-id").is_none(), "{plain}");
 
-        let result = as_json(&Message {
-            role: Role::Tool,
-            content: "# Jan-Klod".to_owned(),
-            tool_call_id: Some("call-1".to_owned()),
-        });
+        let result = as_json(
+            4,
+            &Message {
+                role: Role::Tool,
+                content: "# Jan-Klod".to_owned(),
+                tool_call_id: Some("call-1".to_owned()),
+            },
+        );
         assert_eq!(result["tool-call-id"], serde_json::json!("call-1"));
         assert_eq!(result["content"], serde_json::json!("# Jan-Klod"));
+        // The log position travels with the message: it is what `session/fork`
+        // takes as `at-seq`, and without it a client cannot name a fork point
+        // ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
+        assert_eq!(result["seq"], serde_json::json!(4));
+        assert_eq!(plain["seq"], serde_json::json!(1));
     }
 
     #[test]

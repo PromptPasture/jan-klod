@@ -435,6 +435,118 @@ fn a_turn_streams_its_events_and_answers_the_request() {
     assert!(forked["id"].as_str().is_some_and(|id| !id.is_empty()));
 }
 
+/// A client can fork at a point it obtained from `session/get` and **nothing
+/// else** — which is the whole of
+/// [#106](https://github.com/PromptPasture/jan-klod/issues/106).
+///
+/// `at-seq` names an event in the parent's log, and until now the only command
+/// that reads a session back returned `{role, content}` with no position on it.
+/// Fork was reachable only by a caller that already knew the log's internals,
+/// which no client does — `jan-klod-ui` could not offer "fork from here" because
+/// it held the messages and not their places.
+///
+/// **So this test may not look at the store.** Every number it uses comes off
+/// the wire, because a test that reached into the event log for a seq would
+/// reproduce the bug inside the test and still pass. Note the contrast with
+/// `a_turn_streams_its_events_and_answers_the_request` above, which forks at a
+/// hard-coded `at-seq: 1` — fine as a reachability check, and exactly the
+/// knowledge a real client does not have.
+///
+/// The last assertion is what makes `seq` mean something rather than merely
+/// exist: `at-seq` is inclusive, so forking at a message's seq must produce a
+/// child whose transcript **ends with that message**.
+#[test]
+fn a_client_can_fork_at_a_seq_it_read_from_session_get() {
+    let Some((_dir, mut agent)) = booted("fork-from-read") else {
+        return;
+    };
+    let hello = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{{"version":"{PROTOCOL_VERSION}"}}}}"#
+    );
+
+    // A turn, so the session has a log to read and fork. On its own exchange:
+    // the script is queued up front, so a `session/get` behind the turn is
+    // refused as mid-turn — the same reason the fork above uses a second
+    // connection.
+    exchange(
+        &mut agent,
+        &[
+            &hello,
+            r#"{"jsonrpc":"2.0","id":2,"method":"session/message","params":{"session":"fork-src","message":"hello"}}"#,
+        ],
+    );
+
+    let served = exchange(
+        &mut agent,
+        &[
+            &hello,
+            r#"{"jsonrpc":"2.0","id":2,"method":"session/get","params":{"session":"fork-src"}}"#,
+        ],
+    );
+    let responses = self::responses(&served);
+    let transcript = result(responses[1]);
+
+    // The declared result type must accept what the core actually serves. The
+    // type exists so non-Rust clients can generate from the schema, and a type
+    // nobody parses the real bytes with is exactly how the two drift — which is
+    // the shape of defect this file keeps finding.
+    let typed: jan_klod_protocol::SessionGetResult = serde_json::from_value(transcript.clone())
+        .unwrap_or_else(|e| panic!("session/get must match SessionGetResult: {e}: {transcript}"));
+    assert_eq!(typed.id, "fork-src");
+
+    let messages = transcript["messages"]
+        .as_array()
+        .expect("session/get returns messages");
+    assert!(
+        !messages.is_empty(),
+        "the turn must have left something to fork: {transcript}"
+    );
+
+    // The client's whole knowledge of the log: a number it just read.
+    let first = &messages[0];
+    let at_seq = first["seq"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("every message carries the seq it was projected from: {first}"));
+
+    let next = exchange(
+        &mut agent,
+        &[
+            &hello,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":2,"method":"session/fork","params":{{"session":"fork-src","at-seq":{at_seq}}}}}"#
+            ),
+        ],
+    );
+    let next = self::responses(&next);
+    let forked = result(next[1]);
+    let child = forked["id"].as_str().expect("a fork names its new session");
+
+    // Inclusive: the child's transcript ends with the message forked at.
+    let read_back = exchange(
+        &mut agent,
+        &[
+            &hello,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":2,"method":"session/get","params":{{"session":"{child}"}}}}"#
+            ),
+        ],
+    );
+    let read_back = self::responses(&read_back);
+    let child_messages = result(read_back[1])["messages"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let last = child_messages
+        .last()
+        .expect("forking at a message's seq copies at least that message");
+    assert_eq!(
+        (last["role"].as_str(), last["content"].as_str()),
+        (first["role"].as_str(), first["content"].as_str()),
+        "`at-seq` is inclusive, so the child ends with the message it was forked \
+         at — parent's first: {first}, child's last: {last}"
+    );
+}
+
 /// A cancel that arrives while the turn is running stops it. Asserted by what
 /// the provider was *not* asked for: the turn needed a second completion to
 /// finish, and a cancelled turn never asks for it. A test that only checked the

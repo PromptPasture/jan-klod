@@ -651,6 +651,38 @@ fn generated_schema() -> serde_json::Value {
                 "required": ["version"],
                 "additionalProperties": false,
             },
+            // The read side of the contract. Absent until #106: `session/fork`
+            // took an event seq and nothing a client could read ever carried
+            // one, because the result of `session/get` was untyped JSON built
+            // in the core and so reached no schema at all.
+            "SessionGetResult": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "messages": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/TranscriptMessage" },
+                    },
+                },
+                "required": ["id", "messages"],
+                "additionalProperties": false,
+            },
+            "TranscriptMessage": {
+                "type": "object",
+                "description": "One message of a transcript. `seq` is the log \
+                                position it was projected from and what \
+                                `session/fork` takes as `at-seq`, inclusive — \
+                                sparse, because events projecting to no message \
+                                still consume one, so it is not an index.",
+                "properties": {
+                    "seq": { "type": "integer", "minimum": 0 },
+                    "role": { "enum": ["system", "user", "assistant", "tool"] },
+                    "content": { "type": "string" },
+                    "tool-call-id": { "type": "string" },
+                },
+                "required": ["seq", "role", "content"],
+                "additionalProperties": false,
+            },
             "jsonrpc.Id": {
                 "description": "Echoed back on the response that answers a request.",
                 "oneOf": [{ "type": "integer" }, { "type": "string" }, { "type": "null" }],

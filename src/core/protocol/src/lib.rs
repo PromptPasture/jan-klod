@@ -336,3 +336,44 @@ impl Default for HelloResult {
         }
     }
 }
+
+/// One message of a session's transcript, as [`Command::SessionGet`] returns it.
+///
+/// # Why the read shape is declared here at all
+///
+/// It was not, and that was the whole of
+/// [#106](https://github.com/PromptPasture/jan-klod/issues/106). `session/fork`
+/// takes an event seq and `session/get` returned `{role, content}` — so the only
+/// command that reads a session back never said where in the log anything sat,
+/// and a client could fork only at a number it had no way to obtain. The
+/// commands were declared in this crate ahead of any transport carrying them,
+/// *because the schema is what non-Rust clients generate from*; the result they
+/// answer with was left as untyped JSON assembled in `serve::session_payload`,
+/// so it reached no schema and no generated client.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptMessage {
+    /// The log position this message was projected from, and what
+    /// [`Command::SessionFork`] takes as `at_seq` — inclusive, so forking here
+    /// yields a session whose transcript ends with this message.
+    ///
+    /// **Sparse.** Events that project to no message — an ask, an answer, a
+    /// text delta — still consume a seq, so this is a position in the log and
+    /// not an index into the list.
+    pub seq: u64,
+    /// `system`, `user`, `assistant` or `tool`.
+    pub role: String,
+    /// The message text.
+    pub content: String,
+    /// Present only on a tool result, tying it to the call it answers.
+    #[serde(rename = "tool-call-id", skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+/// What the core answers [`Command::SessionGet`] with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionGetResult {
+    /// The session's id, echoed back.
+    pub id: String,
+    /// The transcript, oldest first.
+    pub messages: Vec<TranscriptMessage>,
+}

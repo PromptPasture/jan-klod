@@ -488,6 +488,55 @@
         }
       ]
     },
+    "SessionGetResult": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/TranscriptMessage"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "messages"
+      ],
+      "type": "object"
+    },
+    "TranscriptMessage": {
+      "additionalProperties": false,
+      "description": "One message of a transcript. `seq` is the log position it was projected from and what `session/fork` takes as `at-seq`, inclusive — sparse, because events projecting to no message still consume one, so it is not an index.",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        "seq": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool-call-id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "role",
+        "content"
+      ],
+      "type": "object"
+    },
     "jsonrpc.Error": {
       "additionalProperties": false,
       "properties": {

@@ -1464,6 +1464,22 @@ impl AgentSession {
         projection::transcript(&events)
     }
 
+    /// [`Self::transcript`], with each message paired to the log seq it was
+    /// projected from — the number [`Self::fork`] takes as `at_seq`.
+    ///
+    /// Serving these together is the point: a client that reads a session gets
+    /// the fork points with it, instead of needing a number the protocol never
+    /// gave it ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
+    #[must_use]
+    pub fn placed_transcript(&self, session: &str) -> Vec<(u64, intercept::Message)> {
+        let events = self
+            .store
+            .lock()
+            .map(|store| store.session_events(session).unwrap_or_default())
+            .unwrap_or_default();
+        projection::placed_transcript(&events)
+    }
+
     /// Copy `from`'s log up to and including `at_seq` into `into`, so the new
     /// session continues from that point and then diverges.
     ///
