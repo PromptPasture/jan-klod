@@ -5,8 +5,8 @@
  * handle — this is the same set of responsibilities with a different surface.
  */
 
-import * as api from "./api.js";
-import type { Frame } from "./frames.js";
+import * as api from "./api.ts";
+import type { Frame } from "./frames.ts";
 
 export interface View {
   sessions: HTMLElement;
@@ -21,7 +21,16 @@ export class App {
   /** The assistant bubble being streamed into, if a turn is running. */
   private streaming: HTMLElement | null = null;
 
-  constructor(private readonly view: View) {}
+  private readonly view: View;
+
+  // A plain field, not a `private readonly view: View` parameter property.
+  // Node's `--experimental-strip-types` removes type annotations without
+  // running a compiler, and a parameter property is not an annotation — it
+  // emits an assignment. Using one makes this file unloadable by the test
+  // runner, which is the price of testing with zero dependencies (README).
+  constructor(view: View) {
+    this.view = view;
+  }
 
   async refreshSessions(): Promise<void> {
     const sessions = await api.listSessions();

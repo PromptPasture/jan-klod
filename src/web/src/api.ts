@@ -8,7 +8,7 @@
  * the core does not serve.
  */
 
-import { FrameReader, parseFrame, type Frame } from "./frames.js";
+import { FrameReader, parseFrame, type Frame } from "./frames.ts";
 
 /** Where the token lives, when there is one. */
 const TOKEN_KEY = "jan-klod-token";

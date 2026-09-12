@@ -5,8 +5,8 @@
  * and what that buys.
  */
 
-import { App } from "./app.js";
-import * as api from "./api.js";
+import { App } from "./app.ts";
+import * as api from "./api.ts";
 
 /** Ask for the token once, if the gateway wants one. */
 async function ensureToken(): Promise<void> {

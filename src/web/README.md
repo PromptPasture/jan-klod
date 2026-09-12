@@ -43,3 +43,48 @@ The client parses JSON off a wire and indexes into arrays of SSE frames, which
 is exactly where a lax `tsconfig` stops being a preference: a missing frame or
 an absent field should be a compile error here rather than an `undefined` in a
 browser.
+
+## Tests
+
+```sh
+npm test
+```
+
+Node's built-in runner over `--experimental-strip-types`, with a ~40-line DOM
+stub in `tests/dom.ts`. **No new dependencies**, which is the whole reason for
+the shape.
+
+### Why not jsdom or Playwright
+
+`## Scope` asked for "whichever is cheaper to keep green", so both were costed
+rather than guessed:
+
+- **jsdom** takes the dependency tree from **28 packages to 66** and
+  `node_modules` from 32 MB to 58 MB — more than doubling it, to test 5.4 kB of
+  client. Measured, not estimated.
+- **Playwright** downloads a browser, which is a CI cache and a version to keep
+  in step. It buys real rendering, which is not currently where the risk is.
+
+`app.ts` touches exactly six DOM APIs — `createElement`, `textContent`,
+`dataset`, `append`, `replaceChildren`, `addEventListener`. A stub for six
+methods is checkable by reading it against the file; that is what makes this
+defensible rather than merely cheap.
+
+**What it does not test**: rendering, layout, event propagation, CSS, or
+anything a browser does differently. If those become the risk the answer is
+Playwright, **not a bigger stub** — a stub that grows to imitate a DOM is the
+thing that passes while the client is broken.
+
+### Two constraints this choice imposes on the source
+
+Both were found by the tests refusing to run, and both are cheap to trip over
+again:
+
+1. **No TypeScript parameter properties.** `--experimental-strip-types` removes
+   annotations without running a compiler, and `constructor(private x: T)` is
+   not an annotation — it emits an assignment. `App` uses a plain field for
+   this reason.
+2. **Imports end in `.ts`, not `.js`.** Node resolves the real file when it
+   runs the sources directly; esbuild is happy either way. `tsconfig` sets
+   `allowImportingTsExtensions` to match.
+
