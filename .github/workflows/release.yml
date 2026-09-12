@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: write   # needed to create/upload release assets
+  pages: write      # the registry index is published to GitHub Pages
+  id-token: write   # actions/deploy-pages authenticates with OIDC
 
 env:
   CARGO_TERM_COLOR: always
@@ -91,10 +93,67 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+      # The registry index, and the files its entries describe (#139).
+      #
+      # **One leg of the matrix, not four.** A guest is compiled to
+      # `wasm32-wasip2`, so `ext/` is the same bytes whichever runner built it
+      # — four copies would be four identical artifacts, and their digests
+      # would have to agree for the index to mean anything anyway. Linux
+      # x86_64 is the cheapest of the four (the macOS runners bill at 10x on a
+      # private repository; see .github/AGENTS.md).
+      #
+      # `make bundle` above already built the guests into `ext/`, so this adds
+      # a generator run and a tar, not a build.
+      #
+      # `make registry-index` **by name**: the published index has to be the
+      # one that target produces, or the index and the drift check that proves
+      # it deterministic would be checking different things. And a gate called
+      # only through an aggregate target is one that quietly stops running
+      # (#130).
+      #
+      # `REGISTRY_URL` is where these files will be served from once the
+      # `release` job has deployed them — the `ext/` path under the Pages site
+      # — and it must stay in step with `registry.url` in config.yaml, which
+      # names `index.json` at that site's root.
+      - name: Generate the registry index
+        if: matrix.os == 'linux' && matrix.arch == 'x86_64'
+        run: |
+          make registry-index \
+            REGISTRY_INDEX="$PWD/dist/index.json" \
+            REGISTRY_URL="https://promptpasture.github.io/jan-klod/ext"
+          cat dist/index.json
+
+      # The index and the artefacts it describes travel together: an index
+      # published without them names URLs that 404, and a publisher serves
+      # **four files per component at plain paths** — `<name>.wasm`,
+      # `<name>.manifest.toml` and a `.minisig` for each. The two signatures
+      # are not produced yet (#93 is deferred until before the first release),
+      # so what ships today is the unsigned pair and an index that says
+      # `"signature": ""` rather than pretending otherwise.
+      - name: Upload the registry artifact
+        if: matrix.os == 'linux' && matrix.arch == 'x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry
+          path: |
+            dist/index.json
+            ext/*.wasm
+            ext/*.manifest.toml
+          if-no-files-found: error
+
   release:
     name: Publish GitHub release
     needs: build
     runs-on: ubuntu-latest
+    # `actions/deploy-pages` requires the job to declare the `github-pages`
+    # environment — it is how the deployment is attributed and how the site URL
+    # comes back. It applies to the whole job rather than the step, so creating
+    # a release now also passes through whatever protection rules that
+    # environment carries. It has none today; adding one would gate releases,
+    # which is worth knowing before somebody adds it for a different reason.
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -134,3 +193,64 @@ jobs:
             --title "jan-klod $GITHUB_REF_NAME" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
             dist/*.tar.gz dist/SHA256SUMS.txt
+
+      # ---- The registry, published where `registry.url` points (#139) ----
+      #
+      # Here rather than in a job of its own, and rather than a fourth workflow:
+      # this job already runs on ubuntu-latest with the artifacts downloaded, so
+      # publishing costs a Jekyll build and an upload instead of another runner
+      # (#95's cost trade, recorded in .github/AGENTS.md).
+      #
+      # **After the release is created, deliberately.** A Pages deploy has more
+      # ways to fail than a release upload does — Pages has to be enabled on the
+      # repository, and a private repository needs a plan that allows a site —
+      # and a failure here should leave the archives published rather than take
+      # the release down with it. The run goes red either way, which is the
+      # honest signal.
+      #
+      # `registry` is downloaded into a separate directory from the bundles
+      # above: the site needs `ext/` as a directory, and merging it into `dist/`
+      # would put components beside the tarballs for no reason.
+      - name: Download the registry artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: registry
+          path: registry/
+
+      # `pages/` is Jekyll source (`_config.yml` names a `remote_theme`), so it
+      # is built rather than uploaded as-is. The index and the components are
+      # copied into the built site afterwards: they are static files Jekyll has
+      # no business processing, and `_site` is what actually gets served.
+      - name: Build the landing page
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: pages
+          destination: _site
+
+      # The layout `registry.url` and `REGISTRY_URL` both assume:
+      #   <site>/index.json      the index
+      #   <site>/ext/<name>.wasm the components it names, at plain paths
+      # Plain paths matter: `ext install` derives the manifest and signature
+      # URLs by resolving a relative reference against the component's, so a
+      # query or a redirect in the way would break the companions.
+      - name: Assemble the registry into the site
+        run: |
+          cp registry/dist/index.json _site/index.json
+          mkdir -p _site/ext
+          cp registry/ext/*.wasm registry/ext/*.manifest.toml _site/ext/
+          ls -l _site/ext | head
+
+      # `enablement: true` turns Pages on via the API if it is not on already,
+      # which it is not today — so the first tagged release is also what creates
+      # the site.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
