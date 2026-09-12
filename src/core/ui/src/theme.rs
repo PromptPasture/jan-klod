@@ -99,12 +99,16 @@ impl Swatch {
 /// bright (`White`), normal (`Gray`), dim (`DarkGray`) and the background end
 /// (`Black`). Four buckets for ten steps loses the fine distinctions, which is
 /// the honest outcome on a sixteen-colour terminal.
+///
+/// `ash` is `#585D66`/240 rather than #97's original `#646A74`/242: as
+/// tabulated there it gave secondary text only 3.88:1 against `chalk`, the
+/// light theme's raised surface, and the contrast target does not move.
 const RAMP: [Swatch; 10] = [
     sw((0xF2, 0xF3, 0xF5), 255, Color::White),    // snow
     sw((0xD6, 0xDA, 0xE0), 252, Color::White),    // chalk
     sw((0xB0, 0xB6, 0xBF), 249, Color::Gray),     // mist
     sw((0x86, 0x8C, 0x96), 245, Color::Gray),     // smoke
-    sw((0x64, 0x6A, 0x74), 242, Color::DarkGray), // ash
+    sw((0x58, 0x5D, 0x66), 240, Color::DarkGray), // ash
     sw((0x3D, 0x41, 0x4A), 238, Color::DarkGray), // steel-1
     sw((0x2A, 0x2D, 0x34), 236, Color::Black),    // steel-0
     sw((0x1C, 0x1E, 0x23), 234, Color::Black),    // ink-2
@@ -337,6 +341,131 @@ mod tests {
             theme.removed(),
             theme.warning(),
         ]
+    }
+
+    /// WCAG 2.1 relative luminance, on the truecolor form of a role.
+    ///
+    /// Only [`Depth::TrueColor`] is checked, and deliberately: the downsampled
+    /// forms are a fixed map onto palettes this crate does not define, so a
+    /// ratio computed against xterm-256's idea of index 240 would be measuring
+    /// that palette rather than this ramp.
+    // The coefficients are quoted from WCAG 2.1 as a weighted sum, which is how
+    // the specification writes them. `suboptimal_flops` would have this as
+    // nested `mul_add` calls; the arithmetic is identical and the resemblance to
+    // the published formula is not, so the lint loses here.
+    #[allow(clippy::suboptimal_flops)]
+    fn relative_luminance(color: Color) -> f64 {
+        let Color::Rgb(r, g, b) = color else {
+            panic!("contrast is only defined on the truecolor form, got {color:?}")
+        };
+        let channel = |c: u8| {
+            let c = f64::from(c) / 255.0;
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+    }
+
+    /// The WCAG contrast ratio between two roles, always ≥ 1.0.
+    fn contrast(a: Color, b: Color) -> f64 {
+        let (la, lb) = (relative_luminance(a), relative_luminance(b));
+        let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// A role accessor, so the tables below can be swept rather than unrolled.
+    type Role = fn(Theme) -> Color;
+
+    /// Everything a foreground role can be drawn on.
+    const SURFACES: [(&str, Role); 3] = [
+        ("background", Theme::background),
+        ("raised", Theme::raised),
+        ("code_surface", Theme::code_surface),
+    ];
+
+    /// The roles #128's Acceptance puts a floor under, with that floor.
+    ///
+    /// `border_idle` and `border_active` are **not** here, and that is the
+    /// mascot rule rather than an omission: the target is "any border or glyph
+    /// **that carries meaning** ≥ 3:1", and in this design a grey carries
+    /// structure while colour carries meaning. The border that means something
+    /// — the focused pane's — is `focus()`, which is on this list. The grey
+    /// borders are separators, and holding them to 3:1 against their own
+    /// surface would light up every idle rule on the screen, which is the
+    /// opposite of "a screen with nothing happening on it is entirely grey".
+    /// They get their own weaker invariant below.
+    ///
+    /// `muted` is absent for a different reason: Acceptance names body,
+    /// secondary, and meaningful border or glyph, and does not say which tier
+    /// muted is in. Inventing one would rewrite the ramp — see
+    /// `muted_is_more_recessive_than_secondary_but_still_distinct` and the
+    /// issue filed against the light theme's raised surface.
+    const GATED: [(&str, Role, f64); 6] = [
+        ("body", Theme::body, 7.0),
+        ("secondary", Theme::secondary, 4.5),
+        ("focus", Theme::focus, 3.0),
+        ("added", Theme::added, 3.0),
+        ("removed", Theme::removed, 3.0),
+        ("warning", Theme::warning, 3.0),
+    ];
+
+    #[test]
+    fn every_permitted_pair_meets_its_contrast_target() {
+        for mode in [Mode::Dark, Mode::Light] {
+            let theme = Theme::new(mode, Depth::TrueColor);
+            for (surface_name, surface) in SURFACES {
+                for (role_name, role, target) in GATED {
+                    let ratio = contrast(role(theme), surface(theme));
+                    assert!(
+                        ratio >= target,
+                        "{mode:?}: {role_name} on {surface_name} is {ratio:.2}:1, \
+                         below its {target}:1 target — move the ramp value and \
+                         update #97's table to match. The target does not move."
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn muted_is_more_recessive_than_secondary_but_still_distinct() {
+        for mode in [Mode::Dark, Mode::Light] {
+            let theme = Theme::new(mode, Depth::TrueColor);
+            for (surface_name, surface) in SURFACES {
+                let muted = contrast(theme.muted(), surface(theme));
+                let secondary = contrast(theme.secondary(), surface(theme));
+                assert!(
+                    muted > 1.0,
+                    "{mode:?}: muted is invisible on {surface_name}"
+                );
+                assert!(
+                    muted < secondary,
+                    "{mode:?}: muted reads at {muted:.2}:1 on {surface_name}, \
+                     no quieter than secondary at {secondary:.2}:1 — a role \
+                     named muted that is not muted"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_active_border_reads_stronger_than_the_idle_one() {
+        for mode in [Mode::Dark, Mode::Light] {
+            let theme = Theme::new(mode, Depth::TrueColor);
+            for (surface_name, surface) in SURFACES {
+                let idle = contrast(theme.border_idle(), surface(theme));
+                let active = contrast(theme.border_active(), surface(theme));
+                assert!(
+                    active > idle,
+                    "{mode:?}: the active border is {active:.2}:1 on \
+                     {surface_name} and the idle one {idle:.2}:1 — the pane with \
+                     focus would not look any different"
+                );
+            }
+        }
     }
 
     #[test]
