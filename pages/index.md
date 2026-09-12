@@ -24,6 +24,21 @@ Most agents run extensions in the same process with full system access. jan-klod
 curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh
 ```
 
+That installs **coding**, the default. A distribution says what the install is
+*for* — not which client it carries, since terminal, window or browser is
+chosen at launch.
+
+| Distribution | What it carries | For |
+|---|---|---|
+| **coding** | models, the interceptor set, file and git tools, skills | working on a codebase |
+| **headless-chat** | models and the interceptor set, nothing that touches the machine | a chat channel over Telegram — a Pi or a container |
+| **minimal** | one provider and the interceptor set | the smallest thing that still runs a turn |
+
+```sh
+curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh -s -- --dist headless-chat
+curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh -s -- --dist minimal
+```
+
 ## Quick start
 
 ```sh
