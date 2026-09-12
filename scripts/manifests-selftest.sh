@@ -71,7 +71,13 @@ refuses "a missing manifest" remove_manifest
 # "which is the api-version", so it must not pick one.
 mkdir -p "$WORK/wit"
 cp "$ROOT/wit/host-fs.wit" "$ROOT/wit/host-log.wit" "$WORK/wit/"
-sed -i.bak 's/@0\.1\.0;/@0.2.0;/' "$WORK/wit/host-log.wit"
+# Rewrite whatever version is there to a fixed unlikely one, rather than
+# spelling the pair. This read `s/@0.1.0;/@0.2.0;/` until wit/ was bumped to
+# 0.2.0, at which point the tamper was a no-op, the two files agreed, and the
+# self-test reported that a disagreement had been "ACCEPTED" — a fixture that
+# encodes the number it is testing against fails the moment that number moves.
+sed -i.bak 's/^package jan-klod:interfaces@.*;/package jan-klod:interfaces@9.9.9;/' \
+    "$WORK/wit/host-log.wit"
 rm -f "$WORK/wit/host-log.wit.bak"
 if sh "$ROOT/scripts/manifests.sh" "$ROOT/src/extensions" "$EXT" "$WORK/wit" tool-fs \
     >"$WORK/gen" 2>&1; then

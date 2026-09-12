@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 /// may not exist is worse than one baked in. The drift that buys is real, so
 /// `host/tests/it/manifest.rs` asserts this equals what every `wit/*.wit`
 /// declares — the same agreement `scripts/manifests.sh` refuses to guess at.
-pub const API_VERSION: &str = "0.1.0";
+pub const API_VERSION: &str = "0.2.0";
 
 /// Whether a component built against `declared` can run on a host speaking
 /// `host`.

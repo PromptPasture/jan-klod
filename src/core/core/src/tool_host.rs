@@ -183,6 +183,48 @@ impl g_proc::Host for ToolHost {
             Err(err) => Err(to_gen_proc_error(err)),
         }
     }
+
+    // ── Long-lived children (Slice 18c-1, #109) ──────────────────────────────
+    //
+    // Declared in the interface, denied by the host. The capability is
+    // **default-deny before it is anything else**: the contract exists so the
+    // shape can be reviewed and a guest can be compiled against it, and until
+    // `execution.long-lived` is read and enforced there is no name any guest
+    // could be granted — so every call refuses.
+    //
+    // Deliberately not `todo!()`. A panic here would trap the guest's whole
+    // instance, which reads as a runtime fault rather than as the refusal it is,
+    // and a capability that is not granted yet should answer the way a
+    // capability that is not granted answers.
+
+    fn spawn(&mut self, _name: String) -> Result<u32, g_proc::ProcError> {
+        eprintln!(
+            "WARN [core] host-process: `spawn` is declared but not yet granted; \
+             `execution.long-lived` is not read yet (#109)"
+        );
+        Err(g_proc::ProcError::Denied)
+    }
+
+    fn write_stdin(&mut self, _child: u32, _data: String) -> Result<(), g_proc::ProcError> {
+        Err(g_proc::ProcError::Denied)
+    }
+
+    fn read_stdout(
+        &mut self,
+        _child: u32,
+        _max_bytes: u32,
+        _timeout_ms: u32,
+    ) -> Result<String, g_proc::ProcError> {
+        Err(g_proc::ProcError::Denied)
+    }
+
+    /// No child can exist while `spawn` refuses, so no handle is running.
+    fn is_running(&mut self, _child: u32) -> bool {
+        false
+    }
+
+    /// Idempotent by contract, and there is nothing to kill.
+    fn kill(&mut self, _child: u32) {}
 }
 
 const fn to_gen_proc_error(err: ProcError) -> g_proc::ProcError {

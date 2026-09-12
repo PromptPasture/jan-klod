@@ -1,12 +1,18 @@
-package jan-klod:interfaces@0.1.0;
+package jan-klod:interfaces@0.2.0;
 
 /// Run a command as a child process — the execution substrate (Phase 7).
 ///
 /// This is **code execution**, so it is host-owned and bounded: **default-deny**
 /// (disabled unless the deployment opts in), the working directory is **jailed to
 /// the workspace**, and each run has a **timeout** and an **output cap**. The loop
-/// gates it at `tool-call` (`interceptor-permission`). v1 runs to completion; a
-/// long-lived / streaming child (ssh, lsp, browser) is a later refinement.
+/// gates it at `tool-call` (`interceptor-permission`).
+///
+/// Two shapes of child, and the second is **narrower** than the first. `exec`
+/// runs a command to completion and is gated by `execution.enabled`. `spawn`
+/// holds a child open — what a stdio MCP server, an `lsp-*` or a browser driver
+/// needs — and is gated by `execution.long-lived`, which names the processes a
+/// guest may start rather than permitting spawning. A guest with the second
+/// grant can start what an operator wrote down and nothing else.
 ///
 /// Implemented by the host; imported by execution `tool-*` extensions (bash/eval/…).
 interface host-process {
@@ -38,4 +44,55 @@ interface host-process {
         cwd: option<string>,
         stdin: option<string>,
     ) -> result<exit, proc-error>;
+
+    /// Opaque handle to a running long-lived child.
+    ///
+    /// A `u32` rather than a `resource`, matching `llm-provider`'s
+    /// `stream-handle` and `agent-delegate`'s `delegate-handle`. The host owns
+    /// the child's lifetime either way — it must leave no orphan when the
+    /// owning instance stops or the runtime drops — so a resource would tidy
+    /// the guest-visible lifetime without discharging that, and the table the
+    /// host keeps to enforce it is the same table that validates a handle.
+    /// Handles are per-instance, so a forged integer reaches only the forger's
+    /// own children.
+    type child-handle = u32;
+
+    /// Start the long-lived child **named** in `execution.long-lived`.
+    ///
+    /// The name is the whole of the guest's say: the command and its arguments
+    /// come from config, so a guest can start a process an operator wrote down
+    /// and no other. A name the policy does not carry is `denied`, with the
+    /// reason in the host's log — `proc-error` carries no payload, and `exec`
+    /// already answers that way.
+    ///
+    /// The child is confined by the same sandbox backend as a one-shot command.
+    /// One that outlives its call is more exposed than one that does not, not
+    /// less.
+    spawn: func(name: string) -> result<child-handle, proc-error>;
+
+    /// Write to the child's stdin. `denied` if the handle is not one of this
+    /// instance's running children.
+    write-stdin: func(child: child-handle, data: string) -> result<_, proc-error>;
+
+    /// Read at most `max-bytes` from the child's stdout, waiting up to
+    /// `timeout-ms` for the first byte.
+    ///
+    /// An **empty string means nothing arrived in that window**, not that the
+    /// child is finished — ask `is-running` for that. The two are different
+    /// questions and a caller that conflates them will either spin or stop
+    /// early.
+    read-stdout: func(
+        child: child-handle,
+        max-bytes: u32,
+        timeout-ms: u32,
+    ) -> result<string, proc-error>;
+
+    /// Whether the child is still alive. `false` for a handle that was never
+    /// valid, so a caller polling a killed child terminates rather than
+    /// erroring forever.
+    is-running: func(child: child-handle) -> bool;
+
+    /// Kill the child and release the handle. Idempotent, and not required for
+    /// correctness: the host kills what is left when the instance stops.
+    kill: func(child: child-handle);
 }

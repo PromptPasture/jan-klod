@@ -485,14 +485,26 @@ fn a_component_built_against_another_api_version_is_refused() {
     let _guard = common::TempDir(dir.clone());
     std::fs::copy(real_ext.join("tool-fs.wasm"), ext.join("tool-fs.wasm")).unwrap();
 
+    // Both versions come from the host's own constant rather than from
+    // literals. This test used to spell them `0.1.0` and `0.2.0`, and the day
+    // `wit/` was bumped to 0.2.0 the "incompatible" rewrite became a no-op —
+    // the component was then perfectly compatible and the test failed asking
+    // why it had not been refused. A fixture that encodes the very number it is
+    // testing against goes stale the moment that number moves.
+    let ours = jan_klod_core::manifest::API_VERSION;
+    let current = format!("api-version = \"{ours}\"");
     let manifest = std::fs::read_to_string(real_ext.join("tool-fs.manifest.toml")).unwrap();
     assert!(
-        manifest.contains("api-version = \"0.1.0\""),
+        manifest.contains(&current),
         "the fixture rewrites this line, so it has to be there: {manifest}"
     );
+    // A different **major**, which is incompatible under both rules — pre-1.0,
+    // where a differing minor is refused, and after, where a differing major
+    // is. So this stays a real mismatch whatever `wit/` is versioned at.
+    let theirs = "9.0.0";
     std::fs::write(
         ext.join("tool-fs.manifest.toml"),
-        manifest.replace("api-version = \"0.1.0\"", "api-version = \"0.2.0\""),
+        manifest.replace(&current, &format!("api-version = \"{theirs}\"")),
     )
     .unwrap();
 
@@ -508,7 +520,7 @@ fn a_component_built_against_another_api_version_is_refused() {
     };
     let message = format!("{error}");
     assert!(
-        message.contains("0.2.0") && message.contains("0.1.0"),
+        message.contains(theirs) && message.contains(ours),
         "both versions are named, so the reader knows which way the gap runs: {message}"
     );
     assert!(

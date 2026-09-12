@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.1.0;
+package jan-klod:interfaces@0.2.0;
 
 /// ACP agent delegation — call another AI agent and stream its response.
 /// Implemented by: agent-claude-code, agent-opencode, agent-codex
