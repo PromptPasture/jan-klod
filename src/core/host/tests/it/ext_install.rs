@@ -15,10 +15,10 @@ use jan_klod_core::ext::{self, Declaration, ExtError};
 use crate::common;
 
 /// A scratch `ext/` and a place to put sources, removed on drop.
-struct Scratch {
+pub struct Scratch {
     root: PathBuf,
-    ext: PathBuf,
-    incoming: PathBuf,
+    pub ext: PathBuf,
+    pub incoming: PathBuf,
 }
 
 impl Drop for Scratch {
@@ -27,7 +27,7 @@ impl Drop for Scratch {
     }
 }
 
-fn scratch(tag: &str) -> Scratch {
+pub fn scratch(tag: &str) -> Scratch {
     let root = std::env::temp_dir().join(format!("jk-ext-install-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let ext = root.join("ext");
@@ -43,7 +43,7 @@ fn scratch(tag: &str) -> Scratch {
 
 /// Copy a staged guest and its manifest into `incoming`, returning the
 /// component's path — an installable pair, exactly as a release would ship it.
-fn offer(scratch: &Scratch, guest: &str) -> PathBuf {
+pub fn offer(scratch: &Scratch, guest: &str) -> PathBuf {
     let staged = common::repo_root().join("ext");
     let component = scratch.incoming.join(format!("{guest}.wasm"));
     std::fs::copy(staged.join(format!("{guest}.wasm")), &component).expect("copies the component");
@@ -126,7 +126,7 @@ fn resign(scratch: &Scratch, guest: &str) -> ext::Checks {
 }
 
 /// Every name in a directory, sorted — enough to assert "nothing landed".
-fn names(dir: &Path) -> Vec<String> {
+pub fn names(dir: &Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(dir)
         .expect("reads the directory")
         .map(|e| {
@@ -681,7 +681,7 @@ fn only_http_and_https_count_as_remote() {
 /// public, so the policy permits them without widening anything. A loopback
 /// test server would have needed a grant, and granting one to test a fetch
 /// would have tested a policy nobody runs.
-fn canned_files(
+pub fn canned_files(
     files: Vec<(&'static str, Vec<u8>)>,
 ) -> (
     jan_klod_core::route::HttpFn,
@@ -705,7 +705,7 @@ fn canned_files(
 }
 
 /// The four files a signed remote install needs, read off a real staged guest.
-fn published(scratch: &Scratch, guest: &str) -> (Vec<(&'static str, Vec<u8>)>, ext::Checks) {
+pub fn published(scratch: &Scratch, guest: &str) -> (Vec<(&'static str, Vec<u8>)>, ext::Checks) {
     let component = offer(scratch, guest);
     let signer = crate::common::minisig::Signer::new();
     signer.sign(&component);

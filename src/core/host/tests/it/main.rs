@@ -27,6 +27,7 @@ mod egress_boundary;
 mod event_log;
 mod execution_config;
 mod ext_install;
+mod ext_registry;
 mod gate;
 mod generated_guest;
 mod grep_budget;

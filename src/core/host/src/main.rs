@@ -17,6 +17,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use jan_klod_core::ext_index;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 
@@ -164,18 +165,135 @@ fn mcp() -> ExitCode {
 fn ext(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("list") => ext_list(&args[1..]),
+        Some("search") => ext_search(&args[1..]),
         Some("remove") => ext_remove(&args[1..]),
         Some("install") => ext_install(&args[1..]),
         _ => {
-            eprintln!("usage: jan-klod-gateway ext list [ext-dir]");
+            eprintln!("usage: jan-klod-gateway ext list [ext-dir] [--remote]");
+            eprintln!("       jan-klod-gateway ext search [term]");
             eprintln!(
-                "       jan-klod-gateway ext install <path.wasm|url> [ext-dir] \
+                "       jan-klod-gateway ext install <name|path.wasm|url> [ext-dir] \
                  [--sha256 <hex>] [--allow-unsigned]"
             );
             eprintln!("       jan-klod-gateway ext remove <name> [ext-dir]");
             ExitCode::FAILURE
         }
     }
+}
+
+/// The index `registry.url` names, and where it came from.
+///
+/// Both are returned because every refusal below wants to say *which* index it
+/// was talking about: "nothing named tool-fs" is a different message when the
+/// index is a local fixture than when it is a URL, and the operator is the one
+/// who has to tell them apart.
+fn configured_index() -> Result<(String, Vec<ext_index::Entry>), ext_index::IndexError> {
+    let config_path = resolve_default("config.yaml");
+    let source = ext_index::url_from_config_path(std::path::Path::new(&config_path))?;
+    // The host's own policy-bound client, so a redirect to a private address
+    // ends the fetch rather than being followed on trust. A `registry.url` that
+    // is not http(s) is a path, and nothing is fetched at all.
+    let http = jan_klod_core::ext::policy_bound_http();
+    let entries = ext_index::load(&source, &http)?;
+    Ok((source, entries))
+}
+
+/// Print one index entry: what it is, then **what it asks the host for**.
+///
+/// The capability line gets its own line rather than a column, and that is the
+/// point of the command rather than a formatting preference: until an
+/// interactive Configurator exists this is the capability view, and a
+/// capability list truncated into a table is one an operator skims past.
+fn show_entry(entry: &ext_index::Entry) {
+    // Whether anything vouches for these bytes, said out loud. A blank column
+    // here would read as "no information"; `unsigned` is information.
+    let provenance = if entry.signature.is_empty() {
+        "unsigned"
+    } else {
+        "signed"
+    };
+    println!(
+        "{}  {}  api {}  {}  {} bytes  {provenance}",
+        entry.name, entry.version, entry.api_version, entry.kind, entry.size
+    );
+    if entry.capabilities.is_empty() {
+        // "needs nothing" is a claim the manifest makes, printed as one — the
+        // same wording `ext list` uses for a staged component.
+        println!("  needs nothing");
+    } else {
+        println!("  may use {}", entry.capabilities.join(", "));
+    }
+    if !entry.description.is_empty() {
+        println!("  {}", entry.description);
+    }
+}
+
+/// Search the registry index for components whose name, kind or description
+/// matches, and print what each one asks for.
+fn ext_search(args: &[String]) -> ExitCode {
+    // No term is every entry rather than an error: `ext search` with nothing to
+    // filter by is the same question `ext list --remote` asks.
+    let term = args.first().map_or("", String::as_str);
+    let (source, entries) = match configured_index() {
+        Ok(index) => index,
+        Err(err) => {
+            eprintln!("jan-klod: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let hits = ext_index::search(&entries, term);
+    if hits.is_empty() {
+        // Which index was searched, and how big it was. "No results" from an
+        // index that turned out to be empty is a different problem from a term
+        // that matched nothing, and the operator cannot see the difference.
+        println!(
+            "nothing matching {term:?} in the index at {source} ({} entries)",
+            entries.len()
+        );
+        return ExitCode::SUCCESS;
+    }
+    for entry in hits {
+        show_entry(entry);
+    }
+    ExitCode::SUCCESS
+}
+
+/// Install from whichever of the three kinds of source this is.
+///
+/// Told apart by shape: a URL fetches, a `.wasm` is a path, and anything else
+/// is a **name** resolved through the registry index.
+///
+/// The `.wasm` test is `Path::extension`, the same rule
+/// [`jan_klod_core::ext::install`] applies to decide a path is a component —
+/// two different spellings of it would eventually disagree about a file, and
+/// this one decides which of three code paths runs.
+///
+/// The name case is last because it is the one that cannot be settled locally:
+/// `tool-fs` might be a typo for a path, and the index's refusal ("nothing
+/// named tool-fs in the index at …, try `ext search`") is the more useful of
+/// the two messages either way.
+///
+/// Every fetch uses the host's own policy-bound client, so a redirect is
+/// re-checked per hop rather than followed on trust.
+fn install_from_source(
+    dir: &str,
+    source: &str,
+    checks: &jan_klod_core::ext::Checks,
+) -> Result<jan_klod_core::ext::Installed, ext_index::IndexError> {
+    let dir = std::path::Path::new(dir);
+    if jan_klod_core::ext::looks_remote(source) {
+        let http = jan_klod_core::ext::policy_bound_http();
+        return Ok(jan_klod_core::ext::install_from_url(
+            dir, source, checks, &http,
+        )?);
+    }
+    let path = std::path::Path::new(source);
+    if path.extension().and_then(|ext| ext.to_str()) == Some("wasm") {
+        return Ok(jan_klod_core::ext::install(dir, path, checks)?);
+    }
+    let (index_source, entries) = configured_index()?;
+    let http = jan_klod_core::ext::policy_bound_http();
+    ext_index::install(dir, &entries, source, &index_source, checks, &http)
 }
 
 /// Install a component after checking it, or refuse and change nothing.
@@ -212,7 +330,7 @@ fn ext_install(args: &[String]) -> ExitCode {
 
     let Some(source) = positional.first() else {
         eprintln!(
-            "usage: jan-klod-gateway ext install <path.wasm|url> [ext-dir] \
+            "usage: jan-klod-gateway ext install <name|path.wasm|url> [ext-dir] \
              [--sha256 <hex>] [--allow-unsigned]"
         );
         return ExitCode::FAILURE;
@@ -234,20 +352,7 @@ fn ext_install(args: &[String]) -> ExitCode {
     checks.sha256 = sha256;
     checks.allow_unsigned = allow_unsigned;
 
-    // A URL fetches; anything else is a path. The fetch is the host's own
-    // policy-bound client, so a redirect is re-checked per hop rather than
-    // followed on trust.
-    let outcome = if jan_klod_core::ext::looks_remote(source) {
-        let http = jan_klod_core::ext::policy_bound_http();
-        jan_klod_core::ext::install_from_url(std::path::Path::new(&dir), source, &checks, &http)
-    } else {
-        jan_klod_core::ext::install(
-            std::path::Path::new(&dir),
-            std::path::Path::new(source.as_str()),
-            &checks,
-        )
-    };
-    match outcome {
+    match install_from_source(&dir, source, &checks) {
         Ok(installed) => {
             // What it may ask the host for, at the moment it is installed —
             // the one time an operator is certainly looking.
@@ -290,9 +395,25 @@ fn ext_install(args: &[String]) -> ExitCode {
     }
 }
 
-/// Each staged component with the capabilities its manifest declares.
+/// Each staged component with the capabilities its manifest declares — or,
+/// with `--remote`, everything the configured registry index publishes.
 fn ext_list(args: &[String]) -> ExitCode {
-    let dir = resolve_default(&arg_or(args, 0, "ext"));
+    // Pulled out before the positional, so `--remote` cannot be mistaken for an
+    // extension directory.
+    let remote = args.iter().any(|arg| arg == "--remote");
+    let positional: Vec<String> = args
+        .iter()
+        .filter(|arg| !arg.starts_with("--"))
+        .cloned()
+        .collect();
+    if remote {
+        // The same traversal `ext search` does with nothing to filter by —
+        // listing a registry and searching it with an empty term are one
+        // question, and two implementations of it would be two answers.
+        return ext_search(&[]);
+    }
+
+    let dir = resolve_default(&arg_or(&positional, 0, "ext"));
     let staged = match jan_klod_core::ext::list(std::path::Path::new(&dir)) {
         Ok(staged) => staged,
         Err(err) => {

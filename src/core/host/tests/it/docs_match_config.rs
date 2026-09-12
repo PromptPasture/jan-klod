@@ -291,8 +291,10 @@ fn every_config_key_is_one_the_runtime_reads() {
     //   providers  — order_chain, applied in build_agent
     //   routing    — interceptor-task-router, via host-config
     //   registry   — ext::Checks::from_config, the trusted-keys grant for
-    //                `ext install`. Distinct from `extensions.registry`, which
-    //                is the category above; they share a word and nothing else.
+    //                `ext install`, and ext_index::url_from_config, the index
+    //                `ext search` reads. Distinct from `extensions.registry`,
+    //                which is the category above; they share a word and
+    //                nothing else.
     const CONSUMED_TOP_LEVEL: [&str; 10] = [
         "allow-unmanifested",
         "extensions",

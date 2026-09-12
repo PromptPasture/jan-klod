@@ -320,6 +320,21 @@ storage:
 # and nothing else.
 registry:
   trusted-keys: []
+  # Where `ext search`, `ext list --remote` and `ext install <name>` read the
+  # published index of components from. An index states what each component
+  # asks the host for *before* anything is downloaded, which is the point of
+  # generating one.
+  #
+  # A URL fetches, over the same egress policy an install does — public
+  # addresses only, every redirect hop re-checked. Anything that is not
+  # http/https is a **path**, so an air-gapped operator can point this at a
+  # file and the whole flow works offline.
+  #
+  # Reading an index grants nothing. `trusted-keys` above still decides what
+  # may land in `ext/`, so with the list empty every install from here is
+  # refused as untrusted — which is the correct answer until something
+  # first-party is signed.
+  url: https://promptpasture.github.io/jan-klod/index.json
 
 # Load a component that ships no `<name>.manifest.toml` beside it. Off, because
 # a component nobody can inspect before running it is the thing a manifest

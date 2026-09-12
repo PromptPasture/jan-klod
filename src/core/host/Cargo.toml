@@ -49,6 +49,11 @@ jan-klod-client = { package = "jan-klod", path = "../ui" }
 blake2 = "0.10"
 # Ed25519 signing, and zero new packages: already in the lock via ureq/rustls.
 ring = "0.17.14"
+# The registry-index fixtures state a digest for the bytes they describe, the
+# way a generated index does. **Zero new packages**, measured before adding:
+# `sha2` 0.10 is already a direct dependency of jan-klod-core and shares
+# `digest 0.10` with the `blake2` pin above.
+sha2 = "0.10"
 
 # The examples are opt-in, because cargo builds every example during `cargo test`
 # and `cargo nextest run` just to check they compile. Each of these links
