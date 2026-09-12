@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain web-supply-chain lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -9,6 +9,7 @@
 CORE := src/core
 EXT := src/extensions
 SUPERVISOR := src/supervisor
+WEB := src/web
 
 # EXT_DIR mirrors the extensions sub-makefile's staging dir.
 CONFIG := $(abspath config.yaml)
@@ -54,10 +55,11 @@ help:
 	@echo "  gate-commit the pre-commit gate: fmt + stage guests + core check + test"
 	@echo "  gate-push   the pre-push gate: stage guests + test-guests + clippy + gate"
 	@echo "              + lockfile + supply-chain, in that order"
-	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go)"
+	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go + web)"
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
 	@echo "  sbom        generate sbom.cdx.json for Rust workspace (cargo-cyclonedx)"
+	@echo "  web-supply-chain  npm lockfile sync + npm audit for src/web"
 	@echo "  run         boot the core against config.yaml + ext/"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
@@ -179,9 +181,36 @@ sbom:
 	jq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
 	  src/core/**/*.cdx.json > sbom.cdx.json
 
+# The npm leg (#120). A named target rather than a line inlined below, and that
+# is not a style choice: the inlined supervisor line further down has never run
+# on a CI runner, because CI calls the legs by name and never calls
+# `supply-chain` itself (#130). A gate that does not run looks exactly like a
+# gate that passes.
+#
+# Advisories only. `npm audit` is the analogue of `cargo audit`; there is no
+# analogue here of `cargo deny`'s licence and source policy, so src/web's
+# dependencies are checked for known vulnerabilities and for nothing else.
+#
+# `npm ci --dry-run` first, and it is load-bearing rather than belt-and-braces:
+# `npm audit` reads package-lock.json and **does not notice** a package.json
+# naming a dependency the lockfile has never seen — it reports "found 0
+# vulnerabilities" and exits 0 while a new dependency goes entirely unscanned.
+# This is what `make lockfile` buys for Cargo: the audited tree has to be the
+# tree that builds. `--dry-run` because resolving the tree is the whole point;
+# installing it is not, and `npm audit` needs no node_modules.
+#
+# DO NOT add --omit=dev or --production here. Every one of src/web's 29
+# packages is a devDependency (esbuild + typescript; there are no runtime
+# dependencies at all), so omitting them makes this command scan an empty set,
+# report "found 0 vulnerabilities" and exit 0 forever. The usual advice — audit
+# what ships, skip the build tools — inverts this gate's entire purpose: a
+# compromised build-time package runs with the privileges of whoever builds.
+web-supply-chain:
+	cd $(WEB) && npm ci --dry-run && npm audit
+
 # License/advisory/source policy + RUSTSEC audit (host + guests), Go vuln
-# scan (guests + supervisor), and the SBOM.
-supply-chain: deny audit sbom
+# scan (guests + supervisor), the npm advisory scan, and the SBOM.
+supply-chain: deny audit sbom web-supply-chain
 	$(MAKE) -C $(EXT) go-supply-chain
 	cd $(SUPERVISOR) && GOFLAGS=-mod=readonly go mod verify && govulncheck ./...
 
