@@ -840,3 +840,83 @@ fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
          assemble that directory — the index would name components that 404"
     );
 }
+
+/// Every tool pin in a workflow matches `versions.mk` (#131, #166).
+///
+/// `versions.mk` says "each pin also has a twin in `.github/workflows/ci.yml`",
+/// and four comments across the workflows say "keep in step with ...". None of
+/// that was checked. It is exactly the rule that gets broken in the file nobody
+/// re-reads: #166 found `release.yml` installing `wkg` unpinned — `cargo install
+/// wkg --locked` pins wkg's own `Cargo.lock`, not which wkg you get — while
+/// every other leg installed the prebuilt v0.15.1 that produced `wit/wkg.lock`.
+///
+/// Checked in the direction that can actually go wrong: a workflow naming a
+/// version **different** from the pin. A tool a workflow does not mention at all
+/// is not a failure — `govulncheck` is invoked through `make`, so it has no twin
+/// to keep.
+#[test]
+fn every_tool_a_workflow_pins_matches_versions_mk() {
+    let root = common::repo_root();
+    let versions = std::fs::read_to_string(root.join("versions.mk")).expect("versions.mk");
+
+    let pin = |name: &str| -> String {
+        versions
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(&format!("{name} := ")))
+            .unwrap_or_else(|| panic!("versions.mk defines {name}"))
+            .trim()
+            .to_owned()
+    };
+
+    // How each pin is spelled where a workflow installs it. `wkg` ships as a
+    // bare binary from a GitHub release, so it is a `tag: v<version>` rather
+    // than a `tool@<version>`.
+    let expected = [
+        ("cargo-deny@", pin("CARGO_DENY_VERSION")),
+        ("cargo-audit@", pin("CARGO_AUDIT_VERSION")),
+        ("cargo-cyclonedx@", pin("CARGO_CYCLONEDX_VERSION")),
+        ("cargo-nextest@", pin("CARGO_NEXTEST_VERSION")),
+        ("wasm-tools@", pin("WASM_TOOLS_VERSION")),
+        ("tag: v", pin("WKG_VERSION")),
+    ];
+
+    let mut checked = 0;
+    for workflow in ["ci.yml", "ci-macos.yml", "release.yml", "labels.yml"] {
+        let path = root.join(".github/workflows").join(workflow);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (line_no, line) in text.lines().enumerate() {
+            // A comment explaining a pin may legitimately name an old version
+            // as history — #166's does. Only what is actually installed counts.
+            if line.trim_start().starts_with('#') {
+                continue;
+            }
+            for (marker, version) in &expected {
+                let mut rest = line;
+                while let Some(at) = rest.find(marker) {
+                    rest = &rest[at + marker.len()..];
+                    let found: String = rest
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.')
+                        .collect();
+                    assert_eq!(
+                        &found,
+                        version,
+                        "{workflow}:{} installs `{marker}{found}` but versions.mk \
+                         pins {version} — the two legs would resolve different \
+                         tools, which is what #131 and #166 were each about",
+                        line_no + 1
+                    );
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        checked >= 6,
+        "only {checked} pins were found in the workflows, so this test is \
+         mostly not looking at anything — the spellings above have drifted \
+         from how the workflows install these tools"
+    );
+}

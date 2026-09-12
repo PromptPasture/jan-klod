@@ -57,11 +57,37 @@ jobs:
         with:
           workspaces: src/core
 
-      - name: Fetch WIT spike deps
-        run: cd wit && wkg wit fetch --wit-dir spike || true
-
+      # These two used to run the other way round — the fetch first, then the
+      # install — so `wkg` did not exist when `wkg wit fetch` was called, and
+      # `|| true` on both meant nothing said so (#166). `wit/spike/deps` was
+      # therefore never populated on a release, and could not be: the same shape
+      # as #130, where a gate that does not run looks exactly like one that
+      # passes.
+      #
+      # Same prebuilt, same pin as ci.yml and ci-macos.yml, and for the reason
+      # ci.yml gives: `wit/wkg.lock` is a resolution of some registry state, and
+      # a newer wkg is not guaranteed to reproduce it. `cargo install wkg
+      # --locked` pinned wkg's *own* Cargo.lock rather than which wkg you get,
+      # so the release leg was free to resolve a different tool from the leg
+      # that validates the lockfile — and it recompiled from source every run to
+      # do it. Keep the tag in step with WKG_VERSION in versions.mk.
       - name: Install wkg (WIT package manager)
-        run: cargo install wkg --locked 2>/dev/null || true
+        uses: jaxxstorm/action-install-gh-release@v1
+        with:
+          repo: bytecodealliance/wasm-pkg-tools
+          tag: v0.15.1
+          extension-matching: disable
+          rename-to: wkg
+          chmod: 0755
+          cache: enable
+
+      # `make -C src/extensions spike-deps` rather than an inline `cd wit &&
+      # wkg …`, so this calls the target a developer calls and the two cannot
+      # drift. No `|| true`: if the deps cannot be fetched, the guests that need
+      # them do not build, and finding that out here beats finding it out in the
+      # build step with a confusing error.
+      - name: Fetch WIT spike deps
+        run: make -C src/extensions spike-deps
 
       # Only Linux needs this, and only for the `GUI=1` archive below. On macOS
       # the webview is WKWebView, part of the OS — #141 verified a Tauri binary
