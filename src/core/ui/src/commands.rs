@@ -86,12 +86,20 @@ pub const COMMANDS: [Command; 6] = [
 ///
 /// Substring would match `/new` for `s`, which is not what a prefix menu means;
 /// a user typing `/se` is narrowing, not searching.
+///
+/// **An exact match sorts first**, and that is not cosmetic. `/new` is a prefix
+/// of `/newline`, so a user who typed the whole of `/new` and pressed `Enter`
+/// would otherwise run `/newline` — the command they did not ask for, selected
+/// because it happened to be listed earlier. Typing a command's full name and
+/// confirming has to run that command.
 #[must_use]
 pub fn matching(typed: &str) -> Vec<&'static Command> {
-    COMMANDS
+    let mut found: Vec<&'static Command> = COMMANDS
         .iter()
         .filter(|c| c.name.starts_with(typed))
-        .collect()
+        .collect();
+    found.sort_by_key(|c| usize::from(c.name != typed));
+    found
 }
 
 #[cfg(test)]
@@ -140,8 +148,21 @@ mod tests {
     fn filtering_is_a_prefix_not_a_search() {
         assert_eq!(matching("/").len(), COMMANDS.len(), "bare slash offers all");
         let ne: Vec<&str> = matching("/ne").iter().map(|c| c.name).collect();
-        assert_eq!(ne, vec!["/newline", "/new"]);
+        assert_eq!(
+            ne,
+            vec!["/newline", "/new"],
+            "table order while neither is exact"
+        );
         assert_eq!(matching("/newl").len(), 1);
+
+        // `/new` is a prefix of `/newline`, and typing it in full must select
+        // it rather than the longer name that happens to be listed first.
+        let exact: Vec<&str> = matching("/new").iter().map(|c| c.name).collect();
+        assert_eq!(
+            exact,
+            vec!["/new", "/newline"],
+            "an exact match comes first"
+        );
         assert!(
             matching("/zzz").is_empty(),
             "no match is empty, and the menu shows an empty state rather than closing"

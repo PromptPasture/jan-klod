@@ -4,6 +4,7 @@
 //! events mutate the [`App`], each turn's answer is recorded, and the view is a
 //! pure function of this state.
 
+use crate::commands::{Availability, Command};
 use crate::composer::Composer;
 
 /// Who authored a transcript line.
@@ -56,6 +57,13 @@ pub struct App {
     /// The text is what makes "unmodified" answerable: the composer is
     /// unmodified while it still holds exactly what recall placed there.
     recall: Option<(usize, String)>,
+    /// Which entry the `/` menu has highlighted, when it is open.
+    ///
+    /// `Some` **is** open, so there is no second flag to fall out of step with
+    /// the first. What the menu *shows* is derived from the composer rather than
+    /// stored (see [`Self::menu_query`]), which is what stops the list and the
+    /// text disagreeing; only the highlight needs remembering.
+    menu: Option<usize>,
     /// Set while a turn is blocked on a confirmation. The next submission is that
     /// answer, not a new message — a turn is already running and typing a fresh
     /// message would go nowhere.
@@ -84,11 +92,13 @@ impl App {
     /// Insert a typed character at the caret.
     pub fn push_char(&mut self, c: char) {
         self.composer.push(c);
+        self.maybe_open_menu();
     }
 
     /// Delete the grapheme before the caret.
     pub fn backspace(&mut self) {
         self.composer.backspace();
+        self.maybe_open_menu();
     }
 
     /// Take a trimmed, non-empty submission: record it as a [`Who::You`] line,
@@ -100,6 +110,92 @@ impl App {
         self.recall = None;
         self.record(Who::You, message.clone());
         Some(message)
+    }
+
+    /// The fragment the `/` menu is filtering on, when it is open.
+    ///
+    /// A command is the whole buffer — `/` then a run of non-whitespace. The
+    /// moment a space or a newline arrives it has stopped being one, and the
+    /// menu closes rather than filtering on something that can never match.
+    #[must_use]
+    pub fn menu_query(&self) -> Option<&str> {
+        self.menu?;
+        let text = self.composer.text();
+        (text.starts_with('/') && !text.contains(char::is_whitespace)).then_some(text)
+    }
+
+    /// The entries the menu is showing. Empty means the empty state, **not**
+    /// that the menu has closed.
+    #[must_use]
+    pub fn menu_entries(&self) -> Vec<&'static Command> {
+        self.menu_query()
+            .map(crate::commands::matching)
+            .unwrap_or_default()
+    }
+
+    /// Which entry is highlighted, clamped to what is on offer.
+    #[must_use]
+    pub fn menu_selected(&self) -> usize {
+        let len = self.menu_entries().len();
+        self.menu.unwrap_or(0).min(len.saturating_sub(1))
+    }
+
+    /// Open the menu, if this keystroke is the one that opens it.
+    fn maybe_open_menu(&mut self) {
+        if self.composer.text() == "/" {
+            self.menu = Some(0);
+        } else if self.menu_query().is_none() {
+            // It stopped looking like a command — a space, a newline, or the
+            // slash was deleted.
+            self.menu = None;
+        }
+    }
+
+    /// `Esc` with the menu open: close it and leave the text alone.
+    ///
+    /// Only a keystroke reopens it, so this does not immediately undo itself.
+    pub const fn menu_dismiss(&mut self) {
+        self.menu = None;
+    }
+
+    /// Move the highlight, wrapping — a six-item list is short enough that
+    /// wrapping is a convenience rather than the disorientation it is in
+    /// history.
+    pub fn menu_move(&mut self, delta: isize) {
+        let len = self.menu_entries().len();
+        if len == 0 {
+            return;
+        }
+        let current = self.menu_selected();
+        let len_i = isize::try_from(len).unwrap_or(1);
+        let next = (isize::try_from(current).unwrap_or(0) + delta).rem_euclid(len_i);
+        self.menu = Some(usize::try_from(next).unwrap_or(0));
+    }
+
+    /// Run the highlighted command, or explain why it cannot run yet.
+    ///
+    /// Returns whether anything was accepted — `false` on the empty state, so
+    /// the caller knows `Enter` still means submit.
+    pub fn menu_accept(&mut self) -> bool {
+        let Some(command) = self.menu_entries().get(self.menu_selected()).copied() else {
+            return false;
+        };
+        self.menu = None;
+        self.composer.set("");
+        match command.availability {
+            Availability::Ready => match command.name {
+                "/newline" => self.composer.push('\n'),
+                "/quit" => self.should_quit = true,
+                // Unreachable while the table and this match agree, and a status
+                // line rather than a panic if they ever stop: a client that
+                // aborts on its own menu is worse than one that says so.
+                other => self.record(Who::Status, format!("{other} is not wired up")),
+            },
+            Availability::Pending(reason) => {
+                self.record(Who::Status, format!("{} — {reason}", command.name));
+            }
+        }
+        true
     }
 
     /// Whether `↑`/`↓` should walk history rather than move the caret.

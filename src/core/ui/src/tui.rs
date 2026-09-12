@@ -15,15 +15,17 @@ use std::time::Duration;
 
 use jan_klod::app::{App, Prompt};
 use jan_klod::blocks;
+use jan_klod::commands::Availability;
 use jan_klod::theme::{Glyph, Theme};
 use jan_klod::transport::Transport;
 use jan_klod::viewport::Viewport;
 use jan_klod::StreamEvent;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
 const POLL_MS: u64 = 50;
@@ -200,6 +202,28 @@ fn edit_or_scroll(
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    // The `/` menu takes the keys it needs while it is open, and only those.
+    if app.menu_query().is_some() {
+        match key.code {
+            KeyCode::Esc => {
+                app.menu_dismiss();
+                return true;
+            }
+            KeyCode::Up => {
+                app.menu_move(-1);
+                return true;
+            }
+            KeyCode::Down => {
+                app.menu_move(1);
+                return true;
+            }
+            // `Enter` on the empty state falls through to submit rather than
+            // being swallowed: a menu showing nothing must not make the
+            // composer unsendable.
+            KeyCode::Enter | KeyCode::Tab if app.menu_accept() => return true,
+            _ => {}
+        }
+    }
     match key.code {
         // Scrolling. `Ctrl+U`/`Ctrl+D` reach here only when the composer is
         // empty: #150 consumes them when there is content and deliberately
@@ -337,6 +361,82 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
         input_area.x + 1 + u16::try_from(caret_cells + caret_col).unwrap_or(0),
         input_area.y + 1 + u16::try_from(caret_row).unwrap_or(0),
     ));
+    render_menu(frame, app, theme, input_area);
+}
+
+/// Draw the `/` menu over the transcript, just above the composer.
+///
+/// Its own function because `render` was past clippy's line limit, and because
+/// this is a self-contained overlay: it reads the menu and draws it, and knows
+/// nothing about the transcript it floats over.
+fn render_menu(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
+    // The menu floats over the transcript, immediately above the composer, so
+    // the line being typed stays where the user is looking.
+    if app.menu_query().is_none() {
+        return;
+    }
+    {
+        let entries = app.menu_entries();
+        let rows: Vec<Line<'static>> = if entries.is_empty() {
+            // An empty state rather than a closed menu: a list that vanishes as
+            // you type reads as a dropped keystroke.
+            vec![Line::from(Span::styled(
+                " no command matches".to_string(),
+                Style::default().fg(theme.muted()),
+            ))]
+        } else {
+            entries
+                .iter()
+                .enumerate()
+                .map(|(i, command)| {
+                    let selected = i == app.menu_selected();
+                    let name = Style::default().fg(if selected {
+                        theme.focus()
+                    } else {
+                        theme.body()
+                    });
+                    let mut spans = vec![
+                        // The highlight is a glyph as well as a colour, because
+                        // under `Mode::Mono` the colour is nothing.
+                        Span::styled(
+                            if selected {
+                                format!("{} ", theme.glyph(Glyph::Collapsed))
+                            } else {
+                                "  ".to_string()
+                            },
+                            name,
+                        ),
+                        Span::styled(command.name.to_string(), name),
+                        Span::styled(
+                            format!("  {}", command.summary),
+                            Style::default().fg(theme.muted()),
+                        ),
+                    ];
+                    if let Availability::Pending(_) = command.availability {
+                        spans.push(Span::styled(
+                            "  (not yet)".to_string(),
+                            Style::default().fg(theme.warning()),
+                        ));
+                    }
+                    Line::from(spans)
+                })
+                .collect()
+        };
+        let height = u16::try_from(rows.len()).unwrap_or(1) + 2;
+        let area = Rect {
+            x: input_area.x,
+            y: input_area.y.saturating_sub(height),
+            width: input_area.width,
+            height: height.min(input_area.y),
+        };
+        if area.height > 2 {
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new(rows).block(Block::bordered().title("commands")),
+                area,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -474,6 +574,112 @@ mod tests {
         app.composer.set("");
         key(&mut app, KeyCode::Up, KeyModifiers::NONE);
         assert_eq!(app.input(), "original", "history holds what was sent");
+    }
+
+    /// #152's Acceptance, driven through the mapping.
+    #[test]
+    fn the_menu_opens_only_at_column_zero_of_an_empty_composer() {
+        let mut app = App::default();
+        app.push_char('/');
+        assert!(
+            app.menu_query().is_some(),
+            "a slash on an empty line opens it"
+        );
+
+        // Mid-word: not a command, so no menu.
+        let mut mid = App::default();
+        "ls /tmp".chars().for_each(|c| mid.push_char(c));
+        assert!(
+            mid.menu_query().is_none(),
+            "a slash inside a message is a slash"
+        );
+
+        // A space ends it, because a command is the whole buffer.
+        let mut spaced = App::default();
+        "/new ".chars().for_each(|c| spaced.push_char(c));
+        assert!(spaced.menu_query().is_none());
+
+        // Deleting the slash closes it.
+        let mut deleted = App::default();
+        deleted.push_char('/');
+        deleted.backspace();
+        assert!(deleted.menu_query().is_none());
+    }
+
+    #[test]
+    fn a_fragment_matching_nothing_shows_an_empty_state_rather_than_closing() {
+        let mut app = App::default();
+        "/zzz".chars().for_each(|c| app.push_char(c));
+        assert!(
+            app.menu_query().is_some(),
+            "the menu stays open — vanishing reads as a dropped keystroke"
+        );
+        assert!(app.menu_entries().is_empty(), "and shows nothing");
+
+        // And `Enter` on the empty state still submits rather than being eaten.
+        assert!(!key(&mut app, KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn every_command_in_the_table_does_what_it_claims() {
+        for command in jan_klod::commands::COMMANDS {
+            let mut app = App::default();
+            command.name.chars().for_each(|c| app.push_char(c));
+            assert_eq!(
+                app.menu_entries().first().map(|c| c.name),
+                Some(command.name),
+                "{} is a prefix of another command and did not sort first",
+                command.name
+            );
+            assert!(key(&mut app, KeyCode::Enter, KeyModifiers::NONE));
+            assert!(
+                !app.input().starts_with('/'),
+                "{} left its own name in the composer",
+                command.name
+            );
+
+            match command.availability {
+                jan_klod::commands::Availability::Ready => match command.name {
+                    "/newline" => assert_eq!(app.input(), "\n"),
+                    "/quit" => assert!(app.should_quit),
+                    other => panic!("{other} is Ready and untested — add it here"),
+                },
+                jan_klod::commands::Availability::Pending(reason) => {
+                    let last = app.transcript.last().expect("a status line");
+                    assert!(
+                        last.text.contains(reason),
+                        "{} said {:?} rather than its reason",
+                        command.name,
+                        last.text
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arrows_move_the_highlight_while_the_menu_is_open() {
+        let mut app = App::default();
+        app.push_char('/');
+        assert_eq!(app.menu_selected(), 0);
+        key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(app.menu_selected(), 1, "and not history");
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(
+            app.menu_selected(),
+            jan_klod::commands::COMMANDS.len() - 1,
+            "a six-item list wraps, unlike history"
+        );
+
+        // Esc closes and leaves the text alone.
+        assert!(key(&mut app, KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.menu_query().is_none());
+        assert_eq!(app.input(), "/", "dismissing is not deleting");
+        assert!(
+            !app.should_quit,
+            "Esc closed the menu rather than the client"
+        );
     }
 
     #[test]
