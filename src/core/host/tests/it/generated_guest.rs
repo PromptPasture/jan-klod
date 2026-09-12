@@ -28,6 +28,24 @@
 //! `manifest.rs::a_generated_crate_boots`, which is where the manifest
 //! cross-check happens.
 //!
+//! # How this is known to fail
+//!
+//! A harness that loads nothing passes exactly as quietly as one that loads a
+//! working component, so this file was probed three ways rather than trusted
+//! ([#112](https://github.com/PromptPasture/jan-klod/issues/112) Acceptance
+//! line 2). Each fails, and each says which thing broke:
+//!
+//! | broken | what the failure says |
+//! |---|---|
+//! | the component is not staged, under `JK_REQUIRE_GUESTS=1` | `must not be skipped, but ["tool-hello.wasm"] are not staged` |
+//! | `invoke` returns something else | `assertion left == right failed … left: "broken"` |
+//! | `extension-lifecycle`'s `init` returns `Err` | `LifecycleRejected { phase: "init", … }` |
+//!
+//! The first is the one that matters most and is the cheapest to lose: without
+//! `JK_REQUIRE_GUESTS` a missing component makes this test *skip*, which reads
+//! as green. That flag is what `make gate` sets, and it is why the skip below
+//! goes through the shared policy rather than an `if` of its own.
+//!
 //! Offline. Skips (passes as a no-op) when the guest is not staged in `ext/`.
 
 use jan_klod_core::host_process::ProcessRunner;
