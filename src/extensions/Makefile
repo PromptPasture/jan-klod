@@ -10,6 +10,11 @@ ROOT := $(abspath $(CURDIR)/../..)
 EXT_DIR := $(ROOT)/ext
 WIT_DIR := $(ROOT)/wit
 
+# Pinned tool versions, shared with the root Makefile, which includes the same
+# file. Via $(ROOT) rather than a relative path so `make -f src/extensions/...`
+# from elsewhere resolves it too — CI invokes this makefile directly.
+include $(ROOT)/versions.mk
+
 # Rust guests, by directory name (= staged ext/<name>.wasm). Add a guest here and
 # it gets `make <name>` + a slot in `all`/`clean` for free.
 # The cargo artifact swaps '-' for '_' (e.g. tool-fs -> tool_fs.wasm).
@@ -95,11 +100,12 @@ deny:
 
 # Supply-chain gate for every Go module under src/extensions (currently only the
 # TinyGo Slice 1a canary): verified module sums + a govulncheck scan. GOFLAGS pins
-# -mod=readonly so a scan can never silently mutate go.mod/go.sum.
+# -mod=readonly so a scan can never silently mutate go.mod/go.sum, and
+# GOVULNCHECK_VERSION pins the scanner for the reason versions.mk records (#131).
 go-supply-chain: export GOFLAGS = -mod=readonly
 go-supply-chain:
 	@for mod in $(GO_MODULES); do dir=$$(dirname $$mod); echo "== go supply-chain $$dir =="; \
-		( cd $$dir && go mod verify && go run golang.org/x/vuln/cmd/govulncheck@latest ./... ) || exit 1; done
+		( cd $$dir && go mod verify && go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./... ) || exit 1; done
 
 # Resolve the spike world's WIT deps (wasi:cli and friends) into wit/spike/deps.
 spike-deps:

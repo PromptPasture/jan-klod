@@ -62,7 +62,7 @@ jobs:
       #
       # Pinned, like every other tool here: these Makefiles parse nextest's
       # output, so a CLI change lands on us the way cargo-deny's did. Keep in
-      # step with CARGO_NEXTEST_VERSION in the root Makefile.
+      # step with CARGO_NEXTEST_VERSION in versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.143
@@ -71,7 +71,7 @@ jobs:
       # by reading the component's own imports out of `wasm-tools component wit`,
       # so staging the guests now needs this. Pinned like everything else here:
       # these Makefiles parse its output. Keep in step with WASM_TOOLS_VERSION in
-      # the root Makefile.
+      # versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-tools@1.258.0
@@ -340,7 +340,7 @@ jobs:
       # cargo-cyclonedx had the identical exposure — `make audit` reads the
       # former's exit code and `make sbom` the latter's output file — so they no
       # longer float either. Keep in step with the CARGO_*_VERSION variables in
-      # the root Makefile.
+      # versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-cyclonedx@0.5.9

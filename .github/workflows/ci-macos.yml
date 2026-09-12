@@ -76,14 +76,14 @@ jobs:
 
       # Pinned exactly as in ci.yml: these Makefiles parse nextest's output, and
       # the count guard below reads `nextest list`. Keep in step with
-      # CARGO_NEXTEST_VERSION in the root Makefile.
+      # CARGO_NEXTEST_VERSION in versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.143
 
       # `make -C src/extensions all` generates each guest's manifest from the
       # component's real imports via `wasm-tools component wit`. Keep in step
-      # with WASM_TOOLS_VERSION in the root Makefile.
+      # with WASM_TOOLS_VERSION in versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-tools@1.258.0

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-13
+
+- **Chore**: **`govulncheck` no longer floats, and the pins now live where two makefiles can both read them** (#131). It was the last tool in the repository still resolving `@latest`, in the one ecosystem that had not yet paid for it — the comment recording cargo-deny's days of red CI sits a few lines above the step that invoked it. A floating *scanner* is worse than a floating formatter in a specific way: a new release can change findings, so the gate goes red on a commit that changed nothing and the fix is not obvious to whoever is holding the build. Pinned to `v1.8.0` at both call sites, `go-supply-chain` and `supervisor-supply-chain`.
+- **One definition, not two, because the second one is the bug.** The two sites live in different makefiles and CI invokes `src/extensions/Makefile` **directly** (`make -C src/extensions go-supply-chain`), so it cannot inherit a variable from a parent make that never ran — and a pin copied into both is a pin that can drift, which is what #131 is about. So the version block became `versions.mk`, included by both. The `CARGO_*_VERSION`, `WASM_TOOLS_VERSION` and `WKG_VERSION` pins moved with it rather than leaving the newest entry somewhere the others are not, and the four "keep in step with … the root Makefile" comments in `ci.yml` and `ci-macos.yml` were repointed — a pin whose twin comment names the wrong file is half-unpinned.
+- Verified by running both legs, not by reading the expansion: `make supervisor-supply-chain` and `make -C src/extensions go-supply-chain` each resolve `govulncheck@v1.8.0` and report no vulnerabilities.
+
 ## 2026-09-12
 
 - **Create**: **`jan-klod --gui` opens the web client in a native window, and Phase 17's exit gate is met** (Slice 17b, #55 — #141 the cost, #142 the window, #143 packaging, #144 this record). One front-end codebase now serves the browser and the desktop: `src/web` builds the page, `src/core` serves it at `/`, and `src/gui` is a Tauri 2 shell that opens a system webview pointed at that address. No bundled browser, and no third client codebase — Vision decision 5.

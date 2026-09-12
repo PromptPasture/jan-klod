@@ -6,6 +6,10 @@
 # src/extensions/Makefile (guest components, staged in ext/). Also owns the
 # root WIT contracts and the integration targets spanning both subtrees.
 
+# Pinned tool versions, shared with src/extensions/Makefile, which includes the
+# same file. See versions.mk for why it is a file and not a block here.
+include versions.mk
+
 CORE := src/core
 EXT := src/extensions
 SUPERVISOR := src/supervisor
@@ -366,19 +370,19 @@ web-supply-chain:
 # have reproduced the same bug in tidier form, which is why the two happen
 # together.
 #
-# `go run …@latest` rather than a `govulncheck` off `PATH`, matching
-# src/extensions' `go-supply-chain`: no runner has govulncheck installed, and
-# the neighbouring leg already resolves the tool this way. That answers #131's
-# second question — the supervisor does use the same call — and leaves it the
-# first one, the `@latest` float, which is now two call sites in one shape
-# rather than two shapes.
+# `go run …@$(GOVULNCHECK_VERSION)` rather than a `govulncheck` off `PATH`,
+# matching src/extensions' `go-supply-chain`: no runner has govulncheck
+# installed, and the neighbouring leg already resolves the tool this way. That
+# answered #131's second question — the supervisor does use the same call — and
+# #131 then closed the first one by pinning the version both sites share, in
+# versions.mk.
 #
 # `src/supervisor` has no `go.sum`: it is a dependency-free binary, so
 # `go mod verify` passes trivially and the real work here is govulncheck's
 # **standard library** scan, which is what a Go toolchain CVE would land in.
 supervisor-supply-chain: export GOFLAGS = -mod=readonly
 supervisor-supply-chain:
-	cd $(SUPERVISOR) && go mod verify && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	cd $(SUPERVISOR) && go mod verify && go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 # License/advisory/source policy + RUSTSEC audit (host + guests), Go vuln
 # scan (guests + supervisor), the npm advisory scan, and the SBOM.
@@ -567,33 +571,6 @@ probe:
 # Resolve config.yaml and print the extension plan (each instance -> wasm).
 config:
 	cd $(CORE) && cargo run --quiet -p jan-klod-config --features examples --example dump -- $(CONFIG)
-
-# Every tool whose output or CLI these targets depend on is pinned, and each pin
-# has a twin in .github/workflows/ci.yml. Unpinned, CI resolves `@latest` while a
-# developer machine keeps whatever it installed months ago, and the two disagree
-# without either being wrong.
-#
-# cargo-deny is why: 0.20 removed `--config` from the `check` subcommand and made
-# it global, so 0.19 and 0.20 need different invocations and no spelling
-# satisfies both. CI had `@latest` (0.20.2), local machines had 0.19, and the
-# supply-chain job failed on main for days. The other three carry the identical
-# exposure — cargo-nextest most of all, since these Makefiles read its output —
-# so they are pinned to the versions current when this was written, which are
-# also the ones this repository has been verified against.
-CARGO_DENY_VERSION := 0.20.2
-CARGO_AUDIT_VERSION := 0.22.2
-CARGO_CYCLONEDX_VERSION := 0.5.9
-CARGO_NEXTEST_VERSION := 0.9.143
-# Not a cargo plugin, but the same rule applies: `make extensions` reads its
-# output to generate each guest's capability manifest, so a change to how it
-# prints a component's WIT lands on us.
-WASM_TOOLS_VERSION := 1.258.0
-# wkg resolves wit/spike/deps against the committed wit/wkg.lock (#77). Pinned
-# for the same reason as everything else here, and to the same value CI installs
-# it at (see the "Install wkg" steps in .github/workflows/ci.yml): a lockfile is
-# a resolution of *some* registry state at the time it was written, and a newer
-# wkg is not guaranteed to reproduce it.
-WKG_VERSION := 0.15.1
 
 # One-time developer setup: cargo supply-chain plugins, git hooks, and the WIT
 # deps that only `wkg` can fetch.
