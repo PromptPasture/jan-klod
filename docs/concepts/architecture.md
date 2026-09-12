@@ -477,6 +477,23 @@ operator who would rather have *no* command than an unconfined one sets
 grants and the tests behind each of these are the "Command effects" row in the
 [security model](security-model.md#capabilities).
 
+**A long-lived child goes through exactly this, and that is the point.** A stdio
+MCP server, an `lsp-*` or a browser driver has to be *held open*, which
+`host-process`'s `exec` cannot do — it runs to completion. `spawn` holds one
+instead, and it reaches the process through the same `ProcessRunner::prepared`
+that `exec` does: confine, then cwd, environment and pipes, then start. A child
+that outlives its call is more exposed than one that does not, so it gets the
+same policy rather than a relaxed one, and the single place that decides how a
+command is bounded is the single place both go through.
+
+What differs is the grant and the lifetime. The grant, `execution.long-lived`,
+**names processes** rather than permitting spawning: a guest asks for a name and
+the host supplies the command, so it can start what an operator wrote down and
+nothing else. The lifetime is the host's: the child is owned by the extension
+instance that started it and killed when that instance goes — including on
+gateway exit, and whether or not the guest ever asks. A guest that forgets, or
+that traps before it can ask, leaves nothing behind.
+
 Two things Seatbelt here does not do, both deliberate: **reads are not confined**
 (the gap being closed is over effects, and a command that cannot read its
 toolchain does not run), and a command needing a **Mach service** fails rather

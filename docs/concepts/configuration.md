@@ -200,6 +200,38 @@ Default-deny: with no `execution:` block, `host-process` refuses every call, and
 | `output-cap` | Captured bytes per stream, stdout and stderr each | `65536` |
 | `env-passthrough` | Extra environment names a child inherits, one at a time. Everything else is stripped — the gateway's own environment holds your API keys | none |
 | `sandbox` | What a command may do once running (below) | see below |
+| `long-lived` | Children a guest may hold open, **named one at a time** (below) | none |
+
+### `execution.long-lived`
+
+A list of processes a guest may start and keep running — what a stdio MCP
+server, an `lsp-*` or a browser driver needs, and what `enabled` alone cannot
+express, because `host-process`'s `exec` runs to completion.
+
+```yaml
+execution:
+  enabled: true
+  long-lived:
+    - name: docs-mcp            # what a guest asks for
+      command: /usr/bin/my-mcp  # what actually runs
+      args: ["--stdio"]
+```
+
+**This is narrower than `enabled`, not wider.** A guest names a child; the
+command and its arguments come from here. So a granted guest can start what you
+wrote down and nothing else — there is no path by which a string the guest chose
+becomes a program. `enabled: true` on its own grants none of these: an empty or
+absent list means no child can be started.
+
+An entry missing `name` or `command` is skipped rather than guessed. A
+half-written grant is one nobody can read, and the conservative reading of it is
+none.
+
+A long-lived child is confined by the same `execution.sandbox` policy as a
+one-shot command — it outlives its call, so it is more exposed, not less — and
+it is killed when the extension instance that started it goes, including when
+the gateway exits. A guest that never calls `kill` cannot leave a process
+behind.
 
 ### `execution.sandbox`
 
