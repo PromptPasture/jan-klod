@@ -248,6 +248,36 @@ jobs:
       - name: Go supply-chain (mod verify + govulncheck)
         run: make -C src/extensions go-supply-chain
 
+      # The npm tree under src/web — the repository's third ecosystem, joining
+      # this job rather than becoming an exception to it (#120).
+      #
+      # node-version is pinned for the reason the three cargo tools above are:
+      # an unpinned version is what failed main for days. The asymmetry worth
+      # knowing is that there is no `make setup` line to keep this in step with,
+      # because npm ships inside Node rather than being a tool make can install
+      # — the local leg uses whatever npm is on PATH. That is tolerable here and
+      # would not have been for cargo-deny: `npm audit`'s verdict comes from the
+      # registry's advisory database, so a client version difference changes the
+      # CLI surface rather than which advisories are found.
+      #
+      # No `cache: npm`, deliberately, and this is measured rather than assumed:
+      # `make web-supply-chain` resolves and audits without installing, so the
+      # whole run leaves 8 KB across 3 files in the npm cache. Restoring and
+      # saving that costs more than it saves. `setup-go` above caches because it
+      # downloads modules for a real build; this leg downloads nothing. Add a
+      # cache the day this step installs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+
+      # Lockfile sync, then advisories. The sync half is load-bearing: `npm
+      # audit` reads package-lock.json and is silent about a dependency that is
+      # only in package.json, so audit alone would leave a newly added package
+      # unscanned while reporting "found 0 vulnerabilities". The Makefile
+      # comment carries the rest, including why --omit=dev must never be added.
+      - name: Web supply-chain (npm lockfile sync + npm audit)
+        run: make web-supply-chain
+
       # SBOM for the Rust workspace (CycloneDX JSON). cargo-cyclonedx installed
       # above via taiki-e/install-action alongside cargo-deny and cargo-audit.
       - name: Generate SBOM
