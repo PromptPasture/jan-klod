@@ -13,7 +13,10 @@ Hosted publicly. Launch on **GitHub Pages**; migrate to `start.janklod.dev` once
 
 ## UI flow
 
-1. Pick a bundle preset (TUI, GUI, full) or start from scratch.
+1. Pick a **distribution** (what the install is for) or start from scratch, and
+   separately tick whether the desktop window ships — two questions, not one.
+   See [Distributions](#distributions) below for why that is not a `tui`/`gui`
+   preset.
 2. Select extensions from the registry (search, filter by role category).
 3. Fill in configuration values (LLM endpoint, API keys, storage backend, etc.).
 4. Click **Generate** — the server resolves the dependency graph, validates WIT interface compatibility, and builds the ZIP.
@@ -21,9 +24,10 @@ Hosted publicly. Launch on **GitHub Pages**; migrate to `start.janklod.dev` once
 ## ZIP layout — standard
 
 ```
-jan-klod-<version>-<os>-<arch>/
-  jan-klod              ← Rust core binary (platform-specific)
-  jan-klod-ui           ← UI client binary (UI bundles only; TUI/GUI by launch flag)
+jan-klod-<version>-<os>-<arch>[-<distribution>][-gui]/
+  jan-klod-gateway    ← the core binary (platform-specific)
+  jan-klod            ← the client: line REPL, or `tui`, or `--gui` by launch mode
+  jan-klod-gui        ← the Tauri window — `-gui` archives only (make bundle GUI=1)
   config.yaml         ← pre-filled from selections
   ext/                ← provider/interceptor/tool guests (persistence, the REST
                         surface, telegram, and delegation are host-side in the core

@@ -13,6 +13,13 @@
 #   coding         (default) models, the interceptor set, file and git tools
 #   headless-chat  a chat channel; nothing that touches the machine
 #   minimal        one provider and the interceptor set
+#
+# Add --gui for the archive that also carries the desktop window:
+#   curl -sSL .../install.sh | sh -s -- --gui
+#
+# --gui is orthogonal to --dist, the way scripts/distributions/README.md says a
+# client choice is: it selects the `-gui` archive of whichever distribution was
+# asked for, not a distribution of its own.
 set -eu
 
 REPO="PromptPasture/jan-klod"
@@ -25,14 +32,19 @@ INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
 # test is what turns that into a failing build instead.
 DISTRIBUTIONS="coding headless-chat minimal"
 DIST="coding"
+# The `-gui` suffix `make bundle GUI=1` adds, or empty. Not a distribution: see
+# the note at the top and scripts/distributions/README.md.
+GUI_SUFFIX=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dist) DIST="${2:?--dist needs a name}"; shift 2 ;;
     --dist=*) DIST="${1#--dist=}"; shift ;;
+    --gui) GUI_SUFFIX="-gui"; shift ;;
     -h|--help)
-      echo "usage: install.sh [--dist <name>]"
+      echo "usage: install.sh [--dist <name>] [--gui]"
       echo "  name: ${DISTRIBUTIONS}"
+      echo "  --gui: also install the desktop window (jan-klod --gui)"
       exit 0 ;;
     *) echo "error: unknown option: $1" >&2; exit 2 ;;
   esac
@@ -79,11 +91,11 @@ fi
 # same change *after* a release would have needed one — an installer that asks
 # for an archive no existing tag has turns every previous version into a 404,
 # which is the one failure a user cannot work around.
-BUNDLE="jan-klod-${TAG}-${OS}-${ARCH}-${DIST}.tar.gz"
+BUNDLE="jan-klod-${TAG}-${OS}-${ARCH}-${DIST}${GUI_SUFFIX}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${TAG}/${BUNDLE}"
 CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS.txt"
 
-echo "Installing jan-klod ${TAG} (${OS}-${ARCH}, ${DIST}) …"
+echo "Installing jan-klod ${TAG} (${OS}-${ARCH}, ${DIST}${GUI_SUFFIX}) …"
 
 # Download bundle + checksums to a temp dir.
 TMP="$(mktemp -d)"
@@ -108,19 +120,26 @@ cd - > /dev/null
 # Extract and install everything the bundle carries — not just the binaries,
 # or the installed agent boots with no extensions and no tools.
 tar -xzf "${TMP}/${BUNDLE}" -C "${TMP}"
-EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}-${DIST}"
+EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}-${DIST}${GUI_SUFFIX}"
 DATA_DIR="${DATA_DIR:-$(dirname "${INSTALL_DIR}")/share/jan-klod}"
 
 mkdir -p "${INSTALL_DIR}" "${DATA_DIR}"
 cp "${EXTRACTED}/jan-klod" "${INSTALL_DIR}/jan-klod"
 cp "${EXTRACTED}/jan-klod-gateway" "${INSTALL_DIR}/jan-klod-gateway"
 chmod +x "${INSTALL_DIR}/jan-klod" "${INSTALL_DIR}/jan-klod-gateway"
+# The window, when this archive carries one. Beside the others because that is
+# how `jan-klod --gui` finds it: sibling of the running executable, then PATH.
+if [ -f "${EXTRACTED}/jan-klod-gui" ]; then
+  cp "${EXTRACTED}/jan-klod-gui" "${INSTALL_DIR}/jan-klod-gui"
+  chmod +x "${INSTALL_DIR}/jan-klod-gui"
+fi
 cp "${EXTRACTED}/config.yaml" "${DATA_DIR}/config.yaml"
 rm -rf "${DATA_DIR}/ext"
 cp -R "${EXTRACTED}/ext" "${DATA_DIR}/ext"
 
 echo "Installed: ${INSTALL_DIR}/jan-klod"
 echo "Installed: ${INSTALL_DIR}/jan-klod-gateway"
+[ -f "${INSTALL_DIR}/jan-klod-gui" ] && echo "Installed: ${INSTALL_DIR}/jan-klod-gui"
 echo "Installed: ${DATA_DIR}/ (config.yaml + $(ls "${DATA_DIR}/ext" | wc -l | tr -d " ") components)"
 
 # Confirm every enabled extension actually loads.
@@ -145,3 +164,6 @@ echo ""
 echo "Quick start:"
 echo "  export OPENAI_API_KEY=sk-..."
 echo "  jan-klod my-session"
+if [ -f "${INSTALL_DIR}/jan-klod-gui" ]; then
+  echo "  jan-klod --gui          # the same client, in a window"
+fi

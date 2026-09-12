@@ -1,7 +1,9 @@
 # cargo-deny policy — the primary supply-chain gate for the Rust host workspace
-# (src/core) and the guest extensions workspace (src/extensions/*, one shared
-# Cargo.lock across all guests). One shared policy keeps the license / advisory /
-# source rules identical across both workspaces. Every invocation points here with
+# (src/core), the guest extensions workspace (src/extensions/*, one shared
+# Cargo.lock across all guests), and the GUI shell workspace (src/gui, which owns
+# the Tauri tree and is kept out of src/core precisely so that tree is not on
+# everyone's build). One shared policy keeps the license / advisory / source rules
+# identical across all three workspaces. Every invocation points here with
 # `--config`, so the file's location is not significant. Closes the Phase 1
 # supply-chain gate (docs/decisions/2026-06-29-extension-technologies/PLAN.md).
 #
@@ -12,7 +14,35 @@
 [advisories]
 # RUSTSEC vulnerabilities are denied by default. Accept one only by listing its ID
 # here with a documented reason and an expiry plan.
-ignore = []
+#
+# Everything below is `unmaintained`, not a vulnerability: `cargo audit` exits 0
+# on all six and would do so with this list empty. They are here because
+# cargo-deny's default `unmaintained` scope is the whole graph, and every one of
+# them is transitive through Tauri with, in cargo-deny's own words, "No safe
+# upgrade is available!" — see #141 for the measurement that put them here.
+#
+# The expiry plan is the same for all six and it is not a date: they leave when
+# the crate above them stops depending on them. `make deny` fails the day one of
+# them is fixed upstream and the ID stops matching anything, which is the signal
+# to delete the line. Nothing here may be a `vulnerability` or an `unsound` —
+# if a future entry would be, that is a different decision than this one.
+#
+# ⚠ This list is load-bearing for exactly one thing: `src/gui`. If the Tauri
+# shell is ever dropped, delete this block with it rather than leaving six
+# standing exemptions for a tree nobody builds.
+ignore = [
+    # proc-macro-error <- glib-macros <- glib <- atk <- gtk <- muda/tao.
+    # Linux only; the darwin and Windows graphs never contain it.
+    "RUSTSEC-2024-0370",
+    # The rust-unic project, retired wholesale in one advisory-db event
+    # (rustsec/advisory-db#2414). All five arrive via one crate:
+    # unic-* <- urlpattern <- tauri-utils.
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
+]
 
 [licenses]
 # Every SPDX expression in the dependency graph must be satisfiable from this
@@ -32,6 +62,35 @@ allow = [
 ]
 # Require high confidence before a license is inferred from file text.
 confidence-threshold = 0.9
+
+# MPL-2.0, named crate by crate rather than added to `allow` above.
+#
+# The distinction is the whole point: `allow` would open MPL-2.0 for all ~660
+# crates in the three workspaces, and this opens it for five. A sixth MPL crate
+# appearing anywhere still fails the gate, which is what keeps this an exception
+# list and not a policy change.
+#
+# All five are unavoidable at the system-webview layer, measured in #141:
+# `dom_query` (cssparser, cssparser-macros, dtoa-short, selectors) and `dirs`
+# (option-ext) are non-optional dependencies of `wry`, the webview binding Tauri
+# sits on — so dropping Tauri for something thinner does not remove them. They
+# are in the darwin graph as well as the Linux one, so narrowing `[graph]
+# targets` does not either.
+#
+# Why this is an acceptable licence and copyleft generally is not: MPL-2.0 is
+# file-level copyleft. Linking these crates unmodified obliges us to make *their*
+# source available — which crates.io already does — and imposes nothing on
+# jan-klod's own Apache-2.0 code. If we ever patch one of them, that file's
+# source has to ship, and that is the obligation to remember.
+#
+# ⚠ Same scope note as the advisory block: these exist for `src/gui` alone.
+exceptions = [
+    { name = "cssparser", allow = ["MPL-2.0"] },
+    { name = "cssparser-macros", allow = ["MPL-2.0"] },
+    { name = "dtoa-short", allow = ["MPL-2.0"] },
+    { name = "selectors", allow = ["MPL-2.0"] },
+    { name = "option-ext", allow = ["MPL-2.0"] },
+]
 
 [bans]
 # Duplicate transitive versions are noise, not a security failure, in a young tree

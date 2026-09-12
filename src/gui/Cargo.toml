@@ -1,0 +1,67 @@
+# The GUI shell's own workspace — deliberately not a member of `src/core`.
+#
+# Tauri resolves 256 packages that nothing else in this repository needs (#141).
+# As a member of the host workspace those would land in `src/core/Cargo.lock`
+# (406 -> 663) and every `cargo test`, `cargo clippy --workspace` and CI run
+# would resolve and build them, whether or not anyone touched the window. A
+# separate workspace keeps that tree behind `make gui`, at the cost of a second
+# `target/` — the trade `src/extensions` already makes for the guests.
+#
+# What it does *not* buy is an exemption from the supply-chain gates: the root
+# `Makefile` names this workspace in `lockfile`, `deny` and `audit` alongside the
+# other two, and `deny.toml` carries the eleven named entries #141 measured.
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "jan-klod-gui"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+# Internal, like every other crate here — a shell binary, not for crates.io.
+publish = false
+
+[[bin]]
+name = "jan-klod-gui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+# The whole dependency. Default features on, deliberately: #141's measurement —
+# the licences, the advisories, the 256 packages — was taken on the default
+# feature set, and a narrowed one would be a tree nobody has measured.
+tauri = "2"
+# For `serde_json::to_string` on the two values interpolated into the
+# initialization script. Adds **zero** packages: `tauri` already depends on it
+# at this version, so this only makes a transitive crate a named one — measured,
+# not assumed, the same way `src/core/ui` records `unicode-width`.
+#
+# Direct because escaping is our own concern: the token goes into a JavaScript
+# string literal, and `format!` with quotes around it would be an injection the
+# day a token contains a quote or a backslash.
+serde_json = "1"
+
+# Mirrors src/core's profile. Disk is tight here for the same reason it is
+# there, and more so: this tree is larger than the host workspace's.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0
+
+# The same lint policy every other crate in this repository inherits, restated
+# because a separate workspace cannot inherit `src/core`'s.
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[lints]
+workspace = true

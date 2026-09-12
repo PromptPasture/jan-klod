@@ -32,21 +32,43 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Resolve the `jan-klod-gateway` binary: sibling of the current exe first,
+/// Resolve one of this repository's binaries: sibling of the current exe first,
 /// then `PATH`.
 ///
-/// Here rather than in the binary because [`transport::Stdio`] spawns it, and a
-/// second copy of this rule would eventually find a different gateway than the
-/// one the REST path starts.
+/// Here rather than in the binary because [`transport::Stdio`] spawns the
+/// gateway, and a second copy of this rule would eventually find a different
+/// gateway than the one the REST path starts. `--gui` needs the same rule for
+/// `jan-klod-gui`, which is why this is by name rather than one function per
+/// binary — a bundle puts all three side by side, and a developer tree puts
+/// them in different `target/` directories, so "sibling, else PATH" is the
+/// answer for each of them.
 #[must_use]
-pub fn gateway_bin() -> PathBuf {
+pub fn sibling_bin(name: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
-        let sibling = exe.with_file_name("jan-klod-gateway");
+        let sibling = exe.with_file_name(name);
         if sibling.exists() {
             return sibling;
         }
     }
-    PathBuf::from("jan-klod-gateway")
+    PathBuf::from(name)
+}
+
+/// Resolve the `jan-klod-gateway` binary. See [`sibling_bin`].
+#[must_use]
+pub fn gateway_bin() -> PathBuf {
+    sibling_bin("jan-klod-gateway")
+}
+
+/// Resolve the `jan-klod-gui` binary — the Tauri shell in `src/gui`, a separate
+/// workspace and therefore a separate build (see [`sibling_bin`]).
+///
+/// Unlike the gateway, this one is genuinely **optional**: `src/gui` is not part
+/// of the host workspace, so a plain `cargo build` never produces it and most
+/// bundles do not ship it. `--gui` checks for it and says so rather than
+/// spawning a name that is not there and reporting the OS's error.
+#[must_use]
+pub fn gui_bin() -> PathBuf {
+    sibling_bin("jan-klod-gui")
 }
 
 /// The `Authorization` header line to send, or empty when no token is set.

@@ -622,6 +622,32 @@ wit/**/deps/
 sbom.spdx.json
 sbom.cdx.json
 src/core/**/*.cdx.json
+src/gui/*.cdx.json
+
+# Every workspace's Cargo.lock IS committed — these binaries are applications,
+# not libraries, and `make lockfile` asserts each lock is current with
+# `cargo metadata --locked` so the audited tree is the tree that builds.
+#
+# The rule above (`Cargo.lock`, from the vendored Rust template) says the
+# opposite, and it does not affect src/core or src/extensions only because those
+# two were committed before it mattered — git ignores rules for files it already
+# tracks. A *new* workspace needs `git add -f` without these, which is a step
+# nobody will remember and a lock that silently never lands. Named per
+# workspace rather than deleting the line above, so adding a fourth is a
+# deliberate line here rather than a default that flipped.
+!src/core/Cargo.lock
+!src/extensions/Cargo.lock
+!src/gui/Cargo.lock
+
+# Tauri's build-time output: `tauri-build` regenerates `gen/schemas/` from
+# tauri.conf.json on every compile, and one of the files it writes is named for
+# the platform that ran it (macOS-schema.json). Committing them would put a
+# per-OS artifact in the tree and make every cross-platform build show a diff.
+src/gui/gen/
+
+# The default session store (`storage.path`), written by any real boot —
+# `make run`, `make serve`, or a gateway started by hand.
+/jan-klod.db
 
 # Bundle output (make bundle)
 /dist/

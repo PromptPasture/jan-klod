@@ -63,6 +63,21 @@ jobs:
       - name: Install wkg (WIT package manager)
         run: cargo install wkg --locked 2>/dev/null || true
 
+      # Only Linux needs this, and only for the `GUI=1` archive below. On macOS
+      # the webview is WKWebView, part of the OS — #141 verified a Tauri binary
+      # runs there with nothing installed beyond the Xcode command line tools,
+      # which the runner already has.
+      #
+      # The `-dev` packages are the build-time half; a *user* on Linux needs the
+      # runtime ones (libwebkit2gtk-4.1-0), which the bundle README names.
+      - name: Install the Linux webview build dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+
       # One job per platform, three archives out of it — not a 4x3 matrix.
       #
       # The expensive half of this job is per *platform*: two toolchains, every
@@ -78,13 +93,29 @@ jobs:
       # `docs_match_config::the_installer_offers_the_distributions_the_release_builds`
       # fails the build if the two disagree, rather than letting a user find out
       # at a 404.
-      - name: Build bundles (one per distribution)
+      # The fourth archive is the same `coding` distribution with the desktop
+      # window in it, not a fourth distribution — `scripts/distributions/README.md`
+      # is explicit that a client choice is orthogonal to what an install is
+      # *for*, so `GUI=1` is a second axis and the archive is `coding-gui`.
+      #
+      # **Only `coding` gets one.** `headless-chat` is headless by definition and
+      # a window for it would be a contradiction; `minimal` is minimal. One gui
+      # archive per platform also keeps this inside the cost argument above: it
+      # rides the job that already paid for the toolchains, adding a Tauri build
+      # rather than a runner. That build is the expensive part — #141 measured
+      # 332 CPU-seconds — which is why it is one archive and not three.
+      #
+      # `install.sh --gui` is the other end of this, and
+      # `docs_match_config::the_release_builds_a_gui_archive_if_the_installer_offers_one`
+      # fails the build if one exists without the other.
+      - name: Build bundles (one per distribution, plus the gui variant)
         env:
           JK_VERSION: ${{ github.ref_name }}
         run: |
           make bundle DIST=coding
           make bundle DIST=headless-chat
           make bundle DIST=minimal
+          make bundle DIST=coding GUI=1
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4

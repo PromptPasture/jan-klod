@@ -220,9 +220,76 @@ question (a separate `api-rest` guest vs. a built-in endpoint) is closed.
 |---|---|---|---|
 | `jan-klod` (default) | Terminal UI | `ratatui`, over stdio JSON-RPC — it spawns the gateway; `--addr` drives a running one over REST + SSE instead | built |
 | browser → core `/` | Web UI | a static, dependency-light TypeScript front-end served by the core over **REST + SSE** (not WebSocket — see below) | **built** (#118 client, #119 serving) |
-| `jan-klod-ui --gui` | Native window | a **Tauri shell around the same web front-end** — system webview, not a third client codebase | planned, Phase 17 |
+| `jan-klod --gui` | Native window | a **Tauri shell around the same web front-end** — system webview, not a third client codebase | **built** (#142; see below) |
 | editor | IDE integration | `jan-klod-gateway acp` — ACP agent side on stdio, mapped onto the same turn path | **built** (18a is MCP, 18b is this) |
 | other agents | MCP server | `jan-klod-gateway mcp` — `ask`, `session_list`, `session_get` over MCP stdio | **built** |
+
+#### The window is a separate workspace, and that is a supply-chain decision
+
+`jan-klod --gui` opens the **same** front-end the browser gets — the one the core
+serves at `/` — in a system webview. There is no third client codebase, which is
+the whole of Vision decision 5.
+
+What the row above does not show is where the code lives. The Tauri shell is
+`src/gui`, **its own cargo workspace**, not a member of `src/core`. That is not
+tidiness: Tauri resolves **256 packages** the host workspace does not otherwise
+need, and as a member those would land in `src/core/Cargo.lock` (406 → 663) and
+be resolved and built by every `cargo test`, every `cargo clippy --workspace`
+and every CI run, whether or not anyone touched the window. Kept separate, they
+are behind `make gui` and nothing else reaches them.
+
+The cost was measured before the code was written ([#141]) because the answer
+could have been "don't":
+
+| | |
+|---|---|
+| Packages added to this repository | **+256** (after dedup against the host workspace) |
+| Clean release build | 332 CPU-seconds, 838 MB of `target/` |
+| Release binary | 9.6 MB (no bundled browser — the webview is the OS's) |
+| `deny.toml` entries it required | **11** — 5 MPL-2.0 crate exceptions, 6 unmaintained-advisory ignores |
+
+Those eleven are named crate by crate rather than widening the policy, and all
+of them are structural: `wry`, the webview binding Tauri sits on, depends on
+`dom_query` and `dirs` itself, so a thinner alternative pays the same licences.
+`deny.toml` carries the reasoning and the scope note — if the shell is ever
+dropped, that block goes with it.
+
+Three consequences worth knowing:
+
+- **Nothing on the default build path builds it.** `make all` and `make gate` do
+  not. `make gui` builds it and stages the binary beside `jan-klod`, which is
+  how the client finds it (sibling of the running executable, then `PATH`).
+- **The supply-chain gates do cover it.** `make lockfile`, `make deny` and
+  `make audit` each name all three workspaces. The tree the policy was widened
+  for is not the one that escapes the policy.
+- **It ships opt-in.** `make bundle GUI=1` adds the binary and suffixes the
+  archive `-gui`; `install.sh --gui` asks for that archive. A client choice is
+  orthogonal to a distribution, so this is a second axis rather than a fourth
+  distribution — see `scripts/distributions/README.md`.
+
+On macOS the webview is WKWebView and needs nothing installed. On Linux it is
+`webkit2gtk-4.1`, a system package; `jan-klod --gui` names it when the shell
+fails to start rather than falling back to the terminal.
+
+[#141]: https://github.com/PromptPasture/jan-klod/issues/141
+
+#### The window is handed the token, and only on the core's origin
+
+The web client keeps the gateway token in `sessionStorage` and prompts for it on
+a 401 (`src/web/src/api.ts`). A window launched by a client that *already has*
+the token should not make the user retype it, so the shell seeds it with a Tauri
+initialization script — and that makes the window a credential boundary rather
+than a frame.
+
+Two rules, both in `src/gui/src/main.rs` and both tested:
+
+- The seed **checks `location.origin` first.** An initialization script runs in
+  every frame the webview loads, so an unguarded one would hand the token to
+  whatever a page embedded.
+- Navigation **off the core's origin is refused** and handed to the system
+  browser, so the guard is a second line rather than the only one.
+
+`docs/concepts/security-model.md` carries the row and names the tests.
 
 #### The web client's bundle is committed, and the alternative costs more than it looks
 

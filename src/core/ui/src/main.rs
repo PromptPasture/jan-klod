@@ -3,6 +3,7 @@
 //! Usage:
 //!   `jan-klod [session]`                    — line REPL over stdio
 //!   `jan-klod tui [session]`                — full-screen terminal UI (`ratatui`)
+//!   `jan-klod --gui`                        — the web client in a native window
 //!   `jan-klod --addr <host:port> [session]` — drive a gateway that is running
 //!
 //!   session  session id, shared across the conversation (default: cli)
@@ -28,6 +29,20 @@
 //! address), and it tells the user so when it sees one in the wrong place.
 //! This does too.
 //!
+//! ## Why `--gui` launches a second binary
+//!
+//! The Tauri shell lives in `src/gui`, which is a **separate cargo workspace**
+//! on purpose: Tauri resolves 256 packages nothing else here needs (#141), and
+//! as a member of the host workspace those would be on every `cargo test` and
+//! every CI run. So this crate cannot depend on it, and `--gui` instead does the
+//! half it already owns — resolve an address and spawn-or-attach a gateway —
+//! then hands a URL that is already answering to `jan-klod-gui`.
+//!
+//! That split is also why `--gui` can fail in a way the other modes cannot: the
+//! shell is an optional binary that a plain `cargo build` does not produce. It
+//! says so rather than falling back to the TUI, because a GUI that silently
+//! becomes a terminal is a worse outcome than one that refuses.
+//!
 //! In the REPL, type a message and press enter to drive a turn; empty input,
 //! `quit`, or EOF exits.
 
@@ -42,7 +57,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use jan_klod::transport::{Logs, Rest, Stdio as StdioTransport, Transport};
-use jan_klod::{gateway_bin, StreamEvent};
+use jan_klod::{gateway_bin, gui_bin, StreamEvent};
 
 /// The address `--addr` defaults to when it is given with no value, and the one
 /// `serve` binds by default.
@@ -50,7 +65,7 @@ const DEFAULT_ADDR: &str = "127.0.0.1:8787";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (use_tui, rest) = split_mode(&args);
+    let (mode, rest) = split_mode(&args);
     let parsed = match parse_args(&rest) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -58,6 +73,15 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // Before the transport is chosen: the window is its own process and speaks
+    // to the gateway over the same REST surface a browser does, so none of the
+    // transports below apply to it.
+    if mode == Mode::Gui {
+        return gui(parsed.addr.as_deref(), parsed.session.as_deref());
+    }
+
+    let use_tui = mode == Mode::Tui;
     let session = parsed.session.unwrap_or_else(|| "cli".to_string());
 
     // The gateway's own log output shares this terminal. A line REPL can read
@@ -111,11 +135,29 @@ struct Args {
     ascii: bool,
 }
 
-/// Strip a leading `tui`/`--tui` mode word.
-fn split_mode(args: &[String]) -> (bool, Vec<String>) {
+/// Which client surface to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// The line REPL: the default, and the only one that needs no terminal
+    /// capability and no window.
+    Repl,
+    /// The full-screen `ratatui` terminal UI.
+    Tui,
+    /// The Tauri window around the web client (`src/gui`).
+    Gui,
+}
+
+/// Strip a leading `tui`/`--tui` or `gui`/`--gui` mode word.
+///
+/// Still only the *first* argument, as it was when `tui` was the only one: a
+/// mode is which program you are running, not an option to it, and accepting
+/// `jan-klod my-session --gui` would invite the reading that the session
+/// survives into the window. It does not — see [`gui`].
+fn split_mode(args: &[String]) -> (Mode, Vec<String>) {
     match args.split_first() {
-        Some((first, rest)) if first == "tui" || first == "--tui" => (true, rest.to_vec()),
-        _ => (false, args.to_vec()),
+        Some((first, rest)) if first == "tui" || first == "--tui" => (Mode::Tui, rest.to_vec()),
+        Some((first, rest)) if first == "gui" || first == "--gui" => (Mode::Gui, rest.to_vec()),
+        _ => (Mode::Repl, args.to_vec()),
     }
 }
 
@@ -251,6 +293,98 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `--gui`: make sure a gateway is listening, then open the web client it serves
+/// in the Tauri window from `src/gui`.
+///
+/// Everything fallible here is reported rather than worked around. There is no
+/// fallback to the TUI: somebody who asked for a window and silently got a
+/// terminal has been told the wrong thing about their machine.
+fn gui(addr: Option<&str>, session: Option<&str>) -> ExitCode {
+    // A session id would be a promise this cannot keep: the web client picks
+    // its own session in the page and has no URL parameter for one. Refused
+    // rather than ignored, the same call `parse_args` makes for a second
+    // positional.
+    if let Some(session) = session {
+        eprintln!(
+            "jan-klod: `--gui` takes no session id (got `{session}`) — the web \
+             client chooses its session in the page."
+        );
+        return ExitCode::FAILURE;
+    }
+
+    // Unlike the other modes, this one has no stdio option: a window needs a URL,
+    // so an address is always required and always defaulted.
+    let addr = addr.unwrap_or(DEFAULT_ADDR).to_string();
+    let bin = gui_bin();
+
+    // Checked before the gateway is started, so a missing shell does not leave a
+    // server running for a window that never opens.
+    if bin.components().count() > 1 && !bin.exists() {
+        eprintln!(
+            "jan-klod: the GUI shell is not installed ({} does not exist).",
+            bin.display()
+        );
+        eprintln!("jan-klod: build it with `make gui`, or use `jan-klod tui`.");
+        return ExitCode::FAILURE;
+    }
+
+    // Keep the handle for the process's lifetime, exactly as the REST path does:
+    // this may have started a gateway, and it should not outlive the window.
+    let _gateway = ensure_gateway(&addr);
+
+    let url = format!("http://{addr}/");
+    eprintln!("jan-klod: opening {url} in a window …");
+    let status = Command::new(&bin)
+        .args(["--url", &url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+
+    match status {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            eprintln!(
+                "jan-klod: the GUI shell is not installed (`{}` is not on PATH).",
+                bin.display()
+            );
+            eprintln!("jan-klod: build it with `make gui`, or use `jan-klod tui`.");
+            ExitCode::FAILURE
+        }
+        Err(err) => {
+            eprintln!("jan-klod: could not start {}: {err}", bin.display());
+            ExitCode::FAILURE
+        }
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => {
+            eprintln!("jan-klod: the GUI shell exited with {status}.");
+            eprintln!("jan-klod: {}", webview_prerequisite_hint());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// What to suggest when the window failed to come up.
+///
+/// Platform-specific because the answer is: on macOS the webview is part of the
+/// OS and a failure is not a missing prerequisite, while on Linux it is a
+/// package and naming it is the whole of the fix (#141 measured which one).
+///
+/// Deliberately phrased as a conditional rather than a diagnosis — the exit
+/// status alone does not prove the webview was the problem, and this function
+/// cannot see the loader error the user just read above it.
+const fn webview_prerequisite_hint() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "if it reported a missing shared library, the system webview is not \
+         installed — on Debian/Ubuntu: sudo apt install libwebkit2gtk-4.1-0 \
+         libayatana-appindicator3-1"
+    } else if cfg!(target_os = "macos") {
+        "the webview is part of macOS, so this is not a missing prerequisite — \
+         the shell's own error is above"
+    } else {
+        "the shell's own error is above"
+    }
+}
+
 /// Check if a gateway is reachable at `addr`; if not, spawn one and wait until
 /// it answers a TCP connection (up to 10 s). Returns the child handle so the
 /// caller keeps it alive for the duration of the process.
@@ -314,7 +448,7 @@ fn is_up(addr: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, split_mode};
+    use super::{parse_args, split_mode, Mode};
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_string()).collect()
@@ -322,8 +456,8 @@ mod tests {
 
     #[test]
     fn no_arguments_means_stdio_and_the_default_session() {
-        let (tui, rest) = split_mode(&args(&[]));
-        assert!(!tui);
+        let (mode, rest) = split_mode(&args(&[]));
+        assert_eq!(mode, Mode::Repl);
         let parsed = parse_args(&rest).expect("parses");
         assert_eq!(parsed.addr, None, "no address means spawn one");
         assert_eq!(parsed.session, None);
@@ -340,14 +474,42 @@ mod tests {
 
     #[test]
     fn the_mode_word_is_stripped_in_both_spellings() {
-        for spelling in ["tui", "--tui"] {
-            let (tui, rest) = split_mode(&args(&[spelling, "s1"]));
-            assert!(tui, "{spelling}");
+        for (spelling, want) in [
+            ("tui", Mode::Tui),
+            ("--tui", Mode::Tui),
+            ("gui", Mode::Gui),
+            ("--gui", Mode::Gui),
+        ] {
+            let (mode, rest) = split_mode(&args(&[spelling, "s1"]));
+            assert_eq!(mode, want, "{spelling}");
             assert_eq!(
                 parse_args(&rest).expect("parses").session.as_deref(),
                 Some("s1")
             );
         }
+    }
+
+    /// A mode word is the first argument or it is nothing — otherwise `--gui`
+    /// would be read as an option that a session id could survive into, and the
+    /// window has nowhere to put one.
+    #[test]
+    fn a_mode_word_that_is_not_first_is_not_a_mode() {
+        let (mode, rest) = split_mode(&args(&["s1", "--gui"]));
+        assert_eq!(mode, Mode::Repl);
+        // And it then fails as what it now is: an unknown option.
+        let err = parse_args(&rest).expect_err("--gui is not an option");
+        assert!(err.contains("--gui"), "{err}");
+    }
+
+    /// `--gui` still parses an address, since the window needs one — that is the
+    /// one flag it shares with the REST path.
+    #[test]
+    fn gui_takes_an_address_like_every_other_mode() {
+        let (mode, rest) = split_mode(&args(&["--gui", "--addr", "127.0.0.1:9000"]));
+        assert_eq!(mode, Mode::Gui);
+        let parsed = parse_args(&rest).expect("parses");
+        assert_eq!(parsed.addr.as_deref(), Some("127.0.0.1:9000"));
+        assert_eq!(parsed.session, None);
     }
 
     #[test]

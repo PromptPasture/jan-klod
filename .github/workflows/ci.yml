@@ -257,6 +257,58 @@ jobs:
       # (`gate: extensions`) and sets the flag, so dropping it loses nothing.
       - run: make gate
 
+  gui:
+    name: GUI shell (src/gui)
+    runs-on: ubuntu-latest
+    # A job of its own, unlike `test-web`, and the reason is the tree rather
+    # than a preference: `src/gui` is a separate cargo workspace with 256
+    # packages the host workspace does not have (#141). Folding it into
+    # `lint-test` would put that build and a distinct `rust-cache` workspace key
+    # on the job every other check waits for; here it runs in parallel on a
+    # runner that bills at 1x.
+    #
+    # Nothing else in CI covers it: `make gate` and `make clippy` are the host
+    # workspace, and `src/gui` is not a member. Without this job the shell would
+    # compile nowhere and its tests would run nowhere, which is the #130 failure
+    # — a check that does not run looks exactly like one that passes. The
+    # supply-chain job *does* cover it already, because the root `lockfile`,
+    # `deny` and `audit` targets name all three workspaces.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/gui
+
+      # The build-time half of what #141 measured. `xvfb` is the other half:
+      # a webview needs a display server, and without one `make test-gui` skips
+      # itself — which is exactly the silent no-op JK_REQUIRE_GUI exists to
+      # forbid, so the display has to be real before that flag means anything.
+      - name: Install the webview build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev xvfb
+
+      - name: Format
+        run: make -C src/gui fmt
+
+      - name: Lint
+        run: make clippy-gui
+
+      # `JK_REQUIRE_GUI=1` turns "no display, skipping" into a failure. Paired
+      # with `xvfb-run` rather than set on its own: the flag asserts that a skip
+      # here would be a lie, and xvfb is what makes that true.
+      - name: Test (unit + webview smoke, under xvfb)
+        env:
+          JK_REQUIRE_GUI: "1"
+        run: xvfb-run -a make test-gui
+
   supply-chain:
     name: Supply-chain gates
     runs-on: ubuntu-latest
@@ -270,6 +322,11 @@ jobs:
       # that builds. This used to be a loop inlined here and, separately, in
       # `.github/hooks/pre-push` — the same commands typed twice, free to drift.
       # Both now call the one target (#72).
+      #
+      # Three workspaces since #142: the host, the guests, and `src/gui`. The
+      # last is not built by any other job in this file, so this is the only
+      # place its lock and its licences are checked — and it is the tree that
+      # `deny.toml`'s eleven named entries exist for (#141).
       - name: Verify lockfiles (--locked)
         run: make lockfile
 

@@ -245,10 +245,16 @@ fn the_installer_offers_the_distributions_the_release_builds() {
 
     let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
         .expect("the release workflow is readable");
+    // Only the distribution name: a line may carry `GUI=1` after it, which is a
+    // second, orthogonal axis rather than a fourth distribution (see
+    // scripts/distributions/README.md, and `the_release_builds_a_gui_archive_if_
+    // the_installer_offers_one` below). Splitting here keeps that axis from
+    // reading as a distribution nothing defines.
     let built: BTreeSet<String> = workflow
         .lines()
         .filter_map(|l| l.trim().strip_prefix("make bundle DIST="))
-        .map(|name| name.trim().to_owned())
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(str::to_owned)
         .collect();
 
     assert_eq!(
@@ -262,6 +268,49 @@ fn the_installer_offers_the_distributions_the_release_builds() {
         "release.yml builds {built:?} but scripts/distributions/ defines \
          {defined:?} — a distribution nobody publishes is a 404 for whoever \
          asks the installer for it"
+    );
+}
+
+/// `install.sh --gui` and `make bundle GUI=1` must both exist, or neither.
+///
+/// The same 404 the test above prevents, on the other axis: `--gui` makes the
+/// installer ask for a `…-gui.tar.gz`, and only a release step that passes
+/// `GUI=1` ever produces one. The two are in different files that cannot see
+/// each other, and the failure would surface after a tag — the one moment it
+/// cannot be fixed quickly.
+///
+/// Checked as a biconditional rather than one direction, because the reverse is
+/// just as wasteful: a release paying for a Tauri build on four runners that no
+/// installer flag can reach is an archive nobody downloads.
+#[test]
+fn the_release_builds_a_gui_archive_if_the_installer_offers_one() {
+    let root = common::repo_root();
+    let installer =
+        std::fs::read_to_string(root.join("scripts/install.sh")).expect("install.sh is readable");
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
+        .expect("the release workflow is readable");
+
+    let offers_gui = installer.contains("--gui)");
+    let builds_gui = workflow
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("make bundle DIST="))
+        .any(|rest| rest.split_whitespace().any(|word| word == "GUI=1"));
+
+    assert_eq!(
+        offers_gui,
+        builds_gui,
+        "install.sh {} `--gui` but release.yml {} a `GUI=1` bundle — whichever \
+         side is missing, a user following the other one gets a 404",
+        if offers_gui {
+            "offers"
+        } else {
+            "does not offer"
+        },
+        if builds_gui {
+            "builds"
+        } else {
+            "does not build"
+        },
     );
 }
 
@@ -474,15 +523,19 @@ fn the_security_model_cites_tests_that_exist() {
             continue;
         };
         let path = path.as_str();
-        // Paths are relative to the two workspaces; try both roots.
+        // Paths are relative to a workspace root; try each, then the repository
+        // root itself. The last is what lets a third workspace be cited without
+        // a fourth entry here every time one is added — `src/gui/src/main.rs`
+        // resolves from the top, where `src/main.rs` would be ambiguous.
         let candidates = [
             root.join("src/core").join(path),
             root.join("src/extensions").join(path),
+            root.join(path),
         ];
         let found = candidates.iter().find(|p| p.exists()).unwrap_or_else(|| {
             panic!(
                 "the security model cites `{path}`, which does not exist under \
-                 src/core or src/extensions"
+                 src/core, src/extensions, or the repository root"
             )
         });
         let source = std::fs::read_to_string(found).expect("the cited file is readable");

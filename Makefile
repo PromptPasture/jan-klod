@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests test-web harness gate clippy audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -10,6 +10,13 @@ CORE := src/core
 EXT := src/extensions
 SUPERVISOR := src/supervisor
 WEB := src/web
+# The Tauri shell (#141, #142). Its own cargo workspace, deliberately: Tauri
+# resolves 256 packages nothing else here needs, and as a member of $(CORE) they
+# would be on every `cargo test` and every CI run. Nothing on the default build
+# path reaches it — `all` does not, `gate` does not — which is the point. Its
+# supply-chain gates are *not* optional in the same way: `lockfile`, `deny` and
+# `audit` below all name it.
+GUI_DIR := src/gui
 
 # EXT_DIR mirrors the extensions sub-makefile's staging dir.
 CONFIG := $(abspath config.yaml)
@@ -44,12 +51,16 @@ help:
 	@echo "  core        build the host workspace"
 	@echo "  extensions  build the Rust guests, staged in ext/ (alias: ext)"
 	@echo "  ext-new     scaffold a new extension crate: NAME=<name> KIND=<kind>"
-	@echo "  bundle      release archive; DIST=coding|headless-chat|minimal for one"
+	@echo "  gui         build the Tauri shell and stage it beside jan-klod"
+	@echo "  bundle      release archive; DIST=coding|headless-chat|minimal for one,"
+	@echo "              GUI=1 to ship the window too (archive gains '-gui')"
 	@echo "  test        run host-side unit tests only (core + guests + supervisor);"
 	@echo "              the integration suite needs 'gate' or 'harness' instead"
 	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
 	@echo "  test-web    run the browser client's suite (src/web; needs Node, not in 'test')"
+	@echo "  test-gui    run the Tauri shell's suite (src/gui; needs a display, not in 'test')"
+	@echo "  clippy-gui  lint the Tauri shell (-D warnings)"
 	@echo "  web-dist-drift  check src/web/dist/ is still what src/web/src/ builds"
 	@echo "  registry-index  write the registry index for ext/ (REGISTRY_INDEX=path)"
 	@echo "  registry-index-drift  check that index generation is deterministic"
@@ -66,6 +77,7 @@ help:
 	@echo "  web-supply-chain  npm lockfile sync + npm audit for src/web"
 	@echo "  supervisor-supply-chain  go mod verify + govulncheck for src/supervisor"
 	@echo "  run         boot the core against config.yaml + ext/"
+	@echo "  chat-gui    open the web client in a window (builds the shell first)"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
 	@echo "  wit         validate the WIT contracts"
@@ -154,6 +166,21 @@ test-guests:
 test-web:
 	cd $(WEB) && npm test
 
+# The Tauri shell's suite (#142). Deliberately **not** a prerequisite of `test`,
+# for the same reason `test-web` is not: it belongs to a workspace that is not
+# on the default build path, and folding it in would put a 256-package build and
+# a ~40s link on every contributor's pre-commit.
+#
+# `ci.yml` calls this by name — the rule from #130, and it bites hardest here,
+# because this is the only suite in the repository that can legitimately skip
+# itself. The skip is what JK_REQUIRE_GUI turns back into a failure, and CI sets
+# it on the jobs that actually have a display.
+test-gui:
+	$(MAKE) -C $(GUI_DIR) test
+
+clippy-gui:
+	$(MAKE) -C $(GUI_DIR) clippy
+
 # The committed bundle is still what the sources build (#127). Kept out of
 # `test-web` on cost: that leg needs Node on PATH and installs nothing, while
 # this one runs `npm ci` against the pinned toolchain, so folding them together
@@ -208,6 +235,17 @@ registry-index-drift: extensions
 supervisor:
 	cd $(SUPERVISOR) && go build ./...
 
+# The Tauri shell, built and put where `jan-klod --gui` will look for it.
+#
+# The staging step is the whole reason this is a target rather than a `cd`:
+# `jan-klod --gui` resolves `jan-klod-gui` as a sibling of itself, which is true
+# in a bundle and false in a developer tree, because two workspaces mean two
+# `target/` directories. Copying it beside the host workspace's binaries makes
+# the developer path and the shipped path find the shell the same way, instead
+# of teaching the client a second rule that only a checkout would ever use.
+gui:
+	$(MAKE) -C $(GUI_DIR) stage
+
 # Self-contained release bundle: core binary + staged guests + config + README,
 # as dist/jan-klod-<version>-<os>-<arch>.tar.gz.
 BUNDLE_OUT ?= $(abspath dist)
@@ -218,9 +256,31 @@ BUNDLE_OUT ?= $(abspath dist)
 # That default is asserted by host/tests/it/bundle_distributions.rs rather than
 # left as an intention.
 DIST ?=
+
+# `make bundle GUI=1` also ships the Tauri window, and the archive name gains
+# `-gui` so it does not overwrite the one without it.
+#
+# **A second axis, not a fourth distribution**, and that is
+# scripts/distributions/README.md's rule rather than a preference: "A
+# distribution says what a jan-klod install is *for*. It is not a client choice
+# — `tui` versus `gui` is how you look at the runtime, and that is orthogonal to
+# what the runtime does." #143 asked for a `gui` distribution beside the other
+# three; taking that literally would have duplicated `coding`'s guest list into
+# a directory whose only real difference is one binary, and left two lists to
+# keep in step. So `DIST` still says what the install is for and `GUI` says
+# whether a window ships — `make bundle DIST=coding GUI=1` is both.
+#
+# Opt-in rather than always-on because it is not free: +256 packages to build,
+# ~10 MB in the archive, and on Linux a webkit2gtk build dependency the other
+# archives do not need (#141).
+GUI ?=
+GUI_BIN := $(abspath $(GUI_DIR)/target/release/jan-klod-gui)
+JK_GUI_BIN := $(if $(GUI),$(GUI_BIN),)
+
 bundle: extensions
 	cd $(CORE) && cargo build --release -p jan-klod-host -p jan-klod
-	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT); 	else 	  sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
+	@if [ -n "$(GUI)" ]; then $(MAKE) -C $(GUI_DIR) release; fi
+	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT); 	else 	  JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
 
 clippy: check-spike-deps
 	$(MAKE) -C $(CORE) clippy
@@ -237,22 +297,37 @@ clippy: check-spike-deps
 # supply-chain job — the same commands typed twice, free to drift the way
 # the rest of #72 was about. Named here, both now call it.
 lockfile:
-	@for m in $(CORE)/Cargo.toml $(EXT)/Cargo.toml; do \
+	@for m in $(CORE)/Cargo.toml $(EXT)/Cargo.toml $(GUI_DIR)/Cargo.toml; do \
 	  cargo metadata --locked --format-version 1 --manifest-path "$$m" >/dev/null \
 	    && echo "lockfile current: $$m" \
 	    || { echo "stale lockfile: $$m (run: cargo update --manifest-path $$m)" >&2; exit 1; }; \
 	done
 
-# Each subtree owns its own audit/deny invocation; root fans out to both.
+# Each subtree owns its own audit/deny invocation; root fans out to all three.
+#
+# `src/gui` is here and not optional. It is the tree that made `deny.toml` grow
+# eleven named entries (#141), so a policy run that skipped it would be checking
+# every workspace except the one the policy was widened for.
 audit deny:
 	$(MAKE) -C $(CORE) $@
 	$(MAKE) -C $(EXT) $@
+	$(MAKE) -C $(GUI_DIR) $@
 
 # CycloneDX SBOM for all Rust crates. Install once: cargo install cargo-cyclonedx
+#
+# `src/gui` is generated too, and it is not a formality: `jan-klod-gui` is a
+# binary a `-gui` archive ships, and it carries 256 packages none of the others
+# do (#141). An SBOM that describes the gateway and the client but not the third
+# binary in the same tarball answers the question it exists to answer — "what is
+# in this release?" — with two thirds of it.
+#
+# `cd` per workspace because cargo-cyclonedx writes beside each manifest; the
+# two globs are then merged into one document by the same `jq` as before.
 sbom:
-	cd src/core && cargo cyclonedx --format json --quiet
+	cd $(CORE) && cargo cyclonedx --format json --quiet
+	cd $(GUI_DIR) && cargo cyclonedx --format json --quiet
 	jq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
-	  src/core/**/*.cdx.json > sbom.cdx.json
+	  $(CORE)/**/*.cdx.json $(GUI_DIR)/*.cdx.json > sbom.cdx.json
 
 # The npm leg (#120). A named target rather than a line inlined below, and that
 # is not a style choice: the inlined supervisor line further down has never run
@@ -474,6 +549,12 @@ SESSION ?= cli
 chat:
 	cd $(CORE) && cargo run --quiet -p jan-klod -- $(ADDR) $(SESSION)
 
+# The same client, in a window. `gui` first so the shell is staged beside the
+# binary `cargo run` produces — without it `--gui` correctly reports that the
+# shell is not installed, which is accurate and unhelpful as a dev loop.
+chat-gui: gui
+	cd $(CORE) && cargo run --quiet -p jan-klod -- --gui --addr $(ADDR)
+
 # Telegram bot (headless). Needs TELEGRAM_BOT_TOKEN + network.
 chat-telegram:
 	cd $(CORE) && cargo run --quiet -p jan-klod-host -- telegram $(CONFIG) $(EXT_DIR)
@@ -532,4 +613,5 @@ install-hooks:
 clean:
 	$(MAKE) -C $(CORE) clean
 	$(MAKE) -C $(EXT) clean
+	$(MAKE) -C $(GUI_DIR) clean
 	rm -rf $(CACHE_DIR)

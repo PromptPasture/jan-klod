@@ -75,6 +75,28 @@ jan-klod --addr 127.0.0.1:8787 my-session
 That path uses the REST + SSE surface instead, and starts a gateway with
 `serve --bind` if nothing answers there.
 
+### The same client, in a window
+
+```sh
+jan-klod --gui
+```
+
+This does what `--addr` does — spawn or attach a gateway — and then opens the
+core's own web client in a desktop window, using the system webview. There is no
+bundled browser and no separate GUI codebase: it is the **same** page a browser
+gets at the gateway's `/`, so anything true of one is true of the other. The
+token comes across with it, so nothing asks you to retype it.
+
+`--gui` takes `--addr` like the other modes and takes **no session id** — the
+page chooses its own, and it refuses one rather than ignoring it.
+
+The window ships only in the `-gui` archive (`install.sh --gui`, or
+`make bundle GUI=1` from a checkout). Without it, `--gui` says the shell is not
+installed and exits non-zero instead of quietly starting the terminal UI. On
+Linux the webview is a system package; if the window will not open, install
+`libwebkit2gtk-4.1-0` and `libayatana-appindicator3-1`. On macOS it is part of
+the OS.
+
 To run the gateway yourself — as a background service, or to share one between
 clients:
 

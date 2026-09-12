@@ -46,6 +46,20 @@ in its own installed data directory otherwise. That is what lets you `cd` into a
 repository and run it there. (Naming them positionally still works, but only
 inside a checkout, where they happen to be beside you.)
 
+The same client, three ways to look at it — the surface is a launch mode, not a
+different install:
+
+```sh
+jan-klod my-session          # a line REPL
+jan-klod tui my-session      # the full-screen terminal UI
+jan-klod --gui               # the web client in a desktop window
+```
+
+`--gui` needs the archive that carries the window
+(`install.sh --gui`, or `make bundle GUI=1` from a checkout); it says so rather
+than falling back to the terminal. A browser reaches the same page at the
+gateway's `/` with nothing installed at all.
+
 For a single answer, with no server to leave running:
 
 ```sh
