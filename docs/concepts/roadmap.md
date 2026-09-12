@@ -87,7 +87,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 13 — Client protocol | `done` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. **13b done 2026-09-10** ([#42](https://github.com/PromptPasture/jan-klod/issues/42)): `jan-klod-gateway rpc` on stdin/stdout, and `jan-klod` uses it by default — no port, no token, nothing left running. The framing moved into the contract crate (the core writes frames and every client reads them); `turn/follow-up` works over stdio and cannot over REST. **The exit gate is met** — a full turn streams, an `ask` is answered on the same pipe, a `turn/cancel` stops a turn (proven by the completion it never asks for), and REST + SSE still pass. **13c (WebSocket) is deferred until Phase 17 needs it** ([#43](https://github.com/PromptPasture/jan-klod/issues/43)) — `tiny_http` cannot hand back a socket that both times out a read and reads while writing, and the client that wants one is not started, so the socket decision belongs to whoever will use it. |
 | 14 — Event-sourced session log | `done` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. **Exit gate passed 2026-09-09** (`make gate`): the append-only `events` table with a versioned envelope (#44), and transcript/resume/fork as projections of it (#45) — a session resumed after a restart rebuilds from the log, and a fork at seq *N* runs independently. Nothing writes a transcript except through events; a pre-log database is converted at boot. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
 | 15 — OS-level effect sandbox | `done` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, the `SandboxBackend` seam, boot-time resolution that never downgrades quietly, and `require: true` denying execution rather than degrading. **15b done 2026-09-10** ([#47](https://github.com/PromptPasture/jan-klod/issues/47)): macOS commands run under a generated Seatbelt profile, so a write outside `writable` is refused by the kernel rather than by a prompt — and `require: true` now permits commands there instead of denying them. Linux is still approval-only until 15c. The per-turn warning is deferred to 16a. Half the gate is met: the macOS half is tested (with an unconfined control for every case, since a command that failed for another reason looks identical to a denial) and the Linux half needs Landlock. **15c done 2026-09-10** ([#48](https://github.com/PromptPasture/jan-klod/issues/48)): Linux commands run under a Landlock ruleset the gateway applies to itself before becoming the command — no `pre_exec`, so no hand-written `unsafe`, and no seccomp, because ABI 4 denies the network and an older kernel refuses the command rather than pretending. **The gate is met on both platforms.** The asymmetry it left is closed as of **2026-09-12** ([#95](https://github.com/PromptPasture/jan-klod/issues/95)): `ci-macos.yml` runs the Seatbelt suite on `macos-latest`, so both backends are now CI-verified. On different schedules, deliberately — Landlock on every push, Seatbelt when the sandbox sources or tests change and on demand, because macOS minutes bill at 10× on a private repository. **15d (Windows spike) is deferred** ([#49](https://github.com/PromptPasture/jan-klod/issues/49)) until a Windows environment exists to verify it in, and does not gate the phase — Windows resolves to approval-only, names the platform at boot, and refuses outright under `require: true`. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot; the security-model row cites the tests. The gate said "at boot and in the turn" until 2026-09-10, which no slice of this phase could ever have met: 15a deferred the per-turn warning to 16a, because nothing yet distinguishes a tool that uses `host-process` from one that only reads files, so it would fire on every tool-using turn. **Closed `done` 2026-09-11** on the convention that an umbrella closes when its exit criteria are met: the phase's work is finished, and what remains stands alone — #47 was open on the missing macOS runner (#95), which landed 2026-09-12, and 15d is deferred until a Windows environment exists (#49). Read `done` as "this phase's work is finished", not "every issue it ever tracked is closed". |
-| 16 — Capability manifest + signed registry | `in-progress` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. **16a done 2026-09-10** (#86, #87): every guest ships a manifest generated from its own imports, and the host refuses a component whose manifest is absent, under-declares what it imports, or names an incompatible interface version — cross-validated by two independent readers of the same artifacts. **16c-1 done 2026-09-11** ([#91](https://github.com/PromptPasture/jan-klod/issues/91)): `ext install` verifies before it copies — digest, minisign signature over the component **and** its manifest under a key from `registry.trusted-keys`, component validity, manifest consistency through the same `inspect` boot uses — staging in `ext/.staging/` so a refusal leaves `ext/` byte-identical. Signed is the default and `--allow-unsigned` requires `--sha256`, so no combination lands a component with no evidence; the list ships empty, so today every install needs that widening until 16c-3 publishes a key. **16b-1 and 16b-2 done 2026-09-10** (#88, #89): the versioning rules are written down, and `make wit` now warns when a `wit/*.wit` changed without the package version moving — resolving a baseline by tag, else merge-base with `origin/main`, else `HEAD~1`, and saying which, since nothing is tagged yet. That check also put `make wit` into CI for the first time; no job ran it before, so the contracts' own `wasm-tools` validation was not running either. 16b-3 (N-1 minor compatibility) is deferred to the freeze (#90). **16c-1 and 16c-2 done 2026-09-11** (#91, #92): `ext install` from a path or a URL, verified before anything lands. **16b and 16c closed 2026-09-11** (#51, #52), their deferred sub-slices standing alone. Remaining for the phase gate: **16d (#53)** — three of the four gate clauses are met, and the unmet one is "an install from a static index fixture works offline", which is 16d's. Also 16c-3 (#93), deferred until before the first release; until it lands `registry.trusted-keys` has nothing to put in it and every install needs `--allow-unsigned --sha256`. Gate: a component whose manifest omits a capability it imports is refused at boot; a tampered download is refused by `ext install`; an install from a static index fixture works offline; WIT `api-version` mismatch is a clear error. |
+| 16 — Capability manifest + signed registry | `done` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. **16a done 2026-09-10** (#86, #87): every guest ships a manifest generated from its own imports, and the host refuses a component whose manifest is absent, under-declares what it imports, or names an incompatible interface version — cross-validated by two independent readers of the same artifacts. **16c-1 done 2026-09-11** ([#91](https://github.com/PromptPasture/jan-klod/issues/91)): `ext install` verifies before it copies — digest, minisign signature over the component **and** its manifest under a key from `registry.trusted-keys`, component validity, manifest consistency through the same `inspect` boot uses — staging in `ext/.staging/` so a refusal leaves `ext/` byte-identical. Signed is the default and `--allow-unsigned` requires `--sha256`, so no combination lands a component with no evidence; the list ships empty, so today every install needs that widening until 16c-3 publishes a key. **16b-1 and 16b-2 done 2026-09-10** (#88, #89): the versioning rules are written down, and `make wit` now warns when a `wit/*.wit` changed without the package version moving — resolving a baseline by tag, else merge-base with `origin/main`, else `HEAD~1`, and saying which, since nothing is tagged yet. That check also put `make wit` into CI for the first time; no job ran it before, so the contracts' own `wasm-tools` validation was not running either. 16b-3 (N-1 minor compatibility) is deferred to the freeze (#90). **16c-1 and 16c-2 done 2026-09-11** (#91, #92): `ext install` from a path or a URL, verified before anything lands. **16b and 16c closed 2026-09-11** (#51, #52), their deferred sub-slices standing alone. **16d done 2026-09-12** (#53 → #137, #138, #139, #140): `make registry-index` writes an `index.json` describing the individual `.wasm` and its `.minisig` rather than a tarball, and its generation is deterministic — two runs over one directory must agree, entries must be sorted and unique, and all three checks are probed on every run. `ext search` and `ext list --remote` read the index `registry.url` names and print **what each component asks the host for before it is downloaded**, which is the capability view until an interactive Configurator exists; `ext install <name>` resolves through it and hands the entry's URL and digest to the same verified install a path gets, so an index that lies is refused rather than trusted. An `http`/`https` index is fetched under the egress policy and anything else is a path, which is what makes the gate's offline fixture install real. A release publishes the index and the components beside it to GitHub Pages — unverified until a tag is pushed. Also 16c-3 (#93), deferred until before the first release; until it lands `registry.trusted-keys` has nothing to put in it and every install needs `--allow-unsigned --sha256`. **Exit gate passed 2026-09-12**, all four clauses: a component whose manifest omits a capability it imports is refused at boot (16a); a tampered download is refused by `ext install` — against a digest and against a signature, including bytes tampered in flight (16c); an install from a static index fixture works offline (16d-2); a WIT `api-version` mismatch is a clear error naming both versions (16b). |
 | 17 — Web client + GUI shell | `in-progress` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. **17a done 2026-09-12** ([#54](https://github.com/PromptPasture/jan-klod/issues/54)): a dependency-light TypeScript SPA served by the core at `/` over **REST + SSE**, not WebSocket — 13c was not a prerequisite after all, and [#43](https://github.com/PromptPasture/jan-klod/issues/43) stays deferred pending evidence that SSE teardown-as-cancel is the wrong shape for a browser. 17b (Tauri) not started. Gate: a browser **and** a Tauri window drive a turn with `ask` + cancel from one front-end codebase served by the core. |
 | 18 — Ecosystem ports | `done` | [#40](https://github.com/PromptPasture/jan-klod/issues/40). Vision decision 6. Needs 13 (done). **18a and 18b done 2026-09-11** (#56, #57): `jan-klod-gateway mcp` serves `ask`, `session_list` and `session_get` over MCP stdio, and `jan-klod-gateway acp` serves the ACP agent side — both method-name adapters over the envelope `rpc` already speaks, so no SDK and no new dependency between them. **The gate is met**: an MCP client lists and calls a core-exposed tool, and an ACP fixture runs a turn, both offline. 18b is the first surface where the core originates JSON-RPC requests as well as serving them — an editor *can* answer a confirmation, where an MCP client cannot. Note a turn over MCP cannot write or run commands — there is nobody to answer a confirmation, so each takes its default, which is a refusal. **Closed `done` 2026-09-11** on the same convention Phase 15 used — an umbrella closes when its exit criteria are met — re-proving both clauses first (`cargo nextest run -p jan-klod-host mcp:: acp::`, 13 passed) rather than inferring them from the slices being closed. What remains stands alone: **18c ([#58](https://github.com/PromptPasture/jan-klod/issues/58), split into [#109](https://github.com/PromptPasture/jan-klod/issues/109) and [#110](https://github.com/PromptPasture/jan-klod/issues/110), both **done 2026-09-12**)** gives `registry-mcp` a stdio transport over a long-lived child, which is the *inbound* direction — the core as an MCP client — and the gate only ever named the core as a server, so it never gated the phase. Gate: an ACP client fixture runs a turn against the core; an MCP client lists and calls a core-exposed tool — both offline. |
 | 19 — Terminal client experience | `in-progress` | [#97](https://github.com/PromptPasture/jan-klod/issues/97). Not one of the vision's six decisions — the client-experience phase that follows them. **19a done 2026-09-12** ([#98](https://github.com/PromptPasture/jan-klod/issues/98)): `src/core/ui/src/theme.rs` owns colour, glyphs and terminal capability, and a test greps the crate so no `Color` literal can reappear outside it. 19b–19h not started; 19a gated them and no longer does. Gate: a full turn renders correctly on a 120×32 terminal and a 60×20 one, and the same run under `NO_COLOR=1` in a 16-colour terminal loses no information. |
@@ -677,10 +677,13 @@ public extension ecosystem.
     anything first-party, permanently — the `cp` route `ext install` exists to
     replace. It is also the shape 16c-1 verifies, 16c-2 derives companion URLs
     for, and 16d's index will describe.
-- **16d — Registry index + `ext search`.** A static JSON index over HTTP (the
-  Configurator's assumption) listing name, version, `api-version`, requested
-  capabilities, checksum, signature; `ext search`/`ext list` read it; the
-  Configurator shows requested capabilities before download.
+- **16d — Registry index + `ext search`.** Split four ways
+  ([#53](https://github.com/PromptPasture/jan-klod/issues/53)), one per subtree,
+  because the original scope reached across a generator, `src/core/`, `.github/`
+  and `docs/`. **Narrowed 2026-09-10:** the Configurator half left the slice —
+  `pages/` is a static landing page and no interactive UI exists
+  ([#63](https://github.com/PromptPasture/jan-klod/issues/63)) — so **`ext
+  search` is the capability view** rather than a stand-in for one.
 
   **The artefact layout is already fixed by everything below it**, so the index
   has to describe that rather than a tarball: a publisher serves **four files
@@ -689,10 +692,74 @@ public extension ecosystem.
   from it by relative resolution, and 16c-3's release decision commits to
   producing it. An index describing anything else would disagree with the
   installer about what a component is.
+  - **16d-1 — `index.json` and a deterministic generator. Done 2026-09-12**
+    ([#137](https://github.com/PromptPasture/jan-klod/issues/137)).
+    `make registry-index` writes name, version, `api-version`, kind,
+    capabilities, description, author, url, `sha256`, signature and size per
+    staged component. The generator is a `jan-klod-core` example rather than a
+    shell script: six of the eleven fields are the manifest's own, and reading
+    them through `ext::list` — the reader boot uses — is what stops the index
+    describing a manifest differently from how the host enforces it. Two things
+    this bullet did not anticipate:
+    - **There was no committed artefact to diff against.** `src/web/dist/`'s
+      drift check compares a rebuild with committed bytes; `ext/*.wasm` is
+      gitignored and a Rust wasm build is not byte-stable across machines, so a
+      committed index would drift per clone. The property held instead is that
+      **two runs over one directory agree**, with the second run from another
+      working directory — which is what a published index needs to be
+      reproducible at all.
+    - **Agreeing twice is not sufficient**, since an order taken from the
+      filesystem can agree by luck, so sortedness and uniqueness are asserted as
+      properties. All three checks are probed on every run: a generator whose
+      output changes, an out-of-order index and a duplicate name must each be
+      refused.
+  - **16d-2 — `ext search` and `ext list --remote`. Done 2026-09-12**
+    ([#138](https://github.com/PromptPasture/jan-klod/issues/138)).
+    `registry.url` names the index; `ext search <term>` prints each hit's
+    identity and then what it asks the host for, and `ext install <name>`
+    resolves through the index. An index is a **directory, not an authority** —
+    the entry's digest becomes the digest the existing install checks, the
+    signature is still verified against `registry.trusted-keys`, and the
+    manifest cross-check is unchanged, so an index that lies produces a refusal
+    rather than an unvouched component. Two decisions worth keeping:
+    - **A `--sha256` the index contradicts stops the install** instead of one
+      winning. Two disagreeing claims about one set of bytes make neither
+      trustworthy, and nothing is fetched.
+    - **An `http`/`https` `registry.url` is fetched under the egress policy and
+      anything else is a path** — the same rule `ext install` already applies to
+      a source. That is what makes a mirrored index work offline, and it is how
+      the exit gate's "install from a static index fixture" is tested with no
+      socket at all.
+  - **16d-3 — a release publishes the index. Done 2026-09-12**
+    ([#139](https://github.com/PromptPasture/jan-klod/issues/139)).
+    `release.yml` generates the index on the linux/x86_64 leg — a guest is
+    `wasm32-wasip2`, so four legs would build the same bytes — and the existing
+    `release` job deploys `index.json` and the components it names to GitHub
+    Pages, at the paths `registry.url` and `REGISTRY_URL` assume. No new job:
+    runner spend is a cost decision (#95). **Unverified until a tag is pushed**,
+    and Pages is not enabled on the repository yet, so `configure-pages` runs
+    with `enablement: true` and the first release also creates the site.
 
-**Exit gate:** a component whose manifest omits a capability it imports is refused
-at boot; a tampered download is refused; an install from a static index fixture
-works offline; a WIT major mismatch is a clear error.
+  - **16d-4 — recorded as built. Done 2026-09-12**
+    ([#140](https://github.com/PromptPasture/jan-klod/issues/140)).
+    [Configurator → Extension registry](configurator.md#extension-registry) now
+    describes the registry in the present tense, with the `ext search` output it
+    actually prints, and this section and the tracker row above say the phase is
+    done.
+
+**Exit gate: passed 2026-09-12**, all four clauses. A component whose manifest
+omits a capability it imports is refused at boot (16a-2). A tampered download is
+refused by `ext install` — against a digest and against a signature, the second
+including bytes tampered in flight (16c-1, 16c-2). An install from a static
+index fixture works offline (16d-2, `ext_registry::a_name_from_a_local_index_installs_offline`).
+A WIT major mismatch is a clear error naming both versions (16a-2).
+
+**What is deliberately not done.** 16b-3 (#90) waits for the interface freeze,
+which needs a first release. 16c-3 (#93) waits for the same release, so
+`registry.trusted-keys` ships empty and every first-party install still needs
+`--allow-unsigned --sha256` — which also means the index's `signature` field is
+empty today and says so rather than pretending. Neither is a gate clause; both
+are named here so the phase does not read as finished work with a quiet gap.
 
 ## Phase 17 — Web client + GUI shell
 

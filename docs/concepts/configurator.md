@@ -89,10 +89,44 @@ data, and the data is already here.
 
 ## Extension registry
 
-The registry is a simple HTTP file server: a directory of `.wasm` files with a metadata index. No crates.io, no npm. Extensions are downloaded at Configurator generation time and bundled into the ZIP.
+The registry is a simple HTTP file server: a directory of `.wasm` files with a metadata index. No crates.io, no npm. When a Configurator exists, extensions are downloaded at generation time and bundled into the ZIP; what is built today is the index and the `ext` commands that read it, below.
 
-**Planned, Phase 16.** The index gains, per extension, its `api-version`, the
-capabilities its manifest requests, a checksum and a signature; the Configurator
-shows requested capabilities *before* download, and the gateway's `ext install` subcommand
-verifies provenance before anything reaches `ext/`. See the
+### What is built
+
+The index is `index.json`, generated from the staged components by `make
+registry-index` and published beside them by a release. Per extension it
+carries the name, version, `api-version`, kind, **the capabilities the
+component's manifest declares**, a description, the publisher, the URL, a
+SHA-256, a signature and a size. The digest and the signature describe the
+individual `.wasm` and its `.minisig` rather than an archive, because `ext
+install` verifies per file.
+
+The capability list is not typed by anyone: `scripts/manifests.sh` reads it
+from the component's real imports, and the generator reads the manifest through
+the same code the host uses at boot. So the line an index shows is the line the
+host will enforce.
+
+`registry.url` in `config.yaml` names the index. An `http`/`https` URL is
+fetched under the egress policy — public destinations only, every redirect hop
+re-checked — and anything else is a path, so a mirrored index on disk works
+with no network at all.
+
+**`ext search` is the capability view.** There is no interactive Configurator
+(see above — the landing page is static), so the command is where an operator
+reads what a component asks for before downloading it:
+
+```console
+$ jan-klod-gateway ext search tool-fs
+tool-fs  0.1.0  api 0.3.0  tool  147445 bytes  unsigned
+  may use host-fs
+  fs tool: read / write / grep a workspace file through host-fs, dispatched by an `op` argument.
+```
+
+`ext list --remote` is the same view with nothing filtered out, and `ext
+install <name>` resolves a name through the index and hands the entry's URL and
+digest to the same verified install a path or a URL gets. Reading an index
+grants nothing: `registry.trusted-keys` still decides what may land in `ext/`,
+so with that list empty every install resolved this way is refused as untrusted
+— which is the correct answer until something first-party is signed. See the
+[security model](security-model.md) row for `registry.url`, and the
 [roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).
