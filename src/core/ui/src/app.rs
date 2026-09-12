@@ -4,6 +4,8 @@
 //! events mutate the [`App`], each turn's answer is recorded, and the view is a
 //! pure function of this state.
 
+use crate::composer::Composer;
+
 /// Who authored a transcript line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Who {
@@ -29,8 +31,11 @@ pub struct Entry {
 /// The REPL/TUI state: the input buffer and the scrollback transcript.
 #[derive(Debug, Default)]
 pub struct App {
-    /// The current input line.
-    pub input: String,
+    /// The message being written, with its caret (#150).
+    ///
+    /// A [`Composer`] rather than a `String`: the old buffer's `pop` removed one
+    /// `char`, so backspacing an emoji left half of it behind.
+    pub composer: Composer,
     /// The conversation so far, oldest first.
     pub transcript: Vec<Entry>,
     /// Set when the user asked to quit.
@@ -53,25 +58,28 @@ pub struct Prompt {
 }
 
 impl App {
-    /// Append a typed character to the input.
-    pub fn push_char(&mut self, c: char) {
-        self.input.push(c);
+    /// The text being written. Kept as an accessor so callers cannot reach past
+    /// the composer and desynchronise its caret from its text.
+    #[must_use]
+    pub fn input(&self) -> &str {
+        self.composer.text()
     }
 
-    /// Delete the last input character (if any).
+    /// Insert a typed character at the caret.
+    pub fn push_char(&mut self, c: char) {
+        self.composer.push(c);
+    }
+
+    /// Delete the grapheme before the caret.
     pub fn backspace(&mut self) {
-        self.input.pop();
+        self.composer.backspace();
     }
 
     /// Take a trimmed, non-empty submission: record it as a [`Who::You`] line,
     /// clear the input, and return the message to send. Whitespace-only input
     /// yields `None` (nothing to send).
     pub fn take_submission(&mut self) -> Option<String> {
-        let message = self.input.trim().to_string();
-        if message.is_empty() {
-            return None;
-        }
-        self.input.clear();
+        let message = self.composer.take()?;
         self.record(Who::You, message.clone());
         Some(message)
     }
@@ -122,13 +130,10 @@ impl App {
     /// thing instead of something undefined.
     pub fn take_answer(&mut self) -> Option<String> {
         let prompt = self.pending_prompt.take()?;
-        let typed = self.input.trim().to_string();
-        self.input.clear();
-        let answer = if typed.is_empty() {
-            prompt.default
-        } else {
-            typed
-        };
+        // `take` clears the composer and its caret together, which is the point
+        // of the type: an answer left behind in the buffer would be sent as the
+        // next message.
+        let answer = self.composer.take().unwrap_or(prompt.default);
         self.record(Who::You, answer.clone());
         Some(answer)
     }

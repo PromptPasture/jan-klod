@@ -191,6 +191,73 @@ impl Composer {
         self.caret = start;
     }
 
+    /// The most rows the composer occupies before it scrolls instead of growing.
+    pub const MAX_ROWS: usize = 8;
+
+    /// The wrapped rows, and the caret's `(row, column)` within them.
+    ///
+    /// **Not [`crate::wrap::wrap`].** That one is for display text: it breaks on
+    /// word boundaries and collapses runs of whitespace, which is right for a
+    /// rendered message and wrong for a buffer somebody is typing into — it
+    /// would eat the second space of a double space and move the caret out from
+    /// under their fingers. This wraps at the pane edge, between graphemes,
+    /// preserving every byte.
+    ///
+    /// Columns are **display cells**, so a caret after a CJK character sits two
+    /// columns along rather than one.
+    #[must_use]
+    pub fn rows(&self, width: usize) -> (Vec<String>, (usize, usize)) {
+        let width = width.max(1);
+        let mut rows: Vec<String> = Vec::new();
+        let mut caret = (0, 0);
+
+        for (n, logical) in self.text.split('\n').enumerate() {
+            // Where this logical line starts in `self.text`.
+            let base = self
+                .text
+                .split('\n')
+                .take(n)
+                .map(|l| l.len() + 1)
+                .sum::<usize>();
+            let mut row = String::new();
+            let mut used = 0;
+
+            for (off, cluster) in logical.grapheme_indices(true) {
+                let w = crate::wrap::width(cluster);
+                if used + w > width && !row.is_empty() {
+                    rows.push(std::mem::take(&mut row));
+                    used = 0;
+                }
+                if base + off == self.caret {
+                    caret = (rows.len(), used);
+                }
+                row.push_str(cluster);
+                used += w;
+            }
+            if base + logical.len() == self.caret {
+                caret = (rows.len(), used);
+            }
+            rows.push(row);
+        }
+        (rows, caret)
+    }
+
+    /// The rows actually on screen, and the caret within them.
+    ///
+    /// Grows to [`Self::MAX_ROWS`] and then scrolls rather than growing further,
+    /// keeping the caret's row visible — a composer that grew without limit
+    /// would eat the transcript it is a reply to.
+    #[must_use]
+    pub fn visible(&self, width: usize) -> (Vec<String>, (usize, usize)) {
+        let (rows, (caret_row, caret_col)) = self.rows(width);
+        if rows.len() <= Self::MAX_ROWS {
+            return (rows, (caret_row, caret_col));
+        }
+        let last = caret_row.max(Self::MAX_ROWS - 1);
+        let start = last + 1 - Self::MAX_ROWS;
+        (rows[start..=last].to_vec(), (caret_row - start, caret_col))
+    }
+
     /// How many lines the text occupies, at minimum one.
     #[must_use]
     pub fn line_count(&self) -> usize {
@@ -303,6 +370,63 @@ mod tests {
         let mut blank = typed("   ");
         assert_eq!(blank.take(), None, "nothing to send");
         assert_eq!(blank.text(), "", "and the whitespace does not linger");
+    }
+
+    /// Acceptance line 4: it grows, then scrolls rather than growing further.
+    #[test]
+    fn the_composer_grows_to_eight_rows_and_then_scrolls() {
+        let mut c = Composer::default();
+        for i in 0..20 {
+            if i > 0 {
+                c.push('\n');
+            }
+            c.insert(&format!("line{i}"));
+        }
+        let (all, _) = c.rows(40);
+        assert_eq!(all.len(), 20, "twenty logical lines are twenty rows");
+
+        let (shown, (row, _)) = c.visible(40);
+        assert_eq!(
+            shown.len(),
+            Composer::MAX_ROWS,
+            "it stopped growing at eight"
+        );
+        assert_eq!(shown.last().map(String::as_str), Some("line19"));
+        assert_eq!(row, Composer::MAX_ROWS - 1, "the caret's row is on screen");
+
+        // And scrolling follows the caret rather than pinning the end.
+        c.home();
+        for _ in 0..15 {
+            c.left();
+        }
+        let (shown, (row, _)) = c.visible(40);
+        assert!(row < Composer::MAX_ROWS, "the caret stayed visible: {row}");
+        assert_eq!(shown.len(), Composer::MAX_ROWS);
+    }
+
+    /// The reason this does not reuse `wrap::wrap`.
+    #[test]
+    fn wrapping_the_buffer_preserves_every_byte() {
+        let c = typed("a  b   c");
+        let (rows, _) = c.rows(40);
+        assert_eq!(rows.concat(), "a  b   c", "runs of spaces survived");
+
+        let wide = typed("日本語です");
+        let (rows, _) = wide.rows(4);
+        assert_eq!(rows.concat(), "日本語です", "nothing was dropped");
+        for row in &rows {
+            assert!(crate::wrap::width(row) <= 4, "{row:?} overflows the pane");
+        }
+    }
+
+    #[test]
+    fn the_caret_column_is_cells_not_characters() {
+        let mut c = typed("日本");
+        let (_, (_, col)) = c.rows(40);
+        assert_eq!(col, 4, "two ideographs are four columns");
+        c.left();
+        let (_, (_, col)) = c.rows(40);
+        assert_eq!(col, 2);
     }
 
     #[test]

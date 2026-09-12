@@ -130,21 +130,14 @@ fn event_loop(
         if key.kind != KeyEventKind::Press {
             continue;
         }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Editing and scrolling first: they are a pure mapping onto the
+        // composer and the viewport, and separating them keeps this loop about
+        // the one thing it alone can do — drive a turn.
+        if edit_or_scroll(&key, &mut app, &mut view, pane) {
+            continue;
+        }
         match key.code {
             KeyCode::Esc => app.quit(),
-            KeyCode::Backspace => app.backspace(),
-            // Scrolling. `Ctrl+U`/`Ctrl+D` reach here only when the composer is
-            // empty: #150 consumes them when there is content and deliberately
-            // does not when there is none, so this arm needs no composer test
-            // and the two slices stay independent.
-            KeyCode::PageUp => view = view.page_up(pane.height),
-            KeyCode::PageDown => view = view.page_down(pane.total, pane.height),
-            KeyCode::Char('u') if ctrl && app.input.is_empty() => view = view.half_up(pane.height),
-            KeyCode::Char('d') if ctrl && app.input.is_empty() => {
-                view = view.half_down(pane.total, pane.height);
-            }
-            KeyCode::Char(c) => app.push_char(c),
             // A pending confirmation is answered even though a turn is running —
             // that turn is precisely what is blocked waiting for it.
             KeyCode::Enter if app.pending_prompt.is_some() => {
@@ -189,9 +182,71 @@ struct Pane {
     height: usize,
 }
 
+/// Keys that only move a caret or a viewport.
+///
+/// Returns whether the key was consumed. Split out of the event loop because it
+/// is a mapping and nothing else — the loop's own arms spawn threads and own the
+/// turn, and mixing the two made one function that did both badly.
+fn edit_or_scroll(
+    key: &ratatui::crossterm::event::KeyEvent,
+    app: &mut App,
+    view: &mut Viewport,
+    pane: Pane,
+) -> bool {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    match key.code {
+        // Scrolling. `Ctrl+U`/`Ctrl+D` reach here only when the composer is
+        // empty: #150 consumes them when there is content and deliberately
+        // does not when there is none, so this arm needs no composer test
+        // and the two slices stay independent.
+        KeyCode::PageUp => *view = view.page_up(pane.height),
+        KeyCode::PageDown => *view = view.page_down(pane.total, pane.height),
+        KeyCode::Char('u') if ctrl && app.composer.is_empty() => *view = view.half_up(pane.height),
+        KeyCode::Char('d') if ctrl && app.composer.is_empty() => {
+            *view = view.half_down(pane.total, pane.height);
+        }
+        // Editing. Readline where the terminal delivers it; the composer
+        // owns what each one means, so this is a mapping and nothing more.
+        KeyCode::Left if alt => app.composer.word_left(),
+        KeyCode::Right if alt => app.composer.word_right(),
+        KeyCode::Left => app.composer.left(),
+        KeyCode::Right => app.composer.right(),
+        KeyCode::Home => app.composer.home(),
+        KeyCode::End => app.composer.end(),
+        KeyCode::Char('a') if ctrl => app.composer.home(),
+        KeyCode::Char('e') if ctrl => app.composer.end(),
+        KeyCode::Char('w') if ctrl => app.composer.delete_word_back(),
+        KeyCode::Char('k') if ctrl => app.composer.kill_to_end(),
+        // The other half of #148's arm: with content, this kills the line
+        // and consumes the key; empty, it fell through to the scroll above.
+        KeyCode::Char('u') if ctrl => app.composer.kill_line(),
+        // Both spellings, because terminals disagree about which reaches the
+        // application — and `/newline` (#152) is the fallback where neither
+        // does. Leaving a user with no way to type a newline is not an
+        // option a client gets to choose.
+        KeyCode::Enter if shift || alt => app.composer.push('\n'),
+        KeyCode::Backspace => app.backspace(),
+        KeyCode::Char(c) if !ctrl => app.push_char(c),
+        _ => return false,
+    }
+    true
+}
+
 fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane: &mut Pane) {
+    // The composer grows with its content and then scrolls, so the split is
+    // computed from the buffer rather than fixed at three rows. `- 2` for the
+    // block border, and again for the caret glyph and the space after it.
+    let caret = format!("{} ", theme.glyph(Glyph::Caret));
+    let caret_cells = jan_klod::wrap::width(&caret);
+    let composer_width = usize::from(frame.area().width).saturating_sub(2 + caret_cells);
+    let (composer_rows, (caret_row, caret_col)) = app.composer.visible(composer_width);
+    let composer_height = u16::try_from(composer_rows.len().max(1)).unwrap_or(1);
+
     let [transcript_area, input_area] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).areas(frame.area());
+        Layout::vertical([Constraint::Min(1), Constraint::Length(composer_height + 2)])
+            .areas(frame.area());
 
     // The transcript is rendered by `blocks::transcript` (#147), which is a
     // pure function of the entries plus a width — so the layout is tested
@@ -247,6 +302,29 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
             )
         },
     );
-    let input = Paragraph::new(app.input.as_str()).block(Block::bordered().title(title));
+    // The caret glyph is the prompt marker, and it is a `Glyph` so it degrades;
+    // the *cursor* is the terminal's own, placed below, because a drawn block
+    // does not blink and does not move with the user's own expectations.
+    let composer: Vec<Line<'static>> = composer_rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let marker = if i == 0 {
+                caret.clone()
+            } else {
+                " ".repeat(caret_cells)
+            };
+            Line::from(vec![
+                Span::styled(marker, Style::default().fg(theme.focus())),
+                Span::styled(row, Style::default().fg(theme.body())),
+            ])
+        })
+        .collect();
+    let input = Paragraph::new(composer).block(Block::bordered().title(title));
     frame.render_widget(input, input_area);
+    // +1 for the border, and the caret column is already in display cells.
+    frame.set_cursor_position((
+        input_area.x + 1 + u16::try_from(caret_cells + caret_col).unwrap_or(0),
+        input_area.y + 1 + u16::try_from(caret_row).unwrap_or(0),
+    ));
 }

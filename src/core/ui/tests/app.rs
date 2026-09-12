@@ -8,7 +8,7 @@ fn typing_and_backspace_edit_the_input() {
         app.push_char(c);
     }
     app.backspace();
-    assert_eq!(app.input, "hi");
+    assert_eq!(app.input(), "hi");
 }
 
 #[test]
@@ -17,7 +17,7 @@ fn submit_records_the_user_line_and_clears_input() {
     "  hello  ".chars().for_each(|c| app.push_char(c));
     let sent = app.take_submission();
     assert_eq!(sent.as_deref(), Some("hello"), "trimmed message returned");
-    assert!(app.input.is_empty(), "input cleared after submit");
+    assert!(app.input().is_empty(), "input cleared after submit");
     assert_eq!(
         app.transcript,
         vec![Entry {
@@ -61,7 +61,7 @@ fn a_pending_prompt_captures_the_next_submission_as_its_answer() {
     "always".chars().for_each(|c| app.push_char(c));
     assert_eq!(app.take_answer().as_deref(), Some("always"));
     assert!(app.pending_prompt.is_none(), "answering clears the wait");
-    assert!(app.input.is_empty(), "the input is consumed");
+    assert!(app.input().is_empty(), "the input is consumed");
 }
 
 #[test]
@@ -81,5 +81,5 @@ fn taking_an_answer_with_nothing_pending_yields_nothing() {
     let mut app = App::default();
     "hello".chars().for_each(|c| app.push_char(c));
     assert_eq!(app.take_answer(), None);
-    assert_eq!(app.input, "hello", "an ordinary message is left alone");
+    assert_eq!(app.input(), "hello", "an ordinary message is left alone");
 }
