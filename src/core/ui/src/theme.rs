@@ -894,6 +894,52 @@ mod tests {
     }
 
     #[test]
+    fn no_colour_literal_survives_outside_this_module() {
+        use std::fs;
+        use std::path::Path;
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut checked = 0_usize;
+
+        for dir in ["src", "tests"] {
+            let entries = fs::read_dir(root.join(dir)).expect("the crate's own directories exist");
+            for entry in entries {
+                let path = entry.expect("a readable directory entry").path();
+                if path.extension().is_none_or(|ext| ext != "rs")
+                    || path.file_name().is_some_and(|name| name == "theme.rs")
+                {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).expect("a readable source file");
+                checked += 1;
+                for (n, line) in text.lines().enumerate() {
+                    // Everything from the first `//` is a comment. A `//` inside
+                    // a string literal would truncate the line early, which can
+                    // only make this check *miss* something, never invent one.
+                    let code = line.split("//").next().unwrap_or_default();
+                    assert!(
+                        !code.contains("Color::"),
+                        "{}:{}: a colour literal outside theme.rs — ask the \
+                         theme for a role instead, or the next terminal that \
+                         cannot render it has no fallback:\n  {}",
+                        path.display(),
+                        n + 1,
+                        line.trim()
+                    );
+                }
+            }
+        }
+
+        // A grep that greps nothing passes for the wrong reason. Five sources
+        // and three integration tests today, minus theme.rs itself.
+        assert!(
+            checked >= 7,
+            "only {checked} files were scanned — this test has stopped finding \
+             the crate it is supposed to guard"
+        );
+    }
+
+    #[test]
     fn every_glyph_has_an_ascii_form_and_it_differs_where_it_must() {
         for glyph in Glyph::ALL {
             let (unicode, ascii) = glyph.forms();

@@ -7,6 +7,7 @@
 //!
 //!   session  session id, shared across the conversation (default: cli)
 //!   --addr   `host:port` of a running gateway; without it, one is spawned
+//!   --ascii  draw with the ASCII glyph vocabulary whatever the locale says
 //!
 //! By default jan-klod starts its own `jan-klod-gateway rpc` and talks to it
 //! over that process's stdin and stdout — no port, no token, nothing left
@@ -85,7 +86,7 @@ fn main() -> ExitCode {
     };
 
     if use_tui {
-        return match tui::run(&transport, &session) {
+        return match tui::run(&transport, &session, parsed.ascii) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("jan-klod: {err}");
@@ -103,6 +104,11 @@ struct Args {
     /// `Some` when the user named a running gateway, which selects REST.
     addr: Option<String>,
     session: Option<String>,
+    /// `--ascii`: draw with the ASCII glyph vocabulary whatever the locale says.
+    ///
+    /// An override for the locale and nothing else — it does not touch colour,
+    /// which is `NO_COLOR`'s and `JAN_KLOD_THEME`'s business.
+    ascii: bool,
 }
 
 /// Strip a leading `tui`/`--tui` mode word.
@@ -113,10 +119,11 @@ fn split_mode(args: &[String]) -> (bool, Vec<String>) {
     }
 }
 
-/// Read `--addr <host:port>` and at most one positional session id.
+/// Read `--addr <host:port>`, `--ascii`, and at most one positional session id.
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut addr = None;
     let mut session = None;
+    let mut ascii = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         if arg == "--addr" {
@@ -126,12 +133,14 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             ));
         } else if let Some(value) = arg.strip_prefix("--addr=") {
             addr = Some(value.to_string());
+        } else if arg == "--ascii" {
+            ascii = true;
         } else if arg.starts_with('-') {
             return Err(format!("jan-klod: unknown option `{arg}`"));
         } else if session.is_some() {
             return Err(format!(
                 "jan-klod: `{arg}` is a second session id. Usage: jan-klod [tui] \
-                 [--addr <host:port>] [session]"
+                 [--addr <host:port>] [--ascii] [session]"
             ));
         } else if looks_like_an_address(arg) {
             // The mistake the old positional form invited. Refused rather than
@@ -145,7 +154,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             session = Some(arg.clone());
         }
     }
-    Ok(Args { addr, session })
+    Ok(Args {
+        addr,
+        session,
+        ascii,
+    })
 }
 
 /// Whether a positional argument looks like a `host:port` rather than a session

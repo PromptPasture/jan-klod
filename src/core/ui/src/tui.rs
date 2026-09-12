@@ -14,11 +14,12 @@ use std::thread;
 use std::time::Duration;
 
 use jan_klod::app::{App, Prompt, Who};
+use jan_klod::theme::Theme;
 use jan_klod::transport::Transport;
 use jan_klod::StreamEvent;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
@@ -28,11 +29,21 @@ const POLL_MS: u64 = 50;
 /// Run the TUI against `transport` with the given `session`, restoring the
 /// terminal on exit.
 ///
+/// `force_ascii` is `--ascii`. The theme is resolved once here, from the
+/// process environment, rather than per frame: the terminal's capabilities do
+/// not change while it is running, and re-reading them every draw would make
+/// the rendering depend on something a test cannot hold still.
+///
 /// # Errors
 /// Propagates a terminal I/O error from the draw/event loop.
-pub fn run(transport: &Arc<dyn Transport>, session: &str) -> std::io::Result<()> {
+pub fn run(
+    transport: &Arc<dyn Transport>,
+    session: &str,
+    force_ascii: bool,
+) -> std::io::Result<()> {
+    let theme = Theme::from_process_env(force_ascii);
     let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, transport, session);
+    let result = event_loop(&mut terminal, transport, session, theme);
     ratatui::restore();
     result
 }
@@ -41,6 +52,7 @@ fn event_loop(
     terminal: &mut DefaultTerminal,
     transport: &Arc<dyn Transport>,
     session: &str,
+    theme: Theme,
 ) -> std::io::Result<()> {
     let mut app = App::default();
     app.record_status(format!(
@@ -99,7 +111,7 @@ fn event_loop(
             }
         }
 
-        terminal.draw(|frame| render(frame, &app))?;
+        terminal.draw(|frame| render(frame, &app, theme))?;
 
         // Short poll so we redraw incrementally during streaming.
         if !event::poll(Duration::from_millis(POLL_MS))? {
@@ -150,7 +162,7 @@ fn event_loop(
     Ok(())
 }
 
-fn render(frame: &mut Frame, app: &App) {
+fn render(frame: &mut Frame, app: &App, theme: Theme) {
     let [transcript_area, input_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).areas(frame.area());
 
@@ -158,11 +170,19 @@ fn render(frame: &mut Frame, app: &App) {
         .transcript
         .iter()
         .map(|entry| {
+            // Routed through the theme rather than named here (#128). Two of
+            // these are exact — an error is `removed`, a status line is `muted`
+            // — and two are the nearest role rather than the same pixels:
+            // `you` was `Cyan` and takes `focus`, the blue-family accent, and
+            // `klod` was `Green` and takes `body`, since the assistant's output
+            // *is* the body text. #97 eventually wants the two speakers told
+            // apart by gutter and indent rather than by tint at all, but that
+            // is 19b's redesign, not this slice's routing.
             let (label, color) = match entry.who {
-                Who::You => ("you", Color::Cyan),
-                Who::Klod => ("klod", Color::Green),
-                Who::Error => ("err", Color::Red),
-                Who::Status => ("··", Color::DarkGray),
+                Who::You => ("you", theme.focus()),
+                Who::Klod => ("klod", theme.body()),
+                Who::Error => ("err", theme.removed()),
+                Who::Status => ("··", theme.muted()),
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{label} › "), Style::default().fg(color)),
