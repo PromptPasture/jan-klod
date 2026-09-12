@@ -36,6 +36,14 @@ unicode-segmentation = "1"
 # unmodified — it depends on `syntect`, which carries RUSTSEC-2025-0141 and
 # RUSTSEC-2024-0320 with no safe upgrade. The cost of both is in README.md.
 pulldown-cmark = { version = "0.13", default-features = false }
+# `.gitignore`-aware directory walking for `@` path completion (#153). +9
+# packages, and `cargo deny` passes the root policy unmodified — measured, not
+# assumed. Taken rather than hand-rolled: a half-correct `.gitignore` is worse
+# than an explicit simpler rule, because a user trusts it and a file they
+# believe is hidden being offered is a different class of mistake. It is also
+# what makes the feature usable in a real repository at all — an unfiltered
+# walk offers `target/` and nothing else fits in the list.
+ignore = "0.4"
 
 [dev-dependencies]
 # The round-trip test stands up a canned HTTP server to drive the client against.

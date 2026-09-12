@@ -20,6 +20,7 @@ pub mod blocks;
 pub mod commands;
 pub mod composer;
 pub mod markdown;
+pub mod paths;
 pub mod theme;
 pub mod transport;
 pub mod viewport;
