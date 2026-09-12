@@ -96,6 +96,40 @@ no_fence_carries_syntax_colour_tagged_or_not` pins that, so a future slice that
 wants highlighting has to come back and change it deliberately rather than
 discover the decision by its absence.
 
+## Not declined, not needed: a diff engine
+
+[#156](https://github.com/PromptPasture/jan-klod/issues/156) renders a unified
+diff, and [#100](https://github.com/PromptPasture/jan-klod/issues/100) allowed
+`similar` for it *only if the client has to compute one*. **It does not.**
+
+`tool-git` (`src/extensions/tool-git/src/lib.rs`) allowlists five read-only
+subcommands, and `op=diff` runs `git diff --no-ext-diff --no-textconv`, returning
+git's own stdout with a `trim_end` and the shared output cap applied and nothing
+else. `op=show` carries a diff in the same format. So the content arriving in a tool result **is already
+unified-diff text**, and this crate parses and renders it rather than computing
+anything. That is the third dependency question this crate has answered without
+adding a package.
+
+`tool-edit` returns prose, not a diff — `"replace applied to <path> (N line(s))"`
+and an anchors-are-now-stale warning — so it is not a source. Nothing else
+produces diff-shaped output today.
+
+Two facts about that text the renderer has to hold, both from the guests rather
+than from git:
+
+- **It can arrive cut.** Every guest passes its output through
+  `guest_fs::truncate`, which appends `…[truncated: N bytes omitted]` on its own
+  line past the cap. A long diff therefore reaches the client with a hunk whose
+  body is shorter than its header claims, and a trailing line that is not diff
+  syntax at all.
+- **An empty diff is the words `(no output)`.** `git::render` substitutes that
+  for empty stdout on a zero exit, so "nothing changed" reaches the client as
+  prose and lands on the plain-text path rather than parsing as a diff with no
+  hunks.
+- **`--no-ext-diff --no-textconv` is a hardening flag, not a formatting one**,
+  but it has a formatting consequence worth knowing: the diff is always git's
+  built-in format, never a driver's, so there is one shape to parse.
+
 ## Colour and glyphs come from `theme.rs`, and only from there
 
 `src/core/ui/src/theme.rs` owns the ten-step grey ramp, the four accents, the
