@@ -23,9 +23,16 @@ use crate::common;
 /// The guests a turn through the MCP registry needs.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "registry-mcp.wasm"];
 
-/// A string that appears in the child's argv and nowhere else on the machine,
-/// so the process can be found without knowing its pid.
-const MARKER: &str = "jk-stdio-fixture-110";
+/// A string that appears in one test's child argv and nowhere else, so the
+/// process can be found without knowing its pid.
+///
+/// **Per test, not per file.** nextest runs each test in its own process and
+/// several in parallel, so a marker shared across tests makes `pgrep` find
+/// somebody else's child — the lifetime test failed exactly that way, blaming
+/// the guarantee for another test's still-running server.
+fn marker(tag: &str) -> String {
+    format!("jk-stdio-fixture-110-{tag}-{}", std::process::id())
+}
 
 /// A minimal MCP server: read a JSON-RPC line, answer it, repeat.
 ///
@@ -52,15 +59,16 @@ const MARKER: &str = "jk-stdio-fixture-110";
 /// confirms that: with `LiveChild::drop` emptied, the lifetime test fails.
 /// Not `exec sleep`, because that replaces the shell and takes `MARKER` out of
 /// argv with it, leaving nothing for `pgrep` to find.
-fn fixture_script() -> String {
+fn fixture_script(tag: &str) -> String {
     let reply =
         |result: &str| format!(r#"printf '{{"jsonrpc":"2.0","id":1,"result":{result}}}\n'"#);
     format!(
-        "MARKER={MARKER}; while IFS= read -r line; do case \"$line\" in \
+        "MARKER={m}; while IFS= read -r line; do case \"$line\" in \
          *'\"initialize\"'*) {init} ;; \
          *'\"tools/list\"'*) {list} ;; \
          *'\"tools/call\"'*) {call} ;; \
          esac; done; sleep 30",
+        m = marker(tag),
         init = reply(r#"{"protocolVersion":"2024-11-05"}"#),
         list = reply(
             r#"{"tools":[{"name":"echo-fixture","description":"a fixture tool","inputSchema":{"type":"object"}}]}"#
@@ -74,8 +82,11 @@ fn fixture_script() -> String {
 /// Two halves that must agree: `execution.long-lived` is the operator granting
 /// a process, and the server entry is the guest naming it. That is the whole
 /// shape of the capability — the guest supplies a name, never a command.
-fn config_yaml(workspace: &str) -> String {
-    let script = fixture_script().replace('\\', "\\\\").replace('"', "\\\"");
+///
+/// `script` is written out by the caller so a test can grant a server that
+/// misbehaves as easily as one that works.
+fn config_yaml_with(workspace: &str, script: &str) -> String {
+    let script = script.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
         r#"
 extensions:
@@ -114,6 +125,15 @@ fn booted_with(
     tag: &str,
     http: impl Fn() -> jan_klod_core::route::HttpFn,
 ) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+    booted_against(tag, &fixture_script(tag), http)
+}
+
+/// [`booted_with`], against a server of the caller's choosing.
+fn booted_against(
+    tag: &str,
+    script: &str,
+    http: impl Fn() -> jan_klod_core::route::HttpFn,
+) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
     if !common::guests_staged(&GUESTS) {
         return None;
     }
@@ -123,8 +143,11 @@ fn booted_with(
     let guard = common::TempDir(dir.clone());
 
     let config = dir.join("config.yaml");
-    std::fs::write(&config, config_yaml(&workspace.display().to_string()))
-        .expect("writes the config");
+    std::fs::write(
+        &config,
+        config_yaml_with(&workspace.display().to_string(), script),
+    )
+    .expect("writes the config");
 
     let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
     let agent = runtime.build_agent(&http).expect("agent boots");
@@ -133,10 +156,10 @@ fn booted_with(
 
 /// Whether the fixture child is running, asked of the OS by its argv rather
 /// than by a pid the host never hands out.
-fn fixture_running() -> bool {
+fn fixture_running(tag: &str) -> bool {
     std::process::Command::new("pgrep")
         .arg("-f")
-        .arg(MARKER)
+        .arg(marker(tag))
         .output()
         .is_ok_and(|out| out.status.success())
 }
@@ -241,7 +264,7 @@ fn the_stdio_child_is_gone_once_the_runtime_stops() {
         "the child has to have started for its death to mean anything: {metas}"
     );
     assert!(
-        fixture_running(),
+        fixture_running("lifetime"),
         "the fixture server should be running while the agent holds it"
     );
 
@@ -249,7 +272,97 @@ fn the_stdio_child_is_gone_once_the_runtime_stops() {
     drop(dir);
 
     assert!(
-        !fixture_running(),
+        !fixture_running("lifetime"),
         "the stdio child must not outlive the runtime that started it"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance line 2: a server that misbehaves must not pin the core.
+//
+// The core is single-threaded. A guest that waited on a child forever would
+// hold the turn, the transport and every other instance with it — so the only
+// interesting question about a broken MCP server is whether asking it
+// *finishes*. These assert on that, with a wall-clock bound, rather than on an
+// error appearing somewhere: a client that hung indefinitely and was killed by
+// the test harness would also "produce no tools".
+// ---------------------------------------------------------------------------
+
+/// Long enough for the guest's own ten-second budget plus a slow machine, short
+/// enough that an unbounded wait cannot pass.
+const MUST_FINISH_WITHIN: std::time::Duration = std::time::Duration::from_secs(40);
+
+/// A server that answers every request with something that is not JSON.
+fn malformed_script(tag: &str) -> String {
+    format!(
+        "MARKER={m}; while IFS= read -r line; do printf 'this is not json\\n'; \
+         done; sleep 30",
+        m = marker(tag)
+    )
+}
+
+/// A server that starts, stays up, and never answers anything.
+fn silent_script(tag: &str) -> String {
+    format!("MARKER={m}; sleep 60", m = marker(tag))
+}
+
+/// A reply that is not JSON is a server that is down, not a turn that fails.
+#[test]
+fn a_malformed_reply_leaves_the_server_down_rather_than_breaking_the_turn() {
+    let started = std::time::Instant::now();
+    let Some((_dir, mut agent)) =
+        booted_against("malformed", &malformed_script("malformed"), || {
+            common::canned_http("ok")
+        })
+    else {
+        return;
+    };
+    let metas = agent.all_metas_json().expect("metadata still resolves");
+    assert!(
+        !metas.to_string().contains("echo-fixture"),
+        "a server that cannot be parsed offers no tools: {metas}"
+    );
+    // The turn is the thing that must survive: a broken registry is a missing
+    // capability, not a broken agent.
+    let answer = agent.run("s1", "hello");
+    assert!(
+        matches!(answer, jan_klod_core::conductor::RunResult::Answered { .. }),
+        "a turn must still run with a broken MCP server configured: {answer:?}"
+    );
+    assert!(
+        started.elapsed() < MUST_FINISH_WITHIN,
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
+/// **The one this box exists for**: a child that never answers.
+///
+/// It starts, it stays up, and it says nothing — so `is-running` keeps
+/// returning true and only the guest's own budget ends the wait. Without that
+/// budget this test does not fail, it *hangs*, which is the failure this
+/// acceptance line is about.
+#[test]
+fn a_silent_child_gives_up_instead_of_pinning_the_core() {
+    let started = std::time::Instant::now();
+    let Some((_dir, mut agent)) = booted_against("silent", &silent_script("silent"), || {
+        common::canned_http("ok")
+    }) else {
+        return;
+    };
+    let metas = agent.all_metas_json().expect("metadata still resolves");
+    assert!(
+        !metas.to_string().contains("echo-fixture"),
+        "a silent server offers no tools: {metas}"
+    );
+    let answer = agent.run("s1", "hello");
+    assert!(
+        matches!(answer, jan_klod_core::conductor::RunResult::Answered { .. }),
+        "a turn must still run with a silent MCP server configured: {answer:?}"
+    );
+    assert!(
+        started.elapsed() < MUST_FINISH_WITHIN,
+        "a silent child must be given up on, not waited out: took {:?}",
+        started.elapsed()
     );
 }
