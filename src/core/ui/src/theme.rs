@@ -221,6 +221,8 @@ pub enum Glyph {
     DiffRemoved,
     /// The composer's caret.
     Caret,
+    /// The transcript is scrolled up and there is more below (#148).
+    MoreBelow,
 }
 
 impl Glyph {
@@ -228,7 +230,7 @@ impl Glyph {
     ///
     /// A `match` in [`Glyph::forms`] keeps this honest in the other direction:
     /// adding a variant without a form is a compile error.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::MessageGutter,
         Self::ToolDone,
         Self::ToolFailed,
@@ -238,6 +240,7 @@ impl Glyph {
         Self::DiffAdded,
         Self::DiffRemoved,
         Self::Caret,
+        Self::MoreBelow,
     ];
 
     /// The Unicode form and the ASCII one, in that order.
@@ -258,6 +261,12 @@ impl Glyph {
             Self::DiffAdded => ("+", "+"),
             Self::DiffRemoved => ("-", "-"),
             Self::Caret => ("›", ">"),
+            // `V` rather than `v`, which `Expanded` has. The two are close, and
+            // deliberately: both mean "there is more this way". They are told
+            // apart by where they appear — `Expanded` opens a block, this sits
+            // at the transcript's edge with a count beside it — and the
+            // distinctness rule is what stops the pair collapsing into one.
+            Self::MoreBelow => ("⇣", "V"),
         }
     }
 }

@@ -15,11 +15,14 @@ use std::time::Duration;
 
 use jan_klod::app::{App, Prompt};
 use jan_klod::blocks;
-use jan_klod::theme::Theme;
+use jan_klod::theme::{Glyph, Theme};
 use jan_klod::transport::Transport;
+use jan_klod::viewport::Viewport;
 use jan_klod::StreamEvent;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
@@ -54,6 +57,11 @@ fn event_loop(
     theme: Theme,
 ) -> std::io::Result<()> {
     let mut app = App::default();
+    let mut view = Viewport::default();
+    // What the last frame drew. The scroll keys need the transcript's line count
+    // and the pane's height, and only `render` knows either — it is the thing
+    // that wraps the text to the width the terminal currently has.
+    let mut pane = Pane::default();
     app.record_status(format!(
         "connected to {} (session `{session}`); Esc to quit",
         transport.describe()
@@ -110,7 +118,7 @@ fn event_loop(
             }
         }
 
-        terminal.draw(|frame| render(frame, &app, theme))?;
+        terminal.draw(|frame| render(frame, &app, theme, &mut view, &mut pane))?;
 
         // Short poll so we redraw incrementally during streaming.
         if !event::poll(Duration::from_millis(POLL_MS))? {
@@ -122,9 +130,20 @@ fn event_loop(
         if key.kind != KeyEventKind::Press {
             continue;
         }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => app.quit(),
             KeyCode::Backspace => app.backspace(),
+            // Scrolling. `Ctrl+U`/`Ctrl+D` reach here only when the composer is
+            // empty: #150 consumes them when there is content and deliberately
+            // does not when there is none, so this arm needs no composer test
+            // and the two slices stay independent.
+            KeyCode::PageUp => view = view.page_up(pane.height),
+            KeyCode::PageDown => view = view.page_down(pane.total, pane.height),
+            KeyCode::Char('u') if ctrl && app.input.is_empty() => view = view.half_up(pane.height),
+            KeyCode::Char('d') if ctrl && app.input.is_empty() => {
+                view = view.half_down(pane.total, pane.height);
+            }
             KeyCode::Char(c) => app.push_char(c),
             // A pending confirmation is answered even though a turn is running —
             // that turn is precisely what is blocked waiting for it.
@@ -161,7 +180,16 @@ fn event_loop(
     Ok(())
 }
 
-fn render(frame: &mut Frame, app: &App, theme: Theme) {
+/// What the last frame drew, so the scroll keys have dimensions to work with.
+#[derive(Debug, Default, Clone, Copy)]
+struct Pane {
+    /// Rendered transcript lines.
+    total: usize,
+    /// Rows the transcript pane can show.
+    height: usize,
+}
+
+fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane: &mut Pane) {
     let [transcript_area, input_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).areas(frame.area());
 
@@ -174,9 +202,39 @@ fn render(frame: &mut Frame, app: &App, theme: Theme) {
     // `- 2` for the block's own border, which is not part of the pane the text
     // may use. Getting that wrong is how a wrap that passes its own test still
     // overflows on screen.
+    // `- 2` for the block's own border, which is not part of the pane the text
+    // may use. Getting that wrong is how a wrap that passes its own test still
+    // overflows on screen.
     let inner_width = usize::from(transcript_area.width).saturating_sub(2);
-    let transcript = Paragraph::new(blocks::transcript(&app.transcript, inner_width, theme))
-        .block(Block::bordered().title("jan-klod"));
+    let inner_height = usize::from(transcript_area.height).saturating_sub(2);
+    let lines = blocks::transcript(&app.transcript, inner_width, theme);
+
+    // Re-clamp against what this frame actually holds, *then* record it. While
+    // attached this follows a streaming delta to the new bottom; while detached
+    // it holds position, which is the whole point of #148.
+    *view = view.reflow(lines.len(), inner_height);
+    *pane = Pane {
+        total: lines.len(),
+        height: inner_height,
+    };
+
+    // The detach marker: a glyph and a count, never a tint. Under `Mode::Mono`
+    // every role resolves to `Color::Reset`, so a marker that were only a colour
+    // would vanish exactly when the user most needs to know the view is stale.
+    let mut block = Block::bordered().title("jan-klod");
+    let below = view.below(lines.len(), inner_height);
+    if below > 0 {
+        block = block.title_bottom(
+            Line::from(Span::styled(
+                format!(" {} {below} ", theme.glyph(Glyph::MoreBelow)),
+                Style::default().fg(theme.warning()),
+            ))
+            .right_aligned(),
+        );
+    }
+
+    let offset = u16::try_from(view.offset()).unwrap_or(u16::MAX);
+    let transcript = Paragraph::new(lines).block(block).scroll((offset, 0));
     frame.render_widget(transcript, transcript_area);
 
     let title = app.pending_prompt.as_ref().map_or_else(
