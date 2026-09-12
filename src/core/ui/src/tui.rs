@@ -85,6 +85,12 @@ fn event_loop(
                     Step::Drained => break,
                     Step::Ended => {
                         rx = None;
+                        // One place where the turn goes back to `Idle`,
+                        // whichever way it ended — answered, failed, or the
+                        // sender dropped. `finish_turn` has already set it on
+                        // the answered path; this costs nothing there and is
+                        // the only thing that sets it on the other two.
+                        app.end_turn();
                         break;
                     }
                 }
@@ -128,8 +134,15 @@ fn event_loop(
                     });
                 }
             }
+            // `Ctrl+C` asks the turn to stop. Whether anything *can* be sent is
+            // a question about the transport, and `request_cancel` answers it
+            // out loud rather than leaving a key that appears to do nothing.
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                request_cancel(&mut app);
+            }
             KeyCode::Enter if rx.is_none() => {
                 if let Some(message) = app.take_submission() {
+                    app.begin_turn();
                     let transport = Arc::clone(transport);
                     let session = session.to_string();
                     let (tx, new_rx) = mpsc::channel();
@@ -148,6 +161,31 @@ fn event_loop(
         }
     }
     Ok(())
+}
+
+/// `Ctrl+C`: ask the running turn to stop, and say what that actually does.
+///
+/// Returns whether this was the ask that acted, which is `false` both when
+/// nothing is running and when a cancel has already been asked for — the
+/// second `Ctrl+C` of a pair must not produce a second line saying the same
+/// thing, for the same reason it must not send a second message.
+///
+/// **The sentence is the point of the function.** The client cannot send
+/// `turn/cancel` on any transport today ([#157]), so a `Ctrl+C` that quietly
+/// set a state and changed nothing visible would teach a user that cancelling
+/// is broken rather than that it is unfinished. Saying which it is costs one
+/// line and is the difference between the two.
+///
+/// [#157]: https://github.com/PromptPasture/jan-klod/issues/157
+fn request_cancel(app: &mut App) -> bool {
+    if !app.cancel() {
+        return false;
+    }
+    app.record_status(
+        "cancel requested — the client cannot send `turn/cancel` yet (#157), \
+         so this turn will run to its end",
+    );
+    true
 }
 
 /// What the last frame drew, so the scroll keys have dimensions to work with.
@@ -598,8 +636,8 @@ fn render_menu(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_or_scroll, Pane};
-    use jan_klod::app::{App, Entry as JanKlodEntry};
+    use super::{edit_or_scroll, request_cancel, Pane};
+    use jan_klod::app::{App, Entry as JanKlodEntry, Turn, Who};
     use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
     use jan_klod::viewport::Viewport;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -980,6 +1018,42 @@ mod tests {
             app.cursor(),
             None,
             "a bare arrow moved the transcript cursor"
+        );
+    }
+
+    /// Box 2's whole job: the key says what it cannot do.
+    #[test]
+    fn ctrl_c_asks_once_and_says_what_it_is_waiting_on() {
+        let mut app = App::default();
+        assert!(!request_cancel(&mut app), "there is no turn to stop");
+        assert!(
+            app.transcript.is_empty(),
+            "a key with nothing to cancel must not narrate"
+        );
+
+        app.begin_turn();
+        app.apply_delta("half an answer");
+        assert!(request_cancel(&mut app), "the first ask acts");
+        assert_eq!(app.turn(), Turn::Cancelling);
+
+        let note = app.transcript.last().expect("a status line");
+        match note {
+            JanKlodEntry::Message { who, text } => {
+                assert_eq!(*who, Who::Status);
+                assert!(
+                    text.contains("#157"),
+                    "the line does not say what it is waiting on: {text:?}"
+                );
+            }
+            other @ JanKlodEntry::Tool(_) => panic!("expected a status line, got {other:?}"),
+        }
+
+        let lines = app.transcript.len();
+        assert!(!request_cancel(&mut app), "the second ask does not act");
+        assert_eq!(
+            app.transcript.len(),
+            lines,
+            "and it did not say the same thing twice"
         );
     }
 }
