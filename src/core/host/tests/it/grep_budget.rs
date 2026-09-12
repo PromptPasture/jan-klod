@@ -24,7 +24,8 @@
 //! not slow — it is **14 ms against ripgrep's 835 ms**, because it does not walk
 //! the tree. `guest_fs::MAX_RESULTS` bounds the walk at 500 files and
 //! `MAX_VISITS` at 20 000 entries, and `fs::render` says so in the output:
-//! `…[partial: the file walk stopped at the result cap]`.
+//! `[partial: the file walk stopped at the result cap]`, which since #145 leads
+//! the hits rather than trailing them.
 //!
 //! So there are two measurements here, and only the first is a speed comparison:
 //!
@@ -220,10 +221,16 @@ fn native_grep_is_faster_per_file_but_not_by_much() {
 ///
 /// `guest_fs::MAX_RESULTS` bounds the walk at 500 files, so a "tree-wide" grep
 /// over 50 000 files answers from the first 500 of them. It is *honest* about
-/// it: `fs::render` appends `…[partial: the file walk stopped at the result
-/// cap]`. But a caller who reads only the hits gets an answer that looks
-/// complete and is not, which is a different problem from the one #61 was
-/// filed about and a much cheaper one to fix.
+/// it: `fs::render` emits `[partial: the file walk stopped at the result cap]`.
+/// But a caller who reads only the hits gets an answer that looks complete and
+/// is not, which is a different problem from the one #61 was filed about and a
+/// much cheaper one to fix.
+///
+/// #145 fixed the cheap half by moving that marker to the **front** of the
+/// output — `guest_fs::truncate` cuts the tail, so a trailing marker was
+/// deleted outright by a result long enough to overflow the byte cap. The
+/// `contains("partial")` assertion below held before and after; what changed is
+/// that it now also holds for the large results where it used not to.
 #[test]
 #[ignore = "a benchmark: builds a 50k-file tree, run it deliberately (#61)"]
 fn a_tree_wide_grep_does_not_walk_a_large_tree() {

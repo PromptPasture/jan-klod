@@ -80,20 +80,38 @@ mod fs {
         }
     }
 
-    /// Format a tree grep, stating every way the result was held back.
+    /// Format a tree grep, stating every way the result was held back **before**
+    /// the hits rather than after them.
+    ///
+    /// The markers used to trail (#145). Two things were wrong with that, and the
+    /// second is the one that makes this a bug rather than a preference:
+    ///
+    /// - The consumer is a language model. One that greps a tree, reads 50 hits
+    ///   and acts concludes the symbol appears in 50 places; a caveat below the
+    ///   data is the part a truncated read drops, and this caller is the one
+    ///   least able to ask a follow-up.
+    /// - [`guest_fs::truncate`] cuts the **tail**. So a result long enough to hit
+    ///   [`guest_fs::MAX_OUTPUT_BYTES`] lost its partial markers entirely — in
+    ///   exactly the case where a bound is most likely to have bitten. The output
+    ///   then read as a complete answer while being the least complete one the
+    ///   tool can produce.
+    ///
+    /// Leading, they survive both. The ellipsis went with the move: `…[partial]`
+    /// meant "and it continues past here", which is not what a header says.
     pub fn render(pattern: &str, hits: &Hits, walk_bound: Option<&str>) -> String {
         if hits.lines.is_empty() {
             return format!("no matches for {pattern}");
         }
-        let mut parts = vec![hits.lines.join("\n")];
+        let mut parts = Vec::new();
         if hits.capped {
             parts.push(format!(
-                "…[partial: stopped at the match cap ({MAX_MATCHES})]"
+                "[partial: stopped at the match cap ({MAX_MATCHES})]"
             ));
         }
         if let Some(bound) = walk_bound {
-            parts.push(format!("…[partial: the file walk stopped at the {bound}]"));
+            parts.push(format!("[partial: the file walk stopped at the {bound}]"));
         }
+        parts.push(hits.lines.join("\n"));
         guest_fs::truncate(parts.join("\n"))
     }
 
@@ -165,20 +183,50 @@ mod fs {
             assert_eq!(render("zzz", &hits, None), "no matches for zzz");
         }
 
+        /// This test used to assert the opposite — `starts_with("a.rs:1:x\n")`,
+        /// "hits come first". #145 reversed it on purpose: a caveat a reader
+        /// meets after the data is a caveat the reader has already acted past.
         #[test]
-        fn a_bounded_walk_is_reported_alongside_the_hits() {
+        fn a_bounded_walk_is_reported_before_the_hits() {
             let hits = Hits {
                 lines: vec!["a.rs:1:x".to_string()],
                 capped: false,
             };
             let rendered = render("x", &hits, Some("visit budget"));
             assert!(
-                rendered.starts_with("a.rs:1:x\n"),
-                "hits come first: {rendered}"
+                rendered.starts_with("[partial: the file walk stopped at the visit budget]\n"),
+                "the bound comes first: {rendered}"
+            );
+            assert!(rendered.ends_with("\na.rs:1:x"), "{rendered}");
+        }
+
+        /// The reason leading beats trailing, rather than merely differing from
+        /// it: `guest_fs::truncate` cuts the tail at `MAX_OUTPUT_BYTES`, so a
+        /// trailing marker was *deleted* by a long result — the very case where
+        /// a bound is most likely to have bitten. Enough hits to overflow the
+        /// cap, and the marker must still be readable.
+        #[test]
+        fn a_marker_survives_the_output_cap_that_would_have_cut_a_trailing_one() {
+            let line = "src/some/quite/long/path/to/a/file.rs:1234:some matching line of code";
+            let lines = vec![line.to_string(); guest_fs::MAX_OUTPUT_BYTES / line.len() + 10];
+            let hits = Hits {
+                lines,
+                capped: true,
+            };
+            let rendered = render("x", &hits, Some("result cap"));
+
+            assert!(
+                rendered.contains("truncated:"),
+                "the fixture must actually overflow the cap, or it proves nothing"
             );
             assert!(
-                rendered.contains("file walk stopped at the visit budget"),
-                "{rendered}"
+                rendered.starts_with("[partial: stopped at the match cap"),
+                "{}",
+                &rendered[..120]
+            );
+            assert!(
+                rendered.contains("file walk stopped at the result cap"),
+                "both markers survive, not just the first"
             );
         }
     }
