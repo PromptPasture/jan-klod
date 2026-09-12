@@ -30,6 +30,7 @@ pub mod wrap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// Resolve one of this repository's binaries: sibling of the current exe first,
@@ -233,6 +234,25 @@ pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
     })
 }
 
+/// Clears a `Rest`'s live-turn socket when a turn ends, however it ends.
+///
+/// A plain assignment after the read loop would not run if the loop returned
+/// early on an error, and would not run at all on a panic — either of which
+/// would leave `cancel` shutting down a socket whose turn is already over. A
+/// guard runs on every path out of the function that created it, `?` and
+/// panic included.
+struct ClearLiveOnDrop<'a> {
+    live_socket: &'a Mutex<Option<TcpStream>>,
+}
+
+impl Drop for ClearLiveOnDrop<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.live_socket.lock() {
+            *slot = None;
+        }
+    }
+}
+
 /// Drive one turn with **streaming**: `POST` with `Accept: text/event-stream` and
 /// invoke `on_event` for each SSE frame as it arrives (a live transcript).
 ///
@@ -243,6 +263,31 @@ pub fn stream_turn(
     session: &str,
     message: &str,
     on_event: &mut dyn FnMut(StreamEvent),
+) -> Result<(), String> {
+    // No caller outside this crate can cancel a turn it did not offer a
+    // socket for, so a throwaway `Mutex` is exactly as capable as this
+    // signature ever was before #157 — a fresh, never-shared slot.
+    stream_turn_cancellable(addr, session, message, on_event, &Mutex::new(None))
+}
+
+/// [`stream_turn`], plus a place to park the connection so another thread can
+/// cancel it.
+///
+/// `live_socket` is where this stores a clone of the connection for the length
+/// of the turn, so [`transport::Rest::cancel`] can shut it down from another
+/// thread — see that impl for why dropping the connection is what cancelling
+/// means on this transport. Not `pub`: nothing outside `transport::Rest` has a
+/// socket to cancel through, so nothing outside it needs this over
+/// [`stream_turn`].
+///
+/// # Errors
+/// Returns a human-readable error if the connection or read fails.
+pub(crate) fn stream_turn_cancellable(
+    addr: &str,
+    session: &str,
+    message: &str,
+    on_event: &mut dyn FnMut(StreamEvent),
+    live_socket: &Mutex<Option<TcpStream>>,
 ) -> Result<(), String> {
     let body = serde_json::json!({ "message": message }).to_string();
     let request = format!(
@@ -259,6 +304,19 @@ pub fn stream_turn(
     stream
         .set_read_timeout(Some(read_timeout))
         .map_err(|err| err.to_string())?;
+
+    // Stored before the request is even written, so a `cancel` racing the
+    // very start of the turn still has a socket to shut down. Cleared on
+    // every exit from this function by `ClearLiveOnDrop`, including an early
+    // `?` return and a panic.
+    let clone = stream
+        .try_clone()
+        .map_err(|err| format!("cloning the turn's socket: {err}"))?;
+    *live_socket
+        .lock()
+        .map_err(|_| "the live turn's socket is poisoned".to_owned())? = Some(clone);
+    let _clear = ClearLiveOnDrop { live_socket };
+
     stream
         .write_all(request.as_bytes())
         .map_err(|err| format!("sending request: {err}"))?;
@@ -341,6 +399,43 @@ pub fn answer_prompt(addr: &str, session: &str, answer: &str) -> Result<(), Stri
                 |e| format!("core: {e}"),
             ))
     }
+}
+
+/// Allocate a new session on the core at `addr` (`host:port`): `POST /sessions`
+/// and return its id.
+///
+/// # Errors
+/// Returns a human-readable error if the connection fails or the response
+/// carries no `id`.
+pub fn create_session(addr: &str) -> Result<String, String> {
+    let request = format!(
+        "POST /sessions HTTP/1.1\r\nHost: {addr}\r\n{}Content-Length: 0\r\nConnection: close\r\n\r\n",
+        auth_header()
+    );
+    let mut stream =
+        TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|err| err.to_string())?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| format!("sending request: {err}"))?;
+
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .map_err(|err| format!("reading response: {err}"))?;
+    let body = raw
+        .split_once("\r\n\r\n")
+        .map_or(raw.as_str(), |(_h, b)| b)
+        .trim();
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|err| format!("malformed response body: {err} (in {body:?})"))?;
+    value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("unexpected response: {body}"))
 }
 
 /// Drive one turn against the core at `addr` (`host:port`): `POST` the message and

@@ -13,10 +13,11 @@
 //! address.
 
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio as ChildIo};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use jan_klod_protocol::{compatible, jsonrpc, Command as Rpc, Notification, PROTOCOL_VERSION};
 
@@ -27,6 +28,24 @@ use crate::StreamEvent;
 /// `Send + Sync` because the TUI hands it to a turn thread and an answer thread
 /// at the same time, which is the whole reason it exists.
 pub trait Transport: Send + Sync {
+    /// Allocate a new session and return its id.
+    ///
+    /// # Errors
+    /// A human-readable message if the connection fails or the core refuses.
+    fn create_session(&self) -> Result<String, String>;
+
+    /// Stop the turn running on `session`, if any.
+    ///
+    /// One method, two honest implementations: over stdio this sends
+    /// `turn/cancel`; over REST it drops the SSE connection, which is the only
+    /// thing that stops a turn on that surface (see the `Rest` impl). The menu
+    /// above this trait does not know which, and must not need to.
+    ///
+    /// # Errors
+    /// A human-readable message if the cancellation cannot be sent or acted on
+    /// — see each implementation for what that means on its transport.
+    fn cancel(&self, session: &str) -> Result<(), String>;
+
     /// Drive one turn, calling `on_event` as the core reports.
     ///
     /// # Errors
@@ -64,24 +83,55 @@ pub trait Transport: Send + Sync {
 /// The REST + SSE surface of a gateway that is already listening.
 pub struct Rest {
     addr: String,
+    /// The socket of the turn currently streaming, if one is. `stream_turn`
+    /// stores a clone here for the length of the turn and clears it when the
+    /// turn ends, however it ends; `cancel` shuts it down, which is what makes
+    /// the reader's line loop see EOF and return (`rpc.rs` reads a closed
+    /// connection as `Flow::Stop` — this is that, from the client side).
+    live: Arc<Mutex<Option<TcpStream>>>,
 }
 
 impl Rest {
     /// Talk to the gateway at `addr` (`host:port`).
     #[must_use]
-    pub const fn new(addr: String) -> Self {
-        Self { addr }
+    pub fn new(addr: String) -> Self {
+        Self {
+            addr,
+            live: Arc::new(Mutex::new(None)),
+        }
     }
 }
 
 impl Transport for Rest {
+    fn create_session(&self) -> Result<String, String> {
+        crate::create_session(&self.addr)
+    }
+
+    fn cancel(&self, _session: &str) -> Result<(), String> {
+        // No turn running is a clear error rather than a silent no-op: a
+        // `/cancel` that "worked" against nothing would teach a user the
+        // opposite of what happened.
+        let guard = self
+            .live
+            .lock()
+            .map_err(|_| "the live turn's socket is poisoned".to_owned())?;
+        guard.as_ref().map_or_else(
+            || Err("no turn is running to cancel".to_owned()),
+            |stream| {
+                stream
+                    .shutdown(std::net::Shutdown::Both)
+                    .map_err(|err| format!("shutting down the turn's connection: {err}"))
+            },
+        )
+    }
+
     fn stream_turn(
         &self,
         session: &str,
         message: &str,
         on_event: &mut dyn FnMut(StreamEvent),
     ) -> Result<(), String> {
-        crate::stream_turn(&self.addr, session, message, on_event)
+        crate::stream_turn_cancellable(&self.addr, session, message, on_event, &self.live)
     }
 
     fn answer(&self, session: &str, answer: &str) -> Result<(), String> {
@@ -311,7 +361,46 @@ impl Stdio {
     }
 }
 
+impl Stdio {
+    /// Send `session/create` and read its own answer.
+    ///
+    /// Safe only when called while no turn is streaming: `stream_turn` holds
+    /// the reader for the whole exchange, so a call made while one is running
+    /// would race it for the next line off the pipe and could steal a frame
+    /// that belonged to the turn thread. The menu calls this to start `/new`,
+    /// which is exactly a moment nothing else is reading.
+    ///
+    /// # Errors
+    /// A human-readable message if the request cannot be sent, the response
+    /// cannot be read, or it carries no `id`.
+    fn create_session_over_stdio(&self) -> Result<String, String> {
+        let id = self.send(&Rpc::SessionCreate)?;
+        let result = self.read_until(&id, &mut |_| {})?;
+        result
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "the gateway's session/create answer carried no id".to_owned())
+    }
+}
+
 impl Transport for Stdio {
+    fn create_session(&self) -> Result<String, String> {
+        self.create_session_over_stdio()
+    }
+
+    fn cancel(&self, session: &str) -> Result<(), String> {
+        // Written and not waited for, exactly like `answer` and `follow_up`:
+        // the turn thread owns the reader, so this one cannot read its own
+        // acknowledgement. A refusal ("no turn is running") comes back as an
+        // error response with this id, which `read_until` surfaces as an
+        // event.
+        self.send(&Rpc::TurnCancel {
+            session: session.to_owned(),
+        })?;
+        Ok(())
+    }
+
     fn stream_turn(
         &self,
         session: &str,
@@ -651,6 +740,144 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
         assert!(
             frame.contains("use the other file"),
             "the steering message did not go with it: {frame:?}"
+        );
+    }
+
+    /// What actually leaves the client for `/cancel` over stdio.
+    ///
+    /// The same shape and the same reason as
+    /// `steering_over_stdio_writes_a_follow_up_frame`: a probe that made
+    /// `cancel` send the wrong method would pass every test that only checks
+    /// the protocol enum, and over a real pipe the core would answer "no turn
+    /// is running" into the turn thread's reader — the cancel simply would
+    /// not happen. So this drives a fake gateway and reads back the bytes.
+    #[cfg(unix)]
+    #[test]
+    fn cancel_over_stdio_writes_a_turn_cancel_frame() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir();
+        let sent = dir.join(format!("jk-cancel-{}.jsonl", std::process::id()));
+        let bin = dir.join(format!("jk-gateway-cancel-{}.sh", std::process::id()));
+        let _ = std::fs::remove_file(&sent);
+
+        let script = format!(
+            r#"#!/bin/sh
+IFS= read -r hello
+id=$(printf '%s' "$hello" | sed 's/.*"id":\([0-9]*\).*/\1/')
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"version":"{version}"}}}}\n' "$id"
+while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
+"#,
+            version = PROTOCOL_VERSION,
+            path = sent.display()
+        );
+        std::fs::write(&bin, script).expect("write the fake gateway");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let Ok(gateway) = Stdio::spawn_from(&bin, &[], Logs::Discard) else {
+            panic!("the fake gateway did not start or did not shake hands")
+        };
+        gateway
+            .cancel("s1")
+            .expect("cancel is written, not waited for");
+
+        let mut frame = String::new();
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(&sent) {
+                if !text.trim().is_empty() {
+                    frame = text;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        drop(gateway);
+        let _ = std::fs::remove_file(&sent);
+        let _ = std::fs::remove_file(&bin);
+
+        assert!(
+            frame.contains(r#""method":"turn/cancel""#),
+            "the client sent something else: {frame:?}"
+        );
+        assert!(
+            frame.contains(r#""session":"s1""#),
+            "the session did not go with it: {frame:?}"
+        );
+    }
+
+    /// `create_session` over stdio reads its own answer, unlike `answer` and
+    /// `follow_up` — it is called when no turn is streaming, so nothing else
+    /// is waiting on the reader.
+    #[cfg(unix)]
+    #[test]
+    fn create_session_over_stdio_reads_the_new_id() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir();
+        let bin = dir.join(format!("jk-gateway-create-{}.sh", std::process::id()));
+
+        // Answer the handshake, then answer `session/create` with an id —
+        // never logging to a file, because this test reads the id back
+        // through the client rather than inspecting bytes on disk.
+        let script = format!(
+            r#"#!/bin/sh
+IFS= read -r hello
+id=$(printf '%s' "$hello" | sed 's/.*"id":\([0-9]*\).*/\1/')
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"version":"{PROTOCOL_VERSION}"}}}}\n' "$id"
+IFS= read -r req
+id2=$(printf '%s' "$req" | sed 's/.*"id":\([0-9]*\).*/\1/')
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"id":"sess-42"}}}}\n' "$id2"
+while IFS= read -r line; do :; done
+"#
+        );
+        std::fs::write(&bin, script).expect("write the fake gateway");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let Ok(gateway) = Stdio::spawn_from(&bin, &[], Logs::Discard) else {
+            panic!("the fake gateway did not start or did not shake hands")
+        };
+        let id = gateway
+            .create_session()
+            .expect("the gateway answers session/create");
+        let _ = std::fs::remove_file(&bin);
+
+        assert_eq!(id, "sess-42");
+    }
+
+    /// `create_session` over REST: `POST /sessions`, and the id in the body
+    /// comes back out.
+    #[test]
+    fn create_session_over_rest_posts_and_reads_the_id() {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("binds ephemeral port");
+        let port = server.server_addr().to_ip().expect("ip addr").port();
+        let addr = format!("127.0.0.1:{port}");
+
+        let server_thread = std::thread::spawn(move || {
+            let request = server.recv().expect("receives request");
+            assert_eq!(request.url(), "/sessions");
+            assert_eq!(*request.method(), tiny_http::Method::Post);
+            let reply = tiny_http::Response::from_string(r#"{"id":"sess-7"}"#);
+            request.respond(reply).unwrap();
+        });
+
+        let rest = Rest::new(addr);
+        let id = rest.create_session().expect("the server answers");
+        assert_eq!(id, "sess-7");
+
+        server_thread.join().unwrap();
+    }
+
+    /// Acceptance line 2's other half: cancelling with no turn running is a
+    /// clear error, not a no-op that looks like it worked.
+    #[test]
+    fn rest_cancel_with_nothing_running_is_a_clear_error() {
+        let rest = Rest::new("127.0.0.1:9".to_owned());
+        let err = rest
+            .cancel("s1")
+            .expect_err("nothing is streaming on a fresh transport");
+        assert!(
+            err.contains("no turn is running"),
+            "a refusal a user can read says what happened: {err:?}"
         );
     }
 }
