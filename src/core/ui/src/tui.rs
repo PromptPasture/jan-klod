@@ -80,43 +80,10 @@ fn event_loop(
         // Drain all pending stream events before redrawing.
         if let Some(receiver) = &rx {
             loop {
-                match receiver.try_recv() {
-                    Ok(Ok(StreamEvent::Delta(text))) => app.apply_delta(&text),
-                    Ok(Ok(StreamEvent::Done(answer))) => {
-                        app.finish_turn(answer);
-                        rx = None;
-                        break;
-                    }
-                    Ok(Ok(StreamEvent::Tool { name, .. })) => {
-                        app.record_status(format!("· {name}"));
-                    }
-                    // Deliberately not rendered. The status line already names
-                    // the running tool, and marking it finished would need the
-                    // call id on the invocation to pair them — `Tool` carries
-                    // none. #100 (tool blocks) is where a paired view belongs.
-                    // What matters here is that it is no longer an error.
-                    Ok(Ok(StreamEvent::ToolResult { .. })) => {}
-                    Ok(Ok(StreamEvent::Warning(msg))) => {
-                        app.record_status(format!("⚠ {msg}"));
-                    }
-                    Ok(Ok(StreamEvent::Prompt {
-                        question,
-                        options,
-                        default,
-                    })) => {
-                        app.ask(Prompt {
-                            question,
-                            options,
-                            default,
-                        });
-                    }
-                    Ok(Ok(StreamEvent::Error(err)) | Err(err)) => {
-                        app.record_error(err);
-                        rx = None;
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
+                match apply_event(&mut app, receiver) {
+                    Step::Applied => {}
+                    Step::Drained => break,
+                    Step::Ended => {
                         rx = None;
                         break;
                     }
@@ -293,6 +260,60 @@ fn edit_or_scroll(
         _ => return false,
     }
     true
+}
+
+/// What one streamed event did to the turn.
+enum Step {
+    /// Applied; there may be more waiting.
+    Applied,
+    /// Nothing left right now.
+    Drained,
+    /// The turn is over, cleanly or otherwise.
+    Ended,
+}
+
+/// Take one streamed event and apply it.
+///
+/// Its own function because the event loop was past clippy's line limit — and
+/// the split is a real one rather than a concession: this half is a fold over
+/// `App`, while the loop's other job is spawning threads and owning the
+/// channel.
+fn apply_event(app: &mut App, receiver: &mpsc::Receiver<Result<StreamEvent, String>>) -> Step {
+    match receiver.try_recv() {
+        Ok(Ok(StreamEvent::Delta(text))) => app.apply_delta(&text),
+        Ok(Ok(StreamEvent::Done(answer))) => {
+            // Before the answer: a block still open when the turn ends is
+            // interrupted, not still running.
+            app.interrupt_open_tools();
+            app.finish_turn(answer);
+            return Step::Ended;
+        }
+        Ok(Ok(StreamEvent::Tool {
+            id,
+            name,
+            arguments,
+        })) => app.record_tool_invoked(id, name, arguments),
+        Ok(Ok(StreamEvent::ToolResult { id, content })) => app.record_tool_result(&id, content),
+        Ok(Ok(StreamEvent::Warning(msg))) => app.record_status(format!("⚠ {msg}")),
+        Ok(Ok(StreamEvent::Prompt {
+            question,
+            options,
+            default,
+        })) => app.ask(Prompt {
+            question,
+            options,
+            default,
+        }),
+        Ok(Ok(StreamEvent::Error(err)) | Err(err)) => {
+            // A failed turn leaves the same blocks open as a finished one.
+            app.interrupt_open_tools();
+            app.record_error(err);
+            return Step::Ended;
+        }
+        Err(mpsc::TryRecvError::Empty) => return Step::Drained,
+        Err(mpsc::TryRecvError::Disconnected) => return Step::Ended,
+    }
+    Step::Applied
 }
 
 fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane: &mut Pane) {
@@ -734,15 +755,15 @@ mod tests {
                     "/quit" => assert!(app.should_quit),
                     other => panic!("{other} is Ready and untested — add it here"),
                 },
-                jan_klod::commands::Availability::Pending(reason) => {
-                    let last = app.transcript.last().expect("a status line");
-                    assert!(
-                        last.text.contains(reason),
+                jan_klod::commands::Availability::Pending(reason) => match app.transcript.last() {
+                    Some(jan_klod::app::Entry::Message { text, .. }) => assert!(
+                        text.contains(reason),
                         "{} said {:?} rather than its reason",
                         command.name,
-                        last.text
-                    );
-                }
+                        text
+                    ),
+                    other => panic!("{} recorded {other:?}", command.name),
+                },
             }
         }
     }

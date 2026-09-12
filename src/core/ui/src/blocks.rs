@@ -32,7 +32,7 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::app::{Entry, Who};
+use crate::app::{Entry, ToolStatus, Who};
 use crate::theme::{Glyph, Theme};
 use crate::wrap::wrap;
 
@@ -63,7 +63,28 @@ const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
 /// Render one entry into lines, wrapped to `width` cells including the gutter.
 #[must_use]
 pub fn block(entry: &Entry, width: usize, theme: Theme) -> Vec<Line<'static>> {
-    let (label, accent) = role(entry.who, theme);
+    let (who, text) = match entry {
+        Entry::Message { who, text } => (*who, text.clone()),
+        // Minimal for now, and deliberately: #155 owns the collapsed line that
+        // names what the call *did* rather than its JSON, the `Ctrl+O` toggle
+        // and the expanded form. This keeps a tool block visible and paired in
+        // the meantime rather than leaving it unrendered, which would make
+        // #154's model untestable through the thing that draws it.
+        Entry::Tool(tool) => {
+            let mark = match &tool.status {
+                ToolStatus::Running => theme.glyph(Glyph::Collapsed).to_string(),
+                ToolStatus::Done(_) => theme.glyph(Glyph::ToolDone).to_string(),
+                ToolStatus::Interrupted => theme.glyph(Glyph::ToolFailed).to_string(),
+            };
+            let suffix = match &tool.status {
+                ToolStatus::Running => String::new(),
+                ToolStatus::Done(content) => format!(" {content}"),
+                ToolStatus::Interrupted => " interrupted".to_string(),
+            };
+            (Who::Status, format!("{mark} {}{suffix}", tool.name))
+        }
+    };
+    let (label, accent) = role(who, theme);
     let glyph = theme.glyph(Glyph::MessageGutter);
     let gutter = gutter_width(theme);
     let body_width = width.saturating_sub(gutter);
@@ -80,10 +101,10 @@ pub fn block(entry: &Entry, width: usize, theme: Theme) -> Vec<Line<'static>> {
     // shown as they typed it — rendering it would mean their backticks and
     // asterisks disappearing from their own transcript — and an error or a
     // status note is not a document.
-    let body: Vec<Line<'static>> = if entry.who == Who::Klod {
-        crate::markdown::render(&entry.text, body_width, theme)
+    let body: Vec<Line<'static>> = if who == Who::Klod {
+        crate::markdown::render(&text, body_width, theme)
     } else {
-        wrap(&entry.text, body_width)
+        wrap(&text, body_width)
             .into_iter()
             .map(|row| Line::from(Span::styled(row, Style::default().fg(theme.body()))))
             .collect()
@@ -126,7 +147,7 @@ mod tests {
     const ALL: [Who; 4] = [Who::You, Who::Klod, Who::Error, Who::Status];
 
     fn entry(who: Who, text: &str) -> Entry {
-        Entry {
+        Entry::Message {
             who,
             text: text.to_string(),
         }

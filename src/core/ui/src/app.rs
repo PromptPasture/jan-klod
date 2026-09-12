@@ -21,13 +21,53 @@ pub enum Who {
     Status,
 }
 
-/// One line in the transcript.
+/// How a tool call is going.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    /// Who authored the line.
-    pub who: Who,
-    /// The line text.
-    pub text: String,
+pub enum ToolStatus {
+    /// Invoked, no result yet.
+    Running,
+    /// Answered, with what it returned.
+    Done(String),
+    /// The turn ended with this call still open.
+    ///
+    /// A block left `Running` forever is a spinner that never stops, which
+    /// reads as a hung client rather than as a turn that moved on.
+    Interrupted,
+}
+
+/// A tool call and its result, as one thing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolBlock {
+    /// Call id, which is what pairs the two halves.
+    pub id: String,
+    /// Tool name.
+    pub name: String,
+    /// JSON arguments, where the transport carried them — the SSE `tool` frame
+    /// does not (#161), so this is `None` over REST.
+    pub arguments: Option<String>,
+    /// Running, done, or interrupted.
+    pub status: ToolStatus,
+}
+
+/// One entry in the transcript.
+///
+/// An enum rather than a `Who` with extra fields: a tool block is **not a
+/// speaker**. It has an id, a name, arguments, a status and a result, and
+/// squeezing that into `{ who, text }` would mean a `Who::Tool` whose `text` is
+/// a rendering — which is exactly the "append it to a status line" shape #100
+/// rules out, because then the model is a string and only the rendering knows
+/// what it means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entry {
+    /// Something somebody said.
+    Message {
+        /// Who authored it.
+        who: Who,
+        /// The text.
+        text: String,
+    },
+    /// A tool call.
+    Tool(ToolBlock),
 }
 
 /// The REPL/TUI state: the input buffer and the scrollback transcript.
@@ -212,6 +252,54 @@ impl App {
         true
     }
 
+    /// A tool is about to run: open a block for it.
+    pub fn record_tool_invoked(&mut self, id: String, name: String, arguments: Option<String>) {
+        self.transcript.push(Entry::Tool(ToolBlock {
+            id,
+            name,
+            arguments,
+            status: ToolStatus::Running,
+        }));
+    }
+
+    /// A tool returned: close the block with the matching id.
+    ///
+    /// **An unmatched result becomes a muted line rather than vanishing.** It
+    /// means the client and the core disagree about what is open, and a user
+    /// watching a turn should see that something arrived — a result dropped
+    /// silently is indistinguishable from one that never came.
+    pub fn record_tool_result(&mut self, id: &str, content: String) {
+        let open = self
+            .transcript
+            .iter_mut()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::Tool(block) if block.id == id && block.status == ToolStatus::Running => {
+                    Some(block)
+                }
+                _ => None,
+            });
+        match open {
+            Some(block) => block.status = ToolStatus::Done(content),
+            None => self.record_status(format!("tool result for an unknown call `{id}`")),
+        }
+    }
+
+    /// The turn ended: nothing still open is still running.
+    ///
+    /// Called on `done` **and** on error, because a turn that failed leaves the
+    /// same blocks open as one that finished, and a spinner that never stops
+    /// reads as a hung client rather than as a turn that moved on.
+    pub fn interrupt_open_tools(&mut self) {
+        for entry in &mut self.transcript {
+            if let Entry::Tool(block) = entry {
+                if block.status == ToolStatus::Running {
+                    block.status = ToolStatus::Interrupted;
+                }
+            }
+        }
+    }
+
     /// Whether the `@` completion list is open.
     #[must_use]
     pub const fn completion_open(&self) -> bool {
@@ -384,20 +472,24 @@ impl App {
     /// Append a streaming text delta to the in-progress assistant message,
     /// starting one if the last entry is not already a [`Who::Klod`] line.
     pub fn apply_delta(&mut self, text: &str) {
-        if let Some(entry) = self.transcript.last_mut().filter(|e| e.who == Who::Klod) {
-            entry.text.push_str(text);
-        } else {
-            self.record(Who::Klod, text.to_string());
+        match self.transcript.last_mut() {
+            Some(Entry::Message {
+                who: Who::Klod,
+                text: existing,
+            }) => existing.push_str(text),
+            _ => self.record(Who::Klod, text.to_string()),
         }
     }
 
     /// Finish a streaming turn with the authoritative answer. Replaces the
     /// partial streamed entry if one exists, otherwise records it fresh.
     pub fn finish_turn(&mut self, answer: String) {
-        if let Some(entry) = self.transcript.last_mut().filter(|e| e.who == Who::Klod) {
-            entry.text = answer;
-        } else {
-            self.record_answer(answer);
+        match self.transcript.last_mut() {
+            Some(Entry::Message {
+                who: Who::Klod,
+                text,
+            }) => *text = answer,
+            _ => self.record_answer(answer),
         }
     }
 
@@ -446,9 +538,89 @@ impl App {
     }
 
     fn record(&mut self, who: Who, text: impl Into<String>) {
-        self.transcript.push(Entry {
+        self.transcript.push(Entry::Message {
             who,
             text: text.into(),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{App, Entry, ToolStatus, Who};
+
+    fn tools(app: &App) -> Vec<&super::ToolBlock> {
+        app.transcript
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Tool(block) => Some(block),
+                Entry::Message { .. } => None,
+            })
+            .collect()
+    }
+
+    /// The first Acceptance line: one block, resolved.
+    #[test]
+    fn an_invocation_and_its_result_are_one_block() {
+        let mut app = App::default();
+        app.record_tool_invoked("c1".into(), "fs.read".into(), Some("{}".into()));
+        app.record_tool_result("c1", "contents".into());
+
+        let blocks = tools(&app);
+        assert_eq!(blocks.len(), 1, "the result did not open a second block");
+        assert_eq!(blocks[0].status, ToolStatus::Done("contents".into()));
+        assert_eq!(app.transcript.len(), 1, "and nothing else was recorded");
+    }
+
+    /// The second: an unmatched result is visible, not dropped.
+    #[test]
+    fn a_result_for_an_unknown_call_is_a_muted_line_and_not_a_panic() {
+        let mut app = App::default();
+        app.record_tool_result("nobody", "orphan".into());
+
+        assert!(tools(&app).is_empty(), "no block was invented for it");
+        match app.transcript.last() {
+            Some(Entry::Message { who, text }) => {
+                assert_eq!(*who, Who::Status);
+                assert!(
+                    text.contains("nobody"),
+                    "the line does not say which call: {text:?}"
+                );
+            }
+            other => panic!("expected a status line, got {other:?}"),
+        }
+    }
+
+    /// The third: `done` with a block open marks it interrupted.
+    #[test]
+    fn a_block_still_open_when_the_turn_ends_is_interrupted() {
+        let mut app = App::default();
+        app.record_tool_invoked("c1".into(), "slow".into(), None);
+        app.record_tool_invoked("c2".into(), "fast".into(), None);
+        app.record_tool_result("c2", "done".into());
+
+        app.interrupt_open_tools();
+        let blocks = tools(&app);
+        assert_eq!(blocks[0].status, ToolStatus::Interrupted, "the open one");
+        assert_eq!(
+            blocks[1].status,
+            ToolStatus::Done("done".into()),
+            "a finished block is not retroactively interrupted"
+        );
+    }
+
+    /// Two calls in flight resolve to their own blocks, which is the whole
+    /// point of pairing by id rather than by position.
+    #[test]
+    fn concurrent_calls_resolve_by_id_not_by_order() {
+        let mut app = App::default();
+        app.record_tool_invoked("a".into(), "first".into(), None);
+        app.record_tool_invoked("b".into(), "second".into(), None);
+        app.record_tool_result("b", "B".into());
+        app.record_tool_result("a", "A".into());
+
+        let blocks = tools(&app);
+        assert_eq!(blocks[0].status, ToolStatus::Done("A".into()));
+        assert_eq!(blocks[1].status, ToolStatus::Done("B".into()));
     }
 }

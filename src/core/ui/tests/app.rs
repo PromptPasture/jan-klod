@@ -20,7 +20,7 @@ fn submit_records_the_user_line_and_clears_input() {
     assert!(app.input().is_empty(), "input cleared after submit");
     assert_eq!(
         app.transcript,
-        vec![Entry {
+        vec![Entry::Message {
             who: Who::You,
             text: "hello".into()
         }]
@@ -43,9 +43,19 @@ fn answers_and_errors_append_to_the_transcript() {
     app.take_submission();
     app.record_answer("the reply");
     app.record_error("boom");
-    let kinds: Vec<Who> = app.transcript.iter().map(|e| e.who).collect();
+    let kinds: Vec<Who> = app
+        .transcript
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Message { who, .. } => Some(*who),
+            Entry::Tool(_) => None,
+        })
+        .collect();
     assert_eq!(kinds, vec![Who::You, Who::Klod, Who::Error]);
-    assert_eq!(app.transcript[1].text, "the reply");
+    match &app.transcript[1] {
+        Entry::Message { text, .. } => assert_eq!(text, "the reply"),
+        Entry::Tool(tool) => panic!("expected a message, got the tool block {tool:?}"),
+    }
 }
 
 #[test]
