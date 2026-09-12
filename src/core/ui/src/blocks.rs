@@ -280,11 +280,21 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
             surface
         };
         lines.push(Line::from(rule()));
-        lines.extend(
-            crate::markdown::verbatim(content.trim_end(), body_width, "  ", style)
-                .into_iter()
-                .map(|row| prefix(rule(), row)),
-        );
+        // A diff renders as a diff, **including inside a failed result** (#156).
+        // The two claims collide — a failure is drawn in `removed()`, which is
+        // the role a `-` line wants — and the diff wins, because a diff whose
+        // every line is the removal colour says the opposite of what it is. The
+        // failure is already said twice on the head row, by glyph and by
+        // colour, and neither of those is what the reader is squinting at here.
+        //
+        // Not indented, unlike the arguments above: the sign has to reach
+        // column 0 of the body or `Mode::Mono` has nothing to read it by, and
+        // a diff needs no indent to be recognisable as one.
+        let body =
+            crate::diff::render(content.trim_end(), body_width, theme).unwrap_or_else(|| {
+                crate::markdown::verbatim(content.trim_end(), body_width, "  ", style)
+            });
+        lines.extend(body.into_iter().map(|row| prefix(rule(), row)));
     }
     lines
 }
@@ -737,6 +747,50 @@ mod tests {
                 "{set:?}: {failed:?}"
             );
         }
+    }
+
+    /// The seam #156 replaces: a result that is a diff stops being plain text.
+    #[test]
+    fn a_result_that_is_a_diff_renders_as_one_even_when_the_call_failed() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let patch = "@@ -1,2 +1,2 @@\n context\n-gone\n+new";
+        let rendered: Vec<String> = block(
+            &opened(call(
+                "git",
+                Some(r#"{"op":"diff"}"#),
+                ToolStatus::Done(patch.into()),
+            )),
+            false,
+            60,
+            theme,
+        )
+        .iter()
+        .map(plain)
+        .collect();
+        let gutter = theme.glyph(Glyph::MessageGutter);
+        let body: Vec<String> = rendered
+            .iter()
+            .map(|r| {
+                r.trim_start_matches(gutter)
+                    .trim_start_matches(' ')
+                    .to_string()
+            })
+            .collect();
+        assert!(
+            body.iter().any(|r| r.starts_with("+  2 new")),
+            "the result did not go through the diff renderer: {body:?}"
+        );
+
+        // The colliding case: a failed result is drawn in `removed()`, which is
+        // the role a `-` line wants. The diff wins, and the failure is still
+        // said on the head row.
+        let failed = opened(call(
+            "git",
+            Some("{}"),
+            ToolStatus::Done(format!("tool `git` error: {patch}")),
+        ));
+        let head = plain(&block(&failed, false, 60, theme)[0]);
+        assert!(head.contains(theme.glyph(Glyph::ToolFailed)), "{head:?}");
     }
 
     /// A selection nobody can see is not a selection.

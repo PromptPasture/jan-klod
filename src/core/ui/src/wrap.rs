@@ -104,9 +104,42 @@ pub fn wrap(text: &str, max: usize) -> Vec<String> {
     lines
 }
 
+/// Break `text` every `max` cells, changing nothing else.
+///
+/// The counterpart to [`wrap`], and the difference is the whole reason it
+/// exists: `wrap` is built on `split_whitespace`, so a run of spaces *inside* a
+/// line becomes one space. That is right for prose and wrong for anything whose
+/// alignment is the content — a diff (#156) above all, where two spaces against
+/// four is the change being shown.
+///
+/// Breaks between grapheme clusters, for the same reason [`wrap`] does: a split
+/// inside a cluster leaves a stray combining mark that no width arithmetic
+/// recovers from.
+#[must_use]
+pub fn hard_wrap(text: &str, max: usize) -> Vec<String> {
+    if max == 0 {
+        return vec![String::new()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut used = 0;
+    for cluster in text.graphemes(true) {
+        let cells = width(cluster);
+        if used + cells > max && used > 0 {
+            lines.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        current.push_str(cluster);
+        used += cells;
+    }
+    // A blank line is still a line: a caller laying out rows needs it to exist.
+    lines.push(current);
+    lines
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{width, wrap};
+    use super::{hard_wrap, width, wrap};
 
     /// Every line a wrap produces must fit the pane, in **cells**.
     fn assert_fits(lines: &[String], max: usize) {
@@ -201,5 +234,31 @@ mod tests {
         let lines = wrap("        word", 4);
         assert_fits(&lines, 4);
         assert_eq!(lines.concat(), "word");
+    }
+
+    /// What `wrap` cannot do, and why `hard_wrap` is not a duplicate of it.
+    #[test]
+    fn a_hard_wrap_changes_nothing_but_where_the_line_ends() {
+        let aligned = "let x = 1;      // two columns of padding";
+        assert_eq!(hard_wrap(aligned, 80), vec![aligned.to_string()]);
+        assert!(
+            !wrap(aligned, 80)[0].contains("      "),
+            "this test exists because `wrap` collapses that run, and if it \
+             stops doing so, `hard_wrap` has lost its reason to exist"
+        );
+
+        let lines = hard_wrap(aligned, 12);
+        assert_fits(&lines, 12);
+        assert_eq!(lines.concat(), aligned, "a cell was invented or lost");
+
+        // Leading whitespace is content here, not an indent to reproduce.
+        assert_eq!(hard_wrap("    x", 10), vec!["    x".to_string()]);
+        assert_eq!(hard_wrap("", 10), vec![String::new()], "a blank line stays");
+        assert_eq!(hard_wrap("anything", 0), vec![String::new()]);
+
+        // Wide clusters still cannot be halved.
+        let cjk = hard_wrap("日本語のテキストです", 5);
+        assert_fits(&cjk, 5);
+        assert_eq!(cjk.concat(), "日本語のテキストです");
     }
 }

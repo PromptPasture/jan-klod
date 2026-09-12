@@ -19,6 +19,7 @@ pub mod app;
 pub mod blocks;
 pub mod commands;
 pub mod composer;
+pub mod diff;
 pub mod markdown;
 pub mod paths;
 pub mod theme;
