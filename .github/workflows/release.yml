@@ -1,8 +1,8 @@
 name: Release
 
 # Builds cross-platform bundles and publishes a GitHub release when a version
-# tag (v*) is pushed. Each platform job produces a .tar.gz in dist/ and
-# uploads it as a release asset via the GitHub CLI.
+# tag (v*) is pushed. Each platform job produces one .tar.gz per distribution
+# in dist/ and uploads them as release assets via the GitHub CLI.
 
 on:
   push:
@@ -61,10 +61,28 @@ jobs:
       - name: Install wkg (WIT package manager)
         run: cargo install wkg --locked 2>/dev/null || true
 
-      - name: Build bundle
+      # One job per platform, three archives out of it — not a 4x3 matrix.
+      #
+      # The expensive half of this job is per *platform*: two toolchains, every
+      # guest built to wasm32-wasip2, and the release binaries. `make bundle
+      # DIST=` after that is staging plus tar. So three archives here cost
+      # roughly what one costs, where twelve jobs would triple the expensive
+      # half — and half these runners are macOS, which bills at 10x on a private
+      # repository (see .github/AGENTS.md, and #95). Splitting this into the
+      # cross product would spend most of its extra minutes on the most
+      # expensive runners for no extra coverage.
+      #
+      # Keep in step with `DISTRIBUTIONS` in scripts/install.sh:
+      # `docs_match_config::the_installer_offers_the_distributions_the_release_builds`
+      # fails the build if the two disagree, rather than letting a user find out
+      # at a 404.
+      - name: Build bundles (one per distribution)
         env:
           JK_VERSION: ${{ github.ref_name }}
-        run: make bundle
+        run: |
+          make bundle DIST=coding
+          make bundle DIST=headless-chat
+          make bundle DIST=minimal
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
