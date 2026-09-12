@@ -27,6 +27,7 @@ mod event_log;
 mod execution_config;
 mod ext_install;
 mod gate;
+mod generated_guest;
 mod host_fs;
 mod host_process;
 mod installed_layout;
