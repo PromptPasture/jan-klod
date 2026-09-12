@@ -116,15 +116,33 @@ pub fn complete(root: &Path, fragment: &str) -> Completion {
 mod tests {
     use super::{complete, fragment, Completion, MAX_ENTRIES};
 
+    /// Distinguishes two trees built in the same microsecond.
+    ///
+    /// The name used to be process id + `SystemTime::now().as_nanos()`, which
+    /// reads as unique and is not: macOS's clock has **microsecond**
+    /// granularity, so `as_nanos()` there always ends in three zeros and 179 of
+    /// 200 consecutive readings are identical. Rust runs these tests as threads
+    /// of one process, so two that called `tree()` together got the same pid
+    /// and the same reading, and therefore *the same directory* — one test's
+    /// 70 `fileNNN.txt` fixtures landing in another's tree, and whichever
+    /// finished first deleting the other's root mid-walk with `remove_dir_all`.
+    ///
+    /// That made `the_entry_cap_binds_and_says_so` fail about one run in six,
+    /// and only when run alongside its siblings — never alone, which is the
+    /// signature of shared state rather than of a wrong assertion.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
     fn tree() -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
             "jk-paths-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
+        // The counter restarts every process, so a run whose test panicked
+        // before its `remove_dir_all` leaves a tree that a later run with a
+        // recycled pid would inherit. Start from nothing rather than from
+        // whatever survived.
+        std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(root.join("src")).expect("tree");
         std::fs::create_dir_all(root.join("target")).expect("tree");
         std::fs::write(root.join(".gitignore"), "target/\nsecret.txt\n").expect("gitignore");
