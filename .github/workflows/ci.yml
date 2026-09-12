@@ -25,7 +25,7 @@ env:
 
 jobs:
   lint-test:
-    name: Lint + test (host workspace)
+    name: Lint + test (host workspace + web client)
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 2 for `make wit`'s version check, which compares `wit/`
@@ -137,6 +137,29 @@ jobs:
       - run: make test
         env:
           JK_REQUIRE_GUESTS: "1"
+
+      # The browser client's suite (#127). It ran nowhere until this step: the
+      # tests existed and passed, but no Makefile target and no workflow named
+      # them, so every frame kind, the `ask` roundtrip and cancel were unguarded
+      # — which is why host/tests/it/web_client.rs does not lean on them.
+      #
+      # Here rather than in a job of its own: `make test-web` is one command
+      # that needs Node and nothing else, and a separate job would pay another
+      # checkout and another runner for it — the same trade #120 made for the
+      # npm supply-chain leg. Here rather than in the `supply-chain` job for the
+      # plainer reason that this is a test, not a supply-chain gate.
+      #
+      # node-version pinned, and pinned to the same string the `supply-chain`
+      # job uses; keep the two in step. Quoted, because an unquoted 22.23.2
+      # would be fine but an unquoted 22.10 parses as a float and silently
+      # selects 22.1. No `cache: npm` and no `npm ci`: the suite imports only
+      # node: builtins and a local module, so there is nothing to install.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+
+      - name: Web client tests (src/web)
+        run: make test-web
 
       - run: make clippy
 

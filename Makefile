@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests harness gate clippy audit deny sbom supply-chain web-supply-chain lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests test-web harness gate clippy audit deny sbom supply-chain web-supply-chain lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -49,6 +49,7 @@ help:
 	@echo "              the integration suite needs 'gate' or 'harness' instead"
 	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
+	@echo "  test-web    run the browser client's suite (src/web; needs Node, not in 'test')"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
@@ -130,6 +131,24 @@ test-core:
 test-guests:
 	$(MAKE) -C $(EXT) test
 	cd $(SUPERVISOR) && go vet ./... && go test ./...
+
+# The browser client's suite (#127). Deliberately **not** a prerequisite of
+# `test` above, which is what keeps it off the pre-commit path `gate-commit`
+# runs: the npm legs are CI-only here, the way `web-supply-chain` already is,
+# so a contributor without Node can still run every local gate. That is the
+# same cost #119 box 1 declined when it kept Node off the Rust build path.
+#
+# `ci.yml` calls this by name, and that is what stops it becoming the target
+# #130 describes — aggregated somewhere nothing invokes, which looks exactly
+# like a gate that passes.
+#
+# No `npm ci` first, and that is a property of the suite rather than an
+# omission: tests/turn.test.ts imports `node:test`, `node:assert` and a local
+# ./dom.ts, and nothing else, so it needs Node on PATH and no install at all.
+# package.json's `test` script runs the .ts sources directly via
+# --experimental-strip-types, which needs Node >= 22.6.
+test-web:
+	cd $(WEB) && npm test
 
 # Tiny Go blue/green supervisor (static, dependency-free binary).
 supervisor:
