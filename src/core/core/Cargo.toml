@@ -52,5 +52,16 @@ url = "2"
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
 
+# Off by default so a plain `cargo test` does not build the example, the same
+# block ../config/Cargo.toml carries for `dump`. It matters more here: this
+# crate links wasmtime, and `registry_index` is a build-time generator nothing
+# at runtime calls.
+[features]
+examples = []
+
+[[example]]
+name = "registry_index"
+required-features = ["examples"]
+
 [lints]
 workspace = true

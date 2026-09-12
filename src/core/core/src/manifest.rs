@@ -84,6 +84,16 @@ pub struct Manifest {
     pub api_version: String,
     /// Category (`provider`, `tool`, `interceptor`, …).
     pub kind: String,
+    /// What the component is for, in prose. Empty when the manifest says
+    /// nothing.
+    ///
+    /// The only optional key, and optional rather than required on purpose:
+    /// boot does not read this, so refusing a component because its author
+    /// wrote no sentence would fail an install over decoration. It is here
+    /// because the registry index (Slice 16d) has to state what a component is
+    /// *before* anyone downloads it, and a second reader of this file would be
+    /// a second answer to what it says.
+    pub description: String,
     /// The `host-*` interfaces it declares, sorted.
     ///
     /// An empty list is a claim — "needs nothing" — and distinct from a
@@ -176,6 +186,13 @@ impl Manifest {
             version: string("version")?,
             api_version: string("api-version")?,
             kind: string("kind")?,
+            // Absent reads as empty rather than as a missing key: see the
+            // field's own note for why this one is not required.
+            description: table
+                .get("description")
+                .and_then(toml::Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
             capabilities,
         }))
     }
@@ -250,7 +267,24 @@ capabilities = [
         assert_eq!(manifest.name, "tool-fs");
         assert_eq!(manifest.api_version, "0.1.0");
         assert_eq!(manifest.kind, "tool");
+        assert_eq!(manifest.description, "reads files");
         assert_eq!(manifest.capabilities, vec!["host-fs"]);
+    }
+
+    /// The one key a manifest may leave out. A component that describes itself
+    /// in no words is still a component; refusing it would make prose a
+    /// condition of loading.
+    #[test]
+    fn a_manifest_without_a_description_still_reads() {
+        let dir = tmp();
+        let component = write(
+            &dir,
+            "tool-terse",
+            "name = \"tool-terse\"\nversion = \"0.1.0\"\napi-version = \"0.1.0\"\n\
+             kind = \"tool\"\ncapabilities = []\n",
+        );
+        let manifest = Manifest::beside(&component).unwrap().expect("present");
+        assert_eq!(manifest.description, "");
     }
 
     #[test]

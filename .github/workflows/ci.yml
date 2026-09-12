@@ -182,6 +182,19 @@ jobs:
       - name: Web dist drift (src/web/dist is what src builds)
         run: make web-dist-drift
 
+      # The registry index is a function of the staged components and nothing
+      # else (#137). Named here rather than folded into another target for the
+      # reason #130 recorded: a gate `ci.yml` does not call by name does not
+      # run, and looks exactly like a gate that passes.
+      #
+      # In this job because the guests are already staged above — the check
+      # needs `ext/*.manifest.toml`, and `JK_REQUIRE_GUESTS` inside the target
+      # makes an unstaged `ext/` a failure rather than a skip. It also probes
+      # itself, so a generator that is not in fact deterministic is refused
+      # rather than waved through.
+      - name: Registry index determinism (#137)
+        run: make registry-index-drift
+
       - run: make clippy
 
   harness:

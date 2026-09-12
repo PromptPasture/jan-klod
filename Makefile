@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests test-web harness gate clippy audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions ext ext-new supervisor bundle test test-core test-guests test-web harness gate clippy audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -51,12 +51,14 @@ help:
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
 	@echo "  test-web    run the browser client's suite (src/web; needs Node, not in 'test')"
 	@echo "  web-dist-drift  check src/web/dist/ is still what src/web/src/ builds"
+	@echo "  registry-index  write the registry index for ext/ (REGISTRY_INDEX=path)"
+	@echo "  registry-index-drift  check that index generation is deterministic"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
 	@echo "  gate-commit the pre-commit gate: fmt + stage guests + core check + test"
 	@echo "  gate-push   the pre-push gate: stage guests + test-guests + clippy + gate"
-	@echo "              + lockfile + supply-chain, in that order"
+	@echo "              + registry-index-drift + lockfile + supply-chain, in that order"
 	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go + web)"
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
@@ -160,6 +162,47 @@ test-web:
 # rebuild happens in a temp tree and why `npm ci` is not `npm install`.
 web-dist-drift:
 	sh scripts/web-dist-drift.sh
+
+# --- Registry index (Slice 16d-1) ---
+#
+# `index.json`: what a registry can say about each staged component *before*
+# anyone downloads it — above all the capabilities it asks the host for, which
+# is what the manifest exists to make knowable in advance.
+#
+# Not committed, unlike this repository's other generated artifacts. It
+# describes `ext/`, and `ext/*.wasm` is gitignored and rebuilt per clone, so a
+# committed index would carry digests that differ per machine. That is also why
+# `registry-index-drift` checks reproducibility rather than diffing against a
+# committed file — the script says the rest.
+#
+# Output beside the release archives, because that is what the index describes:
+# the individual `.wasm` and `.manifest.toml` files a release publishes at plain
+# paths, which `ext install` fetches one by one and verifies per file.
+REGISTRY_INDEX ?= $(BUNDLE_OUT)/index.json
+
+# Where the files the index names will actually be served from. The default is
+# this repository's GitHub Pages path; publishing the first-party index is
+# 16d-3's slice, and it overrides this with wherever that release puts the
+# files. A base carrying a query or fragment is refused by the generator — `ext
+# install` derives the manifest and signature URLs as siblings, and a relative
+# reference drops a query.
+REGISTRY_URL ?= https://promptpasture.github.io/jan-klod/ext
+
+# Who published this index. A manifest names no author — it is generated from a
+# component's own imports — so this is the one field that is stated rather than
+# derived, and stating it once here beats inventing a per-component answer.
+REGISTRY_AUTHOR ?= PromptPasture
+
+registry-index: extensions
+	sh scripts/registry-index.sh $(EXT_DIR) $(REGISTRY_URL) $(REGISTRY_AUTHOR) $(REGISTRY_INDEX)
+
+# Called by name from `ci.yml`, which is what makes it a gate rather than a
+# target somebody could type (#130). JK_REQUIRE_GUESTS turns "no manifests
+# staged, nothing to check" from a skip into a failure, the same way `gate` and
+# `gate-commit` do.
+registry-index-drift: export JK_REQUIRE_GUESTS = 1
+registry-index-drift: extensions
+	sh scripts/registry-index-drift.sh $(EXT_DIR) $(REGISTRY_URL) $(REGISTRY_AUTHOR)
 
 # Tiny Go blue/green supervisor (static, dependency-free binary).
 supervisor:
@@ -406,6 +449,7 @@ gate-push:
 	$(MAKE) test-guests
 	$(MAKE) clippy
 	$(MAKE) gate
+	$(MAKE) registry-index-drift
 	$(MAKE) lockfile
 	$(MAKE) deny
 	$(MAKE) audit
