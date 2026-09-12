@@ -639,6 +639,9 @@ wasmtime-cache/
 /.agents/TODO.md
 /.agents/LOOP.md
 
-# The web client's build output. The core embedding it is a separate slice
-# (#119); until then nothing consumes it and it is rebuilt from src/.
-src/web/dist/
+# `src/web/dist/` is deliberately NOT ignored — the core embeds it with
+# `include_bytes!`, which resolves at compile time, so an absent bundle would
+# make Node a dependency of every `cargo build`. Committed like this
+# repository's other generated artifacts (protocol.schema.json, ext/*.manifest.toml,
+# wit/wkg.lock), with a drift test. The reasoning is in
+# docs/concepts/architecture.md#user-interfaces-separate-clients (#119).

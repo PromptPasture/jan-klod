@@ -219,9 +219,41 @@ question (a separate `api-rest` guest vs. a built-in endpoint) is closed.
 | Launch | Surface | Technology | Status |
 |---|---|---|---|
 | `jan-klod` (default) | Terminal UI | `ratatui`, over stdio JSON-RPC — it spawns the gateway; `--addr` drives a running one over REST + SSE instead | built |
-| browser → core `/` | Web UI | a static, dependency-light TypeScript front-end served by the core, speaking the protocol over WebSocket | planned, Phase 17 |
+| browser → core `/` | Web UI | a static, dependency-light TypeScript front-end served by the core over **REST + SSE** (not WebSocket — see below) | client built (#118); serving it is #119 |
 | `jan-klod-ui --gui` | Native window | a **Tauri shell around the same web front-end** — system webview, not a third client codebase | planned, Phase 17 |
 | editor | IDE integration | `jan-klod-gateway acp` — ACP agent side on stdio, mapped onto the same turn path | **built** (18a is MCP, 18b is this) |
+
+#### The web client's bundle is committed, and the alternative costs more than it looks
+
+`src/web` builds to a 5.4 kB ES module with no runtime dependencies, and the
+core embeds it with `include_bytes!` so the binary carries the page — there is
+no directory to ship beside it. `include_bytes!` resolves at **compile time**,
+which is what makes this a decision rather than a detail: the bundle is either
+in the tree when `cargo build` runs, or it is not.
+
+**Committed**, for two reasons.
+
+The first is that the alternative is not "build it in CI" — it is **Node
+becoming a dependency of building the core**. Every `cargo build`, `make gate`
+and CI job would need `npm run build` to have run first, and none of them
+install Node today. That is a large tax on everyone who never touches the web
+client, paid so that one generated file is absent from git.
+
+The second is that this repository already does this, three times, and has a
+shape for it. `src/core/protocol/schema/protocol.schema.json` is generated and
+committed with a drift test that regenerates and compares; `ext/*.manifest.toml`
+are generated from each component's real imports and committed; `wit/wkg.lock`
+likewise. "The tree carries no generated artifacts" is not a property this
+repository has, so preserving it here would buy nothing while costing the first
+reason.
+
+**What the choice costs, stated rather than glossed.** A committed bundle can go
+stale: someone edits `src/web/src` and forgets to rebuild, and the binary serves
+the previous page. A drift test regenerates and compares, exactly as the schema's
+does — but unlike the schema's it needs **Node** to run, so it skips where Node
+is absent. The guard is therefore weaker than its three precedents, and that
+asymmetry is the real price of this decision. It is why the check belongs in a
+job that does have Node rather than only in `make gate`.
 | other agents | MCP server | `jan-klod-gateway mcp` — `ask`, `session_list`, `session_get` over MCP stdio | **built** |
 
 All are clients of one surface, share one backend, and carry no agent logic. A
