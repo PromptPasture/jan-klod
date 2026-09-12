@@ -299,7 +299,7 @@ impl ProcessRunner {
         let child = self
             .prepared(&grant.command, &grant.args, workspace.root())
             .and_then(|mut c| c.spawn().map_err(|_| ProcError::SpawnFailed))?;
-        Ok(LiveChild::new(child, self.output_cap))
+        Ok(LiveChild::new(child, self.output_cap, name.to_string()))
     }
 
     /// Run `command` with `args`, an optional workspace-relative `cwd`, and optional
@@ -384,11 +384,20 @@ pub struct LiveChild {
     pending: Vec<u8>,
     /// The runner's output cap, applied per read.
     cap: usize,
+    /// The grant this child was started under, so a log line can name it.
+    name: String,
+    /// Whether the death has already been reported (#133).
+    ///
+    /// `is_running` is polled in a loop, and `try_wait` keeps returning the same
+    /// `Ok(Some(status))` once it has reaped — so without this, "log the status
+    /// when the child has exited" is a line per poll, which is a different bug
+    /// from the silence it replaces.
+    exit_reported: bool,
 }
 
 impl LiveChild {
     /// Take the pipes and start the reader thread.
-    fn new(mut child: std::process::Child, cap: usize) -> Self {
+    fn new(mut child: std::process::Child, cap: usize, name: String) -> Self {
         let stdin = child.stdin.take();
         let (tx, stdout) = std::sync::mpsc::channel();
         if let Some(mut out) = child.stdout.take() {
@@ -407,6 +416,8 @@ impl LiveChild {
             stdout,
             pending: Vec::new(),
             cap,
+            name,
+            exit_reported: false,
         }
     }
 
@@ -445,8 +456,36 @@ impl LiveChild {
     }
 
     /// Whether the child is still alive.
+    ///
+    /// The first time it is observed to have exited, the status goes to the host
+    /// log (#133). `try_wait` has always returned it and this used to discard it
+    /// in the same expression that asked for it, which is why four different
+    /// deaths — a wrapper rejecting its arguments, a command that does not
+    /// exist, a script with a syntax error, and a clean deliberate quit — all
+    /// read as `server exited` and cost #132 eight red runs to tell apart.
+    ///
+    /// `Err` is left as it was: it means the question could not be answered, not
+    /// that the child died, and answering it wrongly in a log is worse than not
+    /// answering it.
     pub fn is_running(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        match self.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                if !self.exit_reported {
+                    self.exit_reported = true;
+                    // WARN even for a clean exit: a *long-lived* child is one
+                    // something is still expecting to talk to, so it going away
+                    // is unexpected whatever status it went away with.
+                    eprintln!(
+                        "WARN [core] host-process: long-lived child `{}` {}",
+                        self.name,
+                        describe_exit(status)
+                    );
+                }
+                false
+            }
+            Err(_) => false,
+        }
     }
 
     /// Kill it and reap it. Idempotent.
@@ -550,6 +589,25 @@ impl Children {
 }
 
 /// Read a captured stream to a UTF-8 string, truncated to `cap` bytes.
+/// How a child died, in the terms the platform actually offers.
+///
+/// A signal is not an exit code: on unix `status.code()` is `None` for a child
+/// that was killed, so a formatter that only reads `code()` turns the most
+/// interesting death — SIGSEGV, SIGKILL from an OOM killer — into "no status".
+fn describe_exit(status: std::process::ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("was killed by signal {signal}");
+        }
+    }
+    status.code().map_or_else(
+        || "exited with no status".to_string(),
+        |code| format!("exited with code {code}"),
+    )
+}
+
 fn read_capped(stream: Option<impl Read>, cap: usize) -> String {
     let mut buf = Vec::new();
     if let Some(stream) = stream {
@@ -593,6 +651,46 @@ mod tests {
             "a handle this table never issued reaches nobody"
         );
         assert!(!children.is_running(41));
+    }
+
+    /// A death has to be described in the terms the platform actually used
+    /// (#133).
+    ///
+    /// The signal arm is the one worth asserting: `status.code()` is `None` for
+    /// a child that was killed, so a describer that only reads `code()` turns
+    /// the most interesting deaths — SIGSEGV, or SIGKILL from an OOM killer —
+    /// into "no status", which is the same silence this issue is about.
+    #[test]
+    fn an_exit_is_described_by_code_and_a_kill_by_signal() {
+        let clean = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .output()
+            .expect("sh runs")
+            .status;
+        assert_eq!(describe_exit(clean), "exited with code 0");
+
+        let failed = Command::new("sh")
+            .args(["-c", "exit 3"])
+            .output()
+            .expect("sh runs")
+            .status;
+        assert_eq!(describe_exit(failed), "exited with code 3");
+
+        #[cfg(unix)]
+        {
+            let mut child = Command::new("sh")
+                .args(["-c", "sleep 30"])
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("sh spawns");
+            child.kill().expect("the child is killable");
+            let status = child.wait().expect("the child is reapable");
+            assert_eq!(
+                describe_exit(status),
+                "was killed by signal 9",
+                "a signalled child has no exit code, and saying so is the point"
+            );
+        }
     }
 
     fn runner() -> (Workspace, ProcessRunner) {
