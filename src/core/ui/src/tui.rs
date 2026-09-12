@@ -106,7 +106,7 @@ fn event_loop(
         // Editing and scrolling first: they are a pure mapping onto the
         // composer and the viewport, and separating them keeps this loop about
         // the one thing it alone can do — drive a turn.
-        if edit_or_scroll(&key, &mut app, &mut view, pane) {
+        if edit_or_scroll(&key, &mut app, &mut view, pane, theme) {
             // The completion list is a function of the buffer, so it is
             // refreshed after whatever just changed it rather than in each arm
             // that might have.
@@ -161,6 +161,10 @@ struct Pane {
     /// arms — both are written in terms of *visual* rows, so neither can be
     /// answered without knowing where the text wraps.
     composer_width: usize,
+    /// Cells the *transcript* has, which is a different number: the composer
+    /// gives up two more to its caret glyph. `span_of` has to be asked in the
+    /// same width the frame was drawn in or it measures a layout nobody saw.
+    transcript_width: usize,
 }
 
 /// Keys that only move a caret or a viewport.
@@ -173,6 +177,7 @@ fn edit_or_scroll(
     app: &mut App,
     view: &mut Viewport,
     pane: Pane,
+    theme: Theme,
 ) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -220,6 +225,31 @@ fn edit_or_scroll(
             _ => {}
         }
     }
+    // The transcript cursor, and the one key it exists for (#155). `Alt+Up`
+    // and `Alt+Down` rather than the bare arrows because those are the
+    // composer's — a client where moving the caret also moved a selection
+    // somewhere else on screen would be one where neither is predictable.
+    match key.code {
+        KeyCode::Char('o') if ctrl => {
+            // A no-op when nothing is selected, and it still consumes the key:
+            // falling through would reach the `Char(c)` arm and type an `o`
+            // into the message, which is the worst of both answers.
+            app.toggle_expanded();
+            reveal_cursor(app, view, pane, theme);
+            return true;
+        }
+        KeyCode::Up if alt => {
+            app.cursor_up();
+            reveal_cursor(app, view, pane, theme);
+            return true;
+        }
+        KeyCode::Down if alt => {
+            app.cursor_down();
+            reveal_cursor(app, view, pane, theme);
+            return true;
+        }
+        _ => {}
+    }
     match key.code {
         // Scrolling. `Ctrl+U`/`Ctrl+D` reach here only when the composer is
         // empty: #150 consumes them when there is content and deliberately
@@ -260,6 +290,21 @@ fn edit_or_scroll(
         _ => return false,
     }
     true
+}
+
+/// Scroll so the selected block is on screen, if there is one.
+///
+/// Called after every key that can move the cursor *or* change the height of
+/// the block under it — opening a block that then runs off the bottom of the
+/// pane is the same defect as selecting one that was never on it.
+fn reveal_cursor(app: &App, view: &mut Viewport, pane: Pane, theme: Theme) {
+    let Some(at) = app.cursor() else { return };
+    // Measured against the pane the **last** frame used. The alternative is
+    // laying the transcript out twice per keystroke, and a one-frame-stale
+    // width can only matter on the frame a resize lands — where the next
+    // `reflow` corrects it anyway.
+    let (start, rows) = blocks::span_of(&app.transcript, at, pane.transcript_width, theme);
+    *view = view.reveal(start, rows, pane.total, pane.height);
 }
 
 /// What one streamed event did to the turn.
@@ -345,7 +390,7 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
     // overflows on screen.
     let inner_width = usize::from(transcript_area.width).saturating_sub(2);
     let inner_height = usize::from(transcript_area.height).saturating_sub(2);
-    let lines = blocks::transcript(&app.transcript, inner_width, theme);
+    let lines = blocks::transcript(&app.transcript, app.cursor(), inner_width, theme);
 
     // Re-clamp against what this frame actually holds, *then* record it. While
     // attached this follows a streaming delta to the new bottom; while detached
@@ -355,6 +400,7 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
         total: lines.len(),
         height: inner_height,
         composer_width,
+        transcript_width: inner_width,
     };
 
     // The detach marker: a glyph and a count, never a tint. Under `Mode::Mono`
@@ -553,7 +599,8 @@ fn render_menu(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::{edit_or_scroll, Pane};
-    use jan_klod::app::App;
+    use jan_klod::app::{App, Entry as JanKlodEntry};
+    use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
     use jan_klod::viewport::Viewport;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -572,7 +619,9 @@ mod tests {
                 total: 100,
                 height: 10,
                 composer_width: 40,
+                transcript_width: 40,
             },
+            Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode),
         )
     }
 
@@ -618,7 +667,9 @@ mod tests {
                 total: 100,
                 height: 10,
                 composer_width: 40,
+                transcript_width: 40,
             },
+            Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode),
         );
         assert!(consumed, "the scroll arm handles it");
         assert!(
@@ -886,5 +937,49 @@ mod tests {
         assert_eq!(app.input(), "alpha ");
         assert!(key(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL));
         assert_eq!(app.composer.caret(), 0, "Ctrl+A went to the line start");
+    }
+
+    /// Acceptance: `Ctrl+O` toggles the block under the cursor, and toggling
+    /// with nothing under it is a no-op rather than a panic.
+    #[test]
+    fn ctrl_o_toggles_the_selected_block_and_never_types_an_o() {
+        let mut app = App::default();
+        app.record_tool_invoked("c1".into(), "read".into(), None);
+
+        // Nothing selected: consumed, nothing opened, and — the part that
+        // would actually be noticed — no `o` in the message.
+        assert!(key(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert_eq!(app.input(), "", "the chord was typed into the composer");
+        let JanKlodEntry::Tool(block) = &app.transcript[0] else {
+            panic!("not a tool block")
+        };
+        assert!(!block.expanded, "a block with no cursor on it opened");
+
+        assert!(key(&mut app, KeyCode::Up, KeyModifiers::ALT));
+        assert_eq!(app.cursor(), Some(0));
+        assert!(key(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL));
+        let JanKlodEntry::Tool(block) = &app.transcript[0] else {
+            panic!("not a tool block")
+        };
+        assert!(block.expanded, "`Ctrl+O` did not open the selected block");
+
+        assert!(key(&mut app, KeyCode::Down, KeyModifiers::ALT));
+        assert_eq!(app.cursor(), None, "`Alt+Down` puts the selection away");
+    }
+
+    /// The cursor keys are `Alt`-qualified so the composer keeps the bare
+    /// arrows — history and the caret are what a user reaches for far more
+    /// often than a selection.
+    #[test]
+    fn the_bare_arrows_still_belong_to_the_composer() {
+        let mut app = App::default();
+        app.record_tool_invoked("c1".into(), "read".into(), None);
+        key(&mut app, KeyCode::Up, KeyModifiers::NONE);
+        key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(
+            app.cursor(),
+            None,
+            "a bare arrow moved the transcript cursor"
+        );
     }
 }

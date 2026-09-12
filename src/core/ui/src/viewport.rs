@@ -97,6 +97,34 @@ impl Viewport {
         self
     }
 
+    /// Scroll the least that brings lines `[start, start + rows)` on screen.
+    ///
+    /// What a moving cursor needs (#155): selecting a block the pane is not
+    /// showing selects something the user cannot see, which is worse than
+    /// having no cursor at all. **The least** matters — jumping the block to
+    /// the top or the middle would throw away the context around it that the
+    /// user is reading it in.
+    ///
+    /// A block taller than the pane is shown from its **top**, since the two
+    /// bounds cannot both be met and the top is where a block says what it is.
+    #[must_use]
+    pub const fn reveal(mut self, start: usize, rows: usize, total: usize, height: usize) -> Self {
+        let max = Self::max_offset(total, height);
+        let end = start + rows;
+        if start < self.offset {
+            self.offset = start;
+        } else if end > self.offset + height {
+            // Saturating rather than clamped to `max`: `total` counts the whole
+            // transcript, so a block inside it can never need an offset past
+            // the bottom, and clamping here would hide an arithmetic mistake
+            // rather than show it.
+            let wanted = end.saturating_sub(height);
+            self.offset = if wanted > max { max } else { wanted };
+        }
+        self.attached = self.offset >= max;
+        self
+    }
+
     /// Scroll up by `rows`, detaching if it moves.
     #[must_use]
     pub const fn up(mut self, rows: usize) -> Self {
@@ -258,5 +286,41 @@ mod tests {
         assert_eq!(bottom.half_up(H).offset(), 85);
         let up = bottom.page_up(H).page_up(H);
         assert_eq!(up.half_down(100, H).offset(), 75);
+    }
+
+    /// The scroll a moving cursor needs (#155): the least that shows the block.
+    #[test]
+    fn reveal_scrolls_the_least_that_brings_a_block_on_screen() {
+        // A 100-line transcript in a 10-row pane, sitting at the bottom.
+        let bottom = Viewport::default().reflow(100, 10);
+        assert_eq!(bottom.offset(), 90);
+
+        // Already on screen: nothing moves, and it stays attached.
+        assert_eq!(bottom.reveal(92, 3, 100, 10), bottom);
+
+        // Above the window: the top of the block becomes the top of the pane,
+        // and no further — scrolling past it would throw away the context the
+        // user is reading it in.
+        let up = bottom.reveal(20, 3, 100, 10);
+        assert_eq!(up.offset(), 20);
+        assert!(!up.attached(), "scrolling back detaches");
+
+        // Below the window: it comes to the *bottom* row, not the top.
+        let down = up.reveal(40, 2, 100, 10);
+        assert_eq!(down.offset(), 32, "the block's last line is the last row");
+        assert!(!down.attached());
+
+        // The newest block pulls the view back to the bottom, and re-attaches
+        // there, because an offset at `max` is the bottom by definition.
+        let back = up.reveal(97, 3, 100, 10);
+        assert_eq!(back.offset(), 90);
+        assert!(back.attached(), "arriving at the bottom re-attaches");
+    }
+
+    /// Both bounds cannot be met, so the one that says what the block *is* wins.
+    #[test]
+    fn a_block_taller_than_the_pane_is_shown_from_its_top() {
+        let view = Viewport::default().reflow(100, 10).reveal(30, 40, 100, 10);
+        assert_eq!(view.offset(), 30, "its head row is where the name is");
     }
 }

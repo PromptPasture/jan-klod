@@ -118,6 +118,18 @@ pub struct App {
     /// beside it so a stale list cannot be shown against a newer fragment —
     /// which is the failure a cache of this shape invites.
     completion: Option<(String, usize, paths::Completion)>,
+    /// Which tool block `Ctrl+O` acts on (#155).
+    ///
+    /// An index into [`Self::transcript`], and it only ever addresses an
+    /// [`Entry::Tool`]: a message has nothing to open, so a cursor that could
+    /// land on one would have positions where the only key it exists for does
+    /// nothing.
+    ///
+    /// `None` is the resting state and the common one. A transcript that is
+    /// being *read* does not need a selection, and one that appears
+    /// uninvited — following the newest call, say — would mean a highlight
+    /// moving down the screen on its own while the user types.
+    cursor: Option<usize>,
     /// Set while a turn is blocked on a confirmation. The next submission is that
     /// answer, not a new message — a turn is already running and typing a fresh
     /// message would go nowhere.
@@ -136,6 +148,76 @@ pub struct Prompt {
 }
 
 impl App {
+    /// Which entry the cursor is on, if the user has picked one.
+    #[must_use]
+    pub const fn cursor(&self) -> Option<usize> {
+        self.cursor
+    }
+
+    /// Tool block indices, oldest first — the positions the cursor can occupy.
+    fn stops(&self) -> Vec<usize> {
+        self.transcript
+            .iter()
+            .enumerate()
+            .filter_map(|(i, entry)| matches!(entry, Entry::Tool(_)).then_some(i))
+            .collect()
+    }
+
+    /// Move the cursor to the previous tool block, or to the newest one.
+    ///
+    /// Starting at the newest rather than the oldest is the whole reason this is
+    /// `Alt+Up`: the transcript grows downwards, the call a user wants to open
+    /// is nearly always the one that just happened, and walking up from it is
+    /// the same direction as scrolling back through what was said.
+    ///
+    /// Returns whether it moved, so the caller can scroll to what it selected
+    /// without having to work out whether anything changed.
+    pub fn cursor_up(&mut self) -> bool {
+        let stops = self.stops();
+        let moved = self.cursor.map_or_else(
+            || stops.last().copied(),
+            |at| stops.iter().rev().find(|&&i| i < at).copied(),
+        );
+        // At the oldest block already: hold there rather than wrapping to the
+        // newest. A selection that jumps to the far end of the transcript when
+        // a user presses the same key once too often is a selection they then
+        // have to find again.
+        if moved.is_some() {
+            self.cursor = moved;
+            return true;
+        }
+        false
+    }
+
+    /// Move the cursor to the next tool block, or off the end of the transcript.
+    ///
+    /// Past the newest block it clears rather than sticking, so `Alt+Down` is
+    /// how a user puts the selection away — the same key that made it, which
+    /// means there is nothing extra to know.
+    pub fn cursor_down(&mut self) -> bool {
+        let Some(at) = self.cursor else { return false };
+        self.cursor = self.stops().iter().find(|&&i| i > at).copied();
+        true
+    }
+
+    /// Open or close the block under the cursor.
+    ///
+    /// Returns whether anything happened. **Nothing under the cursor is a
+    /// no-op**, not a panic and not a guess at which block was meant: the index
+    /// is re-checked against the transcript here rather than trusted, so a
+    /// cursor that somehow outlived the entry it addressed costs a keystroke
+    /// instead of the client.
+    pub fn toggle_expanded(&mut self) -> bool {
+        let Some(at) = self.cursor else { return false };
+        match self.transcript.get_mut(at) {
+            Some(Entry::Tool(block)) => {
+                block.expanded = !block.expanded;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// The text being written. Kept as an accessor so callers cannot reach past
     /// the composer and desynchronise its caret from its text.
     #[must_use]
@@ -579,6 +661,72 @@ mod tests {
         assert_eq!(blocks.len(), 1, "the result did not open a second block");
         assert_eq!(blocks[0].status, ToolStatus::Done("contents".into()));
         assert_eq!(app.transcript.len(), 1, "and nothing else was recorded");
+    }
+
+    /// The cursor only stops where there is something to open.
+    #[test]
+    fn the_cursor_walks_tool_blocks_and_ignores_everything_else() {
+        let mut app = App::default();
+        app.record(Who::You, "do it");
+        app.record_tool_invoked("c1".into(), "read".into(), None);
+        app.record(Who::Klod, "thinking");
+        app.record_tool_invoked("c2".into(), "edit".into(), None);
+        app.record(Who::Klod, "done");
+
+        assert_eq!(app.cursor(), None, "a transcript at rest has no selection");
+        assert!(app.cursor_up(), "the first press selects something");
+        assert_eq!(
+            app.cursor(),
+            Some(3),
+            "and it is the newest call, not the oldest"
+        );
+        assert!(app.cursor_up());
+        assert_eq!(
+            app.cursor(),
+            Some(1),
+            "the message between them is not a stop"
+        );
+        assert!(
+            !app.cursor_up(),
+            "the oldest block holds rather than wrapping to the far end"
+        );
+        assert_eq!(app.cursor(), Some(1));
+
+        assert!(app.cursor_down());
+        assert_eq!(app.cursor(), Some(3));
+        assert!(app.cursor_down());
+        assert_eq!(
+            app.cursor(),
+            None,
+            "past the newest is how the selection is put away"
+        );
+        assert!(!app.cursor_down(), "and there is nothing below that");
+    }
+
+    /// Acceptance: a toggle with nothing under the cursor is a no-op.
+    #[test]
+    fn toggling_opens_the_selected_block_and_does_nothing_with_no_selection() {
+        // The block is entry **zero**, deliberately: a toggle that treated no
+        // selection as "the first one" would pass a test where index 0 was a
+        // message, and open the wrong block in the client.
+        let mut app = App::default();
+        app.record_tool_invoked("c1".into(), "read".into(), None);
+        app.record(Who::You, "hello");
+        assert!(
+            !app.toggle_expanded(),
+            "an empty selection toggled something"
+        );
+        assert!(!tools(&app)[0].expanded, "and nothing opened");
+
+        app.cursor_up();
+        assert!(app.toggle_expanded());
+        assert!(tools(&app)[0].expanded, "it opened");
+        assert!(app.toggle_expanded());
+        assert!(!tools(&app)[0].expanded, "and the same key closed it");
+
+        // A cursor that outlived its entry costs a keystroke, not the client.
+        app.transcript.clear();
+        assert!(!app.toggle_expanded(), "a stale index must not panic");
     }
 
     /// Acceptance: **a failure opens itself.** A tool that failed is the one
