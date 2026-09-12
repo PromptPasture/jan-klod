@@ -19,6 +19,7 @@ pub mod app;
 pub mod blocks;
 pub mod theme;
 pub mod transport;
+pub mod viewport;
 pub mod wrap;
 
 use std::io::{BufRead, BufReader, Read, Write};
