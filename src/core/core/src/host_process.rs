@@ -81,6 +81,28 @@ pub struct ProcessRunner {
     /// only fills this in when it has already reported the mode as `Os`, so that
     /// what the runtime says about confinement and what it does cannot diverge.
     confinement: Option<Confinement>,
+    /// The long-lived children an operator named in `execution.long-lived`.
+    ///
+    /// Empty by default, and empty means none — a guest with the capability and
+    /// no grant can start nothing (#109).
+    long_lived: Vec<LongLived>,
+}
+
+/// A long-lived child an operator named in `execution.long-lived`.
+///
+/// **The grant names processes; it does not permit spawning.** A guest asks for
+/// a child by `name` and the host supplies the `command` and `args` from here,
+/// so the widest thing a granted guest can do is start something the operator
+/// wrote down. That is why this is narrower than `execution.enabled`, which
+/// lets a guest choose the command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LongLived {
+    /// What a guest asks for.
+    pub name: String,
+    /// The program to run. Never supplied by the guest.
+    pub command: String,
+    /// Its arguments. Also never supplied by the guest.
+    pub args: Vec<String>,
 }
 
 /// A backend and the policy to hand it, paired because neither confines
@@ -104,6 +126,7 @@ impl ProcessRunner {
             output_cap: 0,
             env_passthrough: Vec::new(),
             confinement: None,
+            long_lived: Vec::new(),
         }
     }
 
@@ -119,6 +142,9 @@ impl ProcessRunner {
             // Nothing confines a command until the boot path says so, and it
             // says so only when it has reported the mode as `Os`.
             confinement: None,
+            // Naming a command to run is a separate grant from being allowed to
+            // run commands, so `execution.enabled` alone grants none.
+            long_lived: Vec::new(),
         }
     }
 
@@ -146,6 +172,23 @@ impl ProcessRunner {
     pub fn with_env_passthrough(mut self, names: Vec<String>) -> Self {
         self.env_passthrough = names;
         self
+    }
+
+    /// Permit these, and only these, long-lived children.
+    #[must_use]
+    pub fn with_long_lived(mut self, children: Vec<LongLived>) -> Self {
+        self.long_lived = children;
+        self
+    }
+
+    /// The grant for `name`, or `None` if the operator did not name it.
+    ///
+    /// The whole of the admission decision: a guest supplies a name and gets
+    /// back what to run, or gets back nothing. There is no path by which a
+    /// guest's own string becomes a program.
+    #[must_use]
+    pub fn long_lived_grant(&self, name: &str) -> Option<&LongLived> {
+        self.long_lived.iter().find(|child| child.name == name)
     }
 
     /// The environment a child process gets: [`BASE_ENV`] plus whatever the

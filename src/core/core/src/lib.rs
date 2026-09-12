@@ -1007,6 +1007,41 @@ impl Runtime {
                             .collect()
                     })
                     .unwrap_or_default();
+                // The long-lived children the operator named. A separate,
+                // narrower grant than `enabled`: it lists processes a guest may
+                // start rather than permitting it to start processes, so a
+                // guest's own string never becomes a program (#109). An entry
+                // missing `name` or `command` is skipped rather than guessed —
+                // a half-written grant is a grant nobody can read, and the
+                // conservative reading of one is none.
+                let long_lived: Vec<host_process::LongLived> = exec
+                    .and_then(|e| e.get("long-lived"))
+                    .and_then(serde_json::Value::as_array)
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .filter_map(|entry| {
+                                let name = entry.get("name")?.as_str()?.to_owned();
+                                let command = entry.get("command")?.as_str()?.to_owned();
+                                let args = entry
+                                    .get("args")
+                                    .and_then(serde_json::Value::as_array)
+                                    .map(|items| {
+                                        items
+                                            .iter()
+                                            .filter_map(|a| a.as_str().map(str::to_owned))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                Some(host_process::LongLived {
+                                    name,
+                                    command,
+                                    args,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 // What a command may do once running, as distinct from what the
                 // runner above bounds. A policy that cannot be read denies
                 // execution outright rather than running unconfined: the
@@ -1060,7 +1095,8 @@ impl Runtime {
                     std::time::Duration::from_secs(timeout),
                     usize::try_from(cap).unwrap_or(64 * 1024),
                 )
-                .with_env_passthrough(passthrough);
+                .with_env_passthrough(passthrough)
+                .with_long_lived(long_lived);
                 // The mode just printed and the confinement just wired come from
                 // the same pair, so the runtime cannot report `Os` while running
                 // commands unconfined.

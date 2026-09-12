@@ -58,14 +58,16 @@ mod component {
         fn meta() -> ToolMeta {
             ToolMeta {
                 name: "proc-probe".to_string(),
-                description: "Run a command via host-process and return its stdout.".to_string(),
+                description: "Run a command via host-process and return its stdout, \
+                              or with {\"spawn\": name} ask for a long-lived child."
+                    .to_string(),
                 arguments_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "command": { "type": "string" },
-                        "args": { "type": "array", "items": { "type": "string" } }
-                    },
-                    "required": ["command"]
+                        "args": { "type": "array", "items": { "type": "string" } },
+                        "spawn": { "type": "string" }
+                    }
                 })
                 .to_string(),
             }
@@ -74,6 +76,23 @@ mod component {
         fn invoke(arguments: String) -> Result<String, ToolError> {
             let value: serde_json::Value =
                 serde_json::from_str(&arguments).map_err(|_| ToolError::InvalidArguments)?;
+
+            // `{"spawn": "<name>"}` asks for a long-lived child instead of a
+            // one-shot command (#109). The outcome comes back as **text rather
+            // than an error**, deliberately: `ToolError` carries no message, so
+            // a refusal returned as an error is indistinguishable from a crash
+            // by the time it reaches the model — and the refusal is the thing
+            // under test here.
+            if let Some(name) = value.get("spawn").and_then(serde_json::Value::as_str) {
+                return Ok(match host_process::spawn(name) {
+                    Ok(child) => format!("spawned {name} handle={child}"),
+                    Err(err) => {
+                        log(LogLevel::Warn, &format!("spawn {name} refused ({err:?})"));
+                        format!("spawn-refused {name} {err:?}")
+                    }
+                });
+            }
+
             let command = value
                 .get("command")
                 .and_then(serde_json::Value::as_str)

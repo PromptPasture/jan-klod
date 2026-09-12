@@ -65,6 +65,28 @@ fn run_command(execution: &str, command: &str, args: &[&str]) -> ProbeTurn {
 /// adoptable directory, so leaving the key out would hand the runner a
 /// workspace rather than withhold one.
 fn run_command_in(root: Option<&str>, execution: &str, command: &str, args: &[&str]) -> ProbeTurn {
+    run_arguments_in(
+        root,
+        execution,
+        &serde_json::json!({ "command": command, "args": args }),
+    )
+}
+
+/// Ask `tool-proc-probe` for a long-lived child by name (#109).
+fn run_spawn(execution: &str, name: &str) -> ProbeTurn {
+    run_arguments_in(None, execution, &serde_json::json!({ "spawn": name }))
+}
+
+/// [`run_command_in`], with the tool's arguments written out in full.
+///
+/// The probe takes more than one shape of request now — a command to run, or a
+/// long-lived child to start — so the harness passes the arguments through
+/// rather than assembling one shape and locking the others out.
+fn run_arguments_in(
+    root: Option<&str>,
+    execution: &str,
+    arguments: &serde_json::Value,
+) -> ProbeTurn {
     let dir = std::env::temp_dir().join(format!(
         "jk-execcfg-{}-{:?}",
         std::process::id(),
@@ -76,7 +98,7 @@ fn run_command_in(root: Option<&str>, execution: &str, command: &str, args: &[&s
 
     let config = dir.join("config.yaml");
     let ws = root.map_or_else(|| workspace.display().to_string(), str::to_owned);
-    let arguments = serde_json::json!({ "command": command, "args": args }).to_string();
+    let arguments = arguments.to_string();
     std::fs::write(
         &config,
         format!(
@@ -521,5 +543,70 @@ fn a_confined_config_built_runner_can_still_write_inside_the_workspace() {
          otherwise the escape test above passes for a runner that denies \
          everything: {}",
         turn.tool_result
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Long-lived children (#109). The grant is `execution.long-lived`, which names
+// *processes* rather than permitting spawning — so the thing to prove is that a
+// guest's own string never becomes a program.
+//
+// Asserted across the Component-Model boundary, through `tool-proc-probe`'s
+// `{"spawn": name}` argument, because the guest is the party being distrusted
+// and a Rust-seam test would be asking the host about itself.
+// ---------------------------------------------------------------------------
+
+/// A config with one granted long-lived child.
+const GRANTED: &str =
+    "execution:\n  enabled: true\n  long-lived:\n    - name: echoer\n      command: cat\n";
+
+/// A name the operator did not write down cannot be spawned.
+///
+/// **Not yet discriminating, and the comment is here so nobody reads it as
+/// though it were.** Box 3 of #109 starts a granted child; until it lands a
+/// granted name is refused too, so this passes against a host that refuses
+/// everything — which is what it did before the config was read at all. The
+/// grant's other half is asserted at the Rust seam below, and this test gets
+/// its control when there is a success to contrast with.
+#[test]
+fn an_unnamed_long_lived_child_is_refused() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_spawn(GRANTED, "not-in-the-config");
+    assert!(
+        turn.produced("spawn-refused"),
+        "a child the operator never named must be refused: {}",
+        turn.tool_result
+    );
+}
+
+/// And the grant is read at all — the control without which the test above
+/// passes against a host that refuses everything, which is exactly what it did
+/// before the config was parsed.
+///
+/// Asserts on the **refusal's absence**, not on a handle: box 3 starts the
+/// child, and until then a granted name is refused too. What distinguishes the
+/// two today is the host log, which this cannot see — so this test is the
+/// weaker half of the pair on purpose, and box 3 is where it gets its teeth.
+#[test]
+fn the_long_lived_grant_is_read_from_config() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let policy = jan_klod_core::host_process::ProcessRunner::disabled().with_long_lived(vec![
+        jan_klod_core::host_process::LongLived {
+            name: "echoer".to_owned(),
+            command: "cat".to_owned(),
+            args: vec![],
+        },
+    ]);
+    assert!(
+        policy.long_lived_grant("echoer").is_some(),
+        "a named child is grantable"
+    );
+    assert!(
+        policy.long_lived_grant("not-in-the-config").is_none(),
+        "and an unnamed one is not"
     );
 }

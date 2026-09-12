@@ -197,10 +197,28 @@ impl g_proc::Host for ToolHost {
     // and a capability that is not granted yet should answer the way a
     // capability that is not granted answers.
 
-    fn spawn(&mut self, _name: String) -> Result<u32, g_proc::ProcError> {
+    fn spawn(&mut self, name: String) -> Result<u32, g_proc::ProcError> {
+        // The admission decision, and it happens **before** anything is
+        // started. An implementation that spawned and then checked would have a
+        // window in which it had done neither, and a window is all a capability
+        // like this needs to stop being default-deny.
+        //
+        // `proc-error` carries no payload, so the reason goes to the host log —
+        // the same answer `exec` gives, and the reason the interface says so.
+        let Some(grant) = self.process.long_lived_grant(&name) else {
+            eprintln!(
+                "WARN [core] host-process: no long-lived child named `{name}` — \
+                 add it to `execution.long-lived` to grant it"
+            );
+            return Err(g_proc::ProcError::Denied);
+        };
+        // Box 3 (#109) starts it. Until then a granted name is still refused,
+        // and says which of the two refusals this was — so the log distinguishes
+        // "you may not" from "not built yet" even while the guest cannot.
         eprintln!(
-            "WARN [core] host-process: `spawn` is declared but not yet granted; \
-             `execution.long-lived` is not read yet (#109)"
+            "WARN [core] host-process: `{name}` is granted (`{}`) but spawning is not \
+             implemented yet (#109)",
+            grant.command
         );
         Err(g_proc::ProcError::Denied)
     }
