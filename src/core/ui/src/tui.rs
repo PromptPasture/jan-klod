@@ -328,3 +328,98 @@ fn render(frame: &mut Frame, app: &App, theme: Theme, view: &mut Viewport, pane:
         input_area.y + 1 + u16::try_from(caret_row).unwrap_or(0),
     ));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{edit_or_scroll, Pane};
+    use jan_klod::app::App;
+    use jan_klod::viewport::Viewport;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn press(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    /// Drive one key and report whether the mapping consumed it.
+    fn key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        let mut view = Viewport::default();
+        edit_or_scroll(
+            &press(code, modifiers),
+            app,
+            &mut view,
+            Pane {
+                total: 100,
+                height: 10,
+            },
+        )
+    }
+
+    #[test]
+    fn both_newline_spellings_insert_one_and_enter_does_not() {
+        for modifier in [KeyModifiers::SHIFT, KeyModifiers::ALT] {
+            let mut app = App::default();
+            "ab".chars().for_each(|c| app.push_char(c));
+            assert!(
+                key(&mut app, KeyCode::Enter, modifier),
+                "{modifier:?} unhandled"
+            );
+            assert_eq!(app.input(), "ab\n");
+        }
+
+        // Plain `Enter` must fall through: submitting is the event loop's job,
+        // and consuming it here would make the composer impossible to send.
+        let mut app = App::default();
+        "ab".chars().for_each(|c| app.push_char(c));
+        assert!(!key(&mut app, KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.input(), "ab", "Enter must not have edited the buffer");
+    }
+
+    /// The two halves of `Ctrl+U`, which #148 and #150 each own one of.
+    #[test]
+    fn ctrl_u_kills_a_line_with_content_and_is_left_alone_when_empty() {
+        let mut app = App::default();
+        "hello".chars().for_each(|c| app.push_char(c));
+        assert!(key(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(app.input(), "", "the line was killed");
+
+        // Empty: the composer does not consume it, so the transcript's
+        // half-page scroll gets it. Consuming it here would make scrolling
+        // impossible from an empty composer, which is the only state you can
+        // scroll from.
+        let mut empty = App::default();
+        let mut view = Viewport::default().reflow(100, 10);
+        let consumed = edit_or_scroll(
+            &press(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            &mut empty,
+            &mut view,
+            Pane {
+                total: 100,
+                height: 10,
+            },
+        );
+        assert!(consumed, "the scroll arm handles it");
+        assert!(
+            !view.attached(),
+            "and it scrolled rather than killing a line"
+        );
+    }
+
+    #[test]
+    fn a_control_chord_is_never_typed_into_the_buffer() {
+        let mut app = App::default();
+        // `Ctrl+Z` has no binding. It must not arrive as a literal `z`, which is
+        // what the catch-all did before the guard.
+        assert!(!key(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL));
+        assert_eq!(app.input(), "");
+    }
+
+    #[test]
+    fn word_motion_and_deletion_reach_the_composer() {
+        let mut app = App::default();
+        "alpha beta".chars().for_each(|c| app.push_char(c));
+        assert!(key(&mut app, KeyCode::Char('w'), KeyModifiers::CONTROL));
+        assert_eq!(app.input(), "alpha ");
+        assert!(key(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.composer.caret(), 0, "Ctrl+A went to the line start");
+    }
+}
