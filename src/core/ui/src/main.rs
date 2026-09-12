@@ -213,7 +213,7 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
                 streamed.push_str(&text);
             }
             StreamEvent::Done(text) => final_answer = text,
-            StreamEvent::Tool(name) => eprint!("\n  ⚙ {name}… "),
+            StreamEvent::Tool { name, .. } => eprint!("\n  ⚙ {name}… "),
             // Closes the line the invocation left open. The content is not
             // printed: it is the model's input, often long, and the answer it
             // produces arrives as `Done`.

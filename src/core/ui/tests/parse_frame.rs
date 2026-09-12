@@ -31,7 +31,11 @@ fn parse_frame_maps_each_event_kind() {
     );
     assert_eq!(
         parse_frame("tool", r#"{"name":"bash","id":"1"}"#),
-        Some(StreamEvent::Tool("bash".into()))
+        Some(StreamEvent::Tool {
+            id: "1".into(),
+            name: "bash".into(),
+            arguments: None,
+        })
     );
     assert_eq!(
         parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#),

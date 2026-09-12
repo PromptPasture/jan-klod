@@ -339,7 +339,18 @@ impl Drop for Stdio {
 pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
     match notification {
         Notification::TextDelta { text } => Some(StreamEvent::Delta(text.clone())),
-        Notification::ToolInvoked { name, .. } => Some(StreamEvent::Tool(name.clone())),
+        // `{ name, .. }` here used to discard both the id and the arguments the
+        // notification carries — so the stdio path threw away more than the SSE
+        // frame was ever given (#154, #161).
+        Notification::ToolInvoked {
+            id,
+            name,
+            arguments,
+        } => Some(StreamEvent::Tool {
+            id: id.clone(),
+            name: name.clone(),
+            arguments: Some(arguments.clone()),
+        }),
         Notification::Warning { message } => Some(StreamEvent::Warning(message.clone())),
         Notification::Done { answer, .. } => Some(StreamEvent::Done(answer.clone())),
         Notification::Ask {
@@ -368,6 +379,31 @@ mod tests {
     use super::{event_for, Logs, Stdio};
     use crate::StreamEvent;
     use jan_klod_protocol::Notification;
+
+    /// The stdio half of #154: the id reaches the client, and so do the
+    /// arguments, which this mapping used to throw away with `{ name, .. }`.
+    ///
+    /// Asserted here as well as in `tests/parse_frame.rs` because #81 was one
+    /// gap with two faces and only the loud one had been reported — a client
+    /// that pairs tool calls over SSE and not over stdio would be the same
+    /// shape of bug.
+    #[test]
+    fn the_stdio_mapping_carries_the_call_id_and_its_arguments() {
+        let event = event_for(&Notification::ToolInvoked {
+            id: "c7".to_owned(),
+            name: "fs.read".to_owned(),
+            arguments: r#"{"path":"a.txt"}"#.to_owned(),
+        });
+        assert_eq!(
+            event,
+            Some(StreamEvent::Tool {
+                id: "c7".to_owned(),
+                name: "fs.read".to_owned(),
+                arguments: Some(r#"{"path":"a.txt"}"#.to_owned()),
+            }),
+            "the id is what pairs an invocation with its result"
+        );
+    }
 
     /// Every notification is either shown or deliberately dropped, and the two
     /// that are dropped are the two named in `event_for`'s documentation.

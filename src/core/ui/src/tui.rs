@@ -87,7 +87,7 @@ fn event_loop(
                         rx = None;
                         break;
                     }
-                    Ok(Ok(StreamEvent::Tool(name))) => {
+                    Ok(Ok(StreamEvent::Tool { name, .. })) => {
                         app.record_status(format!("· {name}"));
                     }
                     // Deliberately not rendered. The status line already names

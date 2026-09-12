@@ -68,11 +68,23 @@ fn auth_header() -> String {
 pub enum StreamEvent {
     /// A chunk of assistant text (preview).
     Delta(String),
-    /// A tool is running.
-    Tool(String),
-    /// A tool returned. `id` is the call this answers; [`StreamEvent::Tool`]
-    /// carries no id, so an invocation and its result cannot be paired yet —
-    /// #100 (tool blocks) is the slice that needs them paired.
+    /// A tool is about to run.
+    ///
+    /// `arguments` is `Option` rather than `String` because the two surfaces do
+    /// not agree: `Notification::ToolInvoked` carries it, and the SSE `tool`
+    /// frame does not (#161). Pretending it is always present would make a
+    /// client that silently shows less over REST than over stdio, which is the
+    /// defect rather than the workaround.
+    Tool {
+        /// Call id, matched by the [`StreamEvent::ToolResult`] that answers it.
+        id: String,
+        /// Tool name.
+        name: String,
+        /// JSON-encoded arguments, where the transport carries them.
+        arguments: Option<String>,
+    },
+    /// A tool returned. `id` is the call this answers, and matches the
+    /// [`StreamEvent::Tool`] that opened it.
     ToolResult {
         /// The call this answers.
         id: String,
@@ -132,7 +144,14 @@ pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
     };
     Some(match kind {
         "delta" => StreamEvent::Delta(field("text")),
-        "tool" => StreamEvent::Tool(field("name")),
+        // The frame has carried `id` all along — `serve::sse_frame` emits
+        // `{ id, name }` — and this client threw it away, which is why an
+        // invocation and its result could not be paired (#154).
+        "tool" => StreamEvent::Tool {
+            id: field("id"),
+            name: field("name"),
+            arguments: None,
+        },
         // The field names are `serve::sse_frame`'s for `Event::ToolResult`.
         // Without this arm the frame took the fallback below and every tool
         // result in a healthy turn reached the user as an error.
