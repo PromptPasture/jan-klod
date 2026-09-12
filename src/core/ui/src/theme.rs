@@ -22,12 +22,18 @@
 //! `tui.rs` does today. Keeping the ramp private is also what stops a caller
 //! quietly inventing a shade that no contrast test ever sees.
 //!
-//! # What this module does not do
+//! # Capabilities are arguments, not ambient
 //!
-//! It does not decide *which* [`Mode`] or [`Depth`] a terminal has. That is
-//! capability detection, which reads the environment, and it is deliberately a
-//! separate concern — [`Theme::new`] takes both, so every test can state the
-//! terminal it means instead of racing a process-global.
+//! [`Theme::new`] takes the [`Mode`], [`Depth`] and [`GlyphSet`] it is to use.
+//! [`Theme::detect`] works them out from an environment that is **handed to
+//! it**, and [`Theme::from_process_env`] is the one line in the module that
+//! reaches for `std::env`.
+//!
+//! That split is what makes the design checkable. A detector that reads the
+//! process environment itself can only be tested by mutating a global, and
+//! tests that mutate a global race each other; running one process per test
+//! would hide that race rather than remove it. So every test here states the
+//! terminal it means.
 
 use ratatui::style::Color;
 
@@ -267,6 +273,29 @@ const SPINNER: (&[&str], &[&str]) = (
     &["-", "\\", "|", "/"],
 );
 
+/// Read a terminal's background out of `COLORFGBG`, which is `fg;bg` and
+/// sometimes `fg;something;bg`, so the background is the last field.
+///
+/// The numbers are ANSI indices: 0–6 and 8 are the dark half, 7 and 9–15 the
+/// light one. Anything else — `default`, an empty string, a 256-colour index —
+/// is not an answer, and `None` lets the caller fall through rather than guess.
+fn background_of(colorfgbg: &str) -> Option<Mode> {
+    match colorfgbg.rsplit(';').next()?.trim().parse::<u8>().ok()? {
+        0..=6 | 8 => Some(Mode::Dark),
+        7 | 9..=15 => Some(Mode::Light),
+        _ => None,
+    }
+}
+
+/// Whether a locale string names UTF-8.
+///
+/// Case-insensitive and hyphen-insensitive because all four of `en_US.UTF-8`,
+/// `en_US.utf8`, `C.UTF-8` and `en_US.Utf-8` are in the wild.
+fn is_utf8(locale: &str) -> bool {
+    let normalised = locale.to_ascii_lowercase().replace('-', "");
+    normalised.contains("utf8")
+}
+
 /// The design system, resolved for one terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
@@ -286,6 +315,91 @@ impl Theme {
             mode,
             depth,
             glyphs,
+        }
+    }
+
+    /// Resolve a theme from the environment.
+    ///
+    /// `lookup` is the environment, injected rather than read: a detector that
+    /// calls `std::env::var` itself can only be tested by mutating a
+    /// process-global, and tests that do that race each other. Running under
+    /// `cargo-nextest`, one process per test, would hide the race rather than
+    /// remove it, so it is not a substitute for taking the environment as an
+    /// argument.
+    ///
+    /// `force_ascii` is the `--ascii` flag: a command-line override beats the
+    /// locale, and only the locale.
+    ///
+    /// # Precedence
+    ///
+    /// Mode: `NO_COLOR` (set to anything) → `JAN_KLOD_THEME` → `COLORFGBG` →
+    /// dark. Depth: `COLORTERM` → `TERM` → sixteen colours. Glyphs:
+    /// `force_ascii` → `LC_ALL` / `LC_CTYPE` / `LANG` → ASCII.
+    ///
+    /// #97 also lists a terminal background *query* between `COLORFGBG` and the
+    /// default, "where the backend supports it". This one does not: crossterm
+    /// 0.29, which ratatui 0.30 bundles, has no such API — its only OSC
+    /// sequences are for the clipboard. Rather than leave a stub, the chain
+    /// falls through to dark, which is the documented default anyway.
+    pub fn detect(lookup: impl Fn(&str) -> Option<String>, force_ascii: bool) -> Self {
+        Self {
+            mode: Self::detect_mode(&lookup),
+            depth: Self::detect_depth(&lookup),
+            glyphs: Self::detect_glyphs(&lookup, force_ascii),
+        }
+    }
+
+    /// [`Theme::detect`] against this process's own environment.
+    ///
+    /// The one place in this module that touches `std::env`, so that everything
+    /// above it stays a pure function of its arguments.
+    #[must_use]
+    pub fn from_process_env(force_ascii: bool) -> Self {
+        Self::detect(|key| std::env::var(key).ok(), force_ascii)
+    }
+
+    fn detect_mode(lookup: &impl Fn(&str) -> Option<String>) -> Mode {
+        // `NO_COLOR` wins outright, whatever it is set to — the convention is
+        // presence, not value, and a user who set it has already answered every
+        // question below.
+        if lookup("NO_COLOR").is_some() {
+            return Mode::Mono;
+        }
+        match lookup("JAN_KLOD_THEME").as_deref() {
+            Some("dark") => return Mode::Dark,
+            Some("light") => return Mode::Light,
+            Some("mono") => return Mode::Mono,
+            // An unrecognised value is not an instruction. Falling through beats
+            // failing: a typo in a shell profile should not stop the client.
+            _ => {}
+        }
+        lookup("COLORFGBG")
+            .as_deref()
+            .and_then(background_of)
+            .unwrap_or(Mode::Dark)
+    }
+
+    fn detect_depth(lookup: &impl Fn(&str) -> Option<String>) -> Depth {
+        if matches!(lookup("COLORTERM").as_deref(), Some("truecolor" | "24bit")) {
+            return Depth::TrueColor;
+        }
+        if lookup("TERM").is_some_and(|term| term.contains("256color")) {
+            return Depth::Indexed256;
+        }
+        Depth::Basic16
+    }
+
+    fn detect_glyphs(lookup: &impl Fn(&str) -> Option<String>, force_ascii: bool) -> GlyphSet {
+        if force_ascii {
+            return GlyphSet::Ascii;
+        }
+        // POSIX precedence: the first of the three that is set decides, even if
+        // it decides against UTF-8. `LC_ALL=C` with `LANG=en_US.UTF-8` means the
+        // user asked for C.
+        let locale = ["LC_ALL", "LC_CTYPE", "LANG"].into_iter().find_map(lookup);
+        match locale {
+            Some(locale) if is_utf8(&locale) => GlyphSet::Unicode,
+            _ => GlyphSet::Ascii,
         }
     }
 
@@ -440,6 +554,7 @@ impl Theme {
 mod tests {
     use super::{Depth, Glyph, GlyphSet, Mode, Theme, ACCENTS, RAMP, SPINNER};
     use ratatui::style::Color;
+    use std::collections::HashMap;
 
     /// Every role, so a test can sweep them without naming each one twice.
     fn roles(theme: Theme) -> Vec<Color> {
@@ -494,6 +609,15 @@ mod tests {
 
     /// A role accessor, so the tables below can be swept rather than unrolled.
     type Role = fn(Theme) -> Color;
+
+    /// The environment one detection case hands to [`Theme::detect`].
+    type Vars = &'static [(&'static str, &'static str)];
+    /// A row of the mode-precedence table: what it shows, the environment, the answer.
+    type ModeCase = (&'static str, Vars, Mode);
+    /// A row of the depth-precedence table.
+    type DepthCase = (&'static str, Vars, Depth);
+    /// A row of the glyph-selection table; the `bool` is `--ascii`.
+    type GlyphCase = (&'static str, Vars, bool, GlyphSet);
 
     /// Everything a foreground role can be drawn on.
     const SURFACES: [(&str, Role); 3] = [
@@ -582,6 +706,191 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Detect against exactly these variables and nothing else.
+    ///
+    /// The closure is the injection: no test here can see, or disturb, the
+    /// environment the test runner happens to be in.
+    fn detect(vars: &[(&str, &str)], force_ascii: bool) -> Theme {
+        let env: HashMap<&str, &str> = vars.iter().copied().collect();
+        Theme::detect(
+            |key| env.get(key).map(|value| (*value).to_owned()),
+            force_ascii,
+        )
+    }
+
+    #[test]
+    fn mode_precedence_no_color_then_override_then_colorfgbg_then_dark() {
+        let cases: &[ModeCase] = &[
+            ("nothing set at all", &[], Mode::Dark),
+            (
+                "COLORFGBG alone, dark background",
+                &[("COLORFGBG", "15;0")],
+                Mode::Dark,
+            ),
+            (
+                "COLORFGBG alone, light background",
+                &[("COLORFGBG", "0;15")],
+                Mode::Light,
+            ),
+            (
+                "COLORFGBG with a middle field",
+                &[("COLORFGBG", "15;default;0")],
+                Mode::Dark,
+            ),
+            (
+                "COLORFGBG unparseable falls through",
+                &[("COLORFGBG", "15;default")],
+                Mode::Dark,
+            ),
+            (
+                "the override beats COLORFGBG",
+                &[("COLORFGBG", "15;0"), ("JAN_KLOD_THEME", "light")],
+                Mode::Light,
+            ),
+            (
+                "the override can also ask for mono",
+                &[("JAN_KLOD_THEME", "mono")],
+                Mode::Mono,
+            ),
+            (
+                "an unrecognised override is not an instruction",
+                &[("JAN_KLOD_THEME", "sepia"), ("COLORFGBG", "0;15")],
+                Mode::Light,
+            ),
+            (
+                "NO_COLOR beats the override",
+                &[
+                    ("NO_COLOR", "1"),
+                    ("JAN_KLOD_THEME", "light"),
+                    ("COLORFGBG", "0;15"),
+                ],
+                Mode::Mono,
+            ),
+            (
+                "NO_COLOR counts even when empty",
+                &[("NO_COLOR", ""), ("JAN_KLOD_THEME", "dark")],
+                Mode::Mono,
+            ),
+        ];
+
+        for (what, vars, expected) in cases {
+            assert_eq!(detect(vars, false).mode(), *expected, "{what}");
+        }
+    }
+
+    #[test]
+    fn depth_precedence_colorterm_then_term_then_sixteen() {
+        let cases: &[DepthCase] = &[
+            ("nothing set at all", &[], Depth::Basic16),
+            ("a plain TERM", &[("TERM", "xterm")], Depth::Basic16),
+            (
+                "TERM says 256",
+                &[("TERM", "xterm-256color")],
+                Depth::Indexed256,
+            ),
+            (
+                "COLORTERM says truecolor",
+                &[("COLORTERM", "truecolor")],
+                Depth::TrueColor,
+            ),
+            (
+                "COLORTERM says 24bit",
+                &[("COLORTERM", "24bit")],
+                Depth::TrueColor,
+            ),
+            (
+                "COLORTERM beats TERM",
+                &[("COLORTERM", "truecolor"), ("TERM", "xterm-256color")],
+                Depth::TrueColor,
+            ),
+            (
+                "an unrecognised COLORTERM falls through",
+                &[("COLORTERM", "yes"), ("TERM", "xterm-256color")],
+                Depth::Indexed256,
+            ),
+        ];
+
+        for (what, vars, expected) in cases {
+            assert_eq!(detect(vars, false).depth(), *expected, "{what}");
+        }
+    }
+
+    #[test]
+    fn glyphs_come_from_the_locale_unless_ascii_is_forced() {
+        let cases: &[GlyphCase] = &[
+            ("no locale at all", &[], false, GlyphSet::Ascii),
+            (
+                "LANG names UTF-8",
+                &[("LANG", "en_US.UTF-8")],
+                false,
+                GlyphSet::Unicode,
+            ),
+            (
+                "lower case and no hyphen",
+                &[("LANG", "en_US.utf8")],
+                false,
+                GlyphSet::Unicode,
+            ),
+            (
+                "LC_CTYPE when LANG is unset",
+                &[("LC_CTYPE", "C.UTF-8")],
+                false,
+                GlyphSet::Unicode,
+            ),
+            (
+                "LC_ALL=C beats a UTF-8 LANG",
+                &[("LC_ALL", "C"), ("LANG", "en_US.UTF-8")],
+                false,
+                GlyphSet::Ascii,
+            ),
+            (
+                "LC_CTYPE beats LANG",
+                &[("LC_CTYPE", "C"), ("LANG", "en_US.UTF-8")],
+                false,
+                GlyphSet::Ascii,
+            ),
+            (
+                "a non-UTF-8 locale",
+                &[("LANG", "en_US.ISO8859-1")],
+                false,
+                GlyphSet::Ascii,
+            ),
+            (
+                "--ascii beats the locale",
+                &[("LANG", "en_US.UTF-8")],
+                true,
+                GlyphSet::Ascii,
+            ),
+        ];
+
+        for (what, vars, force_ascii, expected) in cases {
+            assert_eq!(detect(vars, *force_ascii).glyphs(), *expected, "{what}");
+        }
+    }
+
+    #[test]
+    fn detection_reads_nothing_the_caller_did_not_hand_it() {
+        // Every variable detection knows about, set to the opposite of the
+        // defaults — through the injected map only. If the implementation ever
+        // reaches for `std::env` instead, this stops matching.
+        let theme = detect(
+            &[
+                ("JAN_KLOD_THEME", "light"),
+                ("COLORTERM", "truecolor"),
+                ("LANG", "en_US.UTF-8"),
+            ],
+            false,
+        );
+        assert_eq!(theme.mode(), Mode::Light);
+        assert_eq!(theme.depth(), Depth::TrueColor);
+        assert_eq!(theme.glyphs(), GlyphSet::Unicode);
+
+        let bare = detect(&[], false);
+        assert_eq!(bare.mode(), Mode::Dark);
+        assert_eq!(bare.depth(), Depth::Basic16);
+        assert_eq!(bare.glyphs(), GlyphSet::Ascii);
     }
 
     #[test]
