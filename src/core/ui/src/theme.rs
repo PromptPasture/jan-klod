@@ -181,21 +181,112 @@ enum Accent {
     Ember,
 }
 
+/// Which of the two glyph vocabularies the terminal can render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlyphSet {
+    /// The box-drawing, braille and tick marks of [`Glyph`]'s first column.
+    Unicode,
+    /// The ASCII fallback, for a terminal without them and for `--ascii`.
+    Ascii,
+}
+
+/// A state the interface has to show without relying on colour.
+///
+/// Callers ask for `Glyph::ToolDone`, never for a literal `✓`: the theme owns
+/// which vocabulary is in use, and a literal in a drawing routine is a literal
+/// that never degrades.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Glyph {
+    /// The rule down the left of a message block.
+    MessageGutter,
+    /// A tool that finished.
+    ToolDone,
+    /// A tool that failed.
+    ToolFailed,
+    /// A block that can be opened.
+    Collapsed,
+    /// A block that is open.
+    Expanded,
+    /// A warning.
+    Warning,
+    /// A `+` line in a diff.
+    DiffAdded,
+    /// A `-` line in a diff.
+    DiffRemoved,
+    /// The composer's caret.
+    Caret,
+}
+
+impl Glyph {
+    /// Every variant, so a caller sweeping the vocabulary cannot miss one.
+    ///
+    /// A `match` in [`Glyph::forms`] keeps this honest in the other direction:
+    /// adding a variant without a form is a compile error.
+    pub const ALL: [Self; 9] = [
+        Self::MessageGutter,
+        Self::ToolDone,
+        Self::ToolFailed,
+        Self::Collapsed,
+        Self::Expanded,
+        Self::Warning,
+        Self::DiffAdded,
+        Self::DiffRemoved,
+        Self::Caret,
+    ];
+
+    /// The Unicode form and the ASCII one, in that order.
+    ///
+    /// `tool completed` is `*` in ASCII rather than #97's original `+`: the
+    /// table gave `+` to both it and `diff added`, and under monochrome the
+    /// glyph is the whole signal, so two states cannot share one. `✓` and `+`
+    /// were already distinct in Unicode; only the fallback needed moving.
+    #[must_use]
+    pub const fn forms(self) -> (&'static str, &'static str) {
+        match self {
+            Self::MessageGutter => ("▍", "|"),
+            Self::ToolDone => ("✓", "*"),
+            Self::ToolFailed => ("✗", "x"),
+            Self::Collapsed => ("▸", ">"),
+            Self::Expanded => ("▾", "v"),
+            Self::Warning => ("!", "!"),
+            Self::DiffAdded => ("+", "+"),
+            Self::DiffRemoved => ("-", "-"),
+            Self::Caret => ("›", ">"),
+        }
+    }
+}
+
+/// The frames of the "a tool is running" spinner, Unicode then ASCII.
+///
+/// Not a [`Glyph`]: a spinner is identified by motion rather than by shape, so
+/// it is neither a single mark nor subject to the distinctness rule the static
+/// glyphs are — its ASCII frames deliberately reuse `|` and `-`, which no
+/// stationary glyph could.
+const SPINNER: (&[&str], &[&str]) = (
+    &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+    &["-", "\\", "|", "/"],
+);
+
 /// The design system, resolved for one terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     mode: Mode,
     depth: Depth,
+    glyphs: GlyphSet,
 }
 
 impl Theme {
-    /// A theme for a terminal whose mode and colour depth are already known.
+    /// A theme for a terminal whose capabilities are already known.
     ///
-    /// Both are arguments rather than something this constructor sniffs, so a
-    /// test can name the terminal it means.
+    /// All three are arguments rather than something this constructor sniffs,
+    /// so a test can name the terminal it means.
     #[must_use]
-    pub const fn new(mode: Mode, depth: Depth) -> Self {
-        Self { mode, depth }
+    pub const fn new(mode: Mode, depth: Depth, glyphs: GlyphSet) -> Self {
+        Self {
+            mode,
+            depth,
+            glyphs,
+        }
     }
 
     /// Which end of the ramp this theme reads from.
@@ -208,6 +299,31 @@ impl Theme {
     #[must_use]
     pub const fn depth(self) -> Depth {
         self.depth
+    }
+
+    /// Which glyph vocabulary this theme will draw with.
+    #[must_use]
+    pub const fn glyphs(self) -> GlyphSet {
+        self.glyphs
+    }
+
+    /// The mark for a state, in whichever vocabulary this terminal has.
+    #[must_use]
+    pub const fn glyph(self, glyph: Glyph) -> &'static str {
+        let (unicode, ascii) = glyph.forms();
+        match self.glyphs {
+            GlyphSet::Unicode => unicode,
+            GlyphSet::Ascii => ascii,
+        }
+    }
+
+    /// The spinner's frames, in whichever vocabulary this terminal has.
+    #[must_use]
+    pub const fn spinner(self) -> &'static [&'static str] {
+        match self.glyphs {
+            GlyphSet::Unicode => SPINNER.0,
+            GlyphSet::Ascii => SPINNER.1,
+        }
     }
 
     /// Resolve a ramp role, given the step each direction uses.
@@ -322,7 +438,7 @@ impl Theme {
 
 #[cfg(test)]
 mod tests {
-    use super::{Depth, Mode, Theme, ACCENTS, RAMP};
+    use super::{Depth, Glyph, GlyphSet, Mode, Theme, ACCENTS, RAMP, SPINNER};
     use ratatui::style::Color;
 
     /// Every role, so a test can sweep them without naming each one twice.
@@ -415,7 +531,7 @@ mod tests {
     #[test]
     fn every_permitted_pair_meets_its_contrast_target() {
         for mode in [Mode::Dark, Mode::Light] {
-            let theme = Theme::new(mode, Depth::TrueColor);
+            let theme = Theme::new(mode, Depth::TrueColor, GlyphSet::Unicode);
             for (surface_name, surface) in SURFACES {
                 for (role_name, role, target) in GATED {
                     let ratio = contrast(role(theme), surface(theme));
@@ -433,7 +549,7 @@ mod tests {
     #[test]
     fn muted_is_more_recessive_than_secondary_but_still_distinct() {
         for mode in [Mode::Dark, Mode::Light] {
-            let theme = Theme::new(mode, Depth::TrueColor);
+            let theme = Theme::new(mode, Depth::TrueColor, GlyphSet::Unicode);
             for (surface_name, surface) in SURFACES {
                 let muted = contrast(theme.muted(), surface(theme));
                 let secondary = contrast(theme.secondary(), surface(theme));
@@ -454,7 +570,7 @@ mod tests {
     #[test]
     fn the_active_border_reads_stronger_than_the_idle_one() {
         for mode in [Mode::Dark, Mode::Light] {
-            let theme = Theme::new(mode, Depth::TrueColor);
+            let theme = Theme::new(mode, Depth::TrueColor, GlyphSet::Unicode);
             for (surface_name, surface) in SURFACES {
                 let idle = contrast(theme.border_idle(), surface(theme));
                 let active = contrast(theme.border_active(), surface(theme));
@@ -469,9 +585,71 @@ mod tests {
     }
 
     #[test]
+    fn every_glyph_has_an_ascii_form_and_it_differs_where_it_must() {
+        for glyph in Glyph::ALL {
+            let (unicode, ascii) = glyph.forms();
+            assert!(
+                !ascii.is_empty(),
+                "{glyph:?} has no ASCII form — a terminal without Unicode would \
+                 draw nothing where a state should be"
+            );
+            assert!(!unicode.is_empty(), "{glyph:?} has no Unicode form");
+            if !unicode.is_ascii() {
+                assert_ne!(
+                    unicode, ascii,
+                    "{glyph:?} claims an ASCII fallback that is not the fallback \
+                     for anything — the Unicode form is not ASCII"
+                );
+            }
+        }
+        for frames in [SPINNER.0, SPINNER.1] {
+            assert!(!frames.is_empty(), "a spinner with no frames cannot spin");
+            assert!(frames.iter().all(|f| !f.is_empty()));
+        }
+    }
+
+    #[test]
+    fn monochrome_still_tells_every_state_apart() {
+        // The caret is the composer's cursor rather than a state, and it is the
+        // one mark whose position already says what it is; it shares `>` with
+        // `Collapsed` in ASCII, which is #97's table as drawn. Every actual
+        // state has to stand alone, in both vocabularies, because under
+        // `Mode::Mono` the glyph is the entire signal.
+        let states = Glyph::ALL.iter().filter(|g| **g != Glyph::Caret);
+
+        for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
+            let theme = Theme::new(Mode::Mono, Depth::TrueColor, set);
+            let mut seen: Vec<&str> = Vec::new();
+            for state in states.clone() {
+                let mark = theme.glyph(*state);
+                assert!(
+                    !seen.contains(&mark),
+                    "{set:?}: {state:?} draws {mark:?}, which another state \
+                     already uses — with colour gone there is nothing left to \
+                     tell them apart"
+                );
+                seen.push(mark);
+            }
+        }
+    }
+
+    #[test]
+    fn the_vocabulary_does_not_depend_on_colour() {
+        for mode in [Mode::Dark, Mode::Light, Mode::Mono] {
+            for glyph in Glyph::ALL {
+                assert_eq!(
+                    Theme::new(mode, Depth::TrueColor, GlyphSet::Unicode).glyph(glyph),
+                    glyph.forms().0,
+                    "the glyph a state draws must not change with the colour mode"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mono_emits_no_colour_at_all() {
         for depth in [Depth::TrueColor, Depth::Indexed256, Depth::Basic16] {
-            for role in roles(Theme::new(Mode::Mono, depth)) {
+            for role in roles(Theme::new(Mode::Mono, depth, GlyphSet::Unicode)) {
                 assert_eq!(
                     role,
                     Color::Reset,
@@ -486,16 +664,16 @@ mod tests {
     fn depth_changes_the_representation_not_the_role() {
         for mode in [Mode::Dark, Mode::Light] {
             assert!(matches!(
-                Theme::new(mode, Depth::TrueColor).body(),
+                Theme::new(mode, Depth::TrueColor, GlyphSet::Unicode).body(),
                 Color::Rgb(..)
             ));
             assert!(matches!(
-                Theme::new(mode, Depth::Indexed256).body(),
+                Theme::new(mode, Depth::Indexed256, GlyphSet::Unicode).body(),
                 Color::Indexed(_)
             ));
             // The sixteen are named variants, so "not Rgb and not Indexed" is
             // the whole claim available here.
-            let basic = Theme::new(mode, Depth::Basic16).body();
+            let basic = Theme::new(mode, Depth::Basic16, GlyphSet::Unicode).body();
             assert!(!matches!(basic, Color::Rgb(..) | Color::Indexed(_)));
         }
     }
@@ -518,8 +696,8 @@ mod tests {
 
     #[test]
     fn dark_and_light_read_the_one_ramp_from_opposite_ends() {
-        let dark = Theme::new(Mode::Dark, Depth::TrueColor);
-        let light = Theme::new(Mode::Light, Depth::TrueColor);
+        let dark = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let light = Theme::new(Mode::Light, Depth::TrueColor, GlyphSet::Unicode);
 
         let darkest = RAMP[RAMP.len() - 1].resolve(Depth::TrueColor);
         let lightest = RAMP[0].resolve(Depth::TrueColor);
@@ -537,7 +715,7 @@ mod tests {
     fn every_ramp_step_is_reachable_through_some_role() {
         let reachable: Vec<Color> = [Mode::Dark, Mode::Light]
             .into_iter()
-            .flat_map(|mode| roles(Theme::new(mode, Depth::TrueColor)))
+            .flat_map(|mode| roles(Theme::new(mode, Depth::TrueColor, GlyphSet::Unicode)))
             .collect();
 
         for (i, step) in RAMP.iter().enumerate() {
