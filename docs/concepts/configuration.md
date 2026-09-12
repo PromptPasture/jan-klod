@@ -161,6 +161,69 @@ Two things a remote install refuses that a local one cannot:
   manifest not, and the resulting 404 would read as "no manifest published".
   Refusing says what is wrong instead.
 
+## MCP servers (`extensions.registry.mcp`)
+
+`registry-mcp` connects to MCP servers and offers their tools to the agent,
+namespaced by server — a `tools/list` entry called `echo` on a server called
+`fixture` reaches the model as `fixture::echo`.
+
+Each entry under `servers` names one server and how to reach it:
+
+```yaml
+extensions:
+  registry:
+    mcp:
+      enabled: true
+      servers:
+        - name: remote-docs          # over HTTP
+          transport: sse
+          url: https://mcp.example.com/rpc
+        - name: local-docs           # over a stdio child
+          transport: stdio
+          child: docs-mcp            # optional; defaults to `name`
+```
+
+| Key | Meaning |
+|---|---|
+| `name` | What the server is called, and the namespace its tools appear under |
+| `transport` | `sse`, `streamable-http`, or `stdio` |
+| `url` | Where to reach it. HTTP transports only |
+| `child` | Which `execution.long-lived` entry to start. `stdio` only; defaults to `name` |
+
+### `transport: stdio`
+
+Most MCP servers distributed today are stdio processes rather than HTTP
+endpoints. A `stdio` entry does **not** name a command — it names a child the
+operator granted in [`execution.long-lived`](#executionlong-lived), and the host
+supplies the program:
+
+```yaml
+execution:
+  enabled: true
+  long-lived:
+    - name: docs-mcp
+      command: /usr/bin/my-mcp-server
+      args: ["--stdio"]
+```
+
+So a server has to be written down twice — once as something that may run, once
+as something to talk to — and that is the point rather than an inconvenience: an
+extension cannot introduce a program, only ask for one you already named.
+
+Three things worth knowing before you configure one:
+
+- **A stdio child is confined by [`execution.sandbox`](#executionsandbox) like
+  any other command, so by default it has no network.** An MCP server that
+  reaches out to an API will fail in a way that looks like the server being
+  broken. If it needs the network, say so in the sandbox policy — and note that
+  is a decision about what a third-party program may do on your machine, not a
+  formality.
+- **It is killed when the extension instance goes**, including when the gateway
+  exits. There is no orphaned server to clean up, and none to reuse either.
+- **A server that never answers is given up on after ten seconds** and reported
+  as down. A turn still runs; its tools are simply absent. The same is true of
+  one that answers something that is not JSON.
+
 ## Opaque config and `${VAR}` expansion
 
 Every key in an entry other than `enabled`/`type` is the instance's private
