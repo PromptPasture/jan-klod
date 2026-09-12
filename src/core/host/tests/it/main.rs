@@ -29,6 +29,7 @@ mod execution_config;
 mod ext_install;
 mod gate;
 mod generated_guest;
+mod grep_budget;
 mod host_fs;
 mod host_process;
 mod installed_layout;
