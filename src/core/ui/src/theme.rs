@@ -515,6 +515,29 @@ impl Theme {
     ///
     /// The one role that is the same step in both directions — `smoke` sits at
     /// the middle of the ramp, so it is equally far from either background.
+    ///
+    /// # This role carries no contrast floor, and that is a decision (#135)
+    ///
+    /// On a light terminal `muted` reads at 3.05:1 on the background and
+    /// **2.41:1** on the raised surface, both under WCAG AA's 4.5:1 for body
+    /// text. Dark is fine (5.81 / 5.39 / 4.93:1), so this is specific to
+    /// reading the ramp from the light end.
+    ///
+    /// No ramp value fixes it —
+    /// `no_single_ramp_step_can_give_muted_an_aa_floor_from_both_ends` is the
+    /// arithmetic, run as a test so the next person to reach for the obvious
+    /// fix is told why it is not available. The light theme has room for two AA
+    /// text tiers above a raised surface, not three, and `body` and `secondary`
+    /// are already those two.
+    ///
+    /// So the floor is not lowered and not met: it is **replaced**. `muted` is
+    /// where the mascot rule earns its keep — colour is information, never the
+    /// only carrier of it. Anything drawn in `muted` must also be findable by
+    /// position or by a [`Glyph`], and a caller that puts a state in this colour
+    /// and nowhere else has shipped a state a reader can miss. The alternatives
+    /// were costed on #135: meeting 4.5:1 collapses `muted` into `secondary` on
+    /// light, and meeting 3:1 costs the raised surface its separation from the
+    /// background.
     #[must_use]
     pub const fn muted(self) -> Color {
         self.ramp(Tone::Smoke, Tone::Smoke)
@@ -651,11 +674,15 @@ mod tests {
     /// opposite of "a screen with nothing happening on it is entirely grey".
     /// They get their own weaker invariant below.
     ///
-    /// `muted` is absent for a different reason: Acceptance names body,
-    /// secondary, and meaningful border or glyph, and does not say which tier
-    /// muted is in. Inventing one would rewrite the ramp — see
-    /// `muted_is_more_recessive_than_secondary_but_still_distinct` and the
-    /// issue filed against the light theme's raised surface.
+    /// `muted` is absent for a different reason, and since #135 it is a settled
+    /// one rather than a deferral: no ramp step can give it an AA floor from
+    /// both ends of the ramp at once, so it carries no colour floor at all and
+    /// leans on position and the glyph vocabulary instead. `Theme::muted` has
+    /// the numbers and the alternatives that were rejected;
+    /// `no_single_ramp_step_can_give_muted_an_aa_floor_from_both_ends` is the
+    /// arithmetic, and
+    /// `muted_is_more_recessive_than_secondary_but_still_distinct` is the
+    /// weaker invariant that replaces the floor.
     const GATED: [(&str, Role, f64); 6] = [
         ("body", Theme::body, 7.0),
         ("secondary", Theme::secondary, 4.5),
@@ -681,6 +708,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Why `muted` is not in `GATED`, as arithmetic rather than as a note (#135).
+    ///
+    /// `muted` is deliberately one shared step: `smoke` in both directions,
+    /// because it sits mid-ramp and is equally far from either background. The
+    /// obvious response to "it fails AA on light" is to move that step. This
+    /// test is here to say that does not work, before someone spends an
+    /// afternoon finding out.
+    ///
+    /// A foreground meets 4.5:1 against a lighter surface only by being dark
+    /// enough, and against a darker surface only by being light enough. The two
+    /// surfaces `muted` must survive are the light theme's raised (`chalk`) and
+    /// the dark theme's code surface (`ink-2`). Inverting the WCAG ratio for
+    /// each gives a luminance ceiling from one and a floor from the other — and
+    /// they do not overlap, so no value exists, on this ramp or off it.
+    ///
+    /// If this ever starts failing, a surface moved. That would make an AA
+    /// `muted` newly possible and #135's decision worth reopening, which is
+    /// exactly the news worth waking up for.
+    // The two expressions below are the WCAG contrast ratio solved for the
+    // foreground. `suboptimal_flops` would have the second as a `mul_add`; the
+    // arithmetic is identical and the resemblance to the formula being inverted
+    // is not, so the lint loses here for the same reason it loses in
+    // `relative_luminance`.
+    #[allow(clippy::suboptimal_flops)]
+    #[test]
+    fn no_single_ramp_step_can_give_muted_an_aa_floor_from_both_ends() {
+        const AA: f64 = 4.5;
+        // ratio = (L_light + 0.05) / (L_dark + 0.05), so solving for the
+        // foreground gives a ceiling against a light surface and a floor
+        // against a dark one.
+        let light_raised = relative_luminance(
+            Theme::new(Mode::Light, Depth::TrueColor, GlyphSet::Unicode).raised(),
+        );
+        let dark_code = relative_luminance(
+            Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode).code_surface(),
+        );
+
+        let ceiling = (light_raised + 0.05) / AA - 0.05;
+        let floor = AA * (dark_code + 0.05) - 0.05;
+
+        assert!(
+            ceiling < floor,
+            "a foreground at luminance {floor:.3}..={ceiling:.3} would meet \
+             {AA}:1 against both the light raised surface ({light_raised:.3}) \
+             and the dark code surface ({dark_code:.3}) — so a single shared \
+             `muted` step *can* now be AA, and #135 chose not to have one on \
+             the grounds that it could not be. Reopen it."
+        );
     }
 
     #[test]
