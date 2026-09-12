@@ -50,10 +50,7 @@ struct ToolHost {
     /// instance stops cleanly, errors, or goes down with the runtime. Keeping
     /// them in the runner would not have that property: the runner is `Clone`,
     /// and a child in a clone belongs to nothing in particular.
-    children: std::collections::HashMap<u32, crate::host_process::LiveChild>,
-    /// Next handle. Monotonic, so a killed handle is never reissued and a stale
-    /// one fails rather than addressing somebody else's child.
-    next_child: u32,
+    children: crate::host_process::Children,
 }
 
 impl WasiView for ToolHost {
@@ -212,21 +209,14 @@ impl g_proc::Host for ToolHost {
         //
         // `proc-error` carries no payload, so the reason goes to the host log —
         // the same answer `exec` gives, and the reason the interface says so.
-        let live = self
-            .process
-            .spawn_long_lived(&name)
-            .map_err(to_gen_proc_error)?;
-        let handle = self.next_child;
-        self.next_child += 1;
-        self.children.insert(handle, live);
-        Ok(handle)
+        self.children
+            .spawn(&self.process, &name)
+            .map_err(to_gen_proc_error)
     }
 
     fn write_stdin(&mut self, child: u32, data: String) -> Result<(), g_proc::ProcError> {
         self.children
-            .get_mut(&child)
-            .ok_or(g_proc::ProcError::Denied)?
-            .write_stdin(&data)
+            .write_stdin(child, &data)
             .map_err(to_gen_proc_error)
     }
 
@@ -236,29 +226,21 @@ impl g_proc::Host for ToolHost {
         max_bytes: u32,
         timeout_ms: u32,
     ) -> Result<String, g_proc::ProcError> {
-        let live = self
-            .children
-            .get_mut(&child)
-            .ok_or(g_proc::ProcError::Denied)?;
-        Ok(live.read_stdout(
-            max_bytes as usize,
-            std::time::Duration::from_millis(u64::from(timeout_ms)),
-        ))
-    }
-
-    /// `false` for a handle that was never issued, so a caller polling a child
-    /// it does not have terminates rather than erroring forever.
-    fn is_running(&mut self, child: u32) -> bool {
         self.children
-            .get_mut(&child)
-            .is_some_and(crate::host_process::LiveChild::is_running)
+            .read_stdout(
+                child,
+                max_bytes as usize,
+                std::time::Duration::from_millis(u64::from(timeout_ms)),
+            )
+            .map_err(to_gen_proc_error)
     }
 
-    /// Kill and forget. Dropping the `LiveChild` is what actually kills it, so
-    /// removing it from the map is the whole implementation — and the same
-    /// thing happens to every remaining child when this host is dropped.
+    fn is_running(&mut self, child: u32) -> bool {
+        self.children.is_running(child)
+    }
+
     fn kill(&mut self, child: u32) {
-        self.children.remove(&child);
+        self.children.kill(child);
     }
 }
 
@@ -326,8 +308,7 @@ impl ToolExtension {
             workspace,
             process,
             http,
-            children: std::collections::HashMap::new(),
-            next_child: 1,
+            children: crate::host_process::Children::default(),
         };
         let mut store = Store::new(engine, host);
         let world = bind::ToolWorld::instantiate(&mut store, component, &linker)

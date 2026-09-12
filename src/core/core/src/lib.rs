@@ -552,6 +552,7 @@ impl Runtime {
                     component,
                     config_json,
                     self.egress_policy(),
+                    self.open_process_runner(workspace),
                 )?;
             }
             ("interceptor", _) => {
@@ -787,6 +788,7 @@ impl Runtime {
                         component.clone(),
                         config_json,
                         self.egress_policy(),
+                        process.clone(),
                     );
                 }
                 _ => {}

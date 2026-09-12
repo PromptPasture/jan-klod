@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.2.0;
+package jan-klod:interfaces@0.3.0;
 
 /// MCP server management — discovers tools, handles crashes, reconnects.
 /// Implemented by: registry-mcp
@@ -51,6 +51,12 @@ world mcp-registry-world {
     import host-config;
     import host-http;
     import host-event;
+    /// Slice 18c-2: most MCP servers in the wild are stdio processes, so the
+    /// inbound half of the ecosystem port needs a child it can hold open. Only
+    /// the long-lived half is used — a registry never runs a command to
+    /// completion — but the interface is imported whole because a world imports
+    /// interfaces, not functions.
+    import host-process;
 
     export extension-lifecycle;
     export mcp-registry;

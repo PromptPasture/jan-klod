@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.2.0;
+package jan-klod:interfaces@0.3.0;
 
 /// Generic discrete callable tool.
 /// Implemented by: tool-web-search, any future tool-* extension.

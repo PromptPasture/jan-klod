@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.2.0;
+package jan-klod:interfaces@0.3.0;
 
 /// A namespaced view of the core's own store.
 /// Used by extensions that need persistence but are not the store themselves

@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.2.0;
+package jan-klod:interfaces@0.3.0;
 
 /// One-way observation channel — an extension reports something notable and the
 /// host decides what to do with it (log it today; metrics or a subscriber later).

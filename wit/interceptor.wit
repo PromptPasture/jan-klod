@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.2.0;
+package jan-klod:interfaces@0.3.0;
 
 /// Agent-loop decision hook — the one generic interface every `interceptor-*`
 /// extension exports. The core loop (mechanism, in Rust) drives an **ordered

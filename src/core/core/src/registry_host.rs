@@ -40,6 +40,7 @@ use mcp_bind::jan_klod::interfaces::host_config as mcp_config;
 use mcp_bind::jan_klod::interfaces::host_event as mcp_event;
 use mcp_bind::jan_klod::interfaces::host_http as mcp_http;
 use mcp_bind::jan_klod::interfaces::host_log as mcp_log;
+use mcp_bind::jan_klod::interfaces::host_process as mcp_proc;
 
 // ─── skills host state ───────────────────────────────────────────────────────
 
@@ -157,6 +158,15 @@ struct McpHost {
     /// Destinations this registry may reach — bounded like any other extension's
     /// egress, even though talking to third-party servers is its whole purpose.
     egress: crate::egress::EgressPolicy,
+    /// The bounded command runner, for the long-lived half of `host-process`
+    /// (#110). A registry never runs a command to completion; it holds a stdio
+    /// MCP server open.
+    process: crate::host_process::ProcessRunner,
+    /// This instance's long-lived children. The same type `tool_host` holds, so
+    /// the lifetime guarantee is the same one rather than a second
+    /// implementation of it — a registry instance's children die with it for
+    /// exactly the reason a tool instance's do.
+    children: crate::host_process::Children,
 }
 
 impl WasiView for McpHost {
@@ -353,6 +363,66 @@ impl SkillsExtension {
 // ─── McpExtension ────────────────────────────────────────────────────────────
 
 /// An instantiated `registry-mcp` extension.
+impl mcp_proc::Host for McpHost {
+    /// A registry has no use for a command that runs to completion — it holds a
+    /// server open — so this is refused rather than wired. Declaring it is
+    /// unavoidable: a world imports interfaces, not functions.
+    fn exec(
+        &mut self,
+        _command: String,
+        _args: Vec<String>,
+        _cwd: Option<String>,
+        _stdin: Option<String>,
+    ) -> Result<mcp_proc::Exit, mcp_proc::ProcError> {
+        Err(mcp_proc::ProcError::Denied)
+    }
+
+    fn spawn(&mut self, name: String) -> Result<u32, mcp_proc::ProcError> {
+        self.children
+            .spawn(&self.process, &name)
+            .map_err(to_mcp_proc_error)
+    }
+
+    fn write_stdin(&mut self, child: u32, data: String) -> Result<(), mcp_proc::ProcError> {
+        self.children
+            .write_stdin(child, &data)
+            .map_err(to_mcp_proc_error)
+    }
+
+    fn read_stdout(
+        &mut self,
+        child: u32,
+        max_bytes: u32,
+        timeout_ms: u32,
+    ) -> Result<String, mcp_proc::ProcError> {
+        self.children
+            .read_stdout(
+                child,
+                max_bytes as usize,
+                std::time::Duration::from_millis(u64::from(timeout_ms)),
+            )
+            .map_err(to_mcp_proc_error)
+    }
+
+    fn is_running(&mut self, child: u32) -> bool {
+        self.children.is_running(child)
+    }
+
+    fn kill(&mut self, child: u32) {
+        self.children.kill(child);
+    }
+}
+
+const fn to_mcp_proc_error(err: crate::host_process::ProcError) -> mcp_proc::ProcError {
+    match err {
+        crate::host_process::ProcError::Denied => mcp_proc::ProcError::Denied,
+        crate::host_process::ProcError::Timeout => mcp_proc::ProcError::Timeout,
+        crate::host_process::ProcError::SpawnFailed => mcp_proc::ProcError::SpawnFailed,
+    }
+}
+
+/// A live `registry-mcp` instance: an instantiated, started guest that can be
+/// asked for its tools and called.
 pub struct McpExtension {
     id: String,
     store: Store<McpHost>,
@@ -370,6 +440,7 @@ impl McpExtension {
         component: &wasmtime::component::Component,
         config_json: String,
         egress: crate::egress::EgressPolicy,
+        process: crate::host_process::ProcessRunner,
     ) -> Result<Self, CoreError> {
         let mut linker: Linker<McpHost> = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
@@ -378,6 +449,7 @@ impl McpExtension {
             .map_err(CoreError::linker)?;
         mcp_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
         mcp_event::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
+        mcp_proc::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = McpHost {
             wasi: WasiCtxBuilder::new().inherit_stderr().build(),
@@ -385,6 +457,8 @@ impl McpExtension {
             component_id: id.to_string(),
             config_json,
             egress,
+            process,
+            children: crate::host_process::Children::default(),
         };
         let mut store = Store::new(engine, host);
         let world = mcp_bind::McpRegistryWorld::instantiate(&mut store, component, &linker)
@@ -584,6 +658,9 @@ struct PendingMcp {
     component: Component,
     config_json: String,
     egress: crate::egress::EgressPolicy,
+    /// Carried rather than rebuilt: the runner is the boot path's one decision
+    /// about confinement, and a registry must get the same one a tool gets.
+    process: crate::host_process::ProcessRunner,
 }
 
 /// A registry fleet whose guests are compiled but not yet instantiated (#59).
@@ -638,12 +715,14 @@ impl LazyRegistryFleet {
         component: Component,
         config_json: String,
         egress: crate::egress::EgressPolicy,
+        process: crate::host_process::ProcessRunner,
     ) {
         self.pending_mcp.push(PendingMcp {
             id: id.into(),
             component,
             config_json,
             egress,
+            process,
         });
     }
 
@@ -675,6 +754,7 @@ impl LazyRegistryFleet {
                     &pending.component,
                     pending.config_json,
                     pending.egress,
+                    pending.process,
                 )?);
             }
             self.live = Some(RegistryFleet::new(skills, mcp));

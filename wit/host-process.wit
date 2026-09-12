@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.2.0;
+package jan-klod:interfaces@0.3.0;
 
 /// Run a command as a child process — the execution substrate (Phase 7).
 ///
@@ -14,7 +14,9 @@ package jan-klod:interfaces@0.2.0;
 /// guest may start rather than permitting spawning. A guest with the second
 /// grant can start what an operator wrote down and nothing else.
 ///
-/// Implemented by the host; imported by execution `tool-*` extensions (bash/eval/…).
+/// Implemented by the host; imported by execution `tool-*` extensions (bash/eval/…)
+/// and — for the long-lived half only — by `registry-mcp`, which holds a stdio
+/// MCP server open.
 interface host-process {
     /// Why an exec failed.
     enum proc-error {

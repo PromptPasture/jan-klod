@@ -466,6 +466,89 @@ impl Drop for LiveChild {
     }
 }
 
+/// The long-lived children one extension instance is holding open.
+///
+/// # Why this is a type rather than two fields on a host adapter
+///
+/// Both `tool-*` and `registry-*` guests can hold children, and they are
+/// instantiated by different adapters (`tool_host::ToolHost`,
+/// `registry_host::McpHost`). The lifetime guarantee from
+/// [#109](https://github.com/PromptPasture/jan-klod/issues/109) — a child dies
+/// with the instance that started it — has to hold identically for both, and a
+/// guarantee implemented twice is a guarantee that will eventually be
+/// implemented once. So the table, the handle counter and every guest-facing
+/// operation live here, and an adapter holds one and delegates.
+///
+/// Dropping this kills everything in it, because dropping a [`LiveChild`] does.
+#[derive(Default)]
+pub struct Children {
+    live: std::collections::HashMap<u32, LiveChild>,
+    /// Monotonic, so a killed handle is never reissued and a stale one fails
+    /// rather than addressing somebody else's child.
+    next: u32,
+}
+
+impl Children {
+    /// Start the child `runner` grants under `name`.
+    ///
+    /// # Errors
+    /// Whatever [`ProcessRunner::spawn_long_lived`] refuses with — including
+    /// [`ProcError::Denied`] for a name the operator never wrote down.
+    pub fn spawn(&mut self, runner: &ProcessRunner, name: &str) -> Result<u32, ProcError> {
+        let live = runner.spawn_long_lived(name)?;
+        self.next += 1;
+        let handle = self.next;
+        self.live.insert(handle, live);
+        Ok(handle)
+    }
+
+    /// Write to a child's stdin.
+    ///
+    /// # Errors
+    /// [`ProcError::Denied`] for a handle this instance was not given — a guest
+    /// can pass any integer, and the answer to one it never received is the
+    /// answer it gets for a child it was never granted.
+    pub fn write_stdin(&mut self, handle: u32, data: &str) -> Result<(), ProcError> {
+        self.live
+            .get_mut(&handle)
+            .ok_or(ProcError::Denied)?
+            .write_stdin(data)
+    }
+
+    /// Read from a child's stdout. See [`LiveChild::read_stdout`] for what an
+    /// empty answer means.
+    ///
+    /// # Errors
+    /// [`ProcError::Denied`] for an unknown handle.
+    pub fn read_stdout(
+        &mut self,
+        handle: u32,
+        max_bytes: usize,
+        timeout: Duration,
+    ) -> Result<String, ProcError> {
+        Ok(self
+            .live
+            .get_mut(&handle)
+            .ok_or(ProcError::Denied)?
+            .read_stdout(max_bytes, timeout))
+    }
+
+    /// Whether a child is alive. `false` for an unknown handle, so a caller
+    /// polling one it does not have terminates rather than erroring forever.
+    pub fn is_running(&mut self, handle: u32) -> bool {
+        self.live
+            .get_mut(&handle)
+            .is_some_and(LiveChild::is_running)
+    }
+
+    /// Kill and forget. Dropping the [`LiveChild`] is what kills it, so removing
+    /// it from the map is the whole implementation — and the same thing happens
+    /// to every child still here when this is dropped.
+    pub fn kill(&mut self, handle: u32) {
+        self.live.remove(&handle);
+    }
+}
+
 /// Read a captured stream to a UTF-8 string, truncated to `cap` bytes.
 fn read_capped(stream: Option<impl Read>, cap: usize) -> String {
     let mut buf = Vec::new();
@@ -484,6 +567,33 @@ fn read_capped(stream: Option<impl Read>, cap: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared table refuses a name no grant carries — the one path both
+    /// `tool_host` and `registry_host` go through (#110).
+    ///
+    /// Asserted here rather than across the Component-Model boundary because
+    /// this is the *shared* half: a boundary test needs a guest that calls
+    /// `spawn`, and `registry-mcp` does not yet. The manifest says so plainly —
+    /// capabilities are read from a component's real imports, so `host-process`
+    /// will not appear in `registry-mcp.manifest.toml` until the guest actually
+    /// calls it. The boundary test arrives with the caller.
+    #[test]
+    fn a_name_no_grant_carries_is_refused_by_the_shared_table() {
+        let mut children = Children::default();
+        let ungranted = ProcessRunner::disabled();
+        assert_eq!(
+            children.spawn(&ungranted, "nothing-named-this"),
+            Err(ProcError::Denied)
+        );
+        // And an unknown handle is refused the same way, since a guest can pass
+        // any integer.
+        assert_eq!(
+            children.write_stdin(41, "x"),
+            Err(ProcError::Denied),
+            "a handle this table never issued reaches nobody"
+        );
+        assert!(!children.is_running(41));
+    }
 
     fn runner() -> (Workspace, ProcessRunner) {
         let dir = std::env::temp_dir().join(format!(

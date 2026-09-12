@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.2.0;
+package jan-klod:interfaces@0.3.0;
 
 /// Structured logging — forwarded to core's log pipeline.
 interface host-log {
