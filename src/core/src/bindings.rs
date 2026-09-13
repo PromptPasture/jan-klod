@@ -8,6 +8,6 @@
 //! accessors are used once components are instantiated.
 
 wasmtime::component::bindgen!({
-    path: "../../../wit",
+    path: "../../wit",
     world: "extension-world",
 });

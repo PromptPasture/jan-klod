@@ -36,8 +36,9 @@ serde_json = "1"
 whatlang = "0.16"
 
 # Linting policy, declared once and inherited by every guest via `lints.workspace =
-# true`. Same strict policy as the core workspace (src/core/Cargo.toml) — guests
-# live outside src/core/, so it's declared again here rather than inherited across
+# true`. Same strict policy as the host workspace (src/Cargo.toml) — the guests
+# are their own workspace, so it is declared again here rather than inherited
+# across
 # workspaces.
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -50,7 +51,7 @@ nursery = "warn"
 
 # `make test` compiles these crates' native (host-target) unit tests in the dev
 # profile. Same disk/compile-time tradeoff as the host workspace
-# (src/core/Cargo.toml): full debug info isn't needed for these, backtraces still
+# (src/Cargo.toml): full debug info isn't needed for these, backtraces still
 # resolve to file:line.
 [profile.dev]
 debug = "line-tables-only"

@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = ["core", "config", "host", "protocol", "tui"]
+# Both are cargo workspaces in their own right, sitting under this one's
+# directory. Each declares its own `[workspace]`, so cargo's upward search stops
+# there and neither is silently adopted as a member — naming them here says so
+# out loud, and makes a future glob in `members` safe. `src/supervisor` (Go) and
+# `src/web` (TypeScript) carry no manifest and need no entry.
+exclude = ["extensions", "gui"]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+# Internal crates — a host binary and its libraries, not for crates.io. Marking
+# them unpublished also lets cargo-deny's `allow-wildcard-paths` exempt their
+# versionless intra-workspace path deps (see deny.toml [bans]).
+publish = false
+
+[workspace.dependencies]
+wasmtime = "46"
+wasmtime-wasi = "46"
+# `derive` adds no package to the audited tree: serde and serde_derive are both
+# already in Cargo.lock, pulled in by serde_json and serde_yaml_ng.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+thiserror = "2"
+
+# Disk is tight and wasmtime's debug builds are large: full debug info balloons the
+# incremental cache (was 15GB+ for this workspace alone). Backtraces still resolve
+# to file:line; only step-through variable inspection in a debugger is reduced.
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies get none at all — not even the line tables.
+#
+# Note what the block above already does: a `[profile.dev]` setting applies to
+# every crate built with the profile, dependencies included, which is why the
+# 2026-07-06 change to it reclaimed so much. So this is not "deps still carry
+# full debug info"; it is the narrower step of dropping their remaining line
+# tables. Measured on a clean build of this workspace: 4.6GB -> 4.0GB.
+#
+# The asymmetry with the block above is deliberate: a backtrace through *our*
+# code still resolves to file:line, which is what a panic in a test needs. What
+# is given up is file:line on the third-party frames of a backtrace, and
+# stepping into a dependency in a debugger.
+#
+# `"*"` matches non-workspace packages only, so workspace members keep
+# `line-tables-only`.
+[profile.dev.package."*"]
+debug = 0
+
+# Linting policy, declared once and inherited by every crate via `lints.workspace = true`.
+# Levels are `warn` (visible, non-blocking locally); CI denies warnings (Slice 1b gate).
+[workspace.lints.rust]
+unsafe_code = "deny"   # hand-written unsafe is forbidden; generated bindings opt back in locally
+missing_docs = "warn"  # document each crate's public API
+
+[workspace.lints.clippy]
+all = "warn"       # correctness, style, complexity, perf
+pedantic = "warn"  # stricter modern-Rust idioms
+nursery = "warn"   # in-development lints; may need occasional #[allow]

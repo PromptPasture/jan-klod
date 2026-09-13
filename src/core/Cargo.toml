@@ -1,56 +1,67 @@
-[workspace]
-resolver = "2"
-members = ["core", "../tui", "../config", "../host", "../protocol"]
+[package]
+name = "jan-klod-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
 
-[workspace.package]
-edition = "2021"
-license = "Apache-2.0"
-# Internal crates — a host binary and its libraries, not for crates.io. Marking
-# them unpublished also lets cargo-deny's `allow-wildcard-paths` exempt their
-# versionless intra-workspace path deps (see deny.toml [bans]).
-publish = false
+[dependencies]
+jan-klod-config = { path = "../config" }
+# The wire contract. A real dependency since Slice 13b: `rpc` serves the commands
+# and frames the answers. Never the other way round — `jan-klod-protocol` carries
+# nothing beyond serde/serde_json (#41), and depending on the core would drag
+# wasmtime into every client that reads a frame.
+jan-klod-protocol = { path = "../protocol" }
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+serde_json.workspace = true
+# `derive` only, for the MCP frame shape — zero new packages, since serde and
+# serde_derive are both already in Cargo.lock via serde_json/serde_yaml_ng.
+serde.workspace = true
+toml = "0.9"
+thiserror.workspace = true
+ureq = "3"
+# Host-side persistent store (Phase 3 Slice 3a). `bundled` compiles SQLite from
+# source so there is no system-lib dependency; host-side, so no wasm constraint.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Host-side inbound HTTP surface (Phase 3 Slice 3b). Synchronous/blocking, which
+# matches the sync loop + the !Send Wasmtime-backed AgentSession (no async runtime,
+# no cross-thread sharing of the session). See docs/concepts/architecture.md#transport.
+tiny_http = "0.12"
+# SHA-256 for `ext install --sha256` (Slice 16c-1). **Zero new packages**:
+# `sha2` 0.10 is already in Cargo.lock, pulled in by wasmtime-wasi via wiggle,
+# so this only makes a transitive crate a direct one. Measured before adding,
+# the way `schemars` was measured and rejected at 7.
+sha2 = "0.10"
+# Signature verification for `ext install` (Slice 16c-1). **One package, no
+# transitive dependencies** — measured before adding. Verify-only on purpose:
+# the core never signs anything, so a signing crate would be capability this
+# binary has no use for. `minisign` (which signs) costs 10 packages and drags
+# `rpassword` and `scrypt` in for interactive password prompts; the tests build
+# their fixtures from `ring` + `blake2` instead (dev-only, in `jan-klod-host`),
+# at one more package.
+minisign-verify = "0.2.5"
+url = "2"
 
-[workspace.dependencies]
-wasmtime = "46"
-wasmtime-wasi = "46"
-# `derive` adds no package to the audited tree: serde and serde_derive are both
-# already in Cargo.lock, pulled in by serde_json and serde_yaml_ng.
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml_ng = "0.10"
-thiserror = "2"
 
-# Disk is tight and wasmtime's debug builds are large: full debug info balloons the
-# incremental cache (was 15GB+ for this workspace alone). Backtraces still resolve
-# to file:line; only step-through variable inspection in a debugger is reduced.
-[profile.dev]
-debug = "line-tables-only"
+# Landlock, for the Linux command sandbox (Slice 15c). Target-gated, so it never
+# reaches a macOS or Windows build: 3 packages (landlock, enumflags2,
+# enumflags2_derive), measured before adding. The crate is a safe wrapper over
+# the syscalls, which is what lets this repository keep `unsafe_code = "deny"`
+# while confining a command — see `sandbox_landlock` for the rest of that story.
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.7"
 
-# Dependencies get none at all — not even the line tables.
-#
-# Note what the block above already does: a `[profile.dev]` setting applies to
-# every crate built with the profile, dependencies included, which is why the
-# 2026-07-06 change to it reclaimed so much. So this is not "deps still carry
-# full debug info"; it is the narrower step of dropping their remaining line
-# tables. Measured on a clean build of this workspace: 4.6GB -> 4.0GB.
-#
-# The asymmetry with the block above is deliberate: a backtrace through *our*
-# code still resolves to file:line, which is what a panic in a test needs. What
-# is given up is file:line on the third-party frames of a backtrace, and
-# stepping into a dependency in a debugger.
-#
-# `"*"` matches non-workspace packages only, so workspace members keep
-# `line-tables-only`.
-[profile.dev.package."*"]
-debug = 0
+# Off by default so a plain `cargo test` does not build the example, the same
+# block jan-klod-config's Cargo.toml carries for `dump`. It matters more here: this
+# crate links wasmtime, and `registry_index` is a build-time generator nothing
+# at runtime calls.
+[features]
+examples = []
 
-# Linting policy, declared once and inherited by every crate via `lints.workspace = true`.
-# Levels are `warn` (visible, non-blocking locally); CI denies warnings (Slice 1b gate).
-[workspace.lints.rust]
-unsafe_code = "deny"   # hand-written unsafe is forbidden; generated bindings opt back in locally
-missing_docs = "warn"  # document each crate's public API
+[[example]]
+name = "registry_index"
+required-features = ["examples"]
 
-[workspace.lints.clippy]
-all = "warn"       # correctness, style, complexity, perf
-pedantic = "warn"  # stricter modern-Rust idioms
-nursery = "warn"   # in-development lints; may need occasional #[allow]
+[lints]
+workspace = true

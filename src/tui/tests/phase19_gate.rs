@@ -59,7 +59,7 @@ fn a_full_turn() -> App {
         "c1".to_string(),
         "fs".to_string(),
         Some(
-            r#"{"op":"read","path":"src/core/ui/src/a/deliberately/long/path/to/a/file.rs"}"#
+            r#"{"op":"read","path":"src/tui/src/a/deliberately/long/path/to/a/file.rs"}"#
                 .to_string(),
         ),
     );

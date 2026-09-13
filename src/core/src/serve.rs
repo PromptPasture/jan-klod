@@ -582,8 +582,8 @@ fn accepts_event_stream(request: &Request) -> bool {
 /// would make Node a dependency of every `cargo build`. The reasoning, and what
 /// that choice costs, is in
 /// `docs/concepts/architecture.md#user-interfaces-separate-clients` (#119).
-const WEB_INDEX: &str = include_str!("../../../web/dist/index.html");
-const WEB_APP_JS: &str = include_str!("../../../web/dist/app.js");
+const WEB_INDEX: &str = include_str!("../../web/dist/index.html");
+const WEB_APP_JS: &str = include_str!("../../web/dist/app.js");
 
 /// Serve one embedded asset with its own content type.
 fn respond_asset(request: Request, body: &str, content_type: &str) -> std::io::Result<()> {

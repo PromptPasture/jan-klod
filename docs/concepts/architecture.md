@@ -231,9 +231,9 @@ serves at `/` — in a system webview. There is no third client codebase, which 
 the whole of Vision decision 5.
 
 What the row above does not show is where the code lives. The Tauri shell is
-`src/gui`, **its own cargo workspace**, not a member of `src/core`. That is not
+`src/gui`, **its own cargo workspace**, not a member of the host workspace. That is not
 tidiness: Tauri resolves **256 packages** the host workspace does not otherwise
-need, and as a member those would land in `src/core/Cargo.lock` (406 → 663) and
+need, and as a member those would land in `src/Cargo.lock` (406 → 663) and
 be resolved and built by every `cargo test`, every `cargo clippy --workspace`
 and every CI run, whether or not anyone touched the window. Kept separate, they
 are behind `make gui` and nothing else reaches them.
@@ -308,7 +308,7 @@ install Node today. That is a large tax on everyone who never touches the web
 client, paid so that one generated file is absent from git.
 
 The second is that this repository already does this, three times, and has a
-shape for it. `src/core/protocol/schema/protocol.schema.json` is generated and
+shape for it. `src/protocol/schema/protocol.schema.json` is generated and
 committed with a drift test that regenerates and compares; `ext/*.manifest.toml`
 are generated from each component's real imports and committed; `wit/wkg.lock`
 likewise. "The tree carries no generated artifacts" is not a property this

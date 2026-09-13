@@ -200,9 +200,9 @@ it is built into the core binary since Phase 3, so the earlier question of a
 separate `api-rest` guest is closed.
 
 **Phase 13 — the client protocol is a contract of the same rank as WIT.** The
-`jan-klod-protocol` crate (`src/core/protocol`) holds the typed commands and
+`jan-klod-protocol` crate (`src/protocol`) holds the typed commands and
 notifications, `PROTOCOL_VERSION`, and a JSON Schema export in
-[`schema/protocol.schema.json`](../../src/core/protocol/schema/protocol.schema.json)
+[`schema/protocol.schema.json`](../../src/protocol/schema/protocol.schema.json)
 — which is what a non-Rust client generates its types from. Each value
 serializes to the `method`/`params` pair; the `jsonrpc` module wraps that pair
 in the JSON-RPC 2.0 frame the transports send.

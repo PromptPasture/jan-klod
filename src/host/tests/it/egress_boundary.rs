@@ -298,7 +298,7 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
 fn every_guest_facing_backend_goes_through_the_policy() {
     // Discovered by scanning, not a hard-coded file list — a literal list can't
     // notice a new backend added after it was written.
-    let core = common::repo_root().join("src/core/core/src");
+    let core = common::repo_root().join("src/core/src");
     let mut backends = Vec::new();
     for entry in std::fs::read_dir(&core)
         .expect("core sources are readable")
@@ -351,11 +351,16 @@ fn every_guest_facing_backend_goes_through_the_policy() {
     // Providers and tools receive an `HttpFn` from whoever builds them, so a
     // binary passing `Box::new(http::fetch)` reopens the hole without touching
     // any file scanned above.
-    for binary in ["host/src/main.rs", "ui/src/main.rs"] {
-        let path = common::repo_root().join("src/core").join(binary);
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
+    //
+    // Read with `expect`, not a silent `continue`: this loop names its files by
+    // hand, and a rename that moved one out from under the path left the check
+    // scanning nothing while still reporting green — which is what happened when
+    // `ui/` became `tui/` and the crates moved out of `src/core/`. A missing file
+    // here is a broken test, not an absent binary.
+    for binary in ["host/src/main.rs", "tui/src/main.rs"] {
+        let path = common::repo_root().join("src").join(binary);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is readable: {e}", path.display()));
         for (number, line) in text.lines().enumerate() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") {

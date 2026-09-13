@@ -8,7 +8,7 @@ updated: 2026-09-09T00:00:00Z
 ---
 
 A single `config.yaml` declares which extensions run and how they are
-configured. The **core** loads it (`src/core/config/`, the `jan-klod-config`
+configured. The **core** loads it (`src/config/`, the `jan-klod-config`
 crate) and turns it into a list of **extension instances**; everything domain-
 specific is opaque to the core and handed to the instance through
 [`host-config`](contracts.md#host-provided-interfaces).

@@ -12,18 +12,18 @@ jan-klod --gui      # spawn-or-attach a gateway, then open the window
 ## Why this is its own cargo workspace
 
 Because of what Tauri costs, measured in [#141] **before** any of this was
-written, against a baseline of `src/core` at 406 packages:
+written, against a baseline of the host workspace at 406 packages:
 
 | | |
 |---|---:|
 | Packages added to this repository, after dedup | **+256** |
-| `src/core/Cargo.lock` if this were a member | 406 → **663** |
+| `src/Cargo.lock` if this were a member | 406 → **663** |
 | Clean release build (this crate alone) | 57.6 s wall, **332 CPU-s**, 838 MB `target/` |
 | Clean debug build | 34.2 s wall, 152 CPU-s, 768 MB |
 | Release binary | **9.6 MB** |
 | `deny.toml` entries required | **11** |
 
-As a member of `src/core`, those 256 packages would be resolved and built by
+As a member of the host workspace, those 256 packages would be resolved and built by
 every `cargo test`, every `cargo clippy --workspace` and every CI run — by
 everyone, including everyone who never opens a window. Separate, they are behind
 `make gui` and nothing else. The cost of that separation is a second `target/`
@@ -73,7 +73,7 @@ jan-klod-gui --url <url> [--title <title>]
 ```
 
 `jan-klod --gui` does the rest — `ensure_gateway` (spawn-or-attach, already in
-`src/core/ui`), then launch this with a URL that is already answering. A second
+`src/tui`), then launch this with a URL that is already answering. A second
 copy of spawn-or-attach would eventually find a different gateway than the REST
 path starts, which is the bug that split was drawn to avoid.
 

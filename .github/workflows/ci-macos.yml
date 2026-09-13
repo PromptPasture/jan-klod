@@ -24,7 +24,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src/core/core/src/sandbox*.rs'
+      - 'src/core/src/sandbox*.rs'
       - 'src/host/tests/it/sandbox_*.rs'
       # The boot-path confinement pair lives here, not in a sandbox_* file
       # (#125). It is the only evidence that the runner
@@ -35,7 +35,7 @@ on:
       - '.github/workflows/ci-macos.yml'
   pull_request:
     paths:
-      - 'src/core/core/src/sandbox*.rs'
+      - 'src/core/src/sandbox*.rs'
       - 'src/host/tests/it/sandbox_*.rs'
       # The boot-path confinement pair lives here, not in a sandbox_* file
       # (#125). It is the only evidence that the runner
@@ -72,7 +72,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src/core
+          workspaces: src
 
       # Pinned exactly as in ci.yml: these Makefiles parse nextest's output, and
       # the count guard below reads `nextest list`. Keep in step with
@@ -136,7 +136,7 @@ jobs:
       # nothing sets `CARGO_TERM_COLOR` there.
       - name: Guard — the Seatbelt tests must exist on this runner
         run: |
-          cd src/core
+          cd src
           cargo nextest list -p jan-klod-host \
             --features jan-klod-host/integration --bins --tests \
             --color never > /tmp/nextest-list.txt
@@ -169,7 +169,7 @@ jobs:
       # run against Landlock on every push via ci.yml's `harness` job.
       - name: Seatbelt sandbox tests, and the boot path that resolves them
         run: |
-          cd src/core && cargo nextest run -p jan-klod-host \
+          cd src && cargo nextest run -p jan-klod-host \
             --features jan-klod-host/integration sandbox_seatbelt:: execution_config::
         env:
           JK_REQUIRE_GUESTS: "1"
@@ -177,4 +177,4 @@ jobs:
       # The core's own unit tests on macOS — cheap next to the above, and the
       # half of `sandbox.rs` that picks a backend is itself per-OS.
       - name: Core unit tests
-        run: cd src/core && cargo test -p jan-klod-core
+        run: cd src && cargo test -p jan-klod-core

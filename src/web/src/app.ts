@@ -1,7 +1,7 @@
 /**
  * The client: a session list, a transcript, an input, and a prompt dialog.
  *
- * Plain DOM. `src/core/ui/src/app.rs` is the reference for *what* a client must
+ * Plain DOM. `src/tui/src/app.rs` is the reference for *what* a client must
  * handle — this is the same set of responsibilities with a different surface.
  */
 

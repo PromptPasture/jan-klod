@@ -17,7 +17,7 @@ use crate::CoreError;
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod skills_bind {
     wasmtime::component::bindgen!({
-        path: "../../../wit",
+        path: "../../wit",
         world: "skill-registry-world",
     });
 }
@@ -31,7 +31,7 @@ use skills_bind::jan_klod::interfaces::host_log as sk_log;
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod mcp_bind {
     wasmtime::component::bindgen!({
-        path: "../../../wit",
+        path: "../../wit",
         world: "mcp-registry-world",
     });
 }

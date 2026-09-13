@@ -1,7 +1,8 @@
 # cargo-deny policy — the primary supply-chain gate for the Rust host workspace
-# (src/core), the guest extensions workspace (src/extensions/*, one shared
+# (src/, whose members are src/core, src/config, src/host, src/protocol and
+# src/tui), the guest extensions workspace (src/extensions/*, one shared
 # Cargo.lock across all guests), and the GUI shell workspace (src/gui, which owns
-# the Tauri tree and is kept out of src/core precisely so that tree is not on
+# the Tauri tree and is kept out of the host workspace precisely so that tree is not on
 # everyone's build). One shared policy keeps the license / advisory / source rules
 # identical across all three workspaces. Every invocation points here with
 # `--config`, so the file's location is not significant. Closes the Phase 1

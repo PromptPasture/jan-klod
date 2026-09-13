@@ -35,7 +35,7 @@ use crate::CoreError;
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bind {
     wasmtime::component::bindgen!({
-        path: "../../../wit",
+        path: "../../wit",
         world: "interceptor-world",
     });
 }
@@ -776,9 +776,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn repo_root() -> PathBuf {
-        [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."]
-            .iter()
-            .collect()
+        [env!("CARGO_MANIFEST_DIR"), "..", ".."].iter().collect()
     }
 
     /// #162: a guest `tool-result` interceptor can rewrite `content` (there is

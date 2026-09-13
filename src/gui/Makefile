@@ -1,7 +1,7 @@
 .PHONY: build release test clippy fmt audit deny clean stage
 
 # Builds, tests and lints the GUI shell — a Tauri window around the web client
-# the core already serves. Its own workspace, not a member of src/core: see the
+# the core already serves. Its own workspace, not a member of the host workspace: see the
 # comment at the top of Cargo.toml, and #141 for the measurement behind it.
 
 # The shared cargo-deny policy lives at the repo root — one policy for all three

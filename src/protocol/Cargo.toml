@@ -4,10 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-# This crate lives outside src/core's own directory tree (deliberately, to sit
-# alongside it rather than nested inside it), so cargo's usual upward search for
-# the workspace root won't find it; this points at it explicitly.
-workspace = "../core"
 
 # This crate is the wire *contract*, so it performs no I/O: a transport (Slice
 # 13b stdio, 13c WebSocket) owns the sockets and the read loop. It does now pick

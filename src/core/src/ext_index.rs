@@ -41,7 +41,7 @@ pub const INDEX_VERSION: u64 = 1;
 
 /// One published component, as the index describes it.
 ///
-/// The same shape `src/core/core/examples/registry_index.rs` writes — one
+/// The same shape `src/core/examples/registry_index.rs` writes — one
 /// format, written in one place and read in one place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {

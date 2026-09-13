@@ -4,17 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-# This crate lives outside src/core's own directory tree (deliberately, to sit
-# alongside it rather than nested inside it), so cargo's usual upward search for
-# the workspace root won't find it; this points at it explicitly.
-workspace = "../core"
 
 [[bin]]
 name = "jan-klod-gateway"
 path = "src/main.rs"
 
 [dependencies]
-jan-klod-core = { path = "../core/core" }
+jan-klod-core = { path = "../core" }
 # The `serve` subcommand binds the host-side REST surface. Also used by the
 # api_rest integration test (a normal dep is visible to tests too).
 tiny_http = "0.12"

@@ -6,7 +6,7 @@
 //! This binary is **only a window**. It does not spawn a gateway, resolve an
 //! address, or know what a session is — `jan-klod --gui` does all of that and
 //! then launches this with a URL that is already answering. That split is
-//! deliberate: `src/core/ui` already owns spawn-or-attach, and a second copy of
+//! deliberate: `src/tui` already owns spawn-or-attach, and a second copy of
 //! that rule would eventually find a different gateway than the REST path does.
 //!
 //! ## The one thing here that is not a window
@@ -104,7 +104,7 @@ struct Args {
 
 /// Read `--url <url>` and `--title <title>`.
 ///
-/// Hand-rolled for the same reason `src/core/ui` hand-rolls its own: two flags
+/// Hand-rolled for the same reason `src/tui` hand-rolls its own: two flags
 /// do not justify an argument-parsing dependency in a tree this large already.
 fn parse_args(args: &[String]) -> Result<Args, String> {
     const USAGE: &str = "usage: jan-klod-gui --url <url> [--title <title>]";

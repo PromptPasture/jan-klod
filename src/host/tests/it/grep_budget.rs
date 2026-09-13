@@ -5,7 +5,7 @@
 //! assertion it does not make. Run it deliberately:
 //!
 //! ```console
-//! cd src/core && cargo test -p jan-klod-host --features jan-klod-host/integration \
+//! cd src && cargo test -p jan-klod-host --features jan-klod-host/integration \
 //!   --test it grep_budget -- --ignored --nocapture
 //! ```
 //!

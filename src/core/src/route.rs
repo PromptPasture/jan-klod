@@ -24,7 +24,7 @@ use crate::CoreError;
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod provider_bind {
     wasmtime::component::bindgen!({
-        path: "../../../wit",
+        path: "../../wit",
         world: "provider-world",
     });
 }
@@ -387,9 +387,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn repo_root() -> PathBuf {
-        [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."]
-            .iter()
-            .collect()
+        [env!("CARGO_MANIFEST_DIR"), "..", ".."].iter().collect()
     }
 
     fn canned_http(content: &'static str) -> HttpFn {

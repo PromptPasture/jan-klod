@@ -74,17 +74,17 @@ The generated crate compiles. That is not the same as working, and the host
 suite is where the difference shows:
 
 ```console
-$ cd src/core && cargo nextest run -p jan-klod-host --features jan-klod-host/integration generated_guest::
+$ cd src && cargo nextest run -p jan-klod-host --features jan-klod-host/integration generated_guest::
 ```
 
-`src/core/host/tests/it/generated_guest.rs` is written to be copied. Its module
+`src/host/tests/it/generated_guest.rs` is written to be copied. Its module
 docs name the three things that are yours — the component, the instance id, and
 the assertions — and say the rest is harness. It loads the component and calls
 it directly, with no `Runtime`, no config and no provider, because while you are
 writing a guest a whole agent tells you less and takes longer to fail.
 
 Copy it, change those three things, and add `mod your_module;` to
-`src/core/host/tests/it/main.rs`. **Not a new file beside it**: that is one test
+`src/host/tests/it/main.rs`. **Not a new file beside it**: that is one test
 binary on purpose, because `wasmtime` links statically and every extra
 integration target is another multi-gigabyte link.
 

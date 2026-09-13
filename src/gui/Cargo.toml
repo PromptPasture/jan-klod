@@ -1,7 +1,7 @@
-# The GUI shell's own workspace — deliberately not a member of `src/core`.
+# The GUI shell's own workspace — deliberately not a member of the host workspace.
 #
 # Tauri resolves 256 packages that nothing else in this repository needs (#141).
-# As a member of the host workspace those would land in `src/core/Cargo.lock`
+# As a member of the host workspace those would land in `src/Cargo.lock`
 # (406 -> 663) and every `cargo test`, `cargo clippy --workspace` and CI run
 # would resolve and build them, whether or not anyone touched the window. A
 # separate workspace keeps that tree behind `make gui`, at the cost of a second
@@ -37,14 +37,14 @@ tauri = "2"
 # For `serde_json::to_string` on the two values interpolated into the
 # initialization script. Adds **zero** packages: `tauri` already depends on it
 # at this version, so this only makes a transitive crate a named one — measured,
-# not assumed, the same way `src/core/ui` records `unicode-width`.
+# not assumed, the same way `src/tui` records `unicode-width`.
 #
 # Direct because escaping is our own concern: the token goes into a JavaScript
 # string literal, and `format!` with quotes around it would be an injection the
 # day a token contains a quote or a backslash.
 serde_json = "1"
 
-# Mirrors src/core's profile. Disk is tight here for the same reason it is
+# Mirrors the host workspace's profile. Disk is tight here for the same reason it is
 # there, and more so: this tree is larger than the host workspace's.
 [profile.dev]
 debug = "line-tables-only"
@@ -53,7 +53,7 @@ debug = "line-tables-only"
 debug = 0
 
 # The same lint policy every other crate in this repository inherits, restated
-# because a separate workspace cannot inherit `src/core`'s.
+# because a separate workspace cannot inherit the host workspace's.
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"

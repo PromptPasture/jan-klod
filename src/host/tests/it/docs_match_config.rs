@@ -528,14 +528,14 @@ fn the_security_model_cites_tests_that_exist() {
         // a fourth entry here every time one is added — `src/gui/src/main.rs`
         // resolves from the top, where `src/main.rs` would be ambiguous.
         let candidates = [
-            root.join("src/core").join(path),
+            root.join("src").join(path),
             root.join("src/extensions").join(path),
             root.join(path),
         ];
         let found = candidates.iter().find(|p| p.exists()).unwrap_or_else(|| {
             panic!(
                 "the security model cites `{path}`, which does not exist under \
-                 src/core, src/extensions, or the repository root"
+                 src, src/extensions, or the repository root"
             )
         });
         let source = std::fs::read_to_string(found).expect("the cited file is readable");

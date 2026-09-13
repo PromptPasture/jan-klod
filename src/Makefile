@@ -1,12 +1,13 @@
 .PHONY: build check test clippy audit deny clean
 
-# Builds, tests, and lints the Rust host workspace (core + config + host crates).
-# Strictly core: actually running the integrated system needs the guests staged in
+# Builds, tests, and lints the Rust host workspace — core, config, host,
+# protocol and tui, each a direct child of this directory. Strictly that
+# workspace: actually running the integrated system needs the guests staged in
 # ext/, which spans both subtrees — that orchestration lives in the root Makefile.
 
 # The shared cargo-deny policy lives at the repo root (one policy for the host
 # workspace and every guest). Resolve it absolutely so the target works from here.
-DENY_CONFIG := $(abspath $(CURDIR)/../../deny.toml)
+DENY_CONFIG := $(abspath $(CURDIR)/../deny.toml)
 
 # Compile the host workspace without running it.
 build:

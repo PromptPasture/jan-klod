@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := all
 
-# Orchestrates two sub-makefiles: src/core/Makefile (host workspace) and
+# Orchestrates two sub-makefiles: src/Makefile (the Rust host workspace) and
 # src/extensions/Makefile (guest components, staged in ext/). Also owns the
 # root WIT contracts and the integration targets spanning both subtrees.
 
@@ -10,12 +10,12 @@
 # same file. See versions.mk for why it is a file and not a block here.
 include versions.mk
 
-CORE := src/core
+HOST_WS := src
 EXT := src/extensions
 SUPERVISOR := src/supervisor
 WEB := src/web
 # The Tauri shell (#141, #142). Its own cargo workspace, deliberately: Tauri
-# resolves 256 packages nothing else here needs, and as a member of $(CORE) they
+# resolves 256 packages nothing else here needs, and as a member of $(HOST_WS) they
 # would be on every `cargo test` and every CI run. Nothing on the default build
 # path reaches it — `all` does not, `gate` does not — which is the point. Its
 # supply-chain gates are *not* optional in the same way: `lockfile`, `deny` and
@@ -118,7 +118,7 @@ all: core extensions
 
 # --- Build (delegated to the sub-makefiles) ---
 core:
-	$(MAKE) -C $(CORE) build
+	$(MAKE) -C $(HOST_WS) build
 
 extensions:
 	$(MAKE) -C $(EXT) all
@@ -145,7 +145,7 @@ ext-new:
 test: test-core test-guests
 
 test-core:
-	$(MAKE) -C $(CORE) test
+	$(MAKE) -C $(HOST_WS) test
 
 # The legs `gate` doesn't cover: guest native tests + the Go supervisor.
 test-guests:
@@ -282,12 +282,12 @@ GUI_BIN := $(abspath $(GUI_DIR)/target/release/jan-klod-gui)
 JK_GUI_BIN := $(if $(GUI),$(GUI_BIN),)
 
 bundle: extensions
-	cd $(CORE) && cargo build --release -p jan-klod-host -p jan-klod
+	cd $(HOST_WS) && cargo build --release -p jan-klod-host -p jan-klod
 	@if [ -n "$(GUI)" ]; then $(MAKE) -C $(GUI_DIR) release; fi
-	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT); 	else 	  JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(CORE)/target/release/jan-klod-gateway $(CORE)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
+	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT); 	else 	  JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
 
 clippy: check-spike-deps
-	$(MAKE) -C $(CORE) clippy
+	$(MAKE) -C $(HOST_WS) clippy
 
 # --- Supply-chain gates (CI enforces all of these) ---
 
@@ -301,7 +301,7 @@ clippy: check-spike-deps
 # supply-chain job — the same commands typed twice, free to drift the way
 # the rest of #72 was about. Named here, both now call it.
 lockfile:
-	@for m in $(CORE)/Cargo.toml $(EXT)/Cargo.toml $(GUI_DIR)/Cargo.toml; do \
+	@for m in $(HOST_WS)/Cargo.toml $(EXT)/Cargo.toml $(GUI_DIR)/Cargo.toml; do \
 	  cargo metadata --locked --format-version 1 --manifest-path "$$m" >/dev/null \
 	    && echo "lockfile current: $$m" \
 	    || { echo "stale lockfile: $$m (run: cargo update --manifest-path $$m)" >&2; exit 1; }; \
@@ -313,7 +313,7 @@ lockfile:
 # eleven named entries (#141), so a policy run that skipped it would be checking
 # every workspace except the one the policy was widened for.
 audit deny:
-	$(MAKE) -C $(CORE) $@
+	$(MAKE) -C $(HOST_WS) $@
 	$(MAKE) -C $(EXT) $@
 	$(MAKE) -C $(GUI_DIR) $@
 
@@ -326,12 +326,26 @@ audit deny:
 # in this release?" — with two thirds of it.
 #
 # `cd` per workspace because cargo-cyclonedx writes beside each manifest; the
-# two globs are then merged into one document by the same `jq` as before.
+# results are then merged into one document by `jq`.
+#
+# **One** glob, `src/*/*.cdx.json`, and that is not a shortcut: every crate in
+# both workspaces — the five host members and `jan-klod-gui` — is a direct
+# child of `src/`, so one level of wildcard reaches all six and nothing else.
+# It has to be exactly one level. `src/**/...` is what was here before, and in
+# `sh` (no `globstar`) `**` is just `*`, so it was never recursive; when the
+# members moved out from under `src/core/` it silently stopped matching four of
+# the five and the SBOM lost them. A glob that quietly describes less than it
+# claims is the failure this repository keeps paying for, so the count is
+# asserted rather than trusted.
 sbom:
-	cd $(CORE) && cargo cyclonedx --format json --quiet
+	cd $(HOST_WS) && cargo cyclonedx --format json --quiet
 	cd $(GUI_DIR) && cargo cyclonedx --format json --quiet
+	@n=$$(ls $(HOST_WS)/*/*.cdx.json | wc -l | tr -d ' '); \
+	  test "$$n" -eq 6 \
+	    || { echo "sbom: expected 6 per-crate documents, found $$n:" >&2; \
+	         ls $(HOST_WS)/*/*.cdx.json >&2; exit 1; }
 	jq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
-	  $(CORE)/**/*.cdx.json $(GUI_DIR)/*.cdx.json > sbom.cdx.json
+	  $(HOST_WS)/*/*.cdx.json > sbom.cdx.json
 
 # The npm leg (#120). A named target rather than a line inlined below, and that
 # is not a style choice: the inlined supervisor line further down has never run
@@ -410,10 +424,10 @@ HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegra
 harness: export JK_REQUIRE_GUESTS = 1
 harness: check-spike-deps extensions
 	@for m in $(HARNESS_MODULES); do \
-	  test -f $(CORE)/host/tests/it/$$m.rs \
-	    || { echo "harness: no module $$m.rs in $(CORE)/host/tests/it/" >&2; exit 1; }; \
+	  test -f $(HOST_WS)/host/tests/it/$$m.rs \
+	    || { echo "harness: no module $$m.rs in $(HOST_WS)/host/tests/it/" >&2; exit 1; }; \
 	done
-	cd $(CORE) && cargo nextest run -p jan-klod-host --features jan-klod-host/integration $(addsuffix ::,$(HARNESS_MODULES))
+	cd $(HOST_WS) && cargo nextest run -p jan-klod-host --features jan-klod-host/integration $(addsuffix ::,$(HARNESS_MODULES))
 
 # Exit gate: the full offline integration suite, nothing allowed to skip.
 # JK_REQUIRE_GUESTS turns a silently-skipped test into a failure.
@@ -462,12 +476,12 @@ harness: check-spike-deps extensions
 # `2>/dev/null`, a compile failure and a zero count were one outcome — "exit 1"
 # with no output — and the redirect discarded the error that said which. Let
 # cargo fail on its own exit code, then count from the file.
-GATE_LIST := $(CORE)/target/gate-tests.txt
+GATE_LIST := $(HOST_WS)/target/gate-tests.txt
 
 gate: export JK_REQUIRE_GUESTS = 1
 gate: check-spike-deps extensions
 	@mkdir -p $(dir $(GATE_LIST))
-	@cd $(CORE) && cargo nextest list -p jan-klod-host --features jan-klod-host/integration --bins --tests --color never > target/gate-tests.txt
+	@cd $(HOST_WS) && cargo nextest list -p jan-klod-host --features jan-klod-host/integration --bins --tests --color never > target/gate-tests.txt
 	@n=$$(grep -c '^jan-klod-host::it ' $(GATE_LIST) || true); \
 	  echo "gate: integration suite (jan-klod-host::it) resolves $$n test(s)"; \
 	  if [ "$$n" -eq 0 ]; then \
@@ -476,8 +490,8 @@ gate: check-spike-deps extensions
 	    head -20 $(GATE_LIST) >&2; \
 	    exit 1; \
 	  fi
-	cd $(CORE) && cargo nextest run --workspace --features jan-klod-host/integration --no-fail-fast
-	cd $(CORE) && cargo test --doc --workspace
+	cd $(HOST_WS) && cargo nextest run --workspace --features jan-klod-host/integration --no-fail-fast
+	cd $(HOST_WS) && cargo test --doc --workspace
 
 # --- Hook-facing gates (also called directly by .github/workflows/ci.yml) ---
 #
@@ -504,11 +518,11 @@ gate: check-spike-deps extensions
 # keep it honest, the same reasoning `gate`'s own export above uses.
 gate-commit: export JK_REQUIRE_GUESTS = 1
 gate-commit:
-	cargo fmt --manifest-path $(CORE)/Cargo.toml --all -- --check
+	cargo fmt --manifest-path $(HOST_WS)/Cargo.toml --all -- --check
 	cargo fmt --manifest-path $(EXT)/Cargo.toml --all -- --check
 	rm -rf $(EXT_DIR)
 	$(MAKE) -C $(EXT) all
-	$(MAKE) -C $(CORE) check
+	$(MAKE) -C $(HOST_WS) check
 	$(MAKE) test
 
 # The pre-push gate: a push pays the full gate unconditionally, no skip check.
@@ -538,39 +552,39 @@ gate-push:
 # Boot the real core against config.yaml: resolve extensions against ext/,
 # compile present components, run their lifecycle, print the boot plan.
 run:
-	cd $(CORE) && cargo run --quiet -p jan-klod-host -- $(CONFIG) $(EXT_DIR)
+	cd $(HOST_WS) && cargo run --quiet -p jan-klod-host -- $(CONFIG) $(EXT_DIR)
 
 # Serve the loop over the host-side REST surface. Uses live host-http, so the
 # enabled provider needs its api-key env. Override BIND=host:port.
 BIND ?= 127.0.0.1:8787
 serve:
-	cd $(CORE) && cargo run --quiet -p jan-klod-host -- serve $(CONFIG) $(EXT_DIR) $(BIND)
+	cd $(HOST_WS) && cargo run --quiet -p jan-klod-host -- serve $(CONFIG) $(EXT_DIR) $(BIND)
 
 # TUI client — connects to the gateway (auto-starting it if not running).
 # Override ADDR=host:port and SESSION=id.
 ADDR ?= 127.0.0.1:8787
 SESSION ?= cli
 chat:
-	cd $(CORE) && cargo run --quiet -p jan-klod -- $(ADDR) $(SESSION)
+	cd $(HOST_WS) && cargo run --quiet -p jan-klod -- $(ADDR) $(SESSION)
 
 # The same client, in a window. `gui` first so the shell is staged beside the
 # binary `cargo run` produces — without it `--gui` correctly reports that the
 # shell is not installed, which is accurate and unhelpful as a dev loop.
 chat-gui: gui
-	cd $(CORE) && cargo run --quiet -p jan-klod -- --gui --addr $(ADDR)
+	cd $(HOST_WS) && cargo run --quiet -p jan-klod -- --gui --addr $(ADDR)
 
 # Telegram bot (headless). Needs TELEGRAM_BOT_TOKEN + network.
 chat-telegram:
-	cd $(CORE) && cargo run --quiet -p jan-klod-host -- telegram $(CONFIG) $(EXT_DIR)
+	cd $(HOST_WS) && cargo run --quiet -p jan-klod-host -- telegram $(CONFIG) $(EXT_DIR)
 
 # Drives a provider's llm-provider.complete path against a live endpoint.
 # Needs the provider's api-key env (e.g. OPENAI_API_KEY) — real, billed call.
 probe:
-	cd $(CORE) && cargo run --quiet -p jan-klod-host --features examples --example provider_probe -- $(CONFIG) $(EXT_DIR)
+	cd $(HOST_WS) && cargo run --quiet -p jan-klod-host --features examples --example provider_probe -- $(CONFIG) $(EXT_DIR)
 
 # Resolve config.yaml and print the extension plan (each instance -> wasm).
 config:
-	cd $(CORE) && cargo run --quiet -p jan-klod-config --features examples --example dump -- $(CONFIG)
+	cd $(HOST_WS) && cargo run --quiet -p jan-klod-config --features examples --example dump -- $(CONFIG)
 
 # One-time developer setup: cargo supply-chain plugins, git hooks, and the WIT
 # deps that only `wkg` can fetch.
@@ -588,7 +602,7 @@ install-hooks:
 	git config core.hooksPath .github/hooks
 
 clean:
-	$(MAKE) -C $(CORE) clean
+	$(MAKE) -C $(HOST_WS) clean
 	$(MAKE) -C $(EXT) clean
 	$(MAKE) -C $(GUI_DIR) clean
 	rm -rf $(CACHE_DIR)

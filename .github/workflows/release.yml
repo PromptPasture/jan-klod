@@ -55,7 +55,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src/core
+          workspaces: src
 
       # These two used to run the other way round — the fetch first, then the
       # install — so `wkg` did not exist when `wkg wit fetch` was called, and

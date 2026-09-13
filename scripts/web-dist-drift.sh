@@ -4,7 +4,7 @@
 # #119 box 1 chose to commit the bundle, and the argument it recorded was that
 # this repository already commits generated artifacts — protocol.schema.json,
 # ext/*.manifest.toml, wit/wkg.lock — each with a drift check. dist/ was the
-# first one without, and src/core/host/src/serve.rs embeds it with include_str!,
+# first one without, and src/host/src/serve.rs embeds it with include_str!,
 # so the failure mode is specific and silent: edit src/web/src/*.ts, do not
 # rebuild, and the core serves a stale client forever with everything green.
 #
