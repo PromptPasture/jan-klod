@@ -28,6 +28,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// Resolve one repository binary: sibling exe first, then `PATH`.
+///
 /// Shared rule for gateway (stdio spawns it) and GUI (`--gui`); "sibling, else PATH"
 /// works for bundles (all together) and dev trees (different `target/` dirs).
 #[must_use]

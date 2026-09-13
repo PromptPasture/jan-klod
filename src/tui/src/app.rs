@@ -870,7 +870,10 @@ impl App {
     /// Session from notification (not `self`): multiple clients may run (#103).
     /// Answer is byte-identical to option or composer text (no normalization).
     /// Returns `None` without dequeuing if no selection (no guessing).
-    /// # Panics: Never (queue proven non-empty above).
+    ///
+    /// # Panics
+    ///
+    /// Never: the queue is proven non-empty above.
     pub fn take_answer(&mut self) -> Option<(String, String)> {
         let front = self.prompts.front()?;
         let answer = if front.prompt.options.is_empty() {

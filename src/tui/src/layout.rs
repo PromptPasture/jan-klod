@@ -19,6 +19,7 @@ const MIN_TRANSCRIPT_HEIGHT: u16 = 5;
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 
 /// Frame regions for one `(width, height)` (#104's responsive table).
+///
 /// `header` and `sidebar` are `None` where hidden. `content` is transcript+composer
 /// (split later depends on composer buffer, not terminal size).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

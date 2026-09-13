@@ -78,7 +78,12 @@ pub trait Transport: Send + Sync {
     fn answer(&self, session: &str, answer: &str) -> Result<(), String>;
 
     /// Steer a running turn (not cancel). Called from another thread during
-    /// [`Transport::stream_turn`]. Over REST: always fails (user error).
+    /// [`Transport::stream_turn`].
+    ///
+    /// # Errors
+    ///
+    /// Over REST, always: shown to the user rather than logged, since a
+    /// keystroke that silently vanishes teaches the wrong lesson.
     fn follow_up(&self, session: &str, message: &str) -> Result<(), String>;
 
     /// How to describe this connection in a status line.
@@ -501,7 +506,7 @@ impl Drop for Stdio {
     }
 }
 
-/// Notification → StreamEvent, or `None` when unmapped. Exhaustive (no
+/// Notification → `StreamEvent`, or `None` when unmapped. Exhaustive (no
 /// `_ =>` arm): new protocol notifications must be decided here, not silently
 /// ignored.
 #[must_use]

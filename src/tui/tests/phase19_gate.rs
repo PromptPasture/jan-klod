@@ -90,7 +90,7 @@ fn a_full_turn() -> App {
     app
 }
 
-/// The gate's themes: coloured TrueColor and monochrome on 16 colours.
+/// The gate's themes: coloured `TrueColor` and monochrome on 16 colours.
 const fn themes() -> [(&'static str, Theme); 2] {
     [
         (

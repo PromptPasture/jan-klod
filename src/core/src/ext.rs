@@ -1,6 +1,8 @@
 //! Component lifecycle: install, list, remove from `ext/`.
-//! Checks integrity (via [`crate::inspect`]), SHA-256, minisign. Remote fetch is #92;
-//! first-party signatures are #93. `list` reads manifests for declared capabilities.
+//!
+//! Checks integrity (via [`crate::inspect`]), SHA-256, minisign. Remote fetch is
+//! #92; first-party signatures are #93. `list` reads manifests for declared
+//! capabilities.
 
 use std::path::{Path, PathBuf};
 
@@ -170,6 +172,7 @@ fn wanted(url: &str, allow_unsigned: bool) -> Result<Vec<(String, String)>, ExtE
 }
 
 /// Policy-bound HTTP client for remote installs (single construction, no weak pass).
+///
 /// Every redirect re-checked (#107); `Authorization` doesn't survive hops.
 /// Testable with fake client; [`install_from_url`] takes it as argument.
 #[must_use]

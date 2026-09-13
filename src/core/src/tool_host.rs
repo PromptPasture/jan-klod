@@ -1,7 +1,9 @@
-//! Host adapter for `tool-*` extensions. Instantiates `tool-world` guest,
-//! satisfies imports (`host-log`, `host-config`, `host-http`, `host-fs`),
-//! exposes `tool-callable` exports (`meta`/`invoke`). `host-fs` backed by
-//! optional [`Workspace`]: default-deny without workspace.
+//! Host adapter for `tool-*` extensions.
+//!
+//! Instantiates `tool-world` guest, satisfies imports (`host-log`,
+//! `host-config`, `host-http`, `host-fs`), exposes `tool-callable` exports
+//! (`meta`/`invoke`). `host-fs` backed by optional [`Workspace`]: default-deny
+//! without workspace.
 
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};

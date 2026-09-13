@@ -121,6 +121,7 @@ pub const BINDINGS: &[Binding] = &[
 ];
 
 /// Render hint string for `context` from matching `table` entries, joined with " · ".
+///
 /// Takes `table` as argument (not [`BINDINGS`] directly) so tests can verify
 /// the hint derives from the table, not a hand-written duplicate.
 #[must_use]

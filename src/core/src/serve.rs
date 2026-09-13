@@ -1,6 +1,8 @@
-//! REST API surface (v0.1.0). Routes: GET /health, GET /sessions, POST /sessions,
-//! GET /session/:id, POST /session/:id/message (SSE or JSON), answer, fork.
-//! Synchronous/blocking (tiny_http): one request at a time.
+//! REST API surface (v0.1.0).
+//!
+//! Routes: GET /health, GET /sessions, POST /sessions, GET /session/:id, POST
+//! /session/:id/message (SSE or JSON), answer, fork. Synchronous/blocking
+//! (`tiny_http`): one request at a time.
 //!
 //! Mid-turn confirmations without threads: interceptors block in `Driver::ask`;
 //! the waiting driver serves the socket itself via `recv_timeout` loop until

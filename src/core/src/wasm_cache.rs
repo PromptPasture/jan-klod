@@ -10,14 +10,14 @@
 //! * It caches **components**, not only core modules — Wasmtime's test suite
 //!   proves this directly: `Component::new` is a cache hit on a second call with
 //!   the same `Engine`/bytes.
-//! * The key already covers what #60 asked for (`sha256(bytes) + wasmtime version
-//!   + target triple + engine config hash`). `HashedEngineCompileEnv::hash` hashes
-//!   the compiler's target triple, codegen flags, ISA flags, `Engine::tunables()`,
-//!   `Engine::features()`, `Config::wmemcheck`, and `Config::module_version`
-//!   (defaults to Wasmtime version, so upgrades change the hash). Component bytes
-//!   are a separate term, so byte changes also change the key. That is every term
-//!   #60's proposal named, computed by Wasmtime rather than re-derived here where
-//!   a missed term would silently under-key a cache of *native code*.
+//! * The key already covers what #60 asked for: `sha256(bytes)` plus wasmtime
+//!   version, target triple, and engine config hash. `HashedEngineCompileEnv::hash`
+//!   hashes the compiler's target triple, codegen flags, ISA flags,
+//!   `Engine::tunables()`, `Engine::features()`, `Config::wmemcheck`, and
+//!   `Config::module_version` (defaults to Wasmtime version, so upgrades change
+//!   the hash) — computed by Wasmtime rather than re-derived here, where a missed
+//!   term would silently under-key a cache of *native code*. Component bytes are
+//!   a separate term, so byte changes also change the key.
 //! * Corrupt or foreign artefacts are misses, not errors: Wasmtime's deserializer
 //!   rejects them and recompiles. Exactly #60's requirement.
 //!

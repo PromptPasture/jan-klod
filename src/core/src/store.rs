@@ -1,7 +1,8 @@
-//! SQLite-backed key/value + history store. Implements full
-//! [`memory-store`](../../../wit/memory-store.wit) (superset of `host-storage`).
-//! Host-side by design: sandbox gets no filesystem, database in core, served
-//! to extensions. SQLite embedded via `rusqlite`'s bundled feature.
+//! SQLite-backed key/value + history store.
+//!
+//! Implements full [`memory-store`](../../../wit/memory-store.wit) (superset of
+//! `host-storage`). Host-side by design: sandbox gets no filesystem, database in
+//! core, served to extensions. SQLite embedded via `rusqlite`'s bundled feature.
 //!
 //! Two tables: `entries` (key/value on `namespace, key`; opaque JSON values),
 //! `events` (append-only turn log on `session, seq`). Timestamps in Unix seconds.

@@ -1,8 +1,10 @@
-//! Subprocess effect policy—no enforcement. [`crate::host_process`] confines
-//! the *caller* (default-deny, jailed cwd, timeout, output cap, env). Not the
-//! *command*—runs with user privileges (see security model). OS backends later.
-//! Defines what they'd enforce and what the runtime promises when none exist:
-//! named grant in `config.yaml` and mode saying plainly when nothing confines.
+//! Subprocess effect policy—no enforcement.
+//!
+//! [`crate::host_process`] confines the *caller* (default-deny, jailed cwd,
+//! timeout, output cap, env). Not the *command*—runs with user privileges (see
+//! security model). OS backends later. Defines what they'd enforce and what the
+//! runtime promises when none exist: named grant in `config.yaml` and mode
+//! saying plainly when nothing confines.
 
 use std::path::PathBuf;
 use std::process::Command;

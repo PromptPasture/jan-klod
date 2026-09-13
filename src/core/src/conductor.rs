@@ -1,9 +1,11 @@
 //! Loop conductor — pure mechanism, zero policy.
 //!
 //! Sequences a turn: `before-loop` (may short-circuit to simple), request-shaping
-//! phases (`select-model` → `select-context` → `select-tools`), then **ReAct loop**:
+//! phases (`select-model` → `select-context` → `select-tools`), then the
+//! **`ReAct` loop**:
 //! `complete()` (with provider fallback) → `after-response` → parse tool calls →
-//! `tool-call` gate → dispatch → `tool-result` (block terminates) → repeat → `finalize`.
+//! `tool-call` gate → dispatch → `tool-result` (block terminates) → repeat →
+//! `finalize`.
 //! Every decision is delegated to interceptors; conductor is mechanism only.
 //!
 //! Decoupled from Wasmtime via [`Completer`] and [`ToolInvoker`] traits;
@@ -165,12 +167,13 @@ pub enum RunResult {
 }
 
 /// Run one turn through the loop.
+///
 /// `providers` = fallback chain (tried in order). `tools` routes tool calls.
 /// `driver` answers interceptor `ask`. Conductor is mechanism only; all policy
-/// in dispatched interceptors.
-/// `on_effective_message` fires once with the message model will receive after
-/// `before-loop` rewrites (see [`build_initial_request`]). Supplies hook; callers
-/// decide policy (e.g., `run_and_persist` logs actual message sent, not original).
+/// in dispatched interceptors. `on_effective_message` fires once with the
+/// message model will receive after `before-loop` rewrites (see
+/// [`build_initial_request`]). Supplies hook; callers decide policy (e.g.,
+/// `run_and_persist` logs actual message sent, not original).
 #[allow(clippy::too_many_arguments)] // A turn genuinely needs all parameters; a struct
                                      // would only hide the list.
 pub fn run_turn(
@@ -288,7 +291,7 @@ pub fn run_turn(
 /// then prior history + new message. Returns whether agentic path should run.
 /// `history` before new message or session has no memory. Window trimming is
 /// `select-context`'s job. `on_effective_message` fires once after resolving,
-/// before ReAct loop emits. Callers logging from it get truthfully the *first*
+/// before `ReAct` loop emits. Callers logging from it get truthfully the *first*
 /// recorded item (see #84).
 fn build_initial_request(
     dispatcher: &mut Dispatcher,
@@ -330,7 +333,7 @@ fn build_initial_request(
     (agentic, request)
 }
 
-/// What ReAct loop does after cycle: keep going or stop with final text.
+/// What `ReAct` loop does after cycle: keep going or stop with final text.
 enum LoopStep {
     /// Keep looping.
     Continue,
@@ -423,7 +426,7 @@ enum ToolPass {
 }
 
 /// Run each tool call: gate at `tool-call`, dispatch, run `tool-result`,
-/// append to conversation. Returns ToolPass::Terminated if `tool-result` blocks.
+/// append to conversation. Returns `ToolPass::Terminated` if `tool-result` blocks.
 fn run_tool_calls(
     dispatcher: &mut Dispatcher,
     tools: &mut dyn ToolInvoker,
