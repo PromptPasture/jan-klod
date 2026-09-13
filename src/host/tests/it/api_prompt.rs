@@ -1,17 +1,5 @@
-//! A mid-turn confirmation, answered over HTTP.
-//!
-//! The permission gate can park a turn mid-request to ask the user something.
-//! Over REST that means the turn blocks *inside* an open SSE response while the
-//! answer arrives on a separate connection:
-//!
-//!   client A: POST /session/:id/message (SSE)  → receives `event: prompt`
-//!   client B: POST /session/:id/answer         → the waiting turn takes it
-//!   client A: the stream continues to `event: done`
-//!
-//! `AgentSession` is `!Send`, so it stays on the main thread while clients run
-//! on spawned threads (as in `api_rest.rs`).
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Mid-turn confirmation over HTTP. Permission gate parks, asking via SSE.
+//! Answer arrives on separate connection. `AgentSession` !Send on main thread.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -27,8 +15,7 @@ use tiny_http::Server;
 
 use crate::common;
 
-/// A lost answer must fail fast, not stall for the 3-minute default and then
-/// silently pass on the prompt's own denial.
+/// Set short answer timeout for fast failure
 fn short_answer_timeout() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "5");
 }
@@ -40,7 +27,7 @@ const GUESTS: [&str; 4] = [
     "interceptor-permission.wasm",
 ];
 
-/// First completion calls a dangerous tool (so the gate asks), then answers.
+/// First completion calls dangerous tool (gate asks), then final answer
 fn tool_then_answer_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -99,7 +86,7 @@ extensions:
     config
 }
 
-/// Send `answer` for `session` on its own connection and return the raw response.
+/// POST `answer` for `session`, return HTTP response.
 fn post_answer(port: u16, session: &str, answer: &str) -> String {
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(
@@ -135,8 +122,8 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
     let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
     let port = server.server_addr().to_ip().expect("ip addr").port();
 
-    // Client A: start the turn, read frames as they arrive. When `prompt` lands,
-    // client B answers on a second connection while this stream stays open.
+    // Client A: read frames. On `prompt` frame, client B answers on second
+    // connection while stream stays open.
     let turn = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
@@ -155,7 +142,7 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
             let Ok(line) = line else { break };
             collected.push_str(&line);
             collected.push('\n');
-            // The prompt frame is the cue: the turn is now parked waiting for us.
+            // Prompt frame is cue: turn is parked waiting.
             if line.starts_with("event: prompt") && !answered {
                 answered = true;
                 let ack = post_answer(port, "p-1", "yes");
@@ -168,8 +155,8 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
         (collected, answered)
     });
 
-    // The session-owning thread serves the message request; the waiting driver
-    // serves the answer request from inside it, so one `serve_once` covers both.
+    // Session thread serves message request; waiter serves answer request
+    // from inside, so one `serve_once` covers both.
     serve_once(&server, &mut agent).expect("serves the turn");
 
     let (stream_text, answered) = turn.join().expect("turn client thread");
@@ -220,8 +207,7 @@ fn an_answer_with_nothing_pending_is_refused() {
     serve_once(&server, &mut agent).expect("serves the stray answer");
     let response = client.join().expect("client thread");
 
-    // A route that exists but has nothing to answer says so, rather than 404-ing
-    // as if the client had invented the endpoint.
+    // Route exists but nothing to answer returns 409, not 404 (no fake endpoint).
     assert!(response.contains("409"), "conflict status: {response}");
     assert!(
         response.contains("no confirmation is pending"),

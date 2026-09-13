@@ -9,13 +9,9 @@ updated: 2026-06-29
 
 # Slice 1a Gate — Verdict: **PASS**
 
-The thinnest possible vertical slice works end-to-end: a synchronous Rust +
-Wasmtime host loads a **TinyGo-built component**, built against a **custom WIT
-world**, and calls its exported function across the Component Model boundary.
+Minimal vertical slice works end-to-end: sync Rust+Wasmtime host loads TinyGo component, calls across Component Model.
 
-**Decision: proceed to [Slice 1b](PLAN.md#slice-1b--build-out-to-mvp-parity).**
-The documented escape hatch (fall back to Go + wazero + JSON ABI) is **not**
-exercised — CM-in-Rust and the TinyGo CM toolchain are both clean.
+**Proceed to [Slice 1b](PLAN.md#slice-1b--build-out-to-mvp-parity).** Escape hatch (Go+wazero+JSON) unneeded; CM-in-Rust and TinyGo toolchain both clean.
 
 ## What was built
 
@@ -37,38 +33,19 @@ echo: hello, component model
 The component validates as a real component (`wasm-tools validate`), exports
 `complete`, and imports exactly the `wasi:*` set that `wasmtime-wasi` satisfies.
 
-## The `wasi:cli` quirk — settled
+## `wasi:cli` quirk
 
-TinyGo's `wasip2` runtime needs `wasi:cli/*` (environment, stdio, clocks),
-`wasi:io`, `wasi:filesystem`, and `wasi:random` imports for startup. A custom
-`-wit-world` **replaces** TinyGo's default command world, so unless our world
-re-declares those imports, `wasm-tools component new` fails to resolve them
-(observed: `failed to resolve import wasi:cli/environment@0.2.0`).
+TinyGo needs `wasi:cli/*`, `wasi:io`, `filesystem`, `random` at startup. Custom world replaces default; must re-declare imports or resolution fails.
 
-Resolution — three coordinated pieces:
+**Fix:** (1) Guest world includes `wasi:cli/imports@0.2.0`. (2) `wkg wit fetch` populates deps (lock-pinned). (3) Host calls `add_to_linker_sync`; state implements `WasiView`.
 
-1. **Guest world** `include wasi:cli/imports@0.2.0;` so the imports are present.
-2. **`wkg wit fetch`** populates `wit/spike/deps/` with the wasi packages
-   (lock-pinned; deps are git-ignored and re-fetched).
-3. **Host** calls `wasmtime_wasi::p2::add_to_linker_sync` to provide them; store
-   state implements `WasiView`.
+Note: TinyGo still needs `func main()` even for reactor component.
 
-No `func main()` is dropped — TinyGo's `wasip2` target still requires it even for
-a reactor-style component whose real entry point is the exported function.
+## Async-model decision
 
-## Async-model decision (resolves a Phase 1 open question)
+**Baseline: sync Wasmtime.** Uses `Linker::instantiate` / `call_complete`, no `tokio`. Works for Slice 1a + core skeleton 1b.
 
-**Baseline: synchronous Wasmtime.** The host uses `Linker::instantiate` /
-`call_complete` with no `tokio` runtime. This is enough for Slice 1a and for the
-core's config/registry/lifecycle skeleton in Slice 1b.
-
-**Where `tokio` becomes necessary:** `host-http` (Slice 1b). An outbound HTTP
-capability is inherently async, and `wasmtime-wasi`'s HTTP/socket support is
-built around `tokio`. At that point the host calls into the guest on async
-Wasmtime (`call_async` + `Config::async_support(true)`) and bridges the
-`host-http` import to a `tokio` reactor. Until then, sync keeps the host simple
-and the boundary obvious. This resolves the async bullet in the
-[foundation decision's open questions](../2026-06-29-component-model-rust/Handoff.md#open-questions-carried-forward--new).
+**`tokio` at `host-http` (Slice 1b).** HTTP is inherently async; host calls async Wasmtime (`call_async` + `Config::async_support`), bridges to `tokio` reactor. Sync keeps boundary clean. Resolves [open question](../2026-06-29-component-model-rust/Handoff.md#open-questions-carried-forward--new).
 
 ## Toolchain proven
 
@@ -82,14 +59,9 @@ and the boundary obvious. This resolves the async bullet in the
 make gate   # prints: echo: hello, component model
 ```
 
-## Note on "spike" vs the roadmap wording
+## Spike vs Roadmap
 
-The [roadmap](../../concepts/roadmap.md) Phase 1 goal says "no throwaway spike",
-meaning Phase 1 is not a *separate* discardable phase — its risk is front-loaded
-into Slice 1a. Slice 1a itself is explicitly "a trivial stub … echoes a single
-`complete`", and [PLAN.md](PLAN.md) permitted "a throwaway `spike` world". This
-gate uses exactly that: a stub, inside the real Phase 1, deleted once the verdict
-is recorded.
+[Roadmap](../../concepts/roadmap.md) says "no throwaway spike" (risk front-loaded, not separate phase). Slice 1a is explicitly a trivial stub; [PLAN.md](PLAN.md) permits throwaway `spike` world. Used here: stub inside Phase 1, deleted after verdict.
 
 ## Cleanup (at the start of Slice 1b)
 

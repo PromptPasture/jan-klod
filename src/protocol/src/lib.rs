@@ -1,8 +1,8 @@
-//! The client protocol: one versioned wire contract shared by every client.
+//! One versioned wire contract shared by every client.
 //!
 //! Today a client is whatever `jan_klod_core::serve` happens to serve — REST
 //! routes plus an SSE stream — so each new client (TUI, web, editor) reads the
-//! route table and drifts from the others. This crate makes the surface a
+//! route table and drifts from the others. This crate makes that surface a
 //! contract of the same rank as the WIT package: named commands, named
 //! notifications, and a version that says when either changed.
 //!
@@ -10,12 +10,11 @@
 //!
 //! * **No I/O.** No sockets, no pipes, no read loop. A [`Command`] carries the
 //!   `method`/`params` pair; [`jsonrpc`] wraps it in the frame both transports
-//!   send. Which is a correction: this crate first excluded framing too, on the
-//!   grounds that it belonged to the transport. That holds for one transport and
-//!   fails for two parties — see the [`jsonrpc`] module documentation for what
-//!   changed the answer.
+//!   send. This is a correction: this crate first excluded framing too, but
+//!   that holds for one transport and fails for two parties — see the
+//!   [`jsonrpc`] module documentation for why.
 //! * **No policy.** These are the shapes of what clients say and what the core
-//!   reports back; whether a given command is *allowed* is the core's and its
+//!   reports back; whether a command is *allowed* is the core's and its
 //!   interceptors' business.
 //!
 //! REST + SSE do not go away — they become one projection of this contract.
@@ -41,18 +40,16 @@ pub const PROTOCOL_VERSION: &str = "0.1.0";
 
 /// Every `method` a [`Command`] can carry.
 ///
-/// A transport needs this to tell two failures apart, and a client's dispatcher
-/// can use it too. When `{"method":"session/get"}` arrives without its
-/// `params`, deserializing [`Command`] fails; so does
-/// `{"method":"session/destroy"}`. One is JSON-RPC's `invalid params` and the
-/// other is `method not found`, and serde reports both as one error — the
-/// method name is what distinguishes them.
+/// A transport needs this to distinguish failures; a client dispatcher can use
+/// it too. When `{"method":"session/get"}` arrives without its `params`,
+/// deserializing [`Command`] fails; so does `{"method":"session/destroy"}`.
+/// One is JSON-RPC's `invalid params` and the other `method not found`, and
+/// serde reports both as one error — the method name is what distinguishes them.
 ///
-/// This is a hand-written list, which is exactly the kind of thing that falls
-/// behind the enum beside it. `wire.rs` compares it against the exhaustive
-/// `match` over [`Command`] in both directions, so a command added without a
-/// line here fails the tests rather than becoming a `method not found` that
-/// lies.
+/// This is hand-written and easily falls out of sync with the enum beside it.
+/// `wire.rs` compares it against the exhaustive `match` over [`Command`] in
+/// both directions, so a command added without a line here fails the tests
+/// rather than lying as `method not found`.
 pub const COMMAND_METHODS: &[&str] = &[
     "protocol/hello",
     "session/create",
@@ -67,20 +64,18 @@ pub const COMMAND_METHODS: &[&str] = &[
 
 /// Whether a client built against `client` can talk to a core speaking `core`.
 ///
-/// Same major, and — while the major is `0` — the same minor too. The second
-/// clause is the one that decides anything today, because [`PROTOCOL_VERSION`]
-/// is `0.1.0`: a major-only check would wave a `0.9` client through to a `0.1`
-/// core and call it negotiated. A version that does not parse is incompatible,
-/// since guessing at a malformed version is how a check becomes decoration.
+/// Same major, and — while major is `0` — the same minor too. The second
+/// clause decides today: since [`PROTOCOL_VERSION`] is `0.1.0`, a major-only
+/// check would accept a `0.9` client on a `0.1` core. A malformed version is
+/// incompatible; guessing at one makes the check decoration rather than truth.
 ///
 /// # This rule is deliberately duplicated
 ///
 /// `jan_klod_core::manifest::api_compatible` applies the same test to the WIT
-/// `jan-klod:interfaces` version, and this is not a copy waiting to be
-/// deduplicated. The two version *lines* are independent — a WIT change need
-/// not touch a command, and a new command need not touch WIT — so sharing one
-/// predicate would mean one of them dragging the other to a decision it did not
-/// make. What is shared is the reasoning, which is written down in
+/// `jan-klod:interfaces` version, and this is not a copy to deduplicate. The
+/// two version *lines* are independent — a WIT change need not touch a command,
+/// and vice versa — so sharing one predicate would drag one to decisions it did
+/// not make. What is shared is the reasoning, written in
 /// [Contracts](../../../../docs/concepts/contracts.md).
 #[must_use]
 pub fn compatible(core: &str, client: &str) -> bool {
@@ -101,11 +96,10 @@ pub fn compatible(core: &str, client: &str) -> bool {
 /// A command a client sends to the core.
 ///
 /// Adjacently tagged, so a value serializes to exactly the `method` and
-/// `params` members of a JSON-RPC request and nothing more. That is not a
-/// stylistic choice: [`jsonrpc::Request`] flattens a command into the frame,
-/// and `#[serde(flatten)]` only works over a value that serializes as a map,
-/// which is what adjacent tagging produces — internal or external tagging would
-/// not.
+/// `params` members of a JSON-RPC request. This is not stylistic:
+/// [`jsonrpc::Request`] flattens a command into the frame, and
+/// `#[serde(flatten)]` only works over a value serializing as a map, which
+/// adjacent tagging produces — internal or external tagging would not.
 ///
 /// Each variant names the surface it comes from. `session/*` and `turn/answer`
 /// are the routes `jan_klod_core::serve` serves today; `turn/cancel` and
@@ -213,15 +207,14 @@ pub const SSE_FRAME_KINDS: [&str; 7] = [
 /// Something the core reports to a client, unprompted.
 ///
 /// Tagged like [`Command`], so a transport wraps both the same way — a
-/// notification is a JSON-RPC request with no `id`, which is exactly what
-/// "no reply expected" means there.
+/// notification is a JSON-RPC request with no `id`, the signal for
+/// "no reply expected".
 ///
-/// The first five mirror `jan_klod_core::conductor::Event` one for one. The
-/// rest do not come from an event at all: `Ask` is the pending prompt an
-/// interceptor blocks a turn on, answered by [`Command::TurnAnswer`]; `Error`
-/// is a turn that failed or a command that could not be served;
-/// `SessionUpdated` reports a session whose transcript moved, so a client
-/// listing sessions does not have to poll.
+/// The first five mirror `jan_klod_core::conductor::Event`. The rest are not
+/// events: `Ask` is the pending prompt an interceptor blocks a turn on,
+/// answered by [`Command::TurnAnswer`]; `Error` is a turn that failed or a
+/// command that could not be served; `SessionUpdated` reports a session whose
+/// transcript moved, so a client listing sessions need not poll.
 ///
 /// # These are not the SSE event names
 ///
@@ -350,15 +343,14 @@ impl Default for HelloResult {
 ///
 /// # Why the read shape is declared here at all
 ///
-/// It was not, and that was the whole of
-/// [#106](https://github.com/PromptPasture/jan-klod/issues/106). `session/fork`
-/// takes an event seq and `session/get` returned `{role, content}` — so the only
-/// command that reads a session back never said where in the log anything sat,
-/// and a client could fork only at a number it had no way to obtain. The
-/// commands were declared in this crate ahead of any transport carrying them,
-/// *because the schema is what non-Rust clients generate from*; the result they
-/// answer with was left as untyped JSON assembled in `serve::session_payload`,
-/// so it reached no schema and no generated client.
+/// It was not; see [#106](https://github.com/PromptPasture/jan-klod/issues/106).
+/// `session/fork` takes an event seq but `session/get` returned only
+/// `{role, content}` — so the command reading a session never said where in
+/// the log anything sat, and a client could fork only at a number with no way
+/// to obtain it. Commands are declared in this crate ahead of any transport,
+/// *because non-Rust clients generate from the schema*; their result was left
+/// as untyped JSON in `serve::session_payload`, reaching neither schema nor
+/// generated clients.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptMessage {
     /// The log position this message was projected from, and what

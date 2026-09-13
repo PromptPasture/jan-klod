@@ -1,10 +1,6 @@
-//! A Telegram message drives a turn, offline.
-//!
-//! Boots a `Runtime`, then runs one `poll_once` cycle with an **injected fetch**
-//! that returns a canned `getUpdates` and captures the outbound `sendMessage` —
-//! proving inbound message -> loop -> reply with no network and no Telegram.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Telegram message drives a turn (offline). Boots Runtime, runs `poll_once`
+//! with injected fetch (canned `getUpdates`, captured `sendMessage`).
+//! Skips when guests not staged.
 
 use std::cell::RefCell;
 
@@ -44,7 +40,7 @@ extensions:
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Injected Telegram HTTP: getUpdates returns one message; sendMessage is captured.
+    // Injected HTTP: getUpdates → one message, sendMessage captured.
     let sent: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let fetch = |_method: &str, url: &str, _headers: &[(&str, &str)], body: Option<&[u8]>| {
         if url.contains("getUpdates") {
@@ -82,8 +78,7 @@ extensions:
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// A provider that asks to write a file, then reports done — so the permission
-/// gate has something to confirm.
+/// Mock provider: requests write, then reports done (gate has something to confirm).
 fn write_then_answer_http() -> jan_klod_core::route::HttpFn {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
@@ -122,9 +117,8 @@ fn write_then_answer_http() -> jan_klod_core::route::HttpFn {
     })
 }
 
-/// The headless path must be able to *ask*: a chat confirmation is put to the
-/// user as a message, and their next message answers it. A message from another
-/// chat arriving mid-question is deferred, never dropped.
+/// Headless asks: confirmation as message, next message answers. Messages from
+/// other chats mid-question are deferred, not dropped.
 #[test]
 fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
     let ext_dir = common::repo_root().join("ext");
@@ -151,8 +145,7 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
         if url.contains("getUpdates") {
             let n = polls.get();
             polls.set(n + 1);
-            // Poll 0: the request. Poll 1 (from inside the blocked turn): the
-            // user's "yes", plus an unrelated chat's message that must survive.
+            // Poll 0: request. Poll 1 (blocked turn): "yes" + unrelated chat message.
             let result = if n == 0 {
                 serde_json::json!([{
                     "update_id": 100,
@@ -182,9 +175,7 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
     assert_confirmation_flow(&sent, next, &dir);
 }
 
-/// The config for [`a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message`]:
-/// an `OpenAI` provider (mocked), `tool-selector` + `permission` interceptors, and
-/// `tool.fs` jailed to `dir`. Returns the written `config.yaml` path.
+/// Config with provider, interceptors, tool.fs jailed to dir.
 fn write_confirmation_config(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -215,9 +206,8 @@ workspace: {}
     config
 }
 
-/// Assert the whole confirmation flow happened: the user was asked (in the right
-/// chat, with the standing options, naming the file and its contents), the write
-/// went through only after the reply, and the unrelated chat's message survived.
+/// Verify confirmation flow: asked in right chat, standing options offered,
+/// file+content named, write after reply, unrelated chat's message survived.
 fn assert_confirmation_flow(sent: &[String], next: i64, dir: &std::path::Path) {
     let question = sent
         .iter()
@@ -231,8 +221,7 @@ fn assert_confirmation_flow(sent: &[String], next: i64, dir: &std::path::Path) {
         question.contains("always"),
         "the standing options are offered: {question}"
     );
-    // Over a chat surface the user has no terminal and no other context, so the
-    // question has to carry the whole decision: which file, and what goes in it.
+    // Chat surface: no terminal, question must carry whole decision (file + contents).
     assert!(
         question.contains("note.txt") && question.contains("hi"),
         "the question names the file and shows the content: {question}"
@@ -247,8 +236,7 @@ fn assert_confirmation_flow(sent: &[String], next: i64, dir: &std::path::Path) {
         "hi"
     );
 
-    // The other chat's message was deferred into this cycle, not lost to the
-    // offset the answer-poll advanced.
+    // Other chat's message deferred, not lost to offset advance.
     assert!(
         sent.iter().any(|m| m.contains("\"chat_id\":777")),
         "the unrelated chat still got a turn: {sent:?}"

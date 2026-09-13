@@ -1,16 +1,16 @@
-//! Minisign keypairs and signatures, built here because nothing on the machine
+//! Minisign keypairs and signatures, built here since nothing on the machine
 //! can make one.
 //!
 //! # Why this exists rather than a signing dependency
 //!
-//! `ext install` must be tested for *accepting* a valid signature, not only for
-//! refusing bad ones — a suite of refusals alone passes with a verifier that
-//! rejects everything, which is this repository's recurring defect. That needs
-//! a signature, and there is no `minisign` binary here. The `minisign` crate
-//! signs, but costs 10 packages and brings `rpassword` and `scrypt` in for
-//! interactive password prompts (measured; `schemars` was rejected at 7).
+//! `ext install` must test *accepting* valid signatures, not only refusing bad
+//! ones — a suite of refusals alone passes with a verifier that rejects
+//! everything, this repository's recurring defect. There's no `minisign` binary
+//! here. The `minisign` crate signs, but costs 10 packages and brings
+//! `rpassword` and `scrypt` for interactive password prompts (measured;
+//! `schemars` was rejected at 7).
 //!
-//! So the format is built directly from `ring` (Ed25519, already in the lock
+//! The format is built directly from `ring` (Ed25519, already in the lock
 //! via rustls) and `blake2` (one package, pinned to 0.10 so it shares
 //! `digest 0.10` with `sha2`). ~60 lines instead of 10 crates.
 //!
@@ -18,15 +18,15 @@
 //!
 //! The worry with a hand-made fixture is that it is subtly off-spec, gets
 //! rejected, and the rejection is mistaken for the verifier working. That does
-//! not apply: **the fixture only has to satisfy the same verifier that will
-//! check real signatures.** `minisign-verify` is third-party code this repo
-//! does not write, so a signature it accepts from here is one it would accept
-//! from minisign itself — the two go through identical parsing and
-//! verification. The one way to get this wrong is to exercise a *different*
-//! path than real signatures take, which is why [`sign`] produces the
-//! **prehashed** form (`ED`) that modern minisign emits and the installer
-//! requires, and why [`sign_legacy`] exists to prove the legacy path is
-//! refused rather than silently accepted.
+//! not apply: **the fixture only needs to satisfy the same verifier checking
+//! real signatures.** `minisign-verify` is third-party code this repo does not
+//! write, so a signature it accepts from here is one it would accept from
+//! minisign itself — the two go through identical parsing and verification. The
+//! one way to get this wrong is to exercise a *different* path than real
+//! signatures take, which is why [`sign`] produces the **prehashed** form (`ED`)
+//! that modern minisign emits and the installer requires, and why
+//! [`sign_legacy`] exists to prove the legacy path is refused rather than
+//! silently accepted.
 //!
 //! # The format, read out of `minisign-verify 0.2.5`'s own source
 //!
@@ -87,13 +87,13 @@ impl Signer {
         base64(&raw)
     }
 
-    /// Write `<file>.minisig` for `file`, in the prehashed form the installer
+    /// Write `<file>.minisig` for `file` in the prehashed form the installer
     /// requires.
     pub fn sign(&self, file: &Path) {
         self.write_signature(file, PREHASHED);
     }
 
-    /// The same, in the **legacy** form — for proving it is refused.
+    /// Same, in **legacy** form — to prove it is refused.
     pub fn sign_legacy(&self, file: &Path) {
         self.write_signature(file, LEGACY);
     }
@@ -131,11 +131,10 @@ impl Signer {
     }
 }
 
-/// Standard base64, which is what minisign uses for every binary field.
+/// Standard base64, which minisign uses for every binary field.
 ///
-/// Hand-written for the same reason as the rest of this module: the crate that
-/// would provide it is not in the tree, and 20 lines is cheaper than a
-/// dependency for test fixtures.
+/// Hand-written for the same reason as the rest: the crate would add a
+/// dependency, and 20 lines is cheaper for test fixtures.
 fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();

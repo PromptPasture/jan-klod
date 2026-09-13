@@ -1,6 +1,5 @@
-//! Tauri's build step: reads `tauri.conf.json` and generates the context
-//! `tauri::generate_context!()` expands to (the app identifier, the icon, the
-//! window defaults).
+//! Tauri build step: reads `tauri.conf.json`, generates context for
+//! `tauri::generate_context!()` (app id, icon, window defaults).
 
 fn main() {
     tauri_build::build();

@@ -1,11 +1,8 @@
-//! `ext install` against real components.
-//!
-//! The refusals that need only bytes — not a component, no manifest, already
-//! installed — are unit tests in `core::ext`, where they are cheaper. What
-//! cannot be tested there is anything requiring a *real* component: that a
-//! valid one lands and is loadable afterwards, and that a manifest which
-//! disagrees with the component's actual imports is refused. Both need imports
-//! to disagree *about*, and fabricated bytes have none.
+//! `ext install` against real components. Refusals needing only bytes (no
+//! component, no manifest, already installed) are cheap unit tests in `core::ext`.
+//! Real components need: valid ones land and load, manifests disagreeing with
+//! actual imports refused. Both need imports to disagree about, fabricated
+//! bytes have none.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,7 +11,7 @@ use jan_klod_core::ext::{self, Declaration, ExtError};
 
 use crate::common;
 
-/// A scratch `ext/` and a place to put sources, removed on drop.
+/// Scratch `ext/` and sources dir, removed on drop.
 pub struct Scratch {
     root: PathBuf,
     pub ext: PathBuf,
@@ -41,8 +38,8 @@ pub fn scratch(tag: &str) -> Scratch {
     }
 }
 
-/// Copy a staged guest and its manifest into `incoming`, returning the
-/// component's path — an installable pair, exactly as a release would ship it.
+/// Copy staged guest, manifest to `incoming`, return component path — the
+/// installable pair as released.
 pub fn offer(scratch: &Scratch, guest: &str) -> PathBuf {
     let staged = common::repo_root().join("ext");
     let component = scratch.incoming.join(format!("{guest}.wasm"));
@@ -152,7 +149,7 @@ fn a_valid_component_lands_with_its_manifest_and_is_then_loadable() {
         ext::install(&scratch.ext, &source, &checks).expect("a real component installs");
     assert_eq!(installed.name, "tool-fs");
 
-    // Both files, and nothing else — no staging directory left over.
+    // Both files, nothing else; staging cleaned.
     assert_eq!(
         names(&scratch.ext),
         ["tool-fs.manifest.toml", "tool-fs.wasm"],
@@ -170,9 +167,7 @@ fn a_valid_component_lands_with_its_manifest_and_is_then_loadable() {
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert_eq!(listed[0].declaration, installed.declaration);
 
-    // The claim worth more than either: what installed is *loadable*. Compiling
-    // it is what the boot path does, so this is the check that an install
-    // cannot succeed on something the runtime would then reject.
+    // Worth more: installed is *loadable*. Install can't accept what runtime rejects.
     let engine = wasmtime::Engine::default();
     wasmtime::component::Component::from_file(&engine, scratch.ext.join("tool-fs.wasm"))
         .expect("what install accepted, the runtime can load");
@@ -239,7 +234,7 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
         return;
     };
 
-    // The right digest is accepted.
+    // Right digest accepted.
     ext::install(
         &scratch.ext,
         &source,
@@ -252,7 +247,7 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     .expect("the component matches its own digest");
     ext::remove(&scratch.ext, "tool-fs").expect("removes it again");
 
-    // Uppercase is the same digest — release notes are not consistent about it.
+    // Uppercase same digest (release notes inconsistent).
     ext::install(
         &scratch.ext,
         &source,
@@ -265,8 +260,7 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     .expect("a digest is hex, and hex is case-insensitive");
     ext::remove(&scratch.ext, "tool-fs").expect("removes it again");
 
-    // Now flip one byte in the middle of the file. Still a component; not the
-    // component the digest describes.
+    // Flip one byte: still component, not the one digest describes.
     let mut bytes = std::fs::read(&source).expect("reads the component");
     let middle = bytes.len() / 2;
     bytes[middle] ^= 0xff;
@@ -475,7 +469,7 @@ fn a_legacy_format_signature_is_refused() {
     );
 }
 
-/// Unsigned installs need the flag *and* a digest, and neither alone will do.
+/// Unsigned installs need flag *and* digest; neither alone suffices.
 #[test]
 fn allow_unsigned_needs_a_digest_and_says_so() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -565,8 +559,7 @@ fn a_component_installed_here_is_loaded_by_a_real_boot() {
     let (source, checks) = signed_offer(&scratch, "tool-fs");
     ext::install(&scratch.ext, &source, &checks).expect("installs");
 
-    // A config that enables exactly the instance just installed. `tool.fs`
-    // resolves to `tool-fs.wasm`, which is the file that landed.
+    // Config enabling installed instance. `tool.fs` → `tool-fs.wasm`.
     let config = scratch.root.join("config.yaml");
     std::fs::write(
         &config,
@@ -704,7 +697,7 @@ pub fn canned_files(
     (http, asked)
 }
 
-/// The four files a signed remote install needs, read off a real staged guest.
+/// Four files for signed remote install, from staged guest.
 pub fn published(scratch: &Scratch, guest: &str) -> (Vec<(&'static str, Vec<u8>)>, ext::Checks) {
     let component = offer(scratch, guest);
     let signer = crate::common::minisig::Signer::new();
@@ -733,8 +726,7 @@ pub fn published(scratch: &Scratch, guest: &str) -> (Vec<(&'static str, Vec<u8>)
     )
 }
 
-/// A signed remote install fetches four files and goes through the same
-/// verification a local one does.
+/// Signed remote install fetches four files, same verification as local.
 #[test]
 fn a_remote_install_fetches_the_pair_and_both_signatures() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -771,8 +763,8 @@ fn a_remote_install_fetches_the_pair_and_both_signatures() {
     );
 }
 
-/// Tampering the **served** bytes is refused exactly as a tampered local file
-/// is — which is what proves the download did not get its own weaker path.
+/// Served bytes tampering refused like local (proves download has no weaker
+/// path).
 #[test]
 fn bytes_tampered_in_flight_are_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -798,8 +790,8 @@ fn bytes_tampered_in_flight_are_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-/// With the signature waived, only two files are fetched — a 404 on a
-/// `.minisig` must not fail an install that never wanted one.
+/// Waived signature fetches two files only. 404 on `.minisig` doesn't fail
+/// unsigned install.
 #[test]
 fn an_unsigned_remote_install_does_not_fetch_signatures() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -810,8 +802,7 @@ fn an_unsigned_remote_install_does_not_fetch_signatures() {
     let two = vec![files[0].clone(), files[1].clone()];
     let (http, asked) = canned_files(two);
 
-    // From the system hasher, as the local digest test does — an expectation
-    // computed by the code under test would agree with itself.
+    // System hasher (code-computed expectation agrees with itself).
     let Some(digest) = sha256_of(&scratch.incoming.join("tool-fs.wasm")) else {
         return;
     };
@@ -831,8 +822,7 @@ fn an_unsigned_remote_install_does_not_fetch_signatures() {
     assert_eq!(asked.len(), 2, "no signature was requested: {asked:?}");
 }
 
-/// A URL carrying a query is refused rather than having its siblings silently
-/// requested without it.
+/// URL with query refused, not mangled silently.
 #[test]
 fn a_url_with_a_query_is_refused_rather_than_mangled() {
     let (http, asked) = canned_files(vec![]);
@@ -853,13 +843,9 @@ fn a_url_with_a_query_is_refused_rather_than_mangled() {
     );
 }
 
-/// `install_from_url` refuses a denied destination itself, before asking the
-/// injected client for anything.
-///
-/// Box 1 tests `check_remote` directly; this tests that the installer *calls*
-/// it. Without this, dropping the per-file check in a refactor would leave
-/// every remote test still green, because they all use a permitted origin —
-/// the policy would then rest entirely on whatever client the caller passed.
+/// `install_from_url` refuses denied destination before asking client.
+/// Box 1 tests `check_remote` directly; this tests installer calls it.
+/// Without this, dropping per-file check leaves tests green (all use permitted).
 #[test]
 fn a_refused_destination_is_not_even_requested() {
     let (http, asked) = canned_files(vec![]);
@@ -881,23 +867,11 @@ fn a_refused_destination_is_not_even_requested() {
     );
 }
 
-/// A redirect off the permitted origin is caught, through the installer.
-///
-/// # Why the client is asked for one URL and fetches another
-///
-/// `install_from_url` refuses a non-public URL itself, before the client is
-/// asked anything — which is right, and means **no test can host a redirector
-/// at an entry URL the installer will accept**: a redirector has to bind
-/// somewhere, and nothing a test can bind is public. So the shape here is: the
-/// installer is given a public URL it accepts, and the client it holds performs
-/// a real request against a loopback redirector under a policy that permits
-/// *that* origin and not the sentinel behind it.
-///
-/// What that proves is the claim worth proving — **when the installer's client
-/// is policy-bound, a redirect to a refused destination ends the install and
-/// the destination is never touched.** The per-hop mechanism itself is
-/// `egress_boundary::a_permitted_origin_cannot_redirect_to_a_refused_one`;
-/// this is about the installer honouring it rather than papering over it.
+/// Redirect off permitted origin caught. Non-public URL refused before client
+/// asked (no test can host redirector at accepted URL). Installer given public
+/// URL; client performs request against loopback redirector. Policy permits
+/// redirector origin, not sentinel behind it. Proves: policy-bound client,
+/// redirect to refused destination ends install, destination never touched.
 #[test]
 fn a_redirect_to_a_refused_destination_ends_a_remote_install() {
     let scratch = scratch("remote-redirect");
@@ -907,8 +881,7 @@ fn a_redirect_to_a_refused_destination_ends_a_remote_install() {
         forbidden.port
     ));
 
-    // Permits the redirector, not the sentinel behind it — exactly the
-    // asymmetry a redirect would exploit.
+    // Permits redirector, not sentinel (asymmetry redirect exploits).
     let entry = format!("http://127.0.0.1:{redirect_port}/tool-fs.wasm");
     let policy = jan_klod_core::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{redirect_port}"));

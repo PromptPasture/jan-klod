@@ -3,13 +3,11 @@
 //! Cranelift the second time, and mutating a guest's bytes between boots
 //! produces a fresh miss rather than a stale hit.
 //!
-//! `core/src/wasm_cache.rs`'s own unit tests exercise the same mechanism
-//! directly against Wasmtime's API — with synthetic WAT components, so they
-//! never skip — and are where the "changing the Wasmtime version" acceptance
-//! line is covered (two crate versions cannot both be linked into one test
-//! binary, so that test simulates the axis Wasmtime itself hashes for it).
-//! This file is the same claim proven end-to-end through `Runtime::boot`,
-//! with a real staged guest's real bytes.
+//! `core/src/wasm_cache.rs`'s unit tests exercise the mechanism directly
+//! against Wasmtime's API — with synthetic WAT components — and cover the
+//! "changing the Wasmtime version" acceptance (two crate versions cannot both
+//! link into one binary). This file proves the claim end-to-end through
+//! `Runtime::boot`, with a real staged guest's bytes.
 //!
 //! Skips (passes as a no-op) when the guest is not staged in `ext/`.
 
@@ -18,8 +16,8 @@ use jan_klod_core::Runtime;
 use crate::common;
 
 /// A private copy of `tool-fs.wasm` (+ manifest) this file can mutate freely —
-/// the shared `ext/` is read by other tests running concurrently, and one of
-/// these tests corrupts its copy's bytes on purpose.
+/// the shared `ext/` is read by concurrent tests, and one corrupts its copy's
+/// bytes on purpose.
 fn copy_tool_fs(dir: &std::path::Path) -> std::path::PathBuf {
     let real_ext = common::repo_root().join("ext");
     let ext = dir.join("ext");
@@ -46,11 +44,10 @@ fn config_for(dir: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
-/// Append a trailing custom wasm section: a standard, always-legal way to
-/// change a component's bytes without touching what it imports or exports, so
-/// the manifest cross-check `Runtime::boot` also runs still passes. Confirmed
-/// locally against this exact file with `wasm-tools validate` and `wasmtime
-/// compile` before this test was written, rather than assumed.
+/// Append a trailing custom wasm section: a standard way to change a
+/// component's bytes without touching imports/exports, so the manifest
+/// cross-check still passes. Confirmed locally with `wasm-tools validate` and
+/// `wasmtime compile` before this test was written.
 fn append_custom_section(path: &std::path::Path) {
     let mut bytes = std::fs::read(path).expect("reads the staged component");
     let name = b"jk-cache-test";
@@ -83,9 +80,8 @@ fn a_second_boot_against_the_same_config_dir_skips_cranelift() {
         first.report()
     );
 
-    // Same `config_dir` (`dir`) => the default cache dir
-    // (`<config_dir>/wasmtime-cache`) resolves to the same place, so this is
-    // genuinely "the second boot after a cold one", not two unrelated caches.
+    // Same `config_dir` → same default cache dir, so this is genuinely "the
+    // second boot after a cold one", not two unrelated caches.
     let second = Runtime::boot(&config, &ext).expect("warm boot loads from the cache");
     assert_eq!(
         second.compile_cache_stats(),

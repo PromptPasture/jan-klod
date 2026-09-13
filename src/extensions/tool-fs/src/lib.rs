@@ -6,17 +6,15 @@
 //! - `{ "op": "write", "path", "contents" }`  → a write confirmation.
 //! - `{ "op": "grep",  "pattern", "path"?, "glob"? }` → matching lines.
 //!
-//! `grep` searches a **directory tree** when `path` names one (the default is the
-//! workspace root), and a single file when it names a file. That is the shape the
-//! operation is actually used in: "where is this symbol?" is one call, not a
-//! `find` followed by a `read` per hit. Tree results are prefixed `path:lineno:line`;
-//! single-file results stay `lineno:line`.
+//! `grep` searches a **directory tree** when `path` names one (default: workspace root),
+//! and a single file when it names a file. "Where is this symbol?" is one call,
+//! not `find` + `read` per hit. Tree results are `path:lineno:line`;
+//! single-file results are `lineno:line`.
 //!
 //! Output is capped at [`guest_fs::MAX_OUTPUT_BYTES`] so a single result cannot
-//! consume the whole context budget, and a tree search is bounded the same way a
-//! glob is — with any bound that bites reported in the result. The line-matching
-//! logic is pure Rust (unit-tested natively); the Component-Model glue below only
-//! compiles for `wasm32`.
+//! consume the budget, and a tree search is bounded the same way as a glob —
+//! any limiting bound is reported in the result. The matching logic is pure Rust
+//! (unit-tested natively); the glue compiles for `wasm32` only.
 
 /// Most matching lines a tree-wide grep reports. Past this the answer is not a
 /// search result any more, it is a haystack — the caller should narrow instead.
@@ -27,8 +25,7 @@ const MAX_MATCHES: usize = 400;
 mod fs {
     use crate::MAX_MATCHES;
 
-    /// Return `lineno:line` for every 1-based line of `haystack` containing
-    /// `pattern`, joined by newlines.
+    /// Return `lineno:line` for every 1-based line of `haystack` containing `pattern`.
     pub fn matches(haystack: &str, pattern: &str) -> String {
         haystack
             .lines()
@@ -39,8 +36,7 @@ mod fs {
             .join("\n")
     }
 
-    /// A tree-wide grep result: `path:lineno:line` per hit, and whether the match
-    /// cap stopped it early.
+    /// A tree-wide grep result: `path:lineno:line` per hit, and whether the cap stopped it early.
     pub struct Hits {
         /// One `path:lineno:line` entry per matching line.
         pub lines: Vec<String>,
@@ -83,21 +79,14 @@ mod fs {
     /// Format a tree grep, stating every way the result was held back **before**
     /// the hits rather than after them.
     ///
-    /// The markers used to trail (#145). Two things were wrong with that, and the
-    /// second is the one that makes this a bug rather than a preference:
+    /// Markers used to trail (#145). Why leading is better:
     ///
-    /// - The consumer is a language model. One that greps a tree, reads 50 hits
-    ///   and acts concludes the symbol appears in 50 places; a caveat below the
-    ///   data is the part a truncated read drops, and this caller is the one
-    ///   least able to ask a follow-up.
-    /// - [`guest_fs::truncate`] cuts the **tail**. So a result long enough to hit
-    ///   [`guest_fs::MAX_OUTPUT_BYTES`] lost its partial markers entirely — in
-    ///   exactly the case where a bound is most likely to have bitten. The output
-    ///   then read as a complete answer while being the least complete one the
-    ///   tool can produce.
+    /// - The consumer is a language model. One reading 50 grep hits concludes
+    ///   the symbol appears 50 times; a caveat below the data is the tail readers drop.
+    /// - [`guest_fs::truncate`] cuts the **tail**. A result hitting [`guest_fs::MAX_OUTPUT_BYTES`]
+    ///   loses trailing markers entirely — exactly where a bound is most likely to bite.
     ///
-    /// Leading, they survive both. The ellipsis went with the move: `…[partial]`
-    /// meant "and it continues past here", which is not what a header says.
+    /// Leading markers survive both truncation and the model's consumption.
     pub fn render(pattern: &str, hits: &Hits, walk_bound: Option<&str>) -> String {
         if hits.lines.is_empty() {
             return format!("no matches for {pattern}");

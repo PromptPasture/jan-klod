@@ -1,12 +1,9 @@
-//! Terminal-UI shell over the [`app`](jan_klod::app) model and a
-//! [`Transport`]. This is thin, terminal-bound glue (not unit-tested); all
-//! state logic lives in the tested `App` model, which has never known what the
-//! transport is and still does not.
+//! TUI shell over [`app`](jan_klod::app) and [`Transport`]. Thin,
+//! terminal-bound glue (not unit-tested); state logic in tested `App`, which
+//! has never known its transport.
 //!
-//! The transport arrives as an `Arc<dyn Transport>` rather than as an address
-//! because a turn and an answer run on different threads and, over stdio,
-//! share one pipe to one child process. An address could be cloned per thread;
-//! a pipe cannot.
+//! Transport is `Arc<dyn Transport>` not `Address` because turn and answer
+//! threads share one pipe over stdio. Address could be cloned; pipe can't.
 
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -33,13 +30,10 @@ use ratatui::{DefaultTerminal, Frame};
 
 const POLL_MS: u64 = 50;
 
-/// Run the TUI against `transport` with the given `session`, restoring the
-/// terminal on exit.
-///
-/// `force_ascii` is `--ascii`. The theme is resolved once here, from the
-/// process environment, rather than per frame: the terminal's capabilities do
-/// not change while it is running, and re-reading them every draw would make
-/// the rendering depend on something a test cannot hold still.
+/// Run TUI against `transport` with `session`, restore terminal on exit.
+/// `force_ascii` is `--ascii`. Theme resolved once from environment, not per
+/// frame (terminal capabilities unchanged; re-reading would make rendering
+/// depend on untestable state).
 ///
 /// # Errors
 /// Propagates a terminal I/O error from the draw/event loop.
@@ -62,28 +56,22 @@ fn event_loop(
     theme: Theme,
 ) -> std::io::Result<()> {
     let mut app = App::default();
-    // The session id is owned by `App` and mutable from here on (#105): a
-    // switch or `/new` replaces it via `App::load_session`, rather than this
-    // loop holding a `&str` for its whole lifetime.
+    // Session id owned by App, mutable from here (#105): switch or `/new`
+    // replaces it via `App::load_session`, not held by loop.
     app.set_session(session.to_string());
-    // Read once: which kind of transport this run has never changes, and it is
-    // what the quit confirm's wording depends on (#105) — over stdio the
-    // spawned gateway dies with this client, over `--addr` it does not.
+    // Transport kind never changes, drives quit confirm wording (#105).
+    // Over stdio: spawned gateway dies with client. Over `--addr`: doesn't.
     app.set_stdio(transport.is_stdio());
     let mut view = Viewport::default();
-    // What the last frame drew. The scroll keys need the transcript's line count
-    // and the pane's height, and only `render` knows either — it is the thing
-    // that wraps the text to the width the terminal currently has.
+    // Last frame's state. Scroll keys need transcript line count and pane
+    // height; only `render` knows these (it wraps text to terminal width).
     let mut pane = Pane::default();
-    // Resolved once: the completion root is where the client was started, and a
-    // list that moved because something called `chdir` would be worse than one
-    // that is simply wrong about a directory that no longer exists.
+    // Completion root: startup directory. Moved list (if chdir called) worse
+    // than wrong about a missing directory.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    // Resolved once: the header and the sidebar's SESSION section show `cwd`
-    // and `described` for the life of the run, and neither polls for them —
-    // they were true at connect time and nothing here changes them. The
-    // session id is *not* here any more (#105): it can change, so callers read
-    // it from `app.session()` instead.
+    // Header and sidebar's SESSION show `cwd` and `described` for run life;
+    // neither polls (true at connect time, unchanged). Session id not here
+    // (#105): can change, read from `app.session()`.
     let described = transport.describe();
     let meta = Meta {
         described: &described,
@@ -93,11 +81,10 @@ fn event_loop(
         "connected to {described} (session `{session}`); Esc to quit"
     ));
 
-    // Channel carrying stream events from a background turn thread.
+    // Stream events from background turn thread.
     let mut rx: Option<mpsc::Receiver<Result<StreamEvent, String>>> = None;
-    // How many poll periods have elapsed, which is what drives the spinner.
-    // `wrapping_add` because this only ever feeds a modulo — an overflow after
-    // ~29 000 years of streaming should not be a panic.
+    // Poll count drives spinner. `wrapping_add`: overflow after ~29k years
+    // shouldn't panic.
     let mut tick: usize = 0;
 
     while !app.should_quit {
@@ -109,11 +96,9 @@ fn event_loop(
                     Step::Drained => break,
                     Step::Ended => {
                         rx = None;
-                        // One place where the turn goes back to `Idle`,
-                        // whichever way it ended — answered, failed, or the
-                        // sender dropped. `finish_turn` has already set it on
-                        // the answered path; this costs nothing there and is
-                        // the only thing that sets it on the other two.
+                        // Turn back to Idle (any end: answered, failed,
+                        // sender dropped). `finish_turn` sets on answered path;
+                        // only place it's set on other two.
                         app.end_turn();
                         break;
                     }
@@ -121,25 +106,22 @@ fn event_loop(
             }
         }
 
-        // Every ask `App` may have raised since the last frame — a cancel, a
-        // fresh `session/list`, a fresh `session/create` — sent by the one
-        // thing that holds a transport.
+        // Asks since last frame (cancel, session/list, session/create)
+        // sent by the one transport-holder.
         drain_transport_requests(&mut app, transport);
 
         terminal.draw(|frame| render(frame, &app, theme, &mut view, &mut pane, tick, &meta))?;
 
-        // Short poll so we redraw incrementally during streaming.
+        // Short poll for incremental redraws during streaming.
         if !event::poll(Duration::from_millis(POLL_MS))? {
-            // A poll that timed out is the spinner's heartbeat (#160). The
-            // frame advances here rather than where a delta arrives, so a turn
-            // that is thinking rather than emitting still looks alive.
+            // Poll timeout drives spinner heartbeat (#160). Frame advances
+            // here not on delta arrival, so thinking turn looks alive.
             tick = tick.wrapping_add(1);
-            // The toast's own heartbeat (#104): driven off the same tick as
-            // the spinner, so its expiry needs no clock and no sleep to test.
+            // Toast heartbeat (#104): same tick as spinner, no clock/sleep
+            // needed to test expiry.
             app.tick(tick);
-            // The gateway can exit with nothing in flight to notice it —
-            // `Transport::alive` is what catches that case; a transport error
-            // mid-turn is caught separately, in `apply_event`.
+            // Gateway can exit silently. `Transport::alive` catches it;
+            // mid-turn errors caught in `apply_event`.
             if !app.disconnected() && !transport.alive() {
                 app.disconnect(format!("{} exited", transport.describe()));
             }
@@ -151,13 +133,11 @@ fn event_loop(
         if key.kind != KeyEventKind::Press {
             continue;
         }
-        // Editing and scrolling first: they are a pure mapping onto the
-        // composer and the viewport, and separating them keeps this loop about
-        // the one thing it alone can do — drive a turn.
+        // Editing and scrolling first: pure mapping to composer/viewport.
+        // Separating keeps loop focused on driving turns.
         if edit_or_scroll(&key, &mut app, &mut view, pane, theme) {
-            // The completion list is a function of the buffer, so it is
-            // refreshed after whatever just changed it rather than in each arm
-            // that might have.
+            // Completion is buffer function, refreshed after change not in
+            // each arm.
             app.refresh_completion(&cwd);
             continue;
         }
@@ -234,19 +214,12 @@ fn event_loop(
     Ok(())
 }
 
-/// Every ask `App` may have raised since the last frame, sent to `transport`
-/// (#105). One function because all three share a shape: a model that holds
-/// no transport raised an intent, and this loop — the only thing that holds
-/// one — is what performs it and reports back into the model.
-///
-/// The session switcher's own `session/get` is not here: unlike these three,
-/// it is answered from a specific keystroke (`Enter` on a highlighted entry),
-/// not drained on every frame — see [`switch_session`].
+/// Asks raised since last frame, sent to transport (#105). One function
+/// (all three same shape): model raises intent, loop executes/reports back.
+/// Switcher's `session/get` not here: answered from keystroke, not drained.
 fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
-    // `Ctrl+C` or the `/` menu. `App::cancel` raises the ask and refuses to
-    // raise it twice, so this cannot send two to a core that is already
-    // stopping, and the menu gets to act without `App` ever learning what a
-    // transport is.
+    // `Ctrl+C` or menu. `App::cancel` refuses twice, so no double-send. Menu
+    // acts without App knowing transport.
     if app.take_cancel_request() {
         match transport.cancel(app.session()) {
             Ok(()) => app.record_status("cancelling — the answer so far is kept"),
@@ -254,11 +227,9 @@ fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
         }
     }
 
-    // `Ctrl+S`/`/sessions`. Safe here: neither is reachable while a turn is
-    // streaming and holding the reader/live socket —
-    // `App::request_sessions` declines while the ask dialog is up, and the
-    // switcher's own `Enter` (`switch_session`) is the only thing that can
-    // fire mid-turn, which `App::sessions_confirm` itself refuses.
+    // `Ctrl+S`/`/sessions` safe here: can't reach while turn streams. App
+    // refuses during ask dialog; switcher's Enter (only mid-turn option)
+    // refused by `App::sessions_confirm`.
     if app.take_sessions_request() {
         match transport.session_list() {
             Ok(sessions) => app.open_sessions(
@@ -274,8 +245,7 @@ fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
         }
     }
 
-    // `/new`. `session/create` needs no id and cannot race a running turn's
-    // reader for the same reason.
+    // `/new`: `session/create` needs no id, can't race turn's reader.
     if app.take_new_session_request() {
         match transport.create_session() {
             Ok(id) => app.load_session(id, Vec::new()),
@@ -284,13 +254,10 @@ fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
     }
 }
 
-/// The session switcher's `Enter`: `App::sessions_confirm` decides whether the
-/// switch is allowed at all (refusing mid-turn, #105's design point 4); once
-/// it hands back an id, `transport.session_get` is the one call this loop
-/// makes synchronously rather than on a thread, exactly as
-/// `Transport::session_get`'s docs require — nothing else can be reading the
-/// same pipe while a switch is in progress, because a switch only ever starts
-/// when [`App::turn`] is `Idle`.
+/// Switcher's `Enter`: `App::sessions_confirm` allows switch (refusing
+/// mid-turn). Once approved, `transport.session_get` is the one synchronous
+/// call (as its docs require — nothing reads pipe during switch, which only
+/// starts on `Idle`).
 fn switch_session(app: &mut App, transport: &Arc<dyn Transport>) {
     let Some(id) = app.sessions_confirm() else {
         return;
@@ -312,17 +279,12 @@ fn switch_session(app: &mut App, transport: &Arc<dyn Transport>) {
     }
 }
 
-/// What `Enter` does right now (#159).
-///
-/// `Enter` has four claims on it and the state picks between them. Extracted
-/// from the event loop rather than left as a chain of match guards for one
-/// reason: the loop needs a terminal, so a guard chain is a table nothing can
-/// assert. This is a pure function of the model, and
-/// `enter::the_state_decides_what_enter_means` reads it as the table it is.
+/// What `Enter` does now (#159). Four meanings, state picks. Extracted from
+/// loop (guard chain untestable); pure model function. Read in
+/// `enter::the_state_decides_what_enter_means` as the table it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Enter {
-    /// Answer the pending confirmation. **Does not steer**: a question about a
-    /// turn is not a message to it.
+    /// Answer pending confirmation. **Not steer**: question ≠ message.
     Answer,
     /// A prompt is pending but its dialog is closed: show it again rather than
     /// answer (#103). The user must see the options before `Enter` can send
@@ -338,28 +300,13 @@ enum Enter {
     Nothing,
 }
 
-/// Which meaning the state gives `Enter`.
-///
-/// Order matters and is the table from #159. `Blocked` is checked first because
-/// `App::turn()` derives it from the prompt queue, and a turn that is blocked is
-/// also streaming underneath — so testing for `Streaming` first would steer
-/// instead of answering.
-///
-/// A `Blocked` turn splits in two, added by #103: with the dialog open, `Enter`
-/// answers; with it closed (the user pressed `Esc`), `Enter` only reopens it —
-/// answering blind, with no options on screen, is the one thing a modal must
-/// never let a keystroke do.
-///
-/// Read from `App::turn()` rather than from the event loop's `rx`. Both answer
-/// "is a turn running" and they are reconciled at `Step::Ended`, but they are
-/// two fields with one opinion and the model's accessor is the one #158 made
-/// authoritative; a steering arm that tested the other would work until the
-/// first turn that ended early.
-///
-/// Note the `/` menu and the `@` completion take `Enter` *before* this is ever
-/// reached (19d), and both fall through on an empty list so a list showing
-/// nothing cannot make the composer unsendable. This layers after that order
-/// rather than joining it.
+/// What meaning state gives `Enter`. Order matters (#159 table). `Blocked`
+/// checked first because turn is streaming underneath — steer not answer if
+/// reversed. `Blocked` (added #103): dialog open → answer; closed → reopen
+/// (blind answer is forbidden). Read from `App::turn()` not loop's `rx` (both
+/// answer "running?"; model accessor authoritative per #158; early-exit
+/// steers wrong otherwise). `/` menu and `@` completion take `Enter` before
+/// here (19d), fallthrough on empty so empty list doesn't block send.
 fn enter_means(app: &App) -> Enter {
     match app.turn() {
         Turn::Blocked if app.dialog_open() => Enter::Answer,
@@ -370,22 +317,13 @@ fn enter_means(app: &App) -> Enter {
     }
 }
 
-/// Send the composer's text as a follow-up, and show a refusal rather than
-/// swallowing it (#159).
-///
-/// **Synchronous**, unlike `answer`, and the difference is deliberate.
-/// `Rest::follow_up` is a refusal with no I/O at all, and `Stdio::follow_up` is
-/// one write to a pipe whose *reader* is another thread — neither can block the
-/// draw loop meaningfully. A spawned thread would instead throw away the error,
-/// which over REST is the entire answer: 13b recorded that the REST surface has
-/// no route reaching a turn in flight, so a keystroke that vanished there would
-/// teach a user that steering is broken rather than that this connection cannot
-/// carry it.
-///
-/// The message is taken from the composer either way, so a refused follow-up
-/// still clears what was typed and records it — the user said it, and a
-/// transcript that showed the refusal without the thing refused would be
-/// missing half the exchange.
+/// Steer turn (send follow-up), show refusal not silent drop (#159).
+/// **Synchronous** (unlike `answer`): deliberate. `Rest::follow_up` is refusal
+/// with no I/O; `Stdio::follow_up` writes to pipe with reader on other thread
+/// — neither blocks draw loop. Thread would drop error, which over REST is the
+/// whole answer: no in-flight route, keystroke vanishes, user thinks steering
+/// broken not connection incapable. Message always taken, refusal recorded; if
+/// refused and not shown, transcript missing half exchange.
 fn steer(transport: &dyn Transport, session: &str, app: &mut App) {
     let Some(message) = app.take_submission() else {
         return;
@@ -395,61 +333,36 @@ fn steer(transport: &dyn Transport, session: &str, app: &mut App) {
     }
 }
 
-/// `Ctrl+C`: ask the running turn to stop, and say what that actually does.
-///
-/// Returns whether this was the ask that acted, which is `false` both when
-/// nothing is running and when a cancel has already been asked for — the
-/// second `Ctrl+C` of a pair must not produce a second line saying the same
-/// thing, for the same reason it must not send a second message.
-///
-/// **The partial answer stays.** `App::cancel` does not erase what has already
-/// arrived, and it must not: cancelling finalizes with what is in hand, and
-/// deleting it would misreport what the core actually did before it stopped.
-///
-/// This used to only *say* a cancel had been asked for, because the client had
-/// no way to send one ([#157]). It can now, and does — over stdio a real
-/// `turn/cancel`, over REST the stream teardown the conductor reads as
-/// `Flow::Stop`. One method, two honest implementations, and this does not know
-/// which it got.
-///
-/// It does not send anything itself. `App::cancel` raises the ask and the event
-/// loop drains it, so `Ctrl+C` and the `/cancel` command go out by one path —
-/// the menu is dispatched inside `App`, which holds no transport, and giving it
-/// one to make this key simpler would have been the wrong trade.
-///
-/// [#157]: https://github.com/PromptPasture/jan-klod/issues/157
+/// `Ctrl+C`: ask running turn to stop. Returns false if nothing runs or
+/// already asked (no double-narration, no double-send). **Partial answer
+/// stays**: cancel finalizes with what arrived; delete would misreport what
+/// core did. Used to only narrate (#157 — client couldn't send); now does send
+/// (stdio: `turn/cancel`, REST: stream teardown → `Flow::Stop`). Doesn't send
+/// itself; App raises ask, loop drains, so menu and key share path (App holds
+/// no transport). One method, two implementations.
 fn request_cancel(app: &mut App) -> bool {
     app.cancel()
 }
 
-/// What the last frame drew, so the scroll keys have dimensions to work with.
+/// Last frame's dimensions for scroll keys.
 #[derive(Debug, Default, Clone, Copy)]
 struct Pane {
     /// Rendered transcript lines.
     total: usize,
-    /// Rows the transcript pane can show.
+    /// Transcript pane rows.
     height: usize,
-    /// Cells the composer's text may use, for the vertical motion and history
-    /// arms — both are written in terms of *visual* rows, so neither can be
-    /// answered without knowing where the text wraps.
+    /// Composer text cells (vertical motion/history — visual rows).
     composer_width: usize,
-    /// Cells the *transcript* has, which is a different number: the composer
-    /// gives up two more to its caret glyph. `span_of` has to be asked in the
-    /// same width the frame was drawn in or it measures a layout nobody saw.
+    /// Transcript cells (different: composer caret takes 2 more).
+    /// `span_of` measured against actual frame width.
     transcript_width: usize,
-    /// Whether the last frame's `layout::regions` hid the sidebar (#105:
-    /// "sidebar-in-a-dialog"). `Ctrl+B` only opens the sidebar as a dialog
-    /// when this is true — at a width where the sidebar already has a
-    /// permanent pane, the key would open a second copy of what is already on
-    /// screen, which is the "pointless" case the Scope names.
+    /// Sidebar hidden (#105 "sidebar-in-a-dialog")? `Ctrl+B` dialog only
+    /// opens when true (pointless at width with permanent pane).
     sidebar_hidden: bool,
 }
 
-/// Keys that only move a caret or a viewport.
-///
-/// Returns whether the key was consumed. Split out of the event loop because it
-/// is a mapping and nothing else — the loop's own arms spawn threads and own the
-/// turn, and mixing the two made one function that did both badly.
+/// Keys moving caret or viewport. Returns true if consumed. Split from loop
+/// (pure mapping, loop spawns threads/owns turn; mixing does both badly).
 fn edit_or_scroll(
     key: &ratatui::crossterm::event::KeyEvent,
     app: &mut App,
@@ -460,15 +373,12 @@ fn edit_or_scroll(
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    // Every dialog, and the two shortcuts that open one, ahead of everything
-    // below (#103, #105): while one is open it owns every key that would
-    // otherwise land in the composer or the menus below it.
+    // Dialogs and their shortcuts first (#103, #105): own all keys when open.
     if dialog_priority_keys(key, app, pane) {
         return true;
     }
-    // `@` completion first: the two lists are mutually exclusive — one needs a
-    // slash at column 0, the other an `@` anywhere — but ordering them makes
-    // that a property of the code rather than of the data.
+    // `@` completion first: mutually exclusive lists (slash col 0 vs `@`
+    // anywhere); ordering makes it code property not data.
     if app.completion_open() {
         match key.code {
             KeyCode::Esc => {
@@ -487,7 +397,7 @@ fn edit_or_scroll(
             _ => {}
         }
     }
-    // The `/` menu takes the keys it needs while it is open, and only those.
+    // Menu takes its keys when open, only those.
     if app.menu_query().is_some() {
         match key.code {
             KeyCode::Esc => {
@@ -509,10 +419,8 @@ fn edit_or_scroll(
             _ => {}
         }
     }
-    // The transcript cursor, and the one key it exists for (#155). `Alt+Up`
-    // and `Alt+Down` rather than the bare arrows because those are the
-    // composer's — a client where moving the caret also moved a selection
-    // somewhere else on screen would be one where neither is predictable.
+    // Transcript cursor key (#155). `Alt+Up`/`Down` not bare arrows (those
+    // are composer's). Bare + cursor move would make neither predictable.
     match key.code {
         KeyCode::Char('o') if ctrl => {
             // A no-op when nothing is selected, and it still consumes the key:
@@ -535,18 +443,16 @@ fn edit_or_scroll(
         _ => {}
     }
     match key.code {
-        // Scrolling. `Ctrl+U`/`Ctrl+D` reach here only when the composer is
-        // empty: #150 consumes them when there is content and deliberately
-        // does not when there is none, so this arm needs no composer test
-        // and the two slices stay independent.
+        // Scrolling. `Ctrl+U`/`D` reach here only when composer empty (#150
+        // consumes with content, deliberately not without); no test needed.
         KeyCode::PageUp => *view = view.page_up(pane.height),
         KeyCode::PageDown => *view = view.page_down(pane.total, pane.height),
         KeyCode::Char('u') if ctrl && app.composer.is_empty() => *view = view.half_up(pane.height),
         KeyCode::Char('d') if ctrl && app.composer.is_empty() => {
             *view = view.half_down(pane.total, pane.height);
         }
-        // Editing. Readline where the terminal delivers it; the composer
-        // owns what each one means, so this is a mapping and nothing more.
+        // Editing: readline where terminal delivers. Composer owns meanings;
+        // pure mapping.
         KeyCode::Left if alt => app.composer.word_left(),
         KeyCode::Right if alt => app.composer.word_right(),
         KeyCode::Left => app.composer.left(),
@@ -557,16 +463,14 @@ fn edit_or_scroll(
         KeyCode::Char('e') if ctrl => app.composer.end(),
         KeyCode::Char('w') if ctrl => app.composer.delete_word_back(),
         KeyCode::Char('k') if ctrl => app.composer.kill_to_end(),
-        // The other half of #148's arm: with content, this kills the line
-        // and consumes the key; empty, it fell through to the scroll above.
+        // Other half #148: with content kills line; empty falls through.
         KeyCode::Char('u') if ctrl => app.composer.kill_line(),
         // Both spellings, because terminals disagree about which reaches the
         // application — and `/newline` (#152) is the fallback where neither
         // does. Leaving a user with no way to type a newline is not an
         // option a client gets to choose.
         KeyCode::Enter if shift || alt => app.composer.push('\n'),
-        // History, or the caret — `App` decides which, because the condition is
-        // two facts about its own state and a key arm should ask one question.
+        // History or caret: `App` decides (condition is two state facts).
         KeyCode::Up => app.history_up(pane.composer_width),
         KeyCode::Down => app.history_down(pane.composer_width),
         KeyCode::Backspace => app.backspace(),
@@ -576,19 +480,11 @@ fn edit_or_scroll(
     true
 }
 
-/// Every dialog [`edit_or_scroll`] checks ahead of the composer and the `/`/`@`
-/// lists, plus the two shortcuts that open one from nowhere (#103, #105).
-///
-/// The ask dialog goes first: while it is open it owns every key, because a
-/// digit meant to pick an option must not be typed into a message instead.
-/// The quit confirm, the session switcher, the help overlay and the sidebar
-/// dialog follow — `App` itself refuses to open any of the four while the ask
-/// dialog is up (`request_quit`/`request_sessions`/`toggle_help`/
-/// `toggle_sidebar_dialog` each check `dialog_open`), so at most one of them
-/// is ever open at once. `?` and `Ctrl+B` are the two keys that open a dialog
-/// with no dialog already open to have owned them — checked last, so a `?`
-/// typed while filtering the switcher, say, still reaches its own `Char` arm
-/// rather than this one.
+/// Dialogs [`edit_or_scroll`] checks before composer/menu, plus their open
+/// shortcuts (#103, #105). Ask first (owns all keys; digit can't go to message).
+/// Quit, switcher, help, sidebar follow (App refuses >1 open). `?` and `Ctrl+B`
+/// open from nothing, checked last (so `?` while filtering switcher reaches
+/// its `Char` arm).
 fn dialog_priority_keys(
     key: &ratatui::crossterm::event::KeyEvent,
     app: &mut App,
@@ -610,8 +506,7 @@ fn dialog_priority_keys(
         return true;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    // `?` on an empty composer opens the help overlay; anywhere else it is
-    // punctuation, not a request for help.
+    // `?` on empty composer opens help; elsewhere it's punctuation.
     if key.code == KeyCode::Char('?')
         && !ctrl
         && !key.modifiers.contains(KeyModifiers::ALT)
@@ -620,12 +515,9 @@ fn dialog_priority_keys(
         app.toggle_help();
         return true;
     }
-    // `Ctrl+B`: the sidebar as a dialog, only where 19g's layout left it with
-    // no permanent pane — `pane.sidebar_hidden` is the last frame's own
-    // answer to that, so this needs no copy of `layout::regions`' width
-    // table. At a width with a permanent sidebar the key is deliberately
-    // pointless: opening a second copy of what is already on screen would not
-    // be "reachable", it would be redundant.
+    // `Ctrl+B`: sidebar as dialog, only where 19g layout has no permanent
+    // pane (pane.sidebar_hidden answers it). No `layout::regions` copy needed.
+    // At width with permanent sidebar, deliberately pointless (redundant).
     if key.code == KeyCode::Char('b') && ctrl && pane.sidebar_hidden {
         app.toggle_sidebar_dialog();
         return true;
@@ -633,26 +525,12 @@ fn dialog_priority_keys(
     false
 }
 
-/// Keys the ask dialog owns while it is open (#103).
-///
-/// Returns whether the key was consumed, the same contract as
-/// [`edit_or_scroll`], which checks this first. `Esc` closes the dialog
-/// **without answering** — the prompt stays queued, so it can be reopened —
-/// and never confirms anything on its own. A digit key jumps to that option's
-/// index, 1-based as displayed; `↑`/`↓` move the selection; nothing here
-/// answers, because "nothing is pre-approved" means no key may confirm a
-/// choice the user has not seen highlighted.
-///
-/// **A list prompt (`options` non-empty) accepts no free typing.** Any key that
-/// is not one of the above is consumed as a no-op, so a character meant to pick
-/// an option cannot land in the composer instead. A free-text prompt (`options`
-/// empty) is the opposite: only `Esc` is handled here, and every other key
-/// falls through to the composer, because a free-text answer *is* whatever was
-/// typed into it.
-///
-/// `Enter` is never consumed here even in list mode — it falls through to the
-/// event loop's `enter_means`/`Enter::Answer`, which is what actually calls
-/// `App::take_answer` and sends the answer.
+/// Ask dialog keys while open (#103). Returns consumed. `Esc` closes without
+/// answering (prompt queued, reopenable). Digit jumps to option index (1-based);
+/// `↑`/`↓` move; nothing answers (no pre-approved key). **List prompt: no
+/// free typing** — unmapped keys no-op, can't reach composer. Free-text:
+/// only `Esc` handled, rest falls through (answer is what's typed). `Enter`
+/// never consumed here → loop's `enter_means`/`Answer`.
 fn dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
     if !app.dialog_open() {
         return false;
@@ -703,12 +581,9 @@ const fn quit_confirm_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut 
     true
 }
 
-/// Keys the session switcher owns while it is open (#105). `Esc` closes it;
-/// `↑`/`↓` move the highlight; typing (anything not a control chord) filters.
-/// **`Enter` is not consumed here** — it falls through to the event loop's own
-/// match, which is what actually calls `Transport::session_get` and cannot be
-/// reached from this function (it holds no transport), the same reason the ask
-/// dialog's [`dialog_keys`] leaves `Enter` alone.
+/// Switcher keys while open (#105). `Esc` closes; `↑`/`↓` highlight; type to
+/// filter. **`Enter` not consumed** → loop's match (calls `Transport::session_get`,
+/// unreachable here; no transport; same reason `dialog_keys` leaves `Enter`).
 fn sessions_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
     if !app.sessions_open() {
         return false;
@@ -773,17 +648,13 @@ const fn sidebar_dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mu
     true
 }
 
-/// Scroll so the selected block is on screen, if there is one.
-///
-/// Called after every key that can move the cursor *or* change the height of
-/// the block under it — opening a block that then runs off the bottom of the
-/// pane is the same defect as selecting one that was never on it.
+/// Scroll so selected block is visible. Called after key moving cursor or
+/// changing block height (opening block off-screen same defect as selecting
+/// off-screen).
 fn reveal_cursor(app: &App, view: &mut Viewport, pane: Pane, theme: Theme) {
     let Some(at) = app.cursor() else { return };
-    // Measured against the pane the **last** frame used. The alternative is
-    // laying the transcript out twice per keystroke, and a one-frame-stale
-    // width can only matter on the frame a resize lands — where the next
-    // `reflow` corrects it anyway.
+    // Measured against last frame's pane (alternative: double layout per key).
+    // One-frame-stale width only matters on resize (next `reflow` fixes).
     let (start, rows) = blocks::span_of(&app.transcript, at, pane.transcript_width, theme);
     *view = view.reveal(start, rows, pane.total, pane.height);
 }

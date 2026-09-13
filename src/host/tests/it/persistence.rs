@@ -1,11 +1,9 @@
-//! Durable state survives a restart.
+//! State persists across runtime restarts.
 //!
-//! Boots a `Runtime` against a `config.yaml` whose `store.sqlite` points at a
-//! file, runs a turn (persisted host-side), then **drops the whole runtime and
-//! boots a fresh one against the same DB file** and reads the transcript back —
-//! offline.
+//! Boots a runtime, runs a turn (persisted to SQLite), drops the runtime,
+//! boots a fresh one against the same DB, and verifies the transcript survives.
 //!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Skips if guests are not staged in `ext/`.
 
 use jan_klod_core::conductor::RunResult;
 use jan_klod_core::Runtime;
@@ -45,7 +43,7 @@ extensions:
     )
     .unwrap();
 
-    // First boot: run a turn; its transcript is persisted to the SQLite file.
+    // First boot: run a turn, persisted to SQLite.
     {
         let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
         let factory = || common::canned_http("first answer");
@@ -56,9 +54,8 @@ extensions:
             matches!(out, RunResult::Answered { .. }),
             "the turn completes"
         );
-        // A turn is now two messages — the question and the answer — because
-        // the transcript is projected from the event log rather than read from
-        // one `{user, answer}` row per turn.
+        // Turn is two messages (question + answer) because transcript projects
+        // from the event log, not one `{user, answer}` row per turn.
         assert_eq!(
             agent.transcript("chat-1").len(),
             2,
@@ -68,7 +65,7 @@ extensions:
 
     assert!(db_path.exists(), "the store persisted a database file");
 
-    // Second boot against the SAME db file: the transcript is still there.
+    // Second boot against the same DB: transcript survives.
     {
         let runtime = Runtime::boot(&config, &ext_dir).expect("runtime reboots");
         let factory = || common::canned_http("unused");
@@ -89,13 +86,11 @@ extensions:
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// A relative `storage.path` follows the deployment, not the shell.
+/// Relative `storage.path` resolves against config, not cwd.
 ///
-/// An installed jan-klod runs from whatever directory the user happens to be
-/// in. Resolved against cwd, the default `jan-klod.db` would scatter across
-/// every directory with a different history each time; resolved against the
-/// config, there is one store per deployment. (Invisible in a checkout, where
-/// both paths coincide.)
+/// Installed jan-klod runs from any user directory. Against cwd, the default
+/// `jan-klod.db` would scatter across directories; against config, there is
+/// one store per deployment (invisible in checkout where both paths coincide).
 #[test]
 fn a_relative_storage_path_resolves_against_the_config_not_the_cwd() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -130,12 +125,11 @@ extensions:
 
     assert!(
         dir.join("jan-klod.db").exists(),
-        "the store lands beside config.yaml, where the deployment is"
+        "store lands beside config.yaml"
     );
-    // The assertion above carries this test; cwd is process-wide and tests run
-    // in parallel, so we can't chdir to `elsewhere` to check more directly.
+    // cwd is process-wide; parallel tests can't chdir to `elsewhere` safely.
     assert!(
         !elsewhere.join("jan-klod.db").exists(),
-        "and not in a sibling working directory"
+        "not in a sibling directory"
     );
 }

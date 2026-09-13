@@ -1,9 +1,8 @@
-//! A client that vanishes mid-prompt does not pin the agent.
+//! A dropped client does not hold the agent.
 //!
-//! `JK_ANSWER_TIMEOUT_SECS` is a process-wide env var. This test needs it long
-//! (so the heartbeat, not the deadline, ends the wait) while `api_prompt.rs`
-//! needs it short — under nextest's one-process-per-test isolation both can
-//! set it independently.
+//! `JK_ANSWER_TIMEOUT_SECS` is process-global; this test needs it long
+//! (heartbeat ends the wait, not the deadline) while `api_prompt.rs` needs it short.
+//! nextest's per-test isolation lets both set it independently.
 
 use jan_klod_core::route::HttpFn;
 
@@ -15,7 +14,7 @@ const GUESTS: [&str; 3] = [
     "interceptor-permission.wasm",
 ];
 
-/// A provider that calls a dangerous tool, so the gate parks the turn.
+/// Provider that calls a dangerous tool, parking the turn.
 fn tool_then_answer_http() -> HttpFn {
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -59,22 +58,19 @@ extensions:
     path
 }
 
-/// A client that vanishes mid-prompt does not pin the agent.
+/// Client disconnection doesn't hold the agent.
 ///
-/// A dropped connection can leave a *successful* write (bytes buffered, FIN
-/// not yet seen), so nothing notices until the confirmation timeout — during
-/// which the agent serves nobody. The wait now ticks an SSE comment each
-/// interval, surfacing a dead peer as a write error well before the deadline.
-/// This test drops the connection right after the prompt arrives and asserts
-/// the turn finishes in seconds, with the timeout left deliberately long so a
-/// regression shows up as a slow test, not a silent pass.
+/// A dropped connection may leave a *successful* write (bytes buffered, FIN
+/// not yet seen), unnoticed until the confirmation timeout. SSE heartbeats
+/// now surface a dead peer as a write error before the deadline.
+/// This test drops mid-prompt and asserts the turn finishes quickly;
+/// timeout is long so regressions show as slow tests, not silent passes.
 #[test]
 fn a_disconnected_client_does_not_hold_the_turn_open() {
     if !common::guests_staged(&GUESTS) {
         return;
     }
-    // Long on purpose: the point is that the heartbeat ends the wait, not the
-    // deadline. With this at 5s the test would pass without the fix.
+    // Intentionally long: heartbeat (not deadline) should end the wait.
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "120");
 
     let dir = std::env::temp_dir().join(format!("jk-gone-{}", std::process::id()));

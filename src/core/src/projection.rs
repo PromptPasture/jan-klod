@@ -1,56 +1,51 @@
 //! The conversation, derived from the log.
 //!
-//! A pure function over rows: no store, no I/O, nothing to mock. What it
-//! produces is the history a following turn replays — the same `Vec<Message>`
-//! the conductor would have been handed before, now derived from
-//! [`crate::event_log`] rather than from a separate transcript.
+//! A pure function over rows: no store, no I/O, nothing to mock. Produces the
+//! `Vec<Message>` a following turn replays, derived from [`crate::event_log`]
+//! instead of a separate transcript.
 //!
 //! # What each row becomes, and why
 //!
-//! The rule is *what the model saw*. A row that never entered the conversation
-//! is not invented into one, and a row that did is placed the way the conductor
-//! places it (`conductor::run_turn`, which is the authority these mappings were
-//! read off rather than guessed at):
+//! The rule is *what the model saw*. A row never in the conversation is not
+//! invented into one; a row that was is placed as `conductor::run_turn` places
+//! it (the authority these mappings read off):
 //!
 //! | Row | Becomes | Why |
 //! |---|---|---|
 //! | `user-message` | `Role::User` | the turn's input |
-//! | `follow-up` | `Role::User` | steering is injected as a user message |
+//! | `follow-up` | `Role::User` | steering injected as a user message |
 //! | `done` | `Role::Assistant` | the authoritative answer |
-//! | `tool-result` | `Role::Tool` + `tool_call_id` | exactly how the loop feeds a result back |
-//! | `text-delta` | *dropped* | a preview of the answer `done` carries |
+//! | `tool-result` | `Role::Tool` + `tool_call_id` | exactly how the loop feeds results back |
+//! | `text-delta` | *dropped* | a preview `done` carries |
 //! | `tool-invoked` | *dropped* | the request is not a message; only its result is |
 //! | `warning` | *dropped* | operational notice, never in the conversation |
 //! | `ask` / `answer` | *dropped* | the model never saw them — see below |
 //!
 //! **An `ask` is not a conversation turn.** It is a question put to the *user*
-//! by an interceptor, over a side channel the model has no part in; it never
-//! reaches `PendingRequest.messages`. Rendering the question as an assistant
-//! message would put words in the model's mouth, and rendering the answer as a
-//! user message would make a permission click look like something the user
-//! said. Both are dropped, and a test asserts it: a replayed turn must not
-//! teach the model that it once asked "Run `rm -rf /`?".
+//! by an interceptor over a side channel the model has no part in; it never
+//! reaches `PendingRequest.messages`. Rendering it as an assistant message puts
+//! words in the model's mouth; rendering the answer as a user message makes a
+//! permission click look like user input. Both are dropped: a replayed turn must
+//! not teach the model that it asked "Run `rm -rf /`?".
 //!
 //! # Known limits
 //!
-//! `text-delta` being dropped in favour of `done` means an agentic turn's
-//! *intermediate* assistant texts — what the model said on the way to calling a
-//! tool — are not in the transcript. That matches the transcript this replaces,
-//! which stored only the user message and the final answer, so nothing regresses;
-//! it is written down because "the whole conversation" is what an event log
-//! invites you to assume.
+//! Dropping `text-delta` in favour of `done` means agentic turns' *intermediate*
+//! assistant texts — what the model said before calling a tool — are not in the
+//! transcript. This matches the transcript it replaces, which stored only the
+//! user message and final answer; nothing regresses, but "the whole conversation"
+//! is what an event log invites you to assume.
 //!
-//! A `user-message` row holds the message the model actually received — after
-//! `before-loop` has had its chance to `replace` it — not necessarily the one a
-//! caller asked to send (#84). This replays exactly that message, which is what
-//! makes it correct to feed back into a following turn.
+//! A `user-message` row holds the message the model actually received after
+//! `before-loop` could `replace` it, not necessarily what a caller asked to send
+//! (#84). This replays that exact message, correct for feeding into a following
+//! turn.
 //!
-//! A log written before #84 was fixed can still hold the as-asked message for
-//! a turn where a `before-loop` interceptor rewrote it — the row's *kind* did
-//! not change, only what a live turn puts in it, so an old row still decodes
-//! and replays fine; it is simply a record of what that older build logged. No
-//! interceptor shipped in `config.yaml` rewrites the message, so in practice no
-//! existing session is actually affected.
+//! Logs written before #84 was fixed may hold the as-asked message where a
+//! `before-loop` interceptor rewrote it. The row's *kind* didn't change, only
+//! what a live turn puts in it, so old rows still decode and replay fine. No
+//! interceptor in `config.yaml` rewrites messages, so in practice no session is
+//! actually affected.
 
 use crate::event_log::{decode_record, Record, KIND_USER_MESSAGE};
 use crate::intercept::{Message, Role};
@@ -58,11 +53,9 @@ use crate::store::LoggedEvent;
 
 /// The conversation a session's log describes, oldest first.
 ///
-/// A row that cannot be decoded is skipped rather than failing the whole
-/// projection: a log written by a newer build should read as much of a session
-/// as this one understands, not as no session at all. Skipped silently because
-/// this is a pure function by contract — the log itself remains the record for
-/// anything that wants to audit what was dropped.
+/// Undecidable rows are skipped, not fatal: a log written by a newer build
+/// reads as much as this build understands. Skipped silently—the log itself
+/// remains the record for auditing what was dropped.
 #[must_use]
 pub fn transcript(events: &[LoggedEvent]) -> Vec<Message> {
     placed_transcript(events)
@@ -73,17 +66,15 @@ pub fn transcript(events: &[LoggedEvent]) -> Vec<Message> {
 
 /// [`transcript`], with each message paired to the log position it came from.
 ///
-/// **Every message is projected from exactly one event**, so the seq is that
-/// event's and needs no rule about which of several it means — `message_for`
-/// takes one `Record` and returns at most one `Message`, never folding. That is
-/// what lets a client name a fork point: `session/fork`'s `at-seq` is inclusive,
-/// so forking at the seq beside a message yields a session whose transcript ends
-/// with that message
+/// **Every message projects from exactly one event**, so each seq belongs to
+/// that event—`message_for` takes one `Record`, returns at most one `Message`,
+/// never folding. This lets a client name fork points: `session/fork`'s
+/// `at-seq` is inclusive, so forking at the seq beside a message yields a
+/// transcript ending with that message
 /// ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
 ///
-/// The seqs are **sparse**. An `Ask`, an `Answer`, a `TextDelta`, a
-/// `ToolInvoked` and a `Warning` all project to no message, so a seq is a
-/// position in the log and not an index into this list.
+/// Seqs are **sparse**: `Ask`, `Answer`, `TextDelta`, `ToolInvoked`, `Warning`
+/// all project to no message, so a seq is a log position, not a list index.
 #[must_use]
 pub fn placed_transcript(events: &[LoggedEvent]) -> Vec<(u64, Message)> {
     events
@@ -97,14 +88,13 @@ pub fn placed_transcript(events: &[LoggedEvent]) -> Vec<(u64, Message)> {
 
 /// The tail of `events` holding at most the last `turns` turns.
 ///
-/// A turn begins at a `user-message` row, so the bound is expressed over those
-/// and not over rows. Counting rows would be the obvious thing and the wrong
-/// one: turns are not a fixed number of rows — one tool call adds two — so a
-/// row bound would cut a turn in half and hand the model a conversation that
-/// begins with a tool result answering a call it cannot see.
+/// A turn begins at a `user-message` row; bounds are over turns, not rows.
+/// Rows aren't a fixed per-turn count—one tool call adds two—so row-based
+/// bounds cut turns in half and give the model conversations starting with an
+/// orphaned tool result.
 ///
-/// `turns == 0` is an empty slice. A log with no `user-message` row at all is
-/// returned whole: it is one turn in progress, not zero turns.
+/// `turns == 0` returns an empty slice. A log with no `user-message` rows is
+/// returned whole: one turn in progress, not zero.
 #[must_use]
 pub fn last_turns(events: &[LoggedEvent], turns: u32) -> &[LoggedEvent] {
     if turns == 0 {
@@ -125,9 +115,8 @@ pub fn last_turns(events: &[LoggedEvent], turns: u32) -> &[LoggedEvent] {
 
 /// The message one record contributes, or `None` when it contributes nothing.
 ///
-/// Exhaustive over [`Record`] and over [`crate::conductor::Event`] with no
-/// wildcard arm, so a new kind of either cannot be dropped from the transcript
-/// by default — the decision has to be written here.
+/// Exhaustive over [`Record`] and [`crate::conductor::Event`] with no wildcard,
+/// so new kinds cannot be silently dropped—the decision must be written here.
 fn message_for(record: Record) -> Option<Message> {
     use crate::conductor::Event;
     match record {
@@ -161,8 +150,7 @@ mod tests {
     use crate::intercept::{ToolCall, ToolOutcome};
     use serde_json::json;
 
-    /// Builds rows the way the store would, so a test never depends on `seq`
-    /// being anything other than the order the rows are given in.
+    /// Builds rows as the store does; tests never depend on `seq` beyond row order.
     fn row(seq: u64, kind: &str, payload: String) -> LoggedEvent {
         LoggedEvent {
             session: "s1".to_owned(),
@@ -178,9 +166,9 @@ mod tests {
         row(seq, kind, payload)
     }
 
-    /// The transcript this replaces stored `{user, answer}` per turn, so a
-    /// simple turn must come out as exactly those two messages — otherwise
-    /// swapping `replay` over to this changes what every following turn sees.
+    /// The transcript it replaces stored `{user, answer}` per turn, so a simple
+    /// turn must yield exactly those two messages—otherwise every following turn
+    /// changes when swapping to this.
     #[test]
     fn a_simple_turn_is_the_user_message_and_the_answer() {
         let log = vec![
@@ -206,8 +194,8 @@ mod tests {
         assert_eq!(messages[1].content, "pong");
     }
 
-    /// A result is tied to the call it answers, the way `run_tool_calls` ties
-    /// it — a `Role::Tool` message whose `tool_call_id` is the call's id.
+    /// Results are tied to their calls as `run_tool_calls` does: `Role::Tool`
+    /// message with the call's `tool_call_id`.
     #[test]
     fn a_tool_result_carries_its_call_id() {
         let log = vec![
@@ -255,9 +243,8 @@ mod tests {
         );
     }
 
-    /// The decision this box exists to make: a permission prompt is between an
-    /// interceptor and the user, and must not become something the model said
-    /// or something the user said to it.
+    /// Permission prompts are between interceptor and user only; must not become
+    /// something the model said or the user said to it.
     #[test]
     fn a_permission_prompt_and_its_answer_are_not_conversation() {
         let log = vec![
@@ -340,9 +327,8 @@ mod tests {
         assert!(transcript(&log).is_empty());
     }
 
-    /// A row this build cannot read costs that row, not the session. The
-    /// alternative — failing the whole projection — would make one unreadable
-    /// row hide an entire history.
+    /// Unreadable rows are skipped, not fatal. Failing the whole projection
+    /// would hide an entire history for one undecodable row.
     #[test]
     fn an_undecodable_row_is_skipped_not_fatal() {
         let log = vec![
@@ -376,9 +362,8 @@ mod tests {
         assert!(transcript(&[]).is_empty());
     }
 
-    /// Order comes from the rows, and the rows come from `seq`. The projection
-    /// does not re-sort: a log read out of order is a store bug, and hiding it
-    /// here would make it unfindable.
+    /// Order comes from `seq`; projection doesn't re-sort. Out-of-order logs are
+    /// store bugs, and hiding them here makes them unfindable.
     #[test]
     fn messages_follow_the_order_of_the_rows() {
         let log = vec![
@@ -414,8 +399,8 @@ mod bound_tests {
     use crate::intercept::ToolOutcome;
     use serde_json::json;
 
-    /// `turns` turns, each a user message, a tool result and an answer — so a
-    /// turn is three rows and a row-based bound would visibly cut one open.
+    /// Each turn is user message, tool result, answer—three rows; a row-based
+    /// bound visibly cuts a turn open.
     fn log_of(turns: usize) -> Vec<LoggedEvent> {
         let mut rows = Vec::new();
         for turn in 0..turns {
@@ -472,8 +457,8 @@ mod bound_tests {
         );
     }
 
-    /// The failure a row-based bound would cause, asserted directly: the
-    /// conversation handed to the model must not start with a tool result.
+    /// Row-based bounds would start conversations with orphaned tool results;
+    /// this asserts they don't.
     #[test]
     fn a_bounded_conversation_never_opens_with_a_tool_result() {
         let log = log_of(9);
@@ -493,8 +478,8 @@ mod bound_tests {
         assert!(last_turns(&[], 20).is_empty());
     }
 
-    /// A log whose rows are all events — no turn boundary — is one turn in
-    /// progress. Returning nothing would lose it.
+    /// Logs with no turn boundary (all events) are one turn in progress;
+    /// returning nothing would lose it.
     #[test]
     fn a_log_with_no_turn_boundary_is_returned_whole() {
         let (kind, payload) = encode(&Event::Warning("standalone".to_owned()));
@@ -508,9 +493,8 @@ mod bound_tests {
         assert_eq!(last_turns(&log, 20).len(), 1);
     }
 
-    /// A `follow-up` is a user message but not a turn boundary — steering
-    /// continues a turn rather than starting one, so it must not consume the
-    /// bound.
+    /// `follow-up` is a user message but not a turn boundary—steering continues
+    /// a turn rather than starting one, so it doesn't consume the bound.
     #[test]
     fn steering_does_not_start_a_new_turn() {
         let mut log = log_of(1);

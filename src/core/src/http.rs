@@ -1,14 +1,14 @@
 //! Blocking outbound HTTP — the host half of the `host-http` capability.
 //!
 //! Kept capability-neutral (plain types, no generated bindings) so every
-//! `host-http` bindgen surface can share one implementation: the core's own
-//! [`crate::host::HostState`] and the `provider_probe` example both adapt their
+//! `host-http` bindgen surface can share one implementation: the core's
+//! [`crate::host::HostState`] and `provider_probe` example both adapt their
 //! generated request/response types to the functions here.
 //!
 //! [`ureq`] gives a synchronous client with rustls TLS and no async runtime,
-//! keeping the sync Wasmtime baseline intact. Per the `host-http` contract,
-//! 4xx/5xx are surfaced as errors; transport failures collapse onto the
-//! matching variant.
+//! keeping sync Wasmtime baseline intact. Per the `host-http` contract, 4xx/5xx
+//! are surfaced as errors; transport failures collapse onto the matching
+//! variant.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -102,23 +102,22 @@ const MAX_REDIRECTS: usize = 10;
 /// cross-origin ones, matching what ureq did before.
 const STRIPPED_ON_REDIRECT: [&str; 3] = ["authorization", "cookie", "proxy-authorization"];
 
-/// As [`fetch`], but every destination must satisfy `policy` — including the
-/// ones a redirect chooses.
+/// As [`fetch`], but every destination must satisfy `policy` — including
+/// redirect destinations.
 ///
 /// This is the function the runtime hands to guests. [`fetch`] keeps the
-/// unparameterised signature for the host's own calls (a probe example, the
-/// `ask` CLI) and applies the default public-only rule, so there is no spelling
-/// of "send anywhere" left in the codebase.
+/// unparameterised signature for the host's own calls (probe example, `ask`
+/// CLI) and applies default public-only rule, so no spelling of "send
+/// anywhere" is left in the codebase.
 ///
 /// # Redirects are followed here, not by ureq
 ///
-/// `max_redirects(0)` on the agent and a loop around it, because the policy has
-/// to be checked **per hop**. ureq will follow up to ten redirects and tell
-/// nobody, so a permitted origin answering
-/// `302 Location: http://169.254.169.254/…` would reach cloud metadata with the
-/// policy consulted only about the first URL
-/// ([#107](https://github.com/PromptPasture/jan-klod/issues/107)). The check
-/// that matters is the one on the destination actually contacted.
+/// `max_redirects(0)` on the agent with a loop around it, because the policy
+/// must be checked **per hop**. ureq follows up to ten redirects silently, so
+/// a permitted origin answering `302 Location: http://169.254.169.254/…` would
+/// reach cloud metadata with policy checked only on the first URL
+/// ([#107](https://github.com/PromptPasture/jan-klod/issues/107)). The
+/// mattering check is on the destination actually contacted.
 ///
 /// A relative `Location` is resolved against the current URL by `url::Url`
 /// rather than by hand: RFC 3986's rules are not obvious, and getting them
@@ -231,9 +230,8 @@ const MAX_PINNED_ADDRS: usize = 16;
 ///
 /// This is the fix for [#108](https://github.com/PromptPasture/jan-klod/issues/108):
 /// without it the host is looked up twice — once by
-/// [`crate::egress::EgressPolicy::check`] and once by ureq on the way to the
-/// socket — and a name whose answer changes in between is checked as public and
-/// connected to as private.
+/// [`crate::egress::EgressPolicy::check`] and once by ureq — and a name whose
+/// answer changes in between is checked as public and connected as private.
 #[derive(Debug)]
 struct Pinned(Vec<SocketAddr>);
 
@@ -266,34 +264,32 @@ fn exchange(
     body: Option<&[u8]>,
     timeout: u32,
 ) -> Result<WireResponse, WireError> {
-    // One-shot agent per request: simple, and providers issue infrequent calls.
-    // `http_status_as_error(false)` lets us read 4xx/5xx as responses and map
-    // them ourselves rather than losing the status inside a ureq error.
+    // One-shot agent per request: simple, providers issue infrequent calls.
+    // `http_status_as_error(false)` reads 4xx/5xx as responses, mapping them
+    // ourselves rather than losing the status inside a ureq error.
     //
     // **`max_redirects(0)` is a security setting, not a preference.** ureq
-    // follows up to 10 redirects and tells nobody, which would leave the egress
-    // policy consulted about the first URL only. At 0 the 3xx is returned as-is
-    // (`max_redirects_do_error()` is `max_redirects > 0 && …`), which is what
-    // lets `fetch_within` check each hop before taking it.
+    // follows up to 10 redirects silently, leaving egress policy consulted only
+    // on the first URL. At 0 the 3xx is returned as-is (`max_redirects_do_error()`
+    // is `max_redirects > 0 && …`), letting `fetch_within` check each hop.
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_millis(u64::from(timeout))))
         .http_status_as_error(false)
         .max_redirects(0)
         .build();
 
-    // `Host` and TLS are unaffected by pinning: ureq takes SNI and the header
-    // from the URI's authority, never from the address it connects to, so
-    // virtual hosting and certificate validation still see the name the caller
-    // asked for.
+    // `Host` and TLS are unaffected by pinning: ureq takes SNI and header from
+    // the URI's authority, never from the connection address, so virtual
+    // hosting and certificate validation see the requested name.
     //
-    // The two arms differ in the resolver and nothing else: `Agent::from(config)`
-    // is `with_parts(config, DefaultConnector::default(), DefaultResolver)`, so
+    // The two arms differ in the resolver only: `Agent::from(config)` is
+    // `with_parts(config, DefaultConnector::default(), DefaultResolver)`, so
     // the pinned agent keeps the same transport, TLS and pooling as before.
     //
-    // **`Agent::with_parts` and `Resolver` live in `ureq::unversioned`, which
-    // its own docs exclude from semver.** A ureq minor bump may break this call
-    // site; that is a compile error rather than a silent reopening of #108, and
-    // it is the price of the guarantee.
+    // **`Agent::with_parts` and `Resolver` live in `ureq::unversioned`,
+    // excluded from its own semver docs.** A ureq minor bump may break this
+    // site; that's a compile error not a silent #108 reopening, the price of
+    // the guarantee.
     let agent: ureq::Agent = match destination {
         crate::egress::Destination::Resolved(addrs) => {
             ureq::Agent::with_parts(config, DefaultConnector::default(), Pinned(addrs.clone()))

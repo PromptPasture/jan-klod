@@ -1,22 +1,19 @@
 //! A component built from another language runs in this host — the "any
-//! language" claim, backed by an actual test rather than a spike binary someone
-//! had to run by hand.
+//! language" claim, backed by an actual test rather than a spike.
 //!
 //! Loads `src/extensions/spike/spike.wasm` (TinyGo, built against `wit/spike`),
-//! instantiates it with the host's own WASI wiring, calls its exported
-//! `complete`, and checks the round trip. Runs every gate, no toolchain
-//! required.
+//! instantiates it with the host's WASI wiring, calls its exported `complete`,
+//! and checks the round trip. Runs every gate, no toolchain required.
 //!
-//! That artifact is a **committed fixture**, the one exception to the ignored
-//! guest components: `.gitignore` negates it, `make -C src/extensions clean`
-//! leaves it alone, and `make -C src/extensions spike-guest` regenerates it with
-//! `-no-debug -opt=z` (~75 KB, and no DWARF for a guest panic) for whoever
-//! commits the new one. Nothing in a test run writes to it.
+//! That artifact is a **committed fixture**, the one exception to ignored guest
+//! components: `.gitignore` negates it, `make -C src/extensions clean` leaves it
+//! alone, and `make -C src/extensions spike-guest` regenerates it with `-no-debug
+//! -opt=z` (~75 KB, no DWARF) for whoever commits the new one. Nothing in a test
+//! run writes to it.
 //!
-//! This proves the Component Model boundary is genuinely language-neutral, not
-//! that today's `wit/` still compiles under TinyGo — the committed artifact is
-//! what runs, since rebuilding needs the `tinygo`/`wkg` most contributors lack.
-//! [`the_committed_artifact_is_rebuildable`] covers that half when the toolchain
+//! This proves the Component Model boundary is language-neutral, not that today's
+//! `wit/` still compiles under TinyGo — the committed artifact is what runs.
+//! [`the_committed_artifact_is_rebuildable`] covers rebuilding when the toolchain
 //! is present, building into a temp dir so the fixture stays untouched.
 
 // Dominated by `bindgen!` output; exempt from the workspace's doc/style lints.
@@ -83,10 +80,9 @@ fn a_component_built_from_go_completes_a_call_through_the_host() {
     let path = spike_wasm();
     assert!(
         path.exists(),
-        "the committed TinyGo component is missing at {} — the polyglot claim has \
-         no evidence without it. It is tracked, so restore it with `git checkout \
-         -- {}` rather than rebuilding; only rebuild (`make -C src/extensions \
-         spike-guest`, needs tinygo + wkg) if you mean to commit a new one",
+        "the committed TinyGo component is missing at {} — restore it with \
+         `git checkout -- {}` rather than rebuilding; only rebuild (`make -C \
+         src/extensions spike-guest`) if committing a new one",
         path.display(),
         path.display()
     );
@@ -102,16 +98,13 @@ fn a_component_built_from_go_completes_a_call_through_the_host() {
 /// The other half: does today's `wit/` still produce a working Go guest? Only
 /// checkable where `tinygo`/`wkg` exist, so this skips via
 /// [`common::optional_tool`] (an announced skip) rather than the
-/// `JK_REQUIRE_GUESTS` policy — forcing a hard failure on a toolchain most
-/// contributors lack would just teach people to unset the flag.
+/// `JK_REQUIRE_GUESTS` policy.
 ///
-/// Rebuilds into a temp dir via the recipe's `SPIKE_WASM` override, never over
-/// the committed fixture: writing there made this test's outcome depend on
-/// whether it or its sibling ran first, and left `make gate` with a dirty tree.
-/// The fresh component is then put through the same round trip, so drift that
-/// still compiles but no longer works is caught too. Byte equality with the
-/// committed copy is deliberately not asserted — TinyGo output moves with the
-/// compiler version, and that would fail on an upgrade rather than on drift.
+/// Rebuilds into a temp dir via `SPIKE_WASM`, never over the committed fixture:
+/// writing there made test outcomes depend on test order and left `make gate`
+/// with a dirty tree. The fresh component is put through the same round trip,
+/// catching drift that compiles but no longer works. Byte equality is not
+/// asserted — TinyGo output moves with the compiler version.
 #[test]
 fn the_committed_artifact_is_rebuildable() {
     if !common::optional_tool("tinygo") || !common::optional_tool("wkg") {

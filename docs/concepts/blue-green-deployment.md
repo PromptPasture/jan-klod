@@ -7,59 +7,48 @@ created: 2026-06-28T00:00:00Z
 updated: 2026-06-29T00:00:00Z
 ---
 
-Jan-Klod uses a blue/green strategy to update the runtime or extensions without downtime and with instant rollback.
+Jan-Klod uses blue/green deployment for zero-downtime updates and instant rollback.
 
-A **small standalone supervisor** (planned: a **TinyGo** binary) performs the
-update: it stages the new version, validates it, flips the `active` symlink,
-restarts, health-checks, and rolls back on failure. It is a *separate process
-from the Rust core on purpose* — the component performing the switch cannot be
-the binary being switched, so the supervisor must survive a core swap. It is kept
-small and simple; it carries no agent logic.
+A **small standalone supervisor** (TinyGo binary) performs updates: stages, validates, flips `active`, restarts, health-checks, and rolls back on failure. Separate from the core — the switcher cannot be the binary being switched. Kept small, simple, and free of agent logic.
 
-The blue/green slots hold **core + its `.wasm` extensions** (the deploy unit).
-UI client binaries are separate, optionally-installed artifacts updated on their
-own — core runs headless without them.
+Blue/green slots hold **core + `.wasm` extensions**. UI client binaries are separate and updated independently.
 
 ## Directory layout
 
 ```
 ~/.jan-klod/
-  jan-klod-supervisor  ← Go updater (performs the flip; not swapped during a core update)
+  jan-klod-supervisor  ← updater
   blue/
-    jan-klod         ← Rust core binary (self-contained: persistence, REST surface,
-                       telegram, delegation are host-side in-core as of Phase 3/4)
+    jan-klod         ← core binary
     ext/
-      provider-openai.wasm
-      interceptor-intent-router.wasm
-      …selected provider/interceptor/tool guests…
+      …extensions…
     config.yaml
-  green/             ← standby slot (staged update)
-    jan-klod         ← Rust core binary
+  green/             ← standby slot
+    jan-klod
     ext/
     config.yaml
   active             ← symlink → blue/ or green/
-  state.yaml         ← records which slot is live and version history
+  state.yaml         ← version history
 ```
 
 ## Update flow
 
-1. Download new binary and/or `.wasm` extensions into the standby slot.
-2. Validate (checksums, WASM component interface compatibility check).
-3. Atomically flip the `active` symlink to the standby slot.
-4. Restart the process.
-5. Run health check.
-6. **PASS** → keep new slot active, mark previous slot as rollback target.
-7. **FAIL** → flip `active` back to previous slot, restart, alert user.
+1. Download new binary and/or `.wasm` extensions to standby.
+2. Validate (checksums, WASM compatibility).
+3. Atomically flip `active` to standby.
+4. Restart, then health-check.
+5. **PASS** → keep new slot
+6. **FAIL** → flip back, restart
 
 ```
-jan-klod update          — download + stage into standby
-jan-klod update --apply  — flip symlink + restart
-jan-klod rollback        — flip back to previous slot
+jan-klod update         — download + stage
+jan-klod update --apply — flip + restart
+jan-klod rollback       — flip back
 ```
 
 ## Extension-only updates
 
-Individual `.wasm` files in `ext/` can be updated without replacing the core binary. The interface compatibility check ensures the new `.wasm` satisfies the same WIT world before the flip.
+Individual `.wasm` files can update without replacing the core. Interface compatibility checks ensure the new `.wasm` satisfies the same WIT world before the flip, letting extensions update independently of the core binary.
 
 ## State format (`state.yaml`)
 

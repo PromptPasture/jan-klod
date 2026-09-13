@@ -1,17 +1,8 @@
-//! What a subprocess may do — the policy, and nothing that enforces it.
-//!
-//! [`crate::host_process`] confines the *caller*: default-deny, a cwd jailed to
-//! the workspace, a timeout, an output cap, a rebuilt environment. It does not
-//! confine the *command*, which runs with the user's privileges and can read or
-//! write anywhere the user can — the gap `docs/concepts/security-model.md`
-//! records under "`host-process` confines the caller, not the command".
-//!
-//! Closing it needs an OS backend (Seatbelt, Landlock), and those come later.
-//! What comes first is the thing such a backend would enforce, and the thing
-//! the runtime needs in order to be honest before one exists: a named grant in
-//! `config.yaml`, and a mode that says plainly when nothing is enforcing it.
-//!
-//! Nothing in this module confines anything. [`SandboxPolicy`] is a value.
+//! Subprocess effect policy—no enforcement. [`crate::host_process`] confines
+//! the *caller* (default-deny, jailed cwd, timeout, output cap, env). Not the
+//! *command*—runs with user privileges (see security model). OS backends later.
+//! Defines what they'd enforce and what the runtime promises when none exist:
+//! named grant in `config.yaml` and mode saying plainly when nothing confines.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -20,46 +11,30 @@ use serde_json::Value;
 
 use crate::host_fs::{FsError, Workspace};
 
-/// The `writable` entry assumed when the operator names none: the workspace
-/// root, which is already the only place `host-fs` and the exec cwd allow.
+/// Default writable: workspace root (only place `host-fs` and cwd allow).
 const DEFAULT_WRITABLE: &str = ".";
 
 /// How a command's effects are confined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SandboxMode {
-    /// The OS confines the command itself. The default, and what an operator
-    /// gets by asking for nothing.
+    /// OS confines the command (default).
     #[default]
     Os,
-    /// Nothing confines the command. The permission gate's confirmation is the
-    /// only barrier, and the user is told so on every turn that runs one.
+    /// Nothing confines. Permission gate is the only barrier.
     ApprovalOnly,
 }
 
-/// What the operator asked for in `execution.sandbox`.
-///
-/// This is the *request*. Whether it can be honoured depends on the backends a
-/// build has for the host OS, which is resolved at boot — a policy asking for
-/// [`SandboxMode::Os`] on a platform with no backend is a legitimate config,
-/// and reporting that honestly is the point of [`SandboxMode::ApprovalOnly`]
-/// existing as a named state rather than as silence.
+/// What the operator asked for in `execution.sandbox`. The *request*, not the
+/// effective policy (depends on boot-time backends resolved per-OS).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxPolicy {
-    /// The requested mode, not the effective one.
+    /// Requested mode, not effective.
     pub mode: SandboxMode,
-    /// Absolute paths a command may write to, each already resolved through the
-    /// workspace jail, so an entry here cannot name somewhere `host-fs` would
-    /// refuse.
+    /// Paths command may write (resolved through workspace jail).
     pub writable: Vec<PathBuf>,
-    /// Whether a command may reach the network. Denied by default: a sandboxed
-    /// command that can still open sockets is an exfiltration path with extra
-    /// steps.
+    /// Network access (denied by default; sockets are exfiltration).
     pub network: bool,
-    /// Whether [`SandboxMode::Os`] is a requirement rather than a preference.
-    ///
-    /// False means an unbackable `os` request degrades to approval-only with a
-    /// warning. True means it fails instead, for an operator who would rather
-    /// have no command run than one run unconfined.
+    /// Whether `os` mode is required or degrades to approval-only.
     pub require: bool,
 }
 
@@ -80,27 +55,14 @@ pub enum SandboxConfigError {
 }
 
 impl SandboxPolicy {
-    /// Read `execution.sandbox`, resolving `writable` against `workspace`.
+    /// Parse `execution.sandbox`, resolve `writable` against workspace.
     ///
-    /// `execution` is the top-level block exactly as the config crate preserved
-    /// it — opaque JSON, since the core interprets these keys and the config
-    /// crate does not. Absent block, absent `sandbox`, or an empty one all give
-    /// the default policy.
-    ///
-    /// Strict about `mode` and about `writable`, lenient about the two booleans,
-    /// and the asymmetry is deliberate. A misspelt `mode` has to be an error
-    /// because neither fallback is safe to guess at: defaulting to `os` claims
-    /// confinement the operator may not get, and defaulting to `approval-only`
-    /// silently drops confinement they asked for. A `writable` entry that
-    /// escapes the workspace is a contradiction — the runtime will not honour
-    /// it, so accepting it would make the list mean something other than what it
-    /// says. Whereas a malformed `network` or `require` value falls back to
-    /// `false`, which can only ever *tighten* the policy, so reading it
-    /// leniently costs nothing.
+    /// Strict on `mode` and `writable` (wrong defaults are unsafe); lenient on
+    /// booleans (false tightens policy). Absent block/sandbox/empty all give defaults.
     ///
     /// # Errors
-    /// [`SandboxConfigError`] when `mode` is unrecognised, `writable` is not a
-    /// list of strings, or one of its entries leaves the workspace.
+    /// `SandboxConfigError` when `mode` unrecognised, `writable` not strings,
+    /// or entries escape workspace.
     pub fn from_config(
         execution: Option<&Value>,
         workspace: &Workspace,

@@ -1,48 +1,43 @@
-//! Host-side `host-fs` backend — a path-jailed view of a workspace directory.
+//! Path-jailed workspace directory for `host-fs`.
 //!
-//! Every requested path is workspace-relative and [`resolve`]d against the root;
-//! absolute paths and `..` escapes are rejected. Default-deny lives at the wiring
-//! layer — a `host-fs` import with no [`Workspace`] configured returns `Denied`
-//! for every op.
+//! Paths are workspace-relative; absolute paths and `..` escapes rejected.
+//! Default-deny: unconfigured means all ops return `Denied`.
 //!
-//! Caveat: jailing is lexical (normalize `.`/`..`, then prefix-check against the
-//! canonicalized root). A symlink inside the workspace pointing outside is not
-//! detected.
+//! Caveat: lexical jailing only (no symlink escapes detected).
 
 use std::path::{Component, Path, PathBuf};
 
-/// Why a filesystem operation failed (mirrors `host-fs.fs-error`).
+/// Filesystem operation error (mirrors `host-fs.fs-error`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsError {
-    /// The path does not exist within the workspace.
+    /// Path does not exist.
     NotFound,
-    /// The path escapes the workspace (or no workspace is configured).
+    /// Path escapes workspace or no workspace configured.
     Denied,
-    /// An underlying I/O error.
+    /// I/O error.
     Io,
 }
 
 /// One directory entry (mirrors `host-fs.entry`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    /// File or directory name (not a full path).
+    /// Entry name (not a full path).
     pub name: String,
-    /// Whether the entry is a directory.
+    /// Is the entry a directory.
     pub is_dir: bool,
 }
 
-/// A path-jailed workspace root the host serves `host-fs` from.
+/// Path-jailed workspace root for serving `host-fs`.
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
 }
 
 impl Workspace {
-    /// Wrap `root` as a workspace. The root is canonicalized so jail checks compare
-    /// against a real absolute path.
+    /// Wrap `root` as a workspace (canonicalized for jail checks).
     ///
     /// # Errors
-    /// Returns [`FsError::Io`] if `root` cannot be canonicalized (e.g. missing).
+    /// [`FsError::Io`] if `root` cannot be canonicalized (e.g. missing).
     pub fn open(root: impl AsRef<Path>) -> Result<Self, FsError> {
         let root = root.as_ref().canonicalize().map_err(|_| FsError::Io)?;
         Ok(Self { root })
@@ -54,8 +49,7 @@ impl Workspace {
         &self.root
     }
 
-    /// Resolve a workspace-relative `requested` path to an absolute path inside the
-    /// root, or [`FsError::Denied`] if it escapes.
+    /// Resolve a workspace-relative path to an absolute path inside the root.
     ///
     /// # Errors
     /// [`FsError::Denied`] for absolute paths or `..` escapes.
@@ -74,7 +68,7 @@ impl Workspace {
     /// Read a UTF-8 file.
     ///
     /// # Errors
-    /// [`FsError::Denied`] (escape), [`FsError::NotFound`] (absent), [`FsError::Io`].
+    /// [`FsError::Denied`], [`FsError::NotFound`], or [`FsError::Io`].
     pub fn read(&self, path: &str) -> Result<String, FsError> {
         let full = self.resolve(path)?;
         match std::fs::read_to_string(&full) {
@@ -84,10 +78,10 @@ impl Workspace {
         }
     }
 
-    /// Create or replace a UTF-8 file, creating parent directories.
+    /// Create or replace a UTF-8 file (creates parent directories).
     ///
     /// # Errors
-    /// [`FsError::Denied`] (escape) or [`FsError::Io`].
+    /// [`FsError::Denied`] or [`FsError::Io`].
     pub fn write(&self, path: &str, contents: &str) -> Result<(), FsError> {
         let full = self.resolve(path)?;
         if let Some(parent) = full.parent() {
@@ -99,7 +93,7 @@ impl Workspace {
     /// List a directory.
     ///
     /// # Errors
-    /// [`FsError::Denied`] (escape), [`FsError::NotFound`] (absent), [`FsError::Io`].
+    /// [`FsError::Denied`], [`FsError::NotFound`], or [`FsError::Io`].
     pub fn list_dir(&self, path: &str) -> Result<Vec<Entry>, FsError> {
         let full = self.resolve(path)?;
         let read_dir = match std::fs::read_dir(&full) {
@@ -121,14 +115,14 @@ impl Workspace {
         Ok(entries)
     }
 
-    /// Whether `path` exists and is within the workspace.
+    /// Whether `path` exists within the workspace.
     #[must_use]
     pub fn exists(&self, path: &str) -> bool {
         self.resolve(path).is_ok_and(|full| full.exists())
     }
 }
 
-/// Lexically normalize a path (fold `.` and `..`) without touching the filesystem.
+/// Lexically normalize a path (fold `.` and `..`).
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -180,7 +174,7 @@ mod tests {
     #[test]
     fn inner_relative_paths_resolve_inside_the_root() {
         let (_dir, ws) = workspace();
-        // `a/../b` stays inside the workspace and is allowed.
+        // Relative paths that stay inside are allowed (e.g., `a/../b`).
         assert!(ws.resolve("a/../b.txt").is_ok());
         ws.write("a/../b.txt", "x").unwrap();
         assert!(ws.exists("b.txt"));
@@ -200,7 +194,7 @@ mod tests {
         assert_eq!(names, vec!["a.txt".to_string(), "z.txt".to_string()]);
     }
 
-    /// Minimal self-cleaning temp dir (no dev-dep needed).
+    /// Self-cleaning temp dir (minimal, no dev-deps).
     mod tempdir_guard {
         use std::path::{Path, PathBuf};
 
@@ -210,7 +204,7 @@ mod tests {
         pub struct TempDir(PathBuf);
         impl TempDir {
             pub fn new() -> Self {
-                // pid + a process-unique counter — collision-free across parallel tests.
+                // PID + counter for collision-free parallel test isolation.
                 let base = std::env::temp_dir().join(format!(
                     "jk-fs-{}-{}",
                     std::process::id(),

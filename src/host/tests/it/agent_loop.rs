@@ -6,8 +6,7 @@
 //! fallback chain. `host-http` is canned, so the loop runs with no network and
 //! no API key.
 //!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`; build
-//! them with `make ext`.
+//! Skips when guests aren't staged in `ext/`; build with `make ext`.
 
 use jan_klod_core::conductor::RunResult;
 use jan_klod_core::Runtime;

@@ -1,18 +1,15 @@
 # WIT interfaces — `jan-klod:interfaces@0.1.0`
 
-Contracts between the core and WASM extensions. Standard tooling
-(`wasm-tools`, `wit-bindgen-go`) discovers `.wit` files by scanning this
-directory; no manifest file is required. External dependencies, if any, would
-go in `deps.toml`.
+Contracts between core and WASM extensions. Tooling discovers `.wit` by scanning this dir (no manifest); external deps in `deps.toml`.
 
 ## Files
 
 | File | Kind | Interface(s) |
 |---|---|---|
 | `types.wit` | shared | `llm-types`, `store-types` |
-| `extension-lifecycle.wit` | shared | `extension-lifecycle` (exported by every extension) |
+| `extension-lifecycle.wit` | shared | `extension-lifecycle` (all extensions export) |
 | `llm-provider.wit` | extension-exported | `llm-provider` |
-| `interceptor.wit` | extension-exported | `interceptor` (thin-loop decision hook; host-dispatched) |
+| `interceptor.wit` | extension-exported | `interceptor` (loop decision hook; host-dispatched) |
 | `skill-registry.wit` | extension-exported | `skill-registry` |
 | `mcp-registry.wit` | extension-exported | `mcp-registry` |
 | `agent-delegate.wit` | extension-exported | `agent-delegate` |
@@ -22,22 +19,16 @@ go in `deps.toml`.
 | `host-config.wit` | host-provided | `host-config` |
 | `host-event.wit` | host-provided | `host-event` |
 | `host-storage.wit` | host-provided | `host-storage` |
-| `host-fs.wit` | host-provided | `host-fs` (path-jailed workspace read/write; default-deny) |
-| `host-process.wit` | host-provided | `host-process` (bounded run-to-completion exec; default-deny) |
+| `host-fs.wit` | host-provided | `host-fs` (workspace R/W; default-deny) |
+| `host-process.wit` | host-provided | `host-process` (run-to-completion; default-deny) |
 
 ## Validate
 
 ```sh
-# Install once
-cargo install wasm-tools
-
-# Parse + type-check the whole package
-wasm-tools component wit wit/
+cargo install wasm-tools         # once
+wasm-tools component wit wit/    # parse + type-check
 ```
 
-## Editing note: no double quotes in doc comments
+## Doc comments: no double quotes
 
-A `"` inside a `///` comment here breaks the *generated Rust*, not the WIT parse —
-`wit-bindgen` emits the text into a Rust doc comment and the lexer then reports
-`prefix \`error\` is unknown` at the `generate!` site, several files away from the
-line that caused it. Quote with backticks instead.
+`"` in `///` breaks *generated Rust* (not WIT). `wit-bindgen` emits to Rust doc; lexer reports error at `generate!`, far from cause. Use backticks.

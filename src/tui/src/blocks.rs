@@ -1,9 +1,7 @@
 //! A message is a block, not a line (#147).
 //!
-//! Turns a transcript and a pane width into rendered lines. It draws nothing,
-//! which is what lets every test here run without a terminal and what lets
-//! #148's viewport scroll over the result: lines are data, and deciding which
-//! of them are on screen is a separate question from producing them.
+//! Transcript + pane width → rendered lines (no drawing). Testable without a
+//! terminal; lines are data. Viewport scrolling is separate from rendering.
 //!
 //! # The layout
 //!
@@ -64,21 +62,14 @@ use crate::keymap;
 use crate::theme::{Glyph, Theme};
 use crate::wrap::wrap;
 
-/// The gutter column: a glyph and the space after it.
-///
-/// Everything the body is wrapped into has to leave room for this, or the first
-/// wrapped line fits the pane and the rendered line does not.
+/// Gutter width: glyph + space. Wrapping must leave room or rendered lines overflow.
 fn gutter_width(theme: Theme) -> usize {
     crate::wrap::width(theme.glyph(Glyph::MessageGutter)) + 1
 }
 
-/// The role label and the colour its gutter takes.
-///
-/// `Error` is `removed` and `Status` is `muted` — both exact, since a client
-/// error *is* a failure and a status note *is* recessive. The two speakers take
-/// the border roles rather than an accent: #97's rule is that user and assistant
-/// are distinguished by gutter and indent rather than by tint, and an accent
-/// here would spend one of the four meanings on "who is talking".
+/// Role label and gutter colour.
+/// Error=`removed`, Status=`muted` (exact meanings). Speakers use border roles
+/// (#97: distinguish by gutter/indent not tint; accents spent on meanings).
 const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
     match who {
         Who::You => ("you", theme.border_active()),
@@ -88,35 +79,21 @@ const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
     }
 }
 
-/// The one-line summary: what the call *did*, not its JSON.
-///
-/// A path if the arguments name one, because that is what the reader of an
-/// `edit` or a `read` came for. Anything else returns nothing and the line is
-/// just the tool's name — the collapsed form exists to be scanned, and a JSON
-/// blob squeezed onto one row is not scannable.
-///
-/// `pub(crate)` rather than private: [`crate::sidebar`]'s CHANGED section
-/// reads the same path this line shows, so the two cannot name a call
-/// differently.
+/// One-line summary: what the call did, not JSON.
+/// Path if named (what readers want for `edit`/`read`); else just the tool name.
+/// Collapsed form must be scannable. `pub(crate)`: sidebar CHANGED reads this.
 pub(crate) fn summary(tool: &ToolBlock) -> String {
     let Some(raw) = tool.arguments.as_deref() else {
-        // Not the same thing as "no arguments" — it means nothing arrived, and
-        // a line that rendered `{}` here would tell a user something false they
-        // have no way to check.
-        //
-        // Both surfaces carry `arguments` since [#161], so this is now only
-        // reachable against a core older than that fix. It is kept rather than
-        // made unrepresentable because that core still exists in the world, and
-        // the honest rendering of "I was not told" is not `{}`.
-        //
+        // "No arguments" (present but empty) ≠ nothing arrived.
+        // Both surfaces send `arguments` since [#161]; older cores only reach here.
+        // Rendering `{}` would falsely claim `{}` was passed.
         // [#161]: https://github.com/PromptPasture/jan-klod/issues/161
         return "arguments not sent over this transport".to_string();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
         return String::new();
     };
-    // In precedence order, not the JSON's order: a call with both a `path` and
-    // a `pattern` is a search *in* that file, and the file is the noun.
+    // Precedence order, not JSON order: `path` is the noun when paired with `pattern`.
     for key in ["path", "file", "pattern", "query", "command"] {
         if let Some(found) = value.get(key).and_then(serde_json::Value::as_str) {
             return found.to_string();
@@ -125,20 +102,15 @@ pub(crate) fn summary(tool: &ToolBlock) -> String {
     String::new()
 }
 
-/// The status glyph and the colour it carries.
+/// Status glyph and colour.
 fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
     match &tool.status {
-        // The first spinner frame, standing still. `block` is a pure function
-        // of the model and has no tick to animate against; #160 is the slice
-        // that gives the client one, and this is the frame it starts from.
+        // First spinner frame; `block` is pure, has no tick (#160).
         ToolStatus::Running => (
             (*theme.spinner().first().unwrap_or(&"-")).to_string(),
             theme.secondary(),
         ),
-        // The core says whether the call failed (#162). This used to match the
-        // sentences it happens to write into `content`, which meant renaming
-        // "trapped" to "panicked" would have drawn a failure green with no test
-        // failing anywhere.
+        // Core reports failure (#162), not inferred from content (reliable).
         ToolStatus::Done { failed: true, .. } => {
             (theme.glyph(Glyph::ToolFailed).to_string(), theme.removed())
         }
@@ -149,18 +121,12 @@ fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
     }
 }
 
-/// A tool call: one scannable line, or that line plus its work.
-///
-/// This does **not** go through [`block`]'s message path, and the reason is
-/// mechanical rather than stylistic — [`crate::wrap::wrap`] collapses runs of
-/// whitespace, which is right for prose and would silently flatten every
-/// indent out of the pretty-printed arguments below.
+/// Tool call: one scannable line, or line + work.
+/// Separate from [`block`]'s message path: `wrap` collapses whitespace,
+/// which would flatten indents in pretty-printed arguments below.
 fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> Vec<Line<'static>> {
-    // The cursor is a **different glyph**, not a colour: under `Mode::Mono`
-    // `border_active()` and `muted()` are both `Color::Reset`, so a selection
-    // drawn in colour would be a selection that does not exist on the one mode
-    // with none to spend. Both glyphs are one cell wide in both vocabularies,
-    // so selecting a block cannot reflow it.
+    // Cursor is glyph, not colour: under `Mode::Mono`, colour glyphs and text glyphs
+    // are indistinguishable, so selection must use a different glyph (one cell wide).
     let (glyph, rail) = if selected {
         (
             theme.glyph(Glyph::Caret),
@@ -192,12 +158,8 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
         Span::styled(tool.name.clone(), Style::default().fg(theme.body())),
     ];
 
-    // The collapsed form is **one row**, so what does not fit is cut rather than
-    // wrapped: a call that needed three rows to say it was a call would defeat
-    // the point of collapsing it. The name and the status are never the thing
-    // cut — they are what the row is for — so only the summary is squeezed, and
-    // it is cut from the *left*, because the informative end of a path is the
-    // filename and the informative end of a command is rarely the binary.
+    // Collapsed form is one row: name and status stay, summary is cut from left
+    // (paths end in filename, commands rarely start with useful binary names).
     let mut spent = gutter_width(theme)
         + crate::wrap::width(&open)
         + crate::wrap::width(&status)
@@ -225,10 +187,8 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
         return lines;
     }
 
-    // Indented **and** on `code_surface`, because the surface alone is
-    // `Color::Reset` under `Mode::Mono` — a block that separated itself by
-    // background would vanish on the one mode that has no colour to spend.
-    // The same pairing is why fenced code reads as code in `markdown.rs`.
+    // Indented and on `code_surface`: under `Mode::Mono`, background alone is invisible,
+    // so indent + monospace glyph distinguish code (see `markdown.rs` for fenced code).
     let surface = Style::default().fg(theme.body()).bg(theme.code_surface());
     if let Some(raw) = tool.arguments.as_deref() {
         lines.extend(
@@ -268,11 +228,7 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
     lines
 }
 
-/// The arguments as a human reads them, or unchanged when they are not JSON.
-///
-/// Pretty-printed and **not** highlighted: 19b priced four highlighters against
-/// this crate's dependency budget and declined all of them, and one tool block
-/// is not the argument that reopens it.
+/// Arguments pretty-printed (humans read them), no highlight (budget declined 4).
 fn pretty(raw: &str) -> String {
     serde_json::from_str::<serde_json::Value>(raw)
         .as_ref()
@@ -282,11 +238,8 @@ fn pretty(raw: &str) -> String {
         )
 }
 
-/// `text` cut to `max` cells from the left, marked so the cut is visible.
-///
-/// Grapheme by grapheme rather than by byte or by `char`, for the same reason
-/// `wrap` is: a cut inside a cluster is a broken glyph, and a cut counted in
-/// `char`s puts a wide character half off the pane.
+/// Cut text to max cells from left, marked visible.
+/// Grapheme-by-grapheme: cuts inside clusters break glyphs, wide chars off-pane.
 fn elide(text: &str, max: usize, mark: &str) -> String {
     if crate::wrap::width(text) <= max {
         return text.to_string();

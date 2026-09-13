@@ -1,11 +1,6 @@
 # `src/tui` — the terminal client
 
-`jan-klod`, the client a person actually types into. It is a **separate process**
-from the core, not an extension: it spawns `jan-klod-gateway rpc` and speaks
-newline-delimited JSON-RPC over its pipes, or drives a gateway already listening
-with `--addr`. It depends on neither the core runtime nor Wasmtime — only on the
-wire contract in `jan-klod-protocol`, which carries nothing beyond serde for
-exactly this reason.
+The client you type into. **Separate process** (not extension): spawns `jan-klod-gateway rpc` and speaks newline-delimited JSON-RPC over pipes, or drives an existing gateway. Depends only on `jan-klod-protocol` wire contract (serde only, by design).
 
 ## Dependencies, and why each one is here
 
@@ -16,18 +11,11 @@ exactly this reason.
 | `ratatui` 0.30 | The terminal UI, for the `tui` mode only. Bundles the crossterm backend and event types, used via `ratatui::crossterm`. The pure `App` model in `app.rs` needs none of it and is unit-tested without a terminal. |
 | `tiny_http` *(dev)* | The round-trip test stands up a canned HTTP server to drive the client against. |
 
-Three runtime dependencies. That is the budget, and additions are costed against
-it rather than waved through — the next section is what that looks like in
-practice.
+Three runtime dependencies—the budget. Additions are costed rather than waved through (next section shows how).
 
 ## Declined: a Markdown renderer and a syntax highlighter
 
-Phase 19's chat surface renders assistant text as Markdown with highlighted code
-blocks ([#99](https://github.com/PromptPasture/jan-klod/issues/99)).
-`tui-markdown` 0.3.9 and `syntect` 5.3.0 were the obvious candidates.
-**Both are declined**, measured in
-[#146](https://github.com/PromptPasture/jan-klod/issues/146) against a baseline
-of `ratatui` + `serde_json` (184 resolved packages):
+Phase 19 renders Markdown with highlighted code ([#99]). `tui-markdown` 0.3.9 and `syntect` 5.3.0 are obvious candidates. **Both declined**, measured in [#146] against baseline of `ratatui` + `serde_json` (184 packages):
 
 | Option | Packages | Δ | `cargo deny`, root policy unmodified |
 |---|---:|---:|---|
@@ -35,43 +23,20 @@ of `ratatui` + `serde_json` (184 resolved packages):
 | `syntect` 5.3.0 | 208 | +24 | **advisories FAILED** |
 | `pulldown-cmark` 0.13, `default-features = false` | 186 | **+2** | ok |
 
-**The advisories decide it.** `syntect` brings RUSTSEC-2025-0141 (`bincode`
-unmaintained) and RUSTSEC-2024-0320 (`yaml-rust` unmaintained, and cargo-deny
-reports *"No safe upgrade is available!"*). `tui-markdown` depends on `syntect`
-directly, so it inherits both. Taking either means adding exceptions to the root
-`deny.toml` — and a supply-chain gate widened to let something through has
-stopped being a gate.
+**The advisories decide it.** `syntect` brings RUSTSEC-2025-0141 (`bincode` unmaintained) and RUSTSEC-2024-0320 (`yaml-rust`, no upgrade). `tui-markdown` inherits both via `syntect`. Taking either widens root `deny.toml` — and a gate widened to let something through stops being a gate.
 
 Three further findings, none of which are visible from a crate page:
 
 - **`syntect` is not an alternative beside `tui-markdown`; it is inside it.**
   Resolving both together still costs 234 packages.
-- **`tui-markdown` ships two test frameworks as normal dependencies.** `rstest`
-  and `pretty_assertions` are in the *normal* tree, not the dev tree, so every
-  dependent compiles a test framework it will never call.
-- **It highlights through ANSI.** `ansi-to-tui` is a normal dependency: the
-  pipeline is syntect → escape codes → parsed back into ratatui spans. The
-  design system's rule is that *the highlighter's own theme is ignored* and
-  token classes map onto the ramp — but a library that renders to ANSI and
-  reparses it owns that step, so the colours are syntect's theme by
-  construction.
+- **`tui-markdown` ships test frameworks as normal deps.** `rstest` and `pretty_assertions` in normal tree (not dev), so every dependent compiles unused test code.
+- **Highlights through ANSI.** `ansi-to-tui` (normal dep): syntect → escape codes → ratatui spans. Design rule: highlighter theme ignored, tokens map to ramp. But ANSI→reparse means colors are syntect's theme by construction.
 
-**What is used instead:** `pulldown-cmark` with default features off, and the
-subset #99 names — headings, bold/italic, inline code, bullet and ordered lists,
-block quotes, fenced blocks, links. That is the same parser `tui-markdown`
-itself uses, without the 48 crates wrapped around it. Syntax highlighting was
-left as a separate question, since nothing measured here passed the policy —
-[#149](https://github.com/PromptPasture/jan-klod/issues/149) answered it on its
-own terms, and the next section is that answer.
+**What is used instead:** `pulldown-cmark` with default features off (headings, bold/italic, inline code, lists, block quotes, fenced blocks, links). Same parser `tui-markdown` uses, minus 48 crates. Highlighting left separate (nothing measured passed policy); [#149] answers it independently.
 
 ## Declined again: syntax highlighting
 
-Phase 19 asked for fenced code blocks with a language tag to be highlighted
-([#99](https://github.com/PromptPasture/jan-klod/issues/99)). **They are not**,
-and the reason is cost rather than difficulty
-([#149](https://github.com/PromptPasture/jan-klod/issues/149)). Measured against
-a baseline of `ratatui` + `serde_json` + `pulldown-cmark` — 186 packages,
-191 MB of `target/`:
+Phase 19 asked for highlighted fenced blocks ([#99]). **Not done—cost, not difficulty** ([#149]). Against baseline (ratatui + serde_json + pulldown-cmark): 186 packages, 191 MB target/:
 
 | Candidate | Packages | Δ | `target/` | `cargo deny`, root policy unmodified |
 |---|---:|---:|---:|---|
@@ -80,39 +45,19 @@ a baseline of `ratatui` + `serde_json` + `pulldown-cmark` — 186 packages,
 | `tree-sitter-highlight` 0.25 | 194 | +8 | 327 MB | ok |
 | `inkjet` 0.11 | 204 | +18 | **731 MB** | ok |
 
-The two that pass the policy are the two that cost the most to build.
-`tree-sitter-highlight` adds **136 MB** of build output *before a single
-grammar* — it highlights nothing on its own, and every language is another
-vendored C grammar on top. `inkjet` bundles the grammars, which is why it is one
-dependency rather than a dozen, and why it is **540 MB** and 156 CPU-seconds.
+Policy-passing options cost most to build. `tree-sitter-highlight` adds **136 MB** before a grammar (highlights nothing solo; each language adds vendored C). `inkjet` bundles grammars (one dep vs. dozen), hence **540 MB** + 156s CPU.
 
-For a terminal chat client whose entire crate carries three runtime
-dependencies, that is not a trade worth making for colour in a code block. This
-repository has treated build footprint as first-class before.
+A 3-dep terminal client doesn't trade 540 MB for code color. Build footprint is first-class here.
 
-**So a fenced block is marked by its surface and its indent, and by nothing
-else** — tagged or untagged, the same. `markdown::tests::
-no_fence_carries_syntax_colour_tagged_or_not` pins that, so a future slice that
-wants highlighting has to come back and change it deliberately rather than
-discover the decision by its absence.
+**Fenced blocks marked by surface + indent only** (tagged or untagged). Test `markdown::tests::no_fence_carries_syntax_colour_tagged_or_not` pins this; future highlighting must change it deliberately.
 
 ## Not declined, not needed: a diff engine
 
-[#156](https://github.com/PromptPasture/jan-klod/issues/156) renders a unified
-diff, and [#100](https://github.com/PromptPasture/jan-klod/issues/100) allowed
-`similar` for it *only if the client has to compute one*. **It does not.**
+[#156] renders unified diffs; [#100] allows `similar` only if client computes one. **It doesn't.**
 
-`tool-git` (`src/extensions/tool-git/src/lib.rs`) allowlists five read-only
-subcommands, and `op=diff` runs `git diff --no-ext-diff --no-textconv`, returning
-git's own stdout with a `trim_end` and the shared output cap applied and nothing
-else. `op=show` carries a diff in the same format. So the content arriving in a tool result **is already
-unified-diff text**, and this crate parses and renders it rather than computing
-anything. That is the third dependency question this crate has answered without
-adding a package.
+`tool-git` allowlists five read-only subcommands; `op=diff` runs `git diff --no-ext-diff --no-textconv`, returning git's stdout (trimmed, capped). `op=show` carries diff in same format. Content arrives **already unified-diff text**; client parses/renders (vs. computes). Third dependency question answered without a package.
 
-`tool-edit` returns prose, not a diff — `"replace applied to <path> (N line(s))"`
-and an anchors-are-now-stale warning — so it is not a source. Nothing else
-produces diff-shaped output today.
+`tool-edit` returns prose (`"replace applied to <path> (N lines)"` + warning), not diff. No other tool produces diff-shaped output.
 
 Two facts about that text the renderer has to hold, both from the guests rather
 than from git:
@@ -122,42 +67,20 @@ than from git:
   line past the cap. A long diff therefore reaches the client with a hunk whose
   body is shorter than its header claims, and a trailing line that is not diff
   syntax at all.
-- **An empty diff is the words `(no output)`.** `git::render` substitutes that
-  for empty stdout on a zero exit, so "nothing changed" reaches the client as
-  prose and lands on the plain-text path rather than parsing as a diff with no
-  hunks.
-- **`--no-ext-diff --no-textconv` is a hardening flag, not a formatting one**,
-  but it has a formatting consequence worth knowing: the diff is always git's
-  built-in format, never a driver's, so there is one shape to parse.
+- **Empty diff → `(no output)`.** `git::render` substitutes for zero exit; "nothing changed" lands on plain-text (vs. diff-with-no-hunks).
+- **`--no-ext-diff --no-textconv` hardens (not formats)**, but one consequence: always git's built-in format (vs. driver-specific), one shape to parse.
 
 ## Colour and glyphs come from `theme.rs`, and only from there
 
-`src/tui/src/theme.rs` owns the ten-step grey ramp, the four accents, the
-glyph vocabulary and terminal capability detection
-([#128](https://github.com/PromptPasture/jan-klod/issues/128)). Ask it for a
-**role** — `body()`, `border_active()`, `warning()` — and for a `Glyph`, never
-for a `Color` literal or a `✓`.
+`src/tui/src/theme.rs` owns grey ramp (10 steps), accents (4), glyphs, capability detection. Ask for **roles** — `body()`, `border_active()`, `warning()` — or `Glyph`, never `Color` or `✓`.
 
-This is enforced rather than requested:
-`theme::tests::no_colour_literal_survives_outside_this_module` greps the crate's
-own `src/` and `tests/` and fails the build if a literal reappears anywhere
-outside that module. It also asserts it scanned at least seven files, because a
-grep that greps nothing passes for the same reason as one that finds nothing.
+This is enforced rather than requested: Test `no_colour_literal_survives_outside_this_module` greps crate src/ and tests/, fails if literal appears elsewhere. Also asserts ≥7 scanned files (grep-nothing passes for free).
 
 Two limits worth knowing before designing against it:
 
-- **`muted` has no contrast floor on a light terminal** — 3.05:1 on the
-  background, 2.41:1 on a raised surface. The light ramp carries two AA text
-  tiers, not three, and no single shared step can fix that;
-  [#135](https://github.com/PromptPasture/jan-klod/issues/135) holds the
-  decision about what to do instead.
-- **Grey carries structure, colour carries meaning.** The contrast target is
-  "any border or glyph *that carries meaning* ≥ 3:1", so the accents and the
-  focused border are gated and the grey separators deliberately are not.
+- **`muted` lacks light-terminal contrast floor** (3.05:1 bg, 2.41:1 surface). Light ramp has two AA tiers (not three); no shared step fixes both. [#135] holds decision.
+- **Grey=structure, color=meaning.** Contrast target: borders/glyphs carrying meaning ≥ 3:1. Accents + focused border gated; grey separators not.
 
 ## Tests
 
-`app.rs` is a pure model and is tested without a terminal, which is the shape
-every later Phase 19 slice follows: rendering is a function of `App` plus a
-width, so a viewport, a wrap or a Markdown block can be asserted on without
-drawing anything. `tests/` holds the model, frame-parsing and round-trip suites.
+`app.rs` is pure model, tested without terminal (pattern for Phase 19 slices). Rendering = App + width, so viewport/wrap/block testable without drawing. `tests/` holds model, frame-parsing, round-trip suites.

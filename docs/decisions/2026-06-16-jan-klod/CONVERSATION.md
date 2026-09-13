@@ -9,14 +9,10 @@ updated: 2026-06-29
 
 # Jan-Klod — Full Brainstorm Conversation
 
-> Created: 2026-06-15 · **Primary source** behind this folder's distillations,
-> [Handoff.md](Handoff.md) and [BRAINSTORM.md](BRAINSTORM.md). This is the raw
-> transcript (Java/Quarkus era); the architecture has since moved to Rust +
-> Wasmtime + the Component Model — see
-> [2026-06-29-component-model-rust](../2026-06-29-component-model-rust/Handoff.md).
-> Several ideas here are still load-bearing (Linux-kernel core, agent-loop as an
-> extension "Option A", the LSP-style "core is a server, UI is a client" split,
-> the tiny rarely-changing launcher).
+> Created: 2026-06-15 · **Primary source** for [Handoff.md](Handoff.md) and [BRAINSTORM.md](BRAINSTORM.md).
+> Raw transcript (Java/Quarkus era); see [2026-06-29-component-model-rust](../2026-06-29-component-model-rust/Handoff.md)
+> for current Rust/Wasmtime/Component Model architecture. Load-bearing ideas: Linux-kernel core, 
+> agent-loop as extension, LSP-style server/client split, minimal launcher.
 
 ---
 
@@ -28,17 +24,15 @@ updated: 2026-06-29
 
 Yes, absolutely viable — and there's already a solid foundation in **LangChain4j's Quarkus extension**. Here's an honest breakdown.
 
-#### What a Quarkus agent harness looks like
+#### Quarkus agent harness
 
-Quarkus gives you:
+- `quarkus-langchain4j` — declarative services, tools, memory, embeddings
+- Mutiny + Vert.x — streaming LLM responses
+- MicroProfile REST Client — Anthropic API integration
+- CDI — dependency injection
+- GraalVM native — fast binary
 
-- **`quarkus-langchain4j`** — declarative AI services, tool binding, memory, embeddings
-- **Mutiny + Vert.x** — non-blocking streaming responses from the LLM API
-- **MicroProfile REST Client** — clean Anthropic API integration
-- **CDI** — dependency injection for skills, tools, and handlers
-- **GraalVM native** — compiled binary with fast startup
-
-A minimal agent loop in Quarkus looks like:
+Minimal loop:
 
 ```java
 @ApplicationScoped
@@ -50,7 +44,7 @@ public interface AgentService {
 }
 ```
 
-Skills from `SKILL.md` would be loaded as system prompt segments at startup, injected via `@SystemMessage` composition or a custom `ChatMemory`.
+Skills load as prompt segments via `@SystemMessage` or custom `ChatMemory`.
 
 #### Advantages vs. Claude Code / OpenCode / Python agents
 
@@ -66,56 +60,22 @@ Skills from `SKILL.md` would be loaded as system prompt segments at startup, inj
 | **Memory/vector stores** | ✅ via LangChain4j | Limited | Limited | ✅ Richest |
 | **Skills loading (dynamic)** | ⚠️ GraalVM friction | ✅ Easy | ✅ Easy | ✅ Easy |
 
-**Where Quarkus wins:**
+**Wins:** Enterprise auth/secrets/DB/audit/multi-tenancy, REST/gRPC orchestration, built-in OTEL tracing, Kubernetes/small images.
 
-- **Production enterprise deployments** — auth, secrets management, DB-backed state, audit logs, multi-tenancy all have mature Quarkus solutions
-- **Multi-agent orchestration as a service** — expose agents as REST/gRPC endpoints trivially
-- **Observability** — built-in tracing means you can watch every tool call through Jaeger/Grafana out of the box
-- **Horizontal scaling** — Kubernetes-native, container image sizes ~50MB native vs 500MB+ Python
+**Loses:** MCP lags TS/Python, GraalVM reflection friction (runtime-discovered SKILL.md needs JVM mode), sparse ecosystem, slow iteration, no editor integration vs. Claude Code/OpenCode.
 
-**Where Quarkus loses:**
+#### GraalVM friction
 
-- **MCP protocol support** is TypeScript/Python-first; Java MCP SDKs lag behind
-- **Dynamic skill loading** is painful with GraalVM native (reflection must be declared at build time — runtime-discovered `SKILL.md` files require the JVM mode or careful native config)
-- **Community and skills ecosystem** — Claude Code and Python agents have far more pre-built integrations
-- **Iteration speed** — prototyping an agent in Python or TS is meaningfully faster
-- **Developer tooling** — Claude Code's editor integration, OpenCode's TUI are battle-tested; building equivalent UX in Java is significant work
+Runtime-discovered Markdown vs. fixed classpath at build time. **Options:**
 
-#### The core architectural friction
+1. JVM mode — no friction, dynamic loading, ~1s startup (fine for servers)
+2. Build-time bundling — fast native, no runtime installs
+3. Hybrid — watched directory reload (adds native config complexity)
 
-The skills spec defines skills as **runtime-discovered Markdown folders**. This creates a specific tension with GraalVM native:
+**Good fit:** Server-side platform, Java shop, multi-tenancy, high concurrency.
+**Poor fit:** Local CLI agent, rapid iteration, Python ML libraries, cutting-edge MCP.
 
-```
-Skills loaded at runtime (filesystem scan)
-       ↕ friction
-GraalVM native (classpath fixed at build time)
-```
-
-Your options:
-
-1. **Run in JVM mode** — no friction, full dynamic loading, slower startup (~1s), still fine for server deployments
-2. **Bundle skills at build time** — fast native binary, but skills can't be user-installed at runtime without a restart
-3. **Hybrid** — native binary with a watched directory for skills, reload on change (works but complicates the native reflection config)
-
-#### When to choose Quarkus
-
-**Good fit:**
-- Agent deployed as a backend service (not a local CLI tool)
-- Org already on Java/JVM stack
-- Needs multi-tenancy, auth, audit, database-backed memory
-- Running hundreds of concurrent agent sessions
-
-**Poor fit:**
-- Local developer agent (Claude Code's domain — TS is better here)
-- Rapid prototyping or research
-- Heavy reliance on Python ML libraries (embeddings, fine-tuning, evals)
-- Need bleeding-edge MCP support
-
-#### Practical recommendation
-
-If you're building a **server-side agent platform** for an enterprise Java shop, Quarkus + LangChain4j is genuinely competitive. Start in JVM mode for skill flexibility, profile, then selectively native-compile once your skill set is stable.
-
-If you're building a **local coding agent** to compete with Claude Code/OpenCode, Java is the wrong pick — the CLI/TUI ecosystem, startup expectations, and MCP tooling all favor TypeScript or Go.
+**Recommendation:** Server platform → competitive. Local agent → TypeScript/Go better (CLI ecosystem, startup, MCP tooling).
 
 ---
 
@@ -123,7 +83,7 @@ If you're building a **local coding agent** to compete with Claude Code/OpenCode
 
 **Assistant:**
 
-Good to know — that aligns with the `.agents/` convention already established in `AGENTS.md` for memory files. So the full layout would be:
+Aligns with the `.agents/` convention in `AGENTS.md`. Full layout:
 
 ```
 .agents/
@@ -141,9 +101,9 @@ Good to know — that aligns with the `.agents/` convention already established 
         └── references/
 ```
 
-This matters for the Quarkus harness discussion specifically — the agent startup routine would need to scan `.agents/skills/` at launch, walking subdirectories for `SKILL.md` files and loading their frontmatter for trigger matching. In JVM mode that's a straightforward `Files.walk()`. In GraalVM native you'd either pre-index the directory at build time or configure the native image to allow filesystem access to that path at runtime.
+Agent startup scans `.agents/skills/` for `SKILL.md` files. In JVM mode, trivial with `Files.walk()`. In GraalVM native, pre-index at build time or configure native image filesystem access.
 
-Do you want me to use `.agents/skills/` going forward when referencing or creating skill paths?
+Yes, use `.agents/skills/` going forward.
 
 ---
 
@@ -153,9 +113,9 @@ Do you want me to use `.agents/skills/` going forward when referencing or creati
 
 Good framing. The Linux kernel analogy maps well — core handles the agent loop, context, and API communication; everything else is a module.
 
-### What "extensions" would actually cover
+### Extension layers
 
-Worth separating the layers before thinking about hardness:
+Separate by type before evaluating complexity:
 
 ```
 ┌─────────────────────────────────┐
@@ -173,27 +133,25 @@ Each layer has a different extension story.
 
 ### How hard each layer is
 
-**Skills — trivial.** Just filesystem scanning. Already solved by the `.agents/skills/` convention. No API surface needed.
+**Skills — trivial.** Filesystem scanning; no API surface.
 
-**MCP servers — nearly free.** The protocol is already the extension boundary. Any language, any process, stdio or SSE. You just need a registry of which servers are active.
+**MCP servers — nearly free.** Protocol is the boundary; any language/process. Just track which servers are active.
 
-**Tools — moderate.** Java's `ServiceLoader` is the natural fit — drop a JAR, implement the interface, it's discovered. The hard part is defining a stable tool API that doesn't break extensions when core evolves.
+**Tools — moderate.** Java's `ServiceLoader` works; hard part is a stable tool API that won't break with core evolution.
 
-**Core hooks (middleware, interceptors) — hard.** If extensions want to intercept the agent loop itself — pre/post tool calls, custom memory backends, alternate routing — you need a proper plugin lifecycle with defined hook points. This is where scope creep kills small projects.
+**Core hooks — hard.** Intercepting the loop (pre/post tool calls, memory backends, routing) requires proper lifecycle with defined hook points. Scope creep risk.
 
 ### The real risk
 
-The Linux kernel took decades to stabilize its module API. Your biggest threat is **premature API surface** — every hook point you expose becomes a contract.
-
-A safer path: start with zero extension hooks in core, only skills + MCP as extension mechanisms, and let real usage pressure tell you where the next hook point needs to be.
+Linux took decades to stabilize module APIs. **Premature API surface** is the threat — every hook point becomes a contract. Safer: start with zero hooks, only skills + MCP, add hooks based on real usage pressure.
 
 ### Java-specific friction
 
-GraalVM native and runtime JAR loading don't mix well. If you want drop-in JAR extensions, you're in JVM mode. That's not necessarily bad — a small persistent agent process doesn't need sub-10ms startup — but it's worth deciding early.
+GraalVM native and JAR runtime loading conflict. Drop-in JAR extensions require JVM mode (acceptable for persistent agent; sub-10ms startup not needed).
 
-### What's next
+### Next: extension boundary
 
-What's your instinct on the extension boundary — do you want extensions to be able to add **tools** (code), or stay at **skills + MCP** (configuration/protocol)? That choice drives everything else.
+Tools (code) vs. skills+MCP (config/protocol)? That choice drives architecture.
 
 ---
 
@@ -201,7 +159,7 @@ What's your instinct on the extension boundary — do you want extensions to be 
 
 **Assistant:**
 
-This is a genuinely ambitious architecture. Let me map out the shape of it and where the hard problems live.
+Ambitious architecture. Mapping shape and hard problems:
 
 ### Overall shape
 
@@ -227,11 +185,9 @@ This is a genuinely ambitious architecture. Let me map out the shape of it and w
 └─────────────────────────────────────────────┘
 ```
 
-### The combinatorial problem for native
+### Native combinatorial problem
 
-This is the first hard decision. 10 extensions = 1,024 possible native binaries. Not viable to pre-build all.
-
-**Three practical options:**
+10 extensions = 1,024 combos. Can't pre-build all. **Three options:**
 
 **A) Curated bundles** — like Linux distro editions
 
@@ -280,20 +236,15 @@ Launcher flow on update:
 
 The launcher itself should be a tiny Go or Rust binary — something that almost never needs updating and has zero dependencies.
 
-### Where the real complexity lives
+### Real complexity
 
-**State migration is the silent killer.** Memory schemas, config formats, conversation history — every core upgrade needs a migration path. Design the state format for portability from day one.
+**State migration.** Every upgrade needs paths for schemas, configs, history. Design for portability from day one.
 
-**Extension API stability.** Every interface you expose to extension authors becomes a contract. Define the minimum viable API surface, freeze it early, version it explicitly.
+**Extension API stability.** Every exposed interface is a contract. Freeze minimal surface early; version explicitly.
 
-**The configurator itself** is straightforward — it's essentially a form that generates a `pom.xml` or downloads a pre-built binary. Spring Initializr is open source; you could fork it.
+**Configurator.** Form that generates `pom.xml` or downloads binary. Fork Spring Initializr.
 
-### What to decide next
-
-1. **Is this CLI, server, or both?**
-2. **Native bundles or hybrid?**
-3. **What's in core vs. extensions?**
-4. **State format?** SQLite is the obvious choice.
+### Decide next: CLI vs. server? Native vs. hybrid? Core scope? SQLite for state?
 
 ---
 
@@ -510,8 +461,6 @@ Configurator UI - zip for config + core + extensions, like Spring or Quarkus
 
 **Assistant:**
 
-### Full artifact map
-
 Group ID: `dev.janklod`
 
 ```
@@ -541,7 +490,7 @@ dev.janklod:jan-klod-bundle-gui
 dev.janklod:jan-klod-bundle-full
 ```
 
-### Configurator ZIP layouts
+### ZIP layouts
 
 **JVM:**
 ```
@@ -564,28 +513,17 @@ jan-klod-tui-1.0.0-linux-amd64.zip
 └── README.md
 ```
 
-### Configurator UI flow
+### Configurator UI
 
-```
-1. Version        [1.0.0 ▾]
-2. Packaging      ( ) jvm  (•) tui  ( ) gui  ( ) full
-3. LLM Provider   [x] Anthropic  [ ] OpenAI  [ ] Ollama
-4. Extensions     [x] Context    [x] Memory  [x] Skills
-                  [x] MCP        [ ] Web Search
-5. UI             (•) Terminal   ( ) Graphical
-                  ───────────────────────────
-                  [ Generate & Download ]
-```
+1. Version · 2. Packaging (jvm/tui/gui/full) · 3. LLM provider · 4. Extensions · 5. UI (terminal/graphical) → Generate & Download
 
 ---
 
 ## Rename packages and write BRAINSTORM.md
 
-**User:** Rename packages `dev.janklod:jan-klod-core` => `com.github.janklod:core` and write draft `BRAINSTORM.md`
+**User:** Rename `dev.janklod:jan-klod-core` → `com.github.janklod:core`; write `BRAINSTORM.md`.
 
-**Assistant:** *(Generated `BRAINSTORM.md` — see artifact. Key change: group ID is now `com.github.janklod`, artifact IDs drop the `jan-klod-` prefix.)*
-
-Final artifact map:
+**Assistant:** Generated. Group ID: `com.github.janklod`, drop `jan-klod-` prefix. Final map:
 
 ```
 com.github.janklod:core
@@ -618,17 +556,11 @@ com.github.janklod:bundle-full
 
 **Assistant:**
 
-### Where Java is strong
+### Java strengths & weaknesses
 
-- **Core container** — excellent. Extension registry, lifecycle, event bus. This is exactly Java's domain.
-- **Config and wiring** — solid. SnakeYAML + Jackson, typed binding.
-- **Reactive streaming** — good. Mutiny + Vert.x handle LLM streaming and MCP stdio/SSE cleanly.
-- **GUI** — acceptable. JavaFX / GluonFX with GraalVM native support.
-- **GraalVM native for bundles** — works well when extension set is fixed at build time.
+**Strong:** Core container (registry, lifecycle, event bus), config (SnakeYAML + Jackson), reactive streaming (Mutiny + Vert.x), GUI (JavaFX/GluonFX), GraalVM native.
 
-### Where Java is weak
-
-**TUI — the real problem.**
+**Weak: TUI.**
 
 | Library | Reality |
 |---|---|
@@ -636,11 +568,7 @@ com.github.janklod:bundle-full
 | JLine | Line editing only |
 | Blessed/Ink equivalent | Doesn't exist in Java |
 
-Go has **Bubble Tea**. Rust has **Ratatui**. Python has **Textual**. All significantly better.
-
-**MCP ecosystem** — Java SDK lags TypeScript and Python by months.
-
-**Startup perception** — GraalVM native ~50ms vs Go ~5ms. Noticeable for interactive CLI use.
+Go/Rust/Python (Bubble Tea/Ratatui/Textual) far superior. Java SDK lags months behind TypeScript/Python. Startup: GraalVM ~50ms vs Go ~5ms (noticeable in CLI).
 
 ### Comparison
 
@@ -652,11 +580,9 @@ Go has **Bubble Tea**. Rust has **Ratatui**. Python has **Textual**. All signifi
 | MCP ecosystem | Lagging | Lagging | Lagging | ✅ Good | ✅ Best |
 | Enterprise integration | ✅ Best | Moderate | Poor | Moderate | Poor |
 
-### Pragmatic split considered
+### Pragmatic split
 
-**Core and extensions in Java, launcher and TUI shell in Go.**
-
-Launcher is already a separate binary for blue/green. Go's Bubble Tea TUI is best-in-class. Java core runs as a local server; TUI connects to it — similar to how LSP works with editors.
+Java core/extensions, Go launcher/TUI. Launcher already separate for blue/green. Bubble Tea is best-in-class TUI. Java core as local server; TUI client connects (like LSP + editor).
 
 ---
 
@@ -670,33 +596,15 @@ Narrow job: download, health check, flip symlink or rollback. No domain knowledg
 
 **Verdict: write it once, forget it.**
 
-### TUI — this is the problem
+### TUI problem
 
-Every meaningful product feature forces a TUI change:
-- Streaming token display
-- Tool call visualisation
-- MCP server status panel
-- Skill browser
-- Multi-agent support
+Features (streaming, tools, MCP panels, skills, multi-agent) force constant TUI changes. Two languages = duplicate PRs/releases. **Go TUI changes frequently; split is costly.**
 
-Two languages = two PRs, two release artifacts to keep in sync. That friction compounds.
+### Alternative
 
-**Verdict: Go TUI will change frequently. The split is costly.**
+Java exposes web extension (localhost HTTP+SSE) → Tauri/Electron shell renders. Terminal UI = browser tab. One language, one release. Pattern: Zed, Warp, modern terminal apps.
 
-### Alternative boundary
-
-```
-Java core exposes web extension (localhost HTTP + SSE)
-          ↓
-Browser or thin Tauri/Electron shell renders the UI
-```
-
-- `user-interface-terminal` opens a browser to `localhost:port`
-- `user-interface-graphical` is the same backend, polished Tauri wrapper
-- New features ship in Java only — one language, one release
-- Same pattern used by Zed, Warp, and most modern "terminal" apps
-
-### Revised split recommendation
+### Revised split
 
 | Component | Language | Change frequency |
 |---|---|---|
@@ -707,13 +615,11 @@ Browser or thin Tauri/Electron shell renders the UI
 
 ---
 
-## Why Go specifically — is it better than Rust?
+## Go vs. Rust for launcher?
 
 **Assistant:**
 
-Not specifically — Go was a default assumption worth questioning.
-
-For the launcher, both satisfy all requirements (tiny binary, minimal deps, rarely changes, process/symlink management, cross-platform):
+Both satisfy requirements (tiny binary, minimal deps, stable, process/symlink management, cross-platform). Go was default, worth questioning:
 
 | | Go | Rust |
 |---|---|---|
@@ -724,29 +630,17 @@ For the launcher, both satisfy all requirements (tiny binary, minimal deps, rare
 | Learning curve | Low | High |
 | Safety | GC, no memory bugs | Borrow checker, no memory bugs |
 
-For a launcher that flips symlinks and runs health checks, Rust's safety guarantees don't buy much — the code is simple enough in either language.
+Launcher code is simple; Rust's safety doesn't add much.
 
-**Third option: shell script + PowerShell.**
-
-The launcher is essentially:
-```bash
-download new version
-start new binary
-curl health check → pass/fail
-ln -sfn current or rollback
-```
-
-A well-written shell script with no dependencies is smaller than any compiled binary, works everywhere, and is readable by anyone. The only real argument against it is Windows compatibility — which PowerShell covers.
-
-**Bottom line:** Go has no meaningful advantage over Rust here. Defaulting to Go was habit, not reasoning. Use Rust if your team knows it. If neither, shell + PowerShell covers both platforms with no new language required.
+**Third option: shell + PowerShell.** Smaller, no binary, readable, cross-platform. Only Windows needed PowerShell; Go has no real advantage. Use Rust if your team knows it; else shell+PowerShell covers both with no new language.
 
 ---
 
-## Artifacts produced in this session
+## Artifacts
 
-- `BRAINSTORM.md` — full architecture decisions and open questions
-- `handoff-jan-klod.md` — agent handoff document
-- `CONVERSATION.md` (originally `jan-klod-conversation.md`) — this file
+- `BRAINSTORM.md` — architecture & open questions
+- `Handoff.md` — agent handoff
+- `CONVERSATION.md` — this transcript
 
 ---
 

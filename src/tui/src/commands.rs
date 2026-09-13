@@ -1,29 +1,19 @@
 //! The `/` command table (#152).
 //!
-//! **One list.** The menu renders from this, and 19h's help overlay will read
-//! the same constant. A menu hand-written beside a documented table is a menu
-//! that will disagree with it, and the disagreement shows up as a command that
-//! does nothing — which reads to a user as a broken client rather than as a
-//! stale list.
+//! **One list.** Menu renders from this; help overlay reads the same constant.
+//! Hand-written table vs. actual menu → disagreement → commands that do nothing.
 //!
 //! # Present and honest beats absent
 //!
-//! A command that cannot act yet is still listed, carrying the reason, because
-//! **absent is not a state a user can tell from never planned**. A `/` menu
-//! that silently lacks `/cancel` teaches someone that cancelling is not a
-//! thing; one that lists it and says what it is waiting on teaches them when to
-//! look again. Every command here now acts — 19h (#105) wired the last three,
-//! `/new`, `/sessions` and `/help` — but the mechanism stays, ready for the
-//! next command that has to wait on something.
+//! Unavailable commands still list their blockers (absent looks like never-planned).
+//! Silent lack of `/cancel` suggests cancellation isn't a feature;
+//! listing it + reason teaches when to retry. All act now, but mechanism persists.
 //!
 //! # `Ready` means "acts", not "needs no transport"
 //!
-//! It used to mean both, because the two commands that acted needed nothing.
-//! `/cancel` broke the coincidence: it acts, and it needs a transport. Rather
-//! than let `App::run_command` reach for one — this type has never known what a
-//! transport is, and that is load-bearing — `/cancel` raises the same kind of
-//! flag `/quit` does, and the caller performs it. The model records intent; the
-//! event loop, which is the only thing holding a transport, sends it.
+//! `/cancel` acts but needs transport (breaking the old coincidence).
+//! This type never knows about transport (load-bearing). `/cancel` flags intent
+//! like `/quit` does; the event loop (which owns transport) sends it.
 
 /// Whether a command can act, and if not, what it is waiting on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,16 +81,9 @@ pub const COMMANDS: [Command; 6] = [
     },
 ];
 
-/// The commands whose name starts with `typed`, which is `/` plus a fragment.
-///
-/// Substring would match `/new` for `s`, which is not what a prefix menu means;
-/// a user typing `/se` is narrowing, not searching.
-///
-/// **An exact match sorts first**, and that is not cosmetic. `/new` is a prefix
-/// of `/newline`, so a user who typed the whole of `/new` and pressed `Enter`
-/// would otherwise run `/newline` — the command they did not ask for, selected
-/// because it happened to be listed earlier. Typing a command's full name and
-/// confirming has to run that command.
+/// Commands whose name starts with `typed` (prefix filtering, not substring search).
+/// Exact match sorts first: `/new` typed must run `/new`, not `/newline`
+/// (even if `/newline` is listed first).
 #[must_use]
 pub fn matching(typed: &str) -> Vec<&'static Command> {
     let mut found: Vec<&'static Command> = COMMANDS
@@ -138,8 +121,7 @@ mod tests {
         }
     }
 
-    /// The point of `Availability`: a command that cannot act must say what it
-    /// is waiting on, or listing it is worse than leaving it out.
+    /// Unavailable commands must state their blocker, or listing is worse than omitting.
     #[test]
     fn every_pending_command_carries_a_reason() {
         for command in COMMANDS {
@@ -182,16 +164,8 @@ mod tests {
         );
     }
 
-    /// Which commands claim to act, pinned so one cannot start or stop
-    /// claiming it quietly.
-    ///
-    /// This was `exactly_the_commands_that_need_no_transport_are_ready`, and
-    /// the rename is the finding rather than tidying. `Ready` and "needs
-    /// nothing but the composer" were the same set by coincidence — the only
-    /// two that acted happened to need neither a transport nor a dialog.
-    /// `/cancel` separates them: it acts, and it needs a transport. It does not
-    /// get one *here*, which is the part worth keeping — it raises a flag the
-    /// event loop drains, the same way `/quit` sets `should_quit`.
+    /// Pin which commands claim to act (rename reflects finding: `/cancel` is ready
+    /// but needs transport, separating from "needs only composer" which it coincided with before).
     #[test]
     fn exactly_the_commands_that_act_are_ready() {
         let ready: Vec<&str> = COMMANDS

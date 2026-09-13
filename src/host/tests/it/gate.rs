@@ -9,7 +9,7 @@
 //! tool call that the fleet dispatches to the real guest, which writes through
 //! `host-fs` — proving model → permission → fleet → host-fs → answer.
 //!
-//! Both skip (pass as a no-op) when guests are not staged in `ext/`.
+//! Both skip when guests are not staged in `ext/`.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -76,7 +76,7 @@ fn tool_then_answer_http() -> HttpFn {
     })
 }
 
-/// Driver that approves every `ask` and counts how often it was asked.
+/// Driver approving every `ask`, counting invocations.
 struct CountingApprovingDriver(Arc<AtomicU32>);
 impl Driver for CountingApprovingDriver {
     fn ask(&mut self, _prompt: &UserPrompt) -> String {
@@ -85,7 +85,7 @@ impl Driver for CountingApprovingDriver {
     }
 }
 
-/// A tool backend that returns a canned result and counts invocations.
+/// Tool backend returning canned result, counting calls.
 struct CountingTools(Arc<AtomicU32>);
 impl ToolInvoker for CountingTools {
     fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
@@ -109,8 +109,7 @@ const PHASE8_GUESTS: &[&str] = &[
     "tool-fs.wasm",
 ];
 
-/// A provider that emits an `fs` `{"op":"write"}` tool call on the first completion, then a
-/// final text answer on the second.
+/// Provider: fs write call (completion 0), then final answer (completion 1).
 fn tool_calling_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -140,7 +139,7 @@ fn tool_calling_http() -> HttpFn {
     })
 }
 
-/// A driver that approves every permission `ask` — a client clicking "allow".
+/// Driver approving every permission ask (user clicking "allow").
 struct ApprovingDriver;
 impl Driver for ApprovingDriver {
     fn ask(&mut self, _prompt: &UserPrompt) -> String {
@@ -196,8 +195,7 @@ routing:
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
 
-    // Providers boot in id order: the first http_factory call backs `primary`
-    // with a failing transport, the second backs `secondary` with success.
+    // Call 0: primary fails. Call 1: secondary succeeds.
     let call = Cell::new(0u32);
     let factory = || {
         let n = call.get();
@@ -210,8 +208,7 @@ routing:
     };
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // A multi-step query: intent-router proceeds agentic, shaping interceptors
-    // run, then completion falls back from the failing primary to secondary.
+    // Multi-step: intent-router agentic, shaping runs, fallback to secondary.
     let out = agent.run(
         "gate-session",
         "Refactor the module and run the whole test suite",
@@ -225,8 +222,7 @@ routing:
         "the loop drives shaping + provider fallback to a grounded answer"
     );
 
-    // A greeting short-circuits the agentic loop via the intent router (proving the
-    // before-loop decision path), still answered inline by the fallback provider.
+    // Greeting short-circuits via intent router (before-loop path).
     let greeting = agent.run("gate-session", "hello");
     assert_eq!(
         greeting,
@@ -374,8 +370,7 @@ workspace: {ws}
         agent.tool_names()
     );
 
-    // `fs` with `{"op":"write"}` trips the permission gate (dangerous op); the driver
-    // approves, so the tool runs — exercising the ask→approve→tool path with a real tool.
+    // fs write trips permission gate; driver approves; tool runs (ask→approve).
     let out = agent.run_driven(&mut ApprovingDriver, "gate-8", "please write out.txt");
     assert_eq!(
         out,
@@ -386,7 +381,7 @@ workspace: {ws}
         "the loop returns a grounded answer after the tool ran"
     );
 
-    // The real tool wrote the file through host-fs, into the workspace.
+    // Tool wrote file through host-fs to workspace.
     let written =
         std::fs::read_to_string(workspace.join("out.txt")).expect("the tool wrote the file");
     assert_eq!(written, "hello from the tool");

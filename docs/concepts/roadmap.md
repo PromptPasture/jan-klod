@@ -1,7 +1,7 @@
 ---
 type: concept
 title: Roadmap
-description: Phased plan from the Rust + Wasmtime + Component Model foundation decision to a shippable, polyglot-extension agent runtime (v0.1.0, Phases 1–12), then on to the Harness-as-a-Platform vision — client protocol, event-sourced session log, OS-level effect sandbox, capability manifest + signed registry, web client + GUI shell, MCP/ACP ports (Phases 13–18).
+description: Phased plan from foundation (Rust + Wasmtime + Component Model) to v0.1.0 runtime (Phases 1–12), then Harness-as-a-Platform (Phases 13–18): client protocol, event log, OS sandbox, signed registry, web/GUI, MCP/ACP ports.
 tags: [roadmap, planning, rust, wasmtime, component-model, phases, vision]
 created: 2026-06-29
 updated: 2026-09-13
@@ -10,92 +10,80 @@ status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Ha
 
 # Roadmap
 
-This is the build sequence implied by the foundation decision
+This build sequence follows the foundation decision
 [decisions/2026-06-29-component-model-rust](../decisions/2026-06-29-component-model-rust/Handoff.md).
-It is deliberately a **validated-pivot-then-port**: the Go + Wazero MVP proved the
-*architecture* end-to-end; we now prove the *foundation* (Component Model on
-Rust + Wasmtime) by front-loading the risky check as the first *real* slice (a thin
-walking skeleton behind a go/no-go gate), then build out on it.
+It is a **validated-pivot-then-port**: the Go + Wazero MVP proved *architecture* end-to-end;
+we now prove the *foundation* (Component Model on Rust + Wasmtime) by front-loading the risky
+check as the first slice (a thin walking skeleton behind a go/no-go gate), then build out.
 
 ## Ground rules carried into every phase
 
 - **`core` is Rust, and Rust only.** It is the small, rarely-changing container —
   config loader, extension registry, lifecycle, the Wasmtime component host, event
   bus, observability. Zero agent behaviour. See [Architecture](architecture.md).
-- **Extensions are polyglot by design.** Each extension is authored in whatever
-  language fits it best — any `wit-bindgen` language, all targeting the same
-  [WIT contracts](contracts.md) and interchangeable against them. We switch language
-  per extension; Rust is one option among many, not required just because `core` is
-  Rust. (This is what the *ecosystem* can do.)
-- **Our own built extensions default to Rust.** `core` is Rust and the team is
-  Rust-first, so first-party extensions are Rust too — one language means shared
-  types, a single CI/lockfile/audit path, and no GC caveat. Another language is used
-  only when an ecosystem library or constraint makes it *decisive*, and any such
-  non-Rust choice is still gated by CM-toolchain maturity *and* supply-chain posture
-  (TS/JS and Python case-by-case with hygiene controls; Kotlin/JVM excluded for now).
-  Go (TinyGo) stays fully supported but is no longer the default. The polyglot
-  boundary is kept proven and re-runnable by the Slice 1a TinyGo gate (`make gate`) —
-  we don't need a production Go extension to hold that guarantee. The build pipeline
-  is not protected by the runtime sandbox, so npm-style supply-chain risk weighs on
-  any non-Rust language choice. See
+- **Extensions are polyglot by design.** Each extension uses whatever language fits —
+  any `wit-bindgen` language targeting the same [WIT contracts](contracts.md), interchangeable.
+  Rust is one option, not required because `core` is Rust. (This is what the *ecosystem* can do.)
+- **Our own built extensions default to Rust.** First-party extensions are Rust
+  (shared types, single CI/lockfile/audit, no GC caveat). Non-Rust is used only when
+  an ecosystem library makes it *decisive*, gated by CM-toolchain maturity and supply-chain
+  posture (TS/JS and Python case-by-case; Kotlin/JVM excluded). Go (TinyGo) stays supported
+  but not default. The polyglot boundary is proven by the Slice 1a TinyGo gate (`make gate`);
+  no production Go extension is needed. The build pipeline is unprotected by the sandbox, so
+  npm-style risk weighs on any non-Rust choice. See
   [decisions/2026-06-29-extension-technologies](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md).
 - **The launcher/updater is a tiny Go binary**, separate from `core` so it survives
   a core swap. See [Blue/Green Deployment](blue-green-deployment.md).
 - **The WIT contracts already exist** (`wit/*.wit`, 15 interfaces) and are canonical.
   They survived the Go-source reset and are the fixed point everything builds against.
-- **All implementation code lives under `src/`**, which is itself the Rust host
-  workspace: its five members — `core/` (`jan-klod-core`), `config/`, `host/`,
-  `protocol/` and `tui/` — are direct children, alongside the trees that are
-  deliberately *not* members: `extensions/` (the guests) and `gui/` are each
-  their own cargo workspace, and `supervisor/` (Go) and `web/` (TypeScript)
-  carry no cargo manifest at all. `wit/` stays at the repo root as
-  language-agnostic contracts. Detailed Phase 1 checklist:
+- **All implementation code lives under `src/`**, the Rust host workspace: five members
+  (`core/`, `config/`, `host/`, `protocol/`, `tui/`) are direct children; `extensions/`
+  and `gui/` are separate cargo workspaces; `supervisor/` (Go) and `web/` (TypeScript)
+  have no cargo manifest; `wit/` stays at repo root. Detailed Phase 1 checklist:
   [PLAN.md](../decisions/2026-06-29-extension-technologies/PLAN.md).
 - **Just-in-time library choices.** Every **(TBD)** in [Architecture](architecture.md)
   is resolved at the phase that first needs it (YAGNI), never speculatively.
 
 ## Starting point (after the reset)
 
-The Go MVP source has been removed; its findings live in the decision records
+The Go MVP source has been removed; its findings live in decision records
 ([2026-06-28-mvp-wasm-host](../decisions/2026-06-28-mvp-wasm-host/Handoff.md),
-[2026-06-28-go-wasm-stack](../decisions/2026-06-28-go-wasm-stack/Handoff.md)). What
-remains and carries forward: the **`wit/` contracts**, the architecture/concept docs,
-and the validated *behaviours* (config-driven load, lifecycle, host-http, an
-OpenAI-compatible provider, an in-memory store) — to be re-implemented as real
-Component-Model code, not the hand-rolled JSON ABI.
+[2026-06-28-go-wasm-stack](../decisions/2026-06-28-go-wasm-stack/Handoff.md)). What carries forward:
+the **`wit/` contracts**, architecture/concept docs, and validated behaviours (config-driven load,
+lifecycle, host-http, OpenAI-compatible provider, in-memory store) — re-implemented as
+real Component-Model code, not hand-rolled JSON ABI.
 
 ---
 
 ## Status tracker
 
-The single source of truth for where we are. **The loop:** take the first phase not
-`done` → run its slices → pass its **exit gate** → set it `done` → repeat. Update the
-flag here as state changes (a phase may sit at `blocked` on its gate).
+Single source of truth. **The loop:** first phase not `done` → run slices → pass
+**exit gate** → mark `done` → repeat. Update flags as state changes.
 
 Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 | Phase | Flag | Gate / note |
 |---|---|---|
-| 1 — Walking skeleton + foundation gate | `done` | **Slice 1a PASSED** (2026-06-29); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). **Slice 1b done** — `jan-klod-core` boots from `config.yaml` (registry, tier boot order, lifecycle, component host); all three host caps (`host-log`/`host-config`/`host-http`) are real CM imports; three Rust guests (`store-memory` + `provider-openai` + `manager-agent-loop` — the latter retired in Phase 2) build and verify offline; the exit gate runs as one routed turn in the sandboxed agent-loop guest (`tests/routing.rs`); supply-chain CI gates (`cargo-audit`/`cargo-deny`/`govulncheck` + SBOM via `cargo-cyclonedx`) wired in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) |
-| 2 — Agent loop | `done` | **Re-architected 2026-07-01** ([decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)): thin loop *mechanism* in **core** (`conductor` + `intercept` dispatcher); every decision is a sandboxed **`interceptor-*`** guest the core calls natively. Full v1 set built (`intent-router`, `task-router`, `context`, `tool-selector`, `permission`); `manager-agent-loop`/`agent-loop.wit` retired. **Exit gate passed 2026-07-02** (`make gate` in CI): intent → shaping → ReAct cycle → provider fallback → grounded answer, plus the integrated permission-`ask`, all through sandboxed guests offline. Carried-forward refinements (streaming run-handle; interceptor-`llm` real routing; `tool-callable` fleet) are non-blocking. Detailed checklist: [PLAN.md](../decisions/2026-07-01-phase2-agent-loop/PLAN.md) |
-| 3 — Persistence + inbound network | `done` | [PLAN.md](../decisions/2026-07-02-phase3-persistence-network/PLAN.md) (2026-07-02). **Exit gate passed** (`make gate` in CI): durable state survives a `Runtime` restart (host-side SQLite `Store` via `rusqlite` bundled — persistence is host-side, not SQLite-in-wasm; session transcripts persisted) **and** an external HTTP client drives the loop over the host-side REST surface (`jan_klod_core::serve` on `tiny_http`, launchable via `jan-klod serve`). Boundary calls: store proxied host-side (no store guest); REST surface host-side/sync (not an `api-rest` guest / `axum`). Carried-forward, non-blocking: SSE streaming (with the run-handle), interceptor `host-storage` backed by the shared `Store`. |
-| 4 — Clients & integrations | `done` | [PLAN.md](../decisions/2026-07-02-phase4-clients-integrations/PLAN.md) (2026-07-02). **Exit gate passed** (`make gate` in CI): a UI client (`jan-klod-ui` — line REPL + `ratatui` TUI, a separate process over REST) drives core, and an inbound `chat-telegram` message drives a turn + reply, both offline. `agent-*` ACP delegation via the conductor's `ToolInvoker` seam (`delegate`). Decisions: clients are separate processes over the host-side REST surface; Telegram needs no `host-socket` (outbound HTTP suffices). Carried-forward: GUI (Tauri), concrete ACP-over-HTTP transport + `build_agent` wiring, `host-socket`. **Extended 2026-08-09:** both chat surfaces can now *ask* — the REST/SSE driver serves its own socket while a turn is blocked, and Telegram's `ChatDriver` asks in the chat and takes the user's next message as the answer (deferring other chats' messages so the poll offset cannot lose them). Until then every confirmation on both surfaces was auto-denied by the headless driver. |
-| 5 — Distribution & ops | `done` | [PLAN.md](../decisions/2026-07-02-phase5-distribution-ops/PLAN.md) (2026-07-02). **Exit gate passed** (`make gate` in CI): the tiny Go supervisor (`src/supervisor/`, stdlib-only) runs blue/green flip→health→commit/rollback (probes `GET /health`), unit-tested both ways; `make bundle` produces a self-contained archive whose extracted `jan-klod` boots offline. Deploy unit = host-side core binary + provider/interceptor guests. Carried-forward: staging (download + checksum/WIT validation), the bundle matrix, the interactive web Configurator. |
-| 6 — Streaming & steering | `done` | [PLAN.md](../decisions/2026-07-02-phase6-streaming-steering/PLAN.md) (2026-07-02). **Exit gate passed** (`make gate` in CI): the conductor emits events via a push `EventSink` (fits the sync loop) → **SSE** over the REST surface (`tiny_http` streaming, `jan-klod-ui` consumes it live) → **cancel** (a sink `Stop`, incl. client-disconnect) → **steering** (a `Driver::follow_up` injects another cycle at `prepare-next-turn`). Carried-forward: per-token deltas, TUI/Telegram streaming. |
-| 7 — File-workspace substrate | `done` | [PLAN.md](../decisions/2026-07-02-phase7-file-workspace-substrate/PLAN.md) (2026-07-02). **Exit gate passed** (`make gate` in CI): **`host-fs`** (path-jailed workspace read/write; `..`/absolute/no-workspace denied) and **`host-process`** (bounded run-to-completion exec — workspace-jailed cwd, timeout, output cap; disabled denied), both unit-tested host-side and driven **across the CM boundary** by probe guests (`tool-fs-probe` — since retired, its tests retargeted to `tool-fs`; `tool-proc-probe`) through `tool_host::ToolExtension`. Default-deny + workspace-jailed. Carried-forward: symlink hardening/COW, long-lived children/OS isolation, wiring the substrates into the loop's tools. |
-| 8 — Tool fleet | `done` | [PLAN.md](../decisions/2026-07-02-phase8-tool-fleet/PLAN.md) (2026-07-02). **Exit gate passed** (`make gate` in CI): a model tool call runs through the whole loop — advertised at `select-tools`, gated at `tool-call` (permission ask→approve), dispatched by the `ToolFleet` (`conductor::ToolInvoker`) to a real tool that writes through `host-fs`, result fed back, grounded answer. Fleet: `tool-fs` (a single host-fs tool with read/write/grep ops), `tool-shell` (host-process); `build_agent` instantiates enabled `tool.*` with the default-deny substrates from config. The rest of the fleet follows the same pattern. **Extended 2026-08-08:** `tool-edit` — hash-anchored partial edits (`view` → `replace`/`insert`), the [edit-reliability lever](small-model-harness.md#edit-reliability-tool-edit--built) the harness specifies; a stale anchor is rejected with nothing written. `tool.fs`/`tool.edit` + `interceptor.tool-selector`/`permission` are now **enabled in the shipped `config.yaml`**, so a fresh install can read and edit its workspace (behind the confirmation gate) without hand-editing config. Also `tool-find` — bounded glob discovery (guest-side walk over `host-fs` `list-dir`; visit/depth/result/byte caps, heavy dirs pruned unless named, a bound that bites is reported), which closes the gap that left `read`/`grep`/`edit` dependent on paths the model had to guess — and `tool-fs`'s `grep` now searches the whole tree on that same walk (optional `glob` filter, `path:lineno:line` hits, match cap), so locating a symbol is one call. The shared matcher/walk/cap logic lives in the `guest-fs` library crate (a workspace member, not a component). **`tool-git`** (read-only: status/diff/log/show/branch) demonstrates the fleet's shaping principle — the guest builds its own argv from a closed op set, so the write half of git is *not expressible* rather than merely disallowed, and every call hardens against repo-supplied `core.fsmonitor`/`hooksPath`/diff-driver execution. It needs the `execution:` substrate but grants far less than `tool-shell`. |
-| 9 — Anthropic provider | `done` | **Done 2026-07-03.** `provider-anthropic` guest (Rust, `wasm32-wasip2`): native Anthropic Messages API (`/v1/messages`), system-message extraction to top-level field, `tool_use` block → `ToolCallRequest`, stop-reason normalisation, auth/rate-limit error mapping. Config: `extensions.provider.anthropic.enabled: true`. |
-| 10 — Skills + MCP registry | `done` | **Done 2026-07-03.** `registry-skills` (scans `.agents/skills/*.md`, parses YAML frontmatter `name:`/`description:`, exposes via `skill-registry` WIT, `invoke` renders template); `registry-mcp` (SSE/streamable-HTTP MCP gateway, JSON-RPC `tools/list` + `tools/call`). `registry_host.rs` binds both worlds; `CombinedFleet` dispatches tool calls to `ToolFleet` then `RegistryFleet`. `host-fs` added to `skill-registry-world`. |
-| 11 — UX polish | `done` | **Done 2026-07-03.** REST surface migrated to resource model (`POST /turn` retired; `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message` added); `store::list_namespaces` + `AgentSession::list_sessions`; workspace auto-detection (defaults to `$PWD` when `workspace:` key absent); per-token streaming in TUI via mpsc channel + `apply_delta`/`finish_turn`. UI client and integration tests updated. |
-| 12 — Release: GitHub + web | `done` | **Done 2026-07-03.** GitHub Actions release workflow (`.github/workflows/release.yml`; tag `v*` → matrix linux/darwin × x86_64/arm64 bundles + SHA256SUMS, `gh release create`); `scripts/install.sh` (OS/arch detect, checksum verify, installs to `~/.local/bin`); `pages/index.html` (GitHub Pages landing); `docs/quickstart.md`; README rewrite. |
-| 13 — Client protocol | `done` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` crate — 8 commands, 8 notifications, `PROTOCOL_VERSION`, a committed JSON Schema with a drift test, and a compatibility test proving the SSE projection loses nothing. **13b done 2026-09-10** ([#42](https://github.com/PromptPasture/jan-klod/issues/42)): `jan-klod-gateway rpc` on stdin/stdout, and `jan-klod` uses it by default — no port, no token, nothing left running. The framing moved into the contract crate (the core writes frames and every client reads them); `turn/follow-up` works over stdio and cannot over REST. **The exit gate is met** — a full turn streams, an `ask` is answered on the same pipe, a `turn/cancel` stops a turn (proven by the completion it never asks for), and REST + SSE still pass. **13c (WebSocket) is superseded by Phase 20** (#169), having been deferred until Phase 17 needed it — which it did not ([#43](https://github.com/PromptPasture/jan-klod/issues/43)) — `tiny_http` cannot hand back a socket that both times out a read and reads while writing, and the client that wants one is not started, so the socket decision belongs to whoever will use it. |
-| 14 — Event-sourced session log | `done` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. **Exit gate passed 2026-09-09** (`make gate`): the append-only `events` table with a versioned envelope (#44), and transcript/resume/fork as projections of it (#45) — a session resumed after a restart rebuilds from the log, and a fork at seq *N* runs independently. Nothing writes a transcript except through events; a pre-log database is converted at boot. Gate: after a restart, a resumed session's transcript is rebuilt from the event log and equals the pre-restart transcript; a fork from event *N* runs independently. |
-| 15 — OS-level effect sandbox | `done` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, the `SandboxBackend` seam, boot-time resolution that never downgrades quietly, and `require: true` denying execution rather than degrading. **15b done 2026-09-10** ([#47](https://github.com/PromptPasture/jan-klod/issues/47)): macOS commands run under a generated Seatbelt profile, so a write outside `writable` is refused by the kernel rather than by a prompt — and `require: true` now permits commands there instead of denying them. Linux is still approval-only until 15c. The per-turn warning is deferred to 16a. Half the gate is met: the macOS half is tested (with an unconfined control for every case, since a command that failed for another reason looks identical to a denial) and the Linux half needs Landlock. **15c done 2026-09-10** ([#48](https://github.com/PromptPasture/jan-klod/issues/48)): Linux commands run under a Landlock ruleset the gateway applies to itself before becoming the command — no `pre_exec`, so no hand-written `unsafe`, and no seccomp, because ABI 4 denies the network and an older kernel refuses the command rather than pretending. **The gate is met on both platforms.** The asymmetry it left is closed as of **2026-09-12** ([#95](https://github.com/PromptPasture/jan-klod/issues/95)): `ci-macos.yml` runs the Seatbelt suite on `macos-latest`, so both backends are now CI-verified. On different schedules, deliberately — Landlock on every push, Seatbelt when the sandbox sources or tests change and on demand, because macOS minutes bill at 10× on a private repository. **15d (Windows spike) is deferred** ([#49](https://github.com/PromptPasture/jan-klod/issues/49)) until a Windows environment exists to verify it in, and does not gate the phase — Windows resolves to approval-only, names the platform at boot, and refuses outright under `require: true`. Gate: a `tool-shell` command writing outside the workspace is denied on macOS (Seatbelt) and Linux (Landlock); elsewhere the run reports **approval-only** at boot; the security-model row cites the tests. The gate said "at boot and in the turn" until 2026-09-10, which no slice of this phase could ever have met: 15a deferred the per-turn warning to 16a, because nothing yet distinguishes a tool that uses `host-process` from one that only reads files, so it would fire on every tool-using turn. **Closed `done` 2026-09-11** on the convention that an umbrella closes when its exit criteria are met: the phase's work is finished, and what remains stands alone — #47 was open on the missing macOS runner (#95), which landed 2026-09-12, and 15d is deferred until a Windows environment exists (#49). Read `done` as "this phase's work is finished", not "every issue it ever tracked is closed". |
-| 16 — Capability manifest + signed registry | `done` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. **16a done 2026-09-10** (#86, #87): every guest ships a manifest generated from its own imports, and the host refuses a component whose manifest is absent, under-declares what it imports, or names an incompatible interface version — cross-validated by two independent readers of the same artifacts. **16c-1 done 2026-09-11** ([#91](https://github.com/PromptPasture/jan-klod/issues/91)): `ext install` verifies before it copies — digest, minisign signature over the component **and** its manifest under a key from `registry.trusted-keys`, component validity, manifest consistency through the same `inspect` boot uses — staging in `ext/.staging/` so a refusal leaves `ext/` byte-identical. Signed is the default and `--allow-unsigned` requires `--sha256`, so no combination lands a component with no evidence; the list ships empty, so today every install needs that widening until 16c-3 publishes a key. **16b-1 and 16b-2 done 2026-09-10** (#88, #89): the versioning rules are written down, and `make wit` now warns when a `wit/*.wit` changed without the package version moving — resolving a baseline by tag, else merge-base with `origin/main`, else `HEAD~1`, and saying which, since nothing is tagged yet. That check also put `make wit` into CI for the first time; no job ran it before, so the contracts' own `wasm-tools` validation was not running either. 16b-3 (N-1 minor compatibility) is deferred to the freeze (#90). **16c-1 and 16c-2 done 2026-09-11** (#91, #92): `ext install` from a path or a URL, verified before anything lands. **16b and 16c closed 2026-09-11** (#51, #52), their deferred sub-slices standing alone. **16d done 2026-09-12** (#53 → #137, #138, #139, #140): `make registry-index` writes an `index.json` describing the individual `.wasm` and its `.minisig` rather than a tarball, and its generation is deterministic — two runs over one directory must agree, entries must be sorted and unique, and all three checks are probed on every run. `ext search` and `ext list --remote` read the index `registry.url` names and print **what each component asks the host for before it is downloaded**, which is the capability view until an interactive Configurator exists; `ext install <name>` resolves through it and hands the entry's URL and digest to the same verified install a path gets, so an index that lies is refused rather than trusted. An `http`/`https` index is fetched under the egress policy and anything else is a path, which is what makes the gate's offline fixture install real. A release publishes the index and the components beside it to GitHub Pages — unverified until a tag is pushed. Also 16c-3 (#93), deferred until before the first release; until it lands `registry.trusted-keys` has nothing to put in it and every install needs `--allow-unsigned --sha256`. **Exit gate passed 2026-09-12**, all four clauses: a component whose manifest omits a capability it imports is refused at boot (16a); a tampered download is refused by `ext install` — against a digest and against a signature, including bytes tampered in flight (16c); an install from a static index fixture works offline (16d-2); a WIT `api-version` mismatch is a clear error naming both versions (16b). |
-| 17 — Web client + GUI shell | `done` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. **17a done 2026-09-12** ([#54](https://github.com/PromptPasture/jan-klod/issues/54)): a dependency-light TypeScript SPA served by the core at `/` over **REST + SSE**, not WebSocket — 13c was not a prerequisite after all, and [#43](https://github.com/PromptPasture/jan-klod/issues/43) stays deferred pending evidence that SSE teardown-as-cancel is the wrong shape for a browser. **17b done 2026-09-12** ([#55](https://github.com/PromptPasture/jan-klod/issues/55) → #141, #142, #143, #144): `jan-klod --gui` opens a Tauri 2 window over the same front-end, from `src/gui` — **its own cargo workspace**, because Tauri costs +256 packages and would otherwise put them on every `cargo test` and every CI run (#141 measured it before the app was written: 332 CPU-s, 838 MB, and eleven named `deny.toml` entries for 5 MPL-2.0 crates and 6 unmaintained advisories). The escape hatch was measured and does not exist — the MPL floor is in `wry`, not Tauri. `make bundle GUI=1` ships it as a second axis rather than a fourth distribution, which is `scripts/distributions/README.md`'s own rule. Gate: a browser **and** a Tauri window drive a turn with `ask` + cancel from one front-end codebase served by the core. **Browser half met** (`web_client.rs`). **Window half met in part**: the shipped SPA boots inside the webview against a real gateway and authenticates with the seeded token (verified through a recording proxy), on byte-identical assets over the same transport — but nobody has typed into the window, answered an `ask` in it or cancelled in it, and Linux is unexercised. #142 split that visual half out deliberately; it needs a human at a screen, not more code. **Closed `done` 2026-09-12** on the convention Phases 15 and 18 used — an umbrella closes when its exit criteria are met — with the one clause that is not fully evidenced named here rather than rounded up. |
-| 18 — Ecosystem ports | `done` | [#40](https://github.com/PromptPasture/jan-klod/issues/40). Vision decision 6. Needs 13 (done). **18a and 18b done 2026-09-11** (#56, #57): `jan-klod-gateway mcp` serves `ask`, `session_list` and `session_get` over MCP stdio, and `jan-klod-gateway acp` serves the ACP agent side — both method-name adapters over the envelope `rpc` already speaks, so no SDK and no new dependency between them. **The gate is met**: an MCP client lists and calls a core-exposed tool, and an ACP fixture runs a turn, both offline. 18b is the first surface where the core originates JSON-RPC requests as well as serving them — an editor *can* answer a confirmation, where an MCP client cannot. Note a turn over MCP cannot write or run commands — there is nobody to answer a confirmation, so each takes its default, which is a refusal. **Closed `done` 2026-09-11** on the same convention Phase 15 used — an umbrella closes when its exit criteria are met — re-proving both clauses first (`cargo nextest run -p jan-klod-host mcp:: acp::`, 13 passed) rather than inferring them from the slices being closed. What remains stands alone: **18c ([#58](https://github.com/PromptPasture/jan-klod/issues/58), split into [#109](https://github.com/PromptPasture/jan-klod/issues/109) and [#110](https://github.com/PromptPasture/jan-klod/issues/110), both **done 2026-09-12**)** gives `registry-mcp` a stdio transport over a long-lived child, which is the *inbound* direction — the core as an MCP client — and the gate only ever named the core as a server, so it never gated the phase. Gate: an ACP client fixture runs a turn against the core; an MCP client lists and calls a core-exposed tool — both offline. |
-| 19 — Terminal client experience | `done` | [#97](https://github.com/PromptPasture/jan-klod/issues/97). Not one of the vision's six decisions — the client-experience phase that follows them. **19a done 2026-09-12** ([#98](https://github.com/PromptPasture/jan-klod/issues/98)): `src/core/ui/src/theme.rs` owns colour, glyphs and terminal capability, and a test greps the crate so no `Color` literal can reappear outside it. **19b–19h done 2026-09-12/13** (#99, #100, #101, #102, #103, #104, #105): the chat surface, tool blocks, the composer, the turn lifecycle, the permission modal, the frame, and the session switcher/help overlay/quit confirm dialogs. The findings worth carrying: `Enter` changing meaning mid-turn needed **three** signals rather than one, because the cost of missing it is a message sent into a running turn; the ask dialog was answering with the *client's own* session rather than the one the notification carried — a bug the slice predicted and found; and the session id, held as a `&str` for the event loop's whole lifetime since 13b, finally had to become owned once switching sessions meant replacing it mid-run. Gate: a full turn renders correctly on a 120×32 terminal and a 60×20 one, and the same run under `NO_COLOR=1` in a 16-colour terminal loses no information. |
-| 20 — axum inbound surface | `open` | [#169](https://github.com/PromptPasture/jan-klod/issues/169). [Decision](../decisions/2026-09-13-rest-concurrency-and-the-send-session/Handoff.md). Replaces the inbound HTTP surface with `axum` + `tokio`, which **supersedes `mcp.rs`'s rejection of it** on three measured grounds. The marginal cost is **16 packages**, not the greenfield 53 — 36 are already in the lock, `tokio` via `wasmtime-wasi` — so +3.9% on 406. The tree passes the **unmodified** `deny.toml` (advisories, bans, licenses, sources all ok), where #141's Tauri needed eleven named exceptions. And the `!Send` premise those comments rest on is **not wasmtime**: `Store<T>`, `Instance`, `Engine`, `Component`, `WasiCtx` and `ResourceTable` hold no `Rc`, no `RefCell`, no thread-locals. The cause is `Interceptor` (`intercept.rs:263`) and `Completer` (`conductor.rs:85`) lacking a `Send` supertrait — **compiler-verified**, with no production type failing a `Send` probe and only two test stubs needing `Arc<Mutex<_>>`. Buys two independent things that looked like one: REST stops serving one request at a time (the ~90-line `PromptDriver::wait_for_answer`, where a blocked driver *serves the socket itself*, exists only to work around single-threadedness), and `GET /ws` becomes possible because a real `TcpStream` has the `try_clone` + `set_read_timeout` pair `tiny_http`'s upgraded box lacks. Gate: two clients drive turns in two sessions **concurrently**, with an `ask` answered in one while the other streams. |
+| 1 — Walking skeleton + foundation gate | `done` | **Slice 1a PASSED** (2026-06-29); [verdict](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md). **Slice 1b done:** `jan-klod-core` boots from `config.yaml` (registry, boot order, lifecycle, component host); host caps (`host-log`/`host-config`/`host-http`) as CM imports; three Rust guests build offline (`store-memory`, `provider-openai`, `manager-agent-loop` retiring in Phase 2); exit gate runs one turn in agent-loop guest (`tests/routing.rs`); supply-chain gates (`cargo-audit`/`cargo-deny`/`govulncheck` + SBOM) in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) |
+| 2 — Agent loop | `done` | **Re-architected 2026-07-01** ([decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)): thin loop in **core** (`conductor` + `intercept` dispatcher); every decision is a sandboxed `interceptor-*` guest. Full v1 built (`intent-router`, `task-router`, `context`, `tool-selector`, `permission`). **Exit gate passed 2026-07-02:** intent → shape → ReAct → provider fallback → answer with permission-`ask`, offline. Carried-forward: streaming run-handle, `interceptor-llm` routing, `tool-callable` fleet. Checklist: [PLAN.md](../decisions/2026-07-01-phase2-agent-loop/PLAN.md) |
+| 3 — Persistence + inbound network | `done` | [PLAN.md](../decisions/2026-07-02-phase3-persistence-network/PLAN.md) (2026-07-02). **Exit gate passed:** state survives `Runtime` restart via host-side SQLite (persistence host-side, not in-wasm; transcripts persisted) **and** HTTP client drives loop over REST (`jan_klod_core::serve` on `tiny_http`, via `jan-klod serve`). Boundary: store proxied host-side (no guest); REST host-side/sync (not `axum`). Carried-forward: SSE streaming, `host-storage` backed by `Store`. |
+| 4 — Clients & integrations | `done` | [PLAN.md](../decisions/2026-07-02-phase4-clients-integrations/PLAN.md) (2026-07-02). **Exit gate passed:** UI client (`jan-klod-ui` — REPL + `ratatui` TUI over REST) drives core; `chat-telegram` message drives turn + reply, offline. `agent-*` ACP via `ToolInvoker::delegate`. Decisions: clients as separate processes over REST; Telegram needs no `host-socket`. Carried-forward: GUI (Tauri), ACP-over-HTTP, `host-socket`. **Extended 2026-08-09:** both surfaces now *ask* — REST/SSE driver serves socket mid-turn; Telegram asks in chat, takes next message as answer. |
+| 5 — Distribution & ops | `done` | [PLAN.md](../decisions/2026-07-02-phase5-distribution-ops/PLAN.md) (2026-07-02). **Exit gate passed:** Go supervisor (`src/supervisor/`) runs blue/green flip→health→rollback (probes `/health`), unit-tested both ways; `make bundle` produces archive; extracted `jan-klod` boots offline. Deploy unit = core + guests. Carried-forward: staging, bundle matrix, web Configurator. |
+| 6 — Streaming & steering | `done` | [PLAN.md](../decisions/2026-07-02-phase6-streaming-steering/PLAN.md) (2026-07-02). **Exit gate passed:** conductor emits events via `EventSink` → **SSE** over REST (`tiny_http`, consumed live by UI) → **cancel** (sink `Stop` + client-disconnect) → **steering** (`Driver::follow_up` injects cycle at `prepare-next-turn`). Carried-forward: per-token deltas, TUI/Telegram streaming. |
+| 7 — File-workspace substrate | `done` | [PLAN.md](../decisions/2026-07-02-phase7-file-workspace-substrate/PLAN.md) (2026-07-02). **Exit gate passed:** **`host-fs`** (path-jailed read/write; `..`/absolute denied) and **`host-process`** (bounded exec — workspace-jailed, timeout, output cap), both unit-tested, driven across CM via probe guests through `tool_host::ToolExtension`. Default-deny + workspace-jailed. Carried-forward: symlink hardening, long-lived children, wiring into loop tools. |
+| 8 — Tool fleet | `done` | [PLAN.md](../decisions/2026-07-02-phase8-tool-fleet/PLAN.md) (2026-07-02). **Exit gate passed:** model tool call runs full loop — advertised at `select-tools`, gated at `tool-call`, dispatched by `ToolFleet` to real tool writing via `host-fs`, result fed back, grounded. Fleet: `tool-fs` (read/write/grep), `tool-shell` (host-process); config instantiates enabled `tool.*` with default-deny substrates. **Extended 2026-08-08:** `tool-edit` (hash-anchored edits, [reliability lever](small-model-harness.md#edit-reliability-tool-edit--built); stale anchor rejected). `tool.fs`/`tool.edit` + permission **enabled in `config.yaml`** so fresh install reads/edits without hand-editing. `tool-find` (bounded glob via `host-fs`; visit/depth/byte caps). `tool-fs::grep` searches tree (optional `glob`, `path:lineno:line`). `guest-fs` library (workspace member, not component). `tool-git` (read-only: status/diff/log/show/branch) demonstrates shaping — guest argv from closed ops, write half *not expressible*. |
+| 9 — Anthropic provider | `done` | **Done 2026-07-03.** `provider-anthropic` guest (Rust, `wasm32-wasip2`): native Messages API (`/v1/messages`), system-message extraction, `tool_use` → `ToolCallRequest`, stop-reason normalization, error mapping. Config: `extensions.provider.anthropic.enabled: true`. |
+| 10 — Skills + MCP registry | `done` | **Done 2026-07-03.** `registry-skills` (scans `.agents/skills/*.md`, YAML `name:`/`description:`, exposes via `skill-registry` WIT); `registry-mcp` (SSE/HTTP MCP gateway, JSON-RPC `tools/list` + `tools/call`). `registry_host.rs` binds both; `CombinedFleet` dispatches to `ToolFleet` then `RegistryFleet`. `host-fs` added to `skill-registry-world`. |
+| 11 — UX polish | `done` | **Done 2026-07-03.** REST migrated to resource model (`POST /turn` retired → `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`); `list_sessions`, `list_namespaces`; workspace auto-detect (default `$PWD`); per-token streaming in TUI. |
+| 12 — Release: GitHub + web | `done` | **Done 2026-07-03.** GitHub Actions release (`.github/workflows/release.yml`; tag `v*` → matrix bundles + SHA256SUMS); `scripts/install.sh` (OS/arch detect, verify, install to `~/.local/bin`); GitHub Pages landing, quickstart, README. |
+| 13 — Client protocol | `done` | [#35](https://github.com/PromptPasture/jan-klod/issues/35). [Vision](../decisions/2026-09-08-harness-platform-vision/Vision.md) decision 1. **13a done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)): `jan-klod-protocol` — 8 commands, 8 notifications, `PROTOCOL_VERSION`, JSON Schema + drift test, SSE lossless proof. **13b done 2026-09-10** ([#42](https://github.com/PromptPasture/jan-klod/issues/42)): `jan-klod-gateway rpc` on stdin/stdout; `jan-klod` spawns by default (no port/token). Framing in contract (core writes, clients read); `turn/follow-up` over stdio only. Gate met: turn streams, `ask` answered on pipe, `turn/cancel` stops (proven by never asking), REST + SSE pass. **13c (WebSocket) superseded by Phase 20** (#169), deferred until Phase 17 needed it—which didn't (#43). `tiny_http` cannot timeout-and-write-simultaneously; socket decision deferred. |
+| 14 — Event-sourced session log | `done` | [#36](https://github.com/PromptPasture/jan-klod/issues/36). Vision decision 3. **Exit gate passed 2026-09-09:** append-only `events` table with versioned envelope (#44); transcript/resume/fork as projections (#45). Resumed session rebuilds from log; fork at seq *N* runs independently. Only events write transcripts; pre-log DB converted at boot. Gate: transcript rebuilt post-restart equals pre-restart; fork independent. |
+| 15 — OS-level effect sandbox | `done` | [#37](https://github.com/PromptPasture/jan-klod/issues/37). Vision decision 2. **15a done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)): `execution.sandbox` policy, `SandboxBackend` seam, boot-time resolution never downgrades, `require: true` denies exec. **15b done 2026-09-10** ([#47](https://github.com/PromptPasture/jan-klod/issues/47)): macOS runs under Seatbelt (kernel-enforced writable boundary); `require: true` permits. Linux approval-only (waits 15c). Per-turn warning deferred to 16a. **15c done 2026-09-10** ([#48](https://github.com/PromptPasture/jan-klod/issues/48)): Linux runs under Landlock (gateway applies before exec, no `pre_exec`/`unsafe`, ABI 4 denies network). Gate met on both. **15d deferred** ([#49](https://github.com/PromptPasture/jan-klod/issues/49)): Windows approval-only until environment exists. Asymmetry closed **2026-09-12** ([#95](https://github.com/PromptPasture/jan-klod/issues/95)): `ci-macos.yml` runs Seatbelt on `macos-latest` (both backends CI-verified). Schedules differ: Landlock every push, Seatbelt on change (macOS billing 10×). Gate: write outside workspace denied on macOS/Linux; else **approval-only** at boot. Per-turn warning deferred because nothing yet distinguishes process-using tools from read-only tools. Phase closed when exit criteria met (#47 needed macOS runner #95 landing 2026-09-12). |
+| 16 — Capability manifest + signed registry | `done` | [#38](https://github.com/PromptPasture/jan-klod/issues/38). Vision decision 4. **16a done** (#86, #87): guest ships manifest from imports; host refuses missing/under-declared/incompatible manifests (cross-validated). **16b-1/-2 done** (#88, #89): versioning rules written; `make wit` warns on version mismatch (baseline by tag/merge-base/HEAD~1), entered CI. 16b-3 (N-1 compat) deferred (#90). **16c-1/-2 done** (#91, #92): `ext install` (path or URL) verifies before landing: digest, minisign over component+manifest via `registry.trusted-keys`, validity, consistency. Signed default; `--allow-unsigned` requires `--sha256`. Key list empty; installs need `--allow-unsigned --sha256` until 16c-3 (#93). Staging in `ext/.staging/`. **16d done** (#137–140): `make registry-index` writes deterministic `index.json` (not tarball) of `.wasm` + `.minisig`. Sorted, unique, checksum validated on every run. `ext search`/`ext list --remote` read index from `registry.url`, print capabilities before download. `ext install <name>` resolves via index, refuses tampering (digest + signature). `http`/`https` fetched under egress policy; else path. GitHub Pages publish unverified until tag pushed. **Exit gate 2026-09-12:** manifest-omitted capability refused at boot (16a); tampered download refused (16c); offline fixture install works (16d-2); WIT version mismatch is clear error (16b). |
+| 17 — Web client + GUI shell | `done` | [#39](https://github.com/PromptPasture/jan-klod/issues/39). Vision decision 5. **17a done** ([#54](https://github.com/PromptPasture/jan-klod/issues/54)): TypeScript SPA served at `/` over REST + SSE (13c not prerequisite; #43 deferred pending browser evidence). **17b done** (#141–144): `jan-klod --gui` opens Tauri 2 over same front-end, from `src/gui` (separate workspace; Tauri costs +256 packages, 332 CPU-s, 838 MB, 11 deny entries—escape hatch measured, does not exist; MPL floor in `wry`). `make bundle GUI=1` second axis. Gate: browser **and** window drive turn with `ask`+cancel. Browser met (`web_client.rs`); window partly met (SPA boots in webview, real gateway, seeded token auth, identical assets; no typing/ask/cancel, Linux unexercised—#142 needs human). Closed when exit criteria met. |
+| 18 — Ecosystem ports | `done` | [#40](https://github.com/PromptPasture/jan-klod/issues/40). Vision decision 6. Needs 13. **18a/18b done** (#56, #57): `jan-klod-gateway mcp` (ask/session_list/session_get over MCP stdio), `jan-klod-gateway acp` (ACP agent side)—both method adapters over `rpc`, no SDK/dep. MCP client lists/calls tool; ACP fixture runs turn, offline. First surface where core originates JSON-RPC + serves it (editor can answer; MCP cannot). Note: MCP turn cannot write/run (no responder, default refusal). **Closed** (umbrella closes at gate meet): tested (`cargo nextest run -p jan-klod-host mcp:: acp::`, 13 passed). **18c** (#58→#109/#110, done) gives `registry-mcp` stdio over long-lived child (inbound, core as MCP client; gate only named server, never gated phase). Gate: ACP client runs turn; MCP client lists/calls—offline. |
+| 19 — Terminal client experience | `done` | [#97](https://github.com/PromptPasture/jan-klod/issues/97). Not a vision decision—client experience. **19a done** ([#98](https://github.com/PromptPasture/jan-klod/issues/98)): `src/core/ui/src/theme.rs` owns colour/glyphs/capability; test greps so no `Color` literal escapes. **19b–19h done** (#99–105): chat, tool blocks, composer, lifecycle, permission modal, frame, switcher/help/quit. Key findings: `Enter` mid-turn needs three signals (cost: message into live turn); ask dialog answered with wrong session (bug predicted/found); session id `&str` became owned when switching sessions mid-run. Gate: 120×32 + 60×20 terminals render correctly; `NO_COLOR=1` 16-colour loses no info. |
+| 20 — axum inbound surface | `open` | [#169](https://github.com/PromptPasture/jan-klod/issues/169). [Decision](../decisions/2026-09-13-rest-concurrency-and-the-send-session/Handoff.md). Replaces HTTP surface with `axum` + `tokio`, **superseding `mcp.rs` rejection** on measured grounds. Marginal cost: **16 packages** (+3.9% on 406)—36 already in lock via `tokio`/`wasmtime-wasi`. Passes **unmodified** `deny.toml` (Tauri needed 11 exceptions). `!Send` premise is **not wasmtime** (`Store`/`Instance`/`Engine`/`Component`/`WasiCtx`/`ResourceTable` hold no `Rc`/`RefCell`/thread-locals); cause is `Interceptor`/`Completer` lacking `Send` supertrait (compiler-verified; only 2 test stubs need `Arc<Mutex<_>>`). Buys: REST concurrent (kills ~90-line `PromptDriver::wait_for_answer` single-request workaround); `GET /ws` possible (`TcpStream`'s `try_clone` + `set_read_timeout` vs `tiny_http`'s upgraded box). Gate: two clients drive turns concurrently with `ask` answered in one while other streams. |
 
 Built-extension language assignments and their own status live in the
 [Extension Technologies brainstorm](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md#near-term-assignments-provisional--confirmed-at-the-phase-1-gate).
@@ -107,19 +95,13 @@ Built-extension language assignments and their own status live in the
 **Goal:** prove the foundation on *real* code (no throwaway spike) and then reach the
 Go MVP's parity on it. The risky foundation check is front-loaded as the first slice.
 
-**Slice 1a — the gate (front-load the risk).** The thinnest possible vertical slice:
-a Rust + Wasmtime `core` that loads **one thin Go (TinyGo) component** across the
-Component-Model boundary and calls it, plus the **async model** decision (`tokio` vs
-sync Wasmtime). Keep this component a trivial stub (a `provider` that echoes a single
-`complete`) so toolchain friction surfaces on ~10 lines — *not* on the full agent
-loop. Go (TinyGo) is the non-Rust language we validate at the gate (see
-[Extension Technologies](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md));
-this slice proves its TinyGo CM toolchain (`wkg` deps, `wasi:cli` world quirk) and
-stays as the polyglot canary even though our own extensions are now Rust. It is
-checked by `host/tests/it/polyglot.rs`: the committed Go-built component is loaded
-and called on every `make gate` run, and rebuilt from source wherever `tinygo`
-and `wkg` are installed. Until 2026-08-11 this page said `make gate` ran it and
-`make gate` did not — the spike was an example someone had to invoke by hand.
+**Slice 1a — the gate (front-load the risk).** Thinnest slice: Rust + Wasmtime `core` loads
+**one Go (TinyGo) component** across CM boundary, plus **async model** decision (`tokio` vs sync).
+Trivial stub (`provider` echoing one `complete`) surfaces toolchain friction on ~10 lines.
+Go (TinyGo) validates at gate ([Extension Technologies](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md));
+proves CM toolchain (`wkg` deps, `wasi:cli` quirk), stays polyglot canary (own extensions now Rust).
+Checked by `host/tests/it/polyglot.rs`: committed component loads/called on `make gate`, rebuilt from source
+where `tinygo` + `wkg` installed.
 
 - **Go/no-go checkpoint:** if CM-in-Rust is clean and the non-Rust guest works
   end-to-end → continue to 1b. If friction outweighs the payoff → fall back to
@@ -143,21 +125,13 @@ through a sandboxed component, with an in-memory store, all over the Component M
 **Goal:** the runtime does something useful end-to-end. **Re-architected 2026-07-01**
 ([Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)).
 
-- **Thin loop mechanism in core (Rust):** `stream → tools → loop`, core-native
-  interceptor dispatch (calling each extension's exported `interceptor` interface),
-  grammar passthrough, parse/validate/retry-with-correction, **provider fallback**
-  (on-provider-error re-issue from the `providers:` list), streaming handles, cancel,
-  steering/follow-up queue, tool-result `terminate`. Zero policy. Retires the
-  `manager-agent-loop` extension.
-- **Interceptor framework + the full v1 set** (all sandboxed Rust `interceptor-*`
-  extensions, each exporting `interceptor`): `interceptor-intent-router` (before-loop;
-  recast Slice 2a), `interceptor-task-router` (select-model — task classification +
-  task→model routing), `interceptor-context` (select-context; the reworked context
-  compressor — history/compression handled internally), `interceptor-tool-selector`
-  (select-tools; built thin), and `interceptor-permission` (tool-call; built thin).
-- **Core mechanism, tunable via seams:** constrained-decoding grammar + retry/validate
-  stay fixed in the loop; construction/policy tuned via `host-config` + the
-  request-shaping phases — see [Small-Model Harness](small-model-harness.md).
+- **Thin loop mechanism in core (Rust):** `stream → tools → loop`; core-native interceptor dispatch;
+  grammar, parse/validate/retry, **provider fallback** (on-error re-issue), streaming, cancel,
+  steering/follow-up, tool-result `terminate`. Zero policy. Retires `manager-agent-loop`.
+- **Interceptor framework + v1 set:** sandboxed Rust `interceptor-*`: `intent-router` (before-loop),
+  `task-router` (task classification + routing), `context` (history/compression), `tool-selector`, `permission`.
+- **Core mechanism tunable via seams:** grammar + retry/validate fixed; construction/policy via
+  `host-config` + shaping phases — see [Small-Model Harness](small-model-harness.md).
 
 **Exit gate:** a query runs the full loop (intent hook → shaped request → ReAct cycle
 → fallback on a simulated provider failure) against one provider and returns a grounded
@@ -165,69 +139,49 @@ answer, driven end-to-end through the core-exposed loop entry.
 
 ## Phase 3 — Persistence + inbound network
 
-**Goal:** durable state and a way for the outside world to reach core.
+**Goal:** durable state and outside reach to core.
 
-- Storage → resolved: **host-side SQLite** (`rusqlite`, bundled). Not a component; see [contracts](contracts.md).
-- Design the **`host-serve`** capability (inbound listener) and build `api-rest`
-  (REST + SSE) → resolve the HTTP-framework and SQL **(TBD)**s.
-- Resolve **UI ↔ core transport** (current lean: a UI client always connects via `api-rest`).
+- Storage: **host-side SQLite** (`rusqlite`, bundled), not component; see [contracts](contracts.md).
+- **`host-serve`** capability (listener) + `api-rest` (REST + SSE).
+- **UI ↔ core:** client via `api-rest`.
 
-**Exit gate:** state persists across restart; an external HTTP client drives core via `api-rest`.
+**Exit gate:** state persists across restart; HTTP client drives core via `api-rest`.
 
 ## Phase 4 — Clients & integrations
 
-**Goal:** the human- and agent-facing surfaces.
+**Goal:** human and agent surfaces.
 
-- `jan-klod-ui` client: TUI first (toolkit **TBD**), then GUI by launch flag.
-- Design the **`host-socket`** capability + `chat-telegram` first — this unlocks the
-  headless Raspberry-Pi / container use case (chat-only access, no UI client).
-- `agent-*` ACP delegation, both directions.
+- `jan-klod-ui` TUI, then GUI by flag.
+- **`host-socket`** + `chat-telegram`—unlocks headless Pi/container (chat-only, no UI).
+- `agent-*` ACP delegation both ways.
 
 ## Phase 5 — Distribution & ops
 
-**Goal:** ship it and keep it updatable.
+**Goal:** ship and keep updatable.
 
-- The tiny **Go launcher/updater**: blue/green stage → flip → health-check → rollback.
-- [Configurator](configurator.md) (web ZIP generator) + curated bundles.
+- **Go launcher/updater**: blue/green → flip → health-check → rollback.
+- [Configurator](configurator.md) (web ZIP) + bundles.
 
 ## Phase 6 — Streaming & steering
 
-**Goal:** the loop streams incrementally, and a driver can interrupt and steer it.
-Promotes the Phase 2 carry-forward — the run-handle was prototyped as a core Rust
-entry (`build_agent`/`run_with`) but the loop currently returns a whole answer.
+**Goal:** loop streams incrementally; driver interrupts/steers (Phase 2 carry-forward).
 
-- **Run-handle** — `run(session, message)` → a handle; `next-event` streams
-  `text-delta` / `tool-invoked` / `tool-result` / `warning` / `done`; `cancel` /
-  `close`; a `pending-prompt` event + `provide-answer` resuming the interceptor
-  `ask`; a **steering + follow-up-injection** queue. Preview-vs-authoritative
-  streaming (see [`wit/interceptor.wit`](../../wit/interceptor.wit) `finalize`).
-- **SSE on the REST surface** — `serve` streams `next-event` as Server-Sent Events
-  (the deferred `/turn` streaming); the UI client + Telegram consume incrementally.
-- **Driver-capability WIT** — promote the core Rust loop-entry to the WIT shape an
-  `api-*`/`chat-*` guest would import, if/when those become guests.
+- **Run-handle:** `run(session, message)` → handle; `next-event` streams `text-delta`/`tool-invoked`/`tool-result`/`warning`/`done`; `cancel`/`close`;
+  `pending-prompt` + `provide-answer` resuming `ask`; steering + follow-up queue. Preview-vs-authoritative streaming ([`wit/interceptor.wit`](../../wit/interceptor.wit) `finalize`).
+- **SSE on REST:** `serve` streams events; UI + Telegram consume live.
+- **Driver-capability WIT:** promote loop-entry to guest shape.
 
-**Exit gate:** a driver runs a multi-step turn, receives events incrementally over
-SSE, answers an `ask` mid-turn, and cancels a run — offline.
+**Exit gate:** driver runs multi-step turn, receives events over SSE, answers mid-turn, cancels—offline.
 
 ## Phase 7 — File-workspace substrate
 
-**Goal:** give the sandbox **mediated** file and process access — the two
-capabilities everything file- or execution-shaped depends on. Neither exists yet by
-design (the sandbox grants no filesystem, no process); both are added as host-owned,
-routed capabilities.
+**Goal:** mediated file and process access (core capabilities for all file/execution tools; sandbox grants none by design).
 
-- **`host-fs`** — a scoped, path-jailed read/write view of a workspace directory.
-  Every file-touching tool (read/write, edit, grep/find) needs it. Copy-on-write /
-  overlay isolation for safe edits + checkpoint/restore is a candidate model.
-- **`host-process`** — spawn and **hold a long-lived child process**. A *co-equal*
-  substrate, not a sub-case: **code execution** (`bash`/`eval`) depends on it, as do
-  `ssh`, background jobs, and the language-server / debugger / browser bridges.
-- **Open** — whether these are two capabilities or one; the isolation model (path
-  jail, resource limits, COW). Resolve at this phase and record as a dated decision.
+- **`host-fs`:** path-jailed read/write workspace view. File tools (read/write/edit/grep/find) need it. COW/overlay isolation + checkpoint/restore candidate.
+- **`host-process`:** spawn long-lived child (co-equal substrate). Code execution (`bash`/`eval`), `ssh`, jobs, language-server/debugger/browser bridges depend on it.
+- **Open:** one or two capabilities; isolation model (path jail, resource limits, COW)—resolve and record.
 
-**Exit gate:** a sandboxed extension reads and writes a workspace file through
-`host-fs` (jailed to the workspace) and runs a command through `host-process`, both
-core-mediated — verified offline.
+**Exit gate:** sandboxed extension reads/writes file through `host-fs` (jailed) and runs command through `host-process`, core-mediated—offline.
 
 ## Phase 8 — Tool fleet
 
@@ -274,88 +228,50 @@ a live `ANTHROPIC_API_KEY`. Offline: canned `host-http` reply → correct chunk 
 
 ## Phase 10 — Skills + MCP registry
 
-**Goal:** named workflow shortcuts and ecosystem tool access.
+**Goal:** workflow shortcuts and ecosystem tool access.
 
-- **`registry-skills`** — implements `skill-registry` (`wit/skill-registry.wit`).
-  Scans `.agents/skills/` for Markdown files with a YAML `name:` field; exposes them
-  via `list-skills` / `invoke` / `reload`. The `ToolFleet` calls `list-skills` at
-  `select-tools` and `invoke` at dispatch — the same seam as `tool-callable` but
-  through the `skill-registry` interface.
-- **`registry-mcp`** — implements `mcp-registry` (`wit/mcp-registry.wit`). Connects
-  to configured MCP servers via **SSE only** (via `host-http`; stdio deferred —
-  requires long-lived `host-process` carry-forward from Phase 7). Exposes
-  `list-tools` / `invoke-tool` / `reconnect`. **Correction (2026-08-09):** the
-  guest never called `host-event`, and the interface has since narrowed to
-  `publish` — crash *notification* (something reacting) needs a consumer that
-  does not exist yet. `ToolFleet` calls `list-tools` at `select-tools` and `invoke-tool`
-  at dispatch. Permission gate fires on each outbound MCP call.
-- **Prerequisite:** verify `host-event` is granted to `mcp-registry-world` guests
-  before starting `registry-mcp`.
+- **`registry-skills`:** scans `.agents/skills/` Markdown (YAML `name:`), exposes via `list-skills`/`invoke`/`reload`. `ToolFleet` calls at `select-tools`/dispatch.
+- **`registry-mcp`:** connects MCP servers via SSE (stdio deferred—needs long-lived `host-process`). Exposes `list-tools`/`invoke-tool`/`reconnect`. Guest narrows to `publish`. Permission gate on MCP calls.
+- **Prerequisite:** `host-event` granted to `mcp-registry-world`.
 
-**Exit gate:** model calls an MCP tool via a canned SSE stub (offline); model invokes
-a skill from `.agents/skills/review.md` and the template is injected correctly.
+**Exit gate:** model calls MCP tool via SSE stub (offline); invokes skill, template injected.
 
 ## Phase 11 — UX polish
 
-**Goal:** the daily-use experience is complete. Per-token streaming has no dependency
-on Phases 9–10 and can start immediately in parallel with them.
+**Goal:** daily-use complete (can start in parallel with 9–10).
 
-- **Per-token streaming in TUI** (Phase 6 carry-forward) — `jan-klod-ui`'s `ratatui`
-  TUI consumes `text-delta` SSE events incrementally, appending to the active message
-  buffer and re-rendering on each event. Wiring only; no architectural change.
-- **Session list + resume** — `GET /sessions` returns past sessions from SQLite (id,
-  created, preview). `jan-klod-ui --session <id>` or `/sessions` REPL command picks
-  a session to resume. `POST /turn` with an existing session id replays stored history
-  into the context interceptor before the first new turn.
-- **Workspace auto-detection** — when `jan-klod serve` is launched without an explicit
-  `workspace:` config key, default to `$PWD`. Config-defaulting change in `Runtime::boot`.
+- **Per-token streaming in TUI:** `ratatui` consumes `text-delta` SSE incrementally. Wiring only.
+- **Session list + resume:** `GET /sessions` returns past sessions (id/created/preview). `--session <id>` resumes; `POST /turn` replays history.
+- **Workspace auto-detect:** `jan-klod serve` defaults to `$PWD` when `workspace:` absent.
 
-**Exit gate:** launch in a repo, send a message, disconnect, relaunch, resume by id,
-receive per-token streaming output in the TUI.
+**Exit gate:** launch in repo, message, disconnect, resume by id, stream per-token in TUI.
 
 ## Phase 12 — Release: GitHub + web
 
-**Goal:** a developer unfamiliar with Jan-Klod can find it, install it, and have a
-working session within 15 minutes.
+**Goal:** find, install, work in under 15 minutes.
 
-- **GitHub releases** — GitHub Actions workflow: on `git tag v*`, build
-  `dist/jan-klod-<version>-<os>-<arch>.tar.gz` for the matrix (linux-amd64,
-  linux-arm64, darwin-arm64, darwin-amd64) and publish as release assets. `make bundle`
-  already produces the archive; this wires it into CI.
-- **Install script** — `scripts/install.sh`: detects OS/arch, downloads the matching
-  bundle from the latest GitHub release, verifies checksum, extracts to
-  `~/.local/bin/jan-klod`. Stdlib sh, no dependencies. Usage:
-  `curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh`.
-- **GitHub Pages site** (`pages/`) — static site served from `pages/` on `main`.
-  Content: what Jan-Klod is, the WASM sandboxing differentiator, install command,
-  quickstart link. Plain HTML + minimal CSS; no build framework.
-- **Quickstart doc** (`docs/quickstart.md`) — install → set API key → `jan-klod serve`
-  → first TUI session → fix a bug in a real repo. Under 500 words; golden path only.
-- **README rewrite** — what it is (one sentence), differentiator vs Pi (one sentence),
-  install, quickstart link, TUI screenshot.
+- **GitHub releases:** Actions on `git tag v*` → matrix bundles (linux/darwin × x86_64/arm64) + SHA256SUMS.
+- **Install script** `scripts/install.sh`: detect OS/arch, download, verify, install to `~/.local/bin`.
+- **GitHub Pages:** static site (what/differentiator/install/quickstart).
+- **Quickstart:** install → API key → serve → TUI → edit file. <500 words.
+- **README:** what/differentiator/install/quickstart/screenshot.
 
-**Exit gate:** cold-start install from the README command completes and the quickstart
-produces a model-driven file edit in under 15 minutes.
+**Exit gate:** cold-start install + quickstart file edit in under 15 minutes.
 
 ---
 
 ## Post-v0.1: Harness as a Platform (Phases 13–18)
 
 [Vision — Harness as a Platform](../decisions/2026-09-08-harness-platform-vision/Vision.md)
-(2026-09-08) reframes jan-klod as an **agent runtime** — kernel + distributions +
-clients — and records six decisions. They are phased below by dependency: the
-protocol (13) is what the web client (17) and the ecosystem ports (18) build on;
-the event log (14) is host-only and independent; the sandbox (15) and the
-registry (16) are independent of everything and can run in parallel with 13–14.
-Work items are GitHub Issues: one umbrella per phase ([#35](https://github.com/PromptPasture/jan-klod/issues/35), [#36](https://github.com/PromptPasture/jan-klod/issues/36), [#37](https://github.com/PromptPasture/jan-klod/issues/37), [#38](https://github.com/PromptPasture/jan-klod/issues/38), [#39](https://github.com/PromptPasture/jan-klod/issues/39), [#40](https://github.com/PromptPasture/jan-klod/issues/40)), one issue per slice; cross-cutting items are [#59](https://github.com/PromptPasture/jan-klod/issues/59), [#60](https://github.com/PromptPasture/jan-klod/issues/60), [#61](https://github.com/PromptPasture/jan-klod/issues/61), [#62](https://github.com/PromptPasture/jan-klod/issues/62), [#63](https://github.com/PromptPasture/jan-klod/issues/63).
-Library choices are still made just-in-time inside each phase.
+(2026-09-08): jan-klod as **agent runtime** (kernel + distributions + clients). Phased by dependency:
+protocol (13) gates web (17) + ecosystem ports (18); event log (14) independent; sandbox (15) + registry (16)
+parallel with 13–14. Work: one umbrella issue per phase ([#35–40](https://github.com/PromptPasture/jan-klod/issues/35)),
+one per slice; cross-cutting [#59–63](https://github.com/PromptPasture/jan-klod/issues/59). Library choices just-in-time.
 
 ## Phase 13 — Client protocol
 
-**Goal:** the client surface becomes a contract of the same rank as WIT — its own
-versioned schema, its own compatibility tests — so TUI, web, GUI, editors and
-scripts share one wire format. Supersedes the Phase 3 lean "UI always connects via
-REST"; REST + SSE stay as one *projection* of the protocol.
+**Goal:** client surface becomes WIT-rank contract (versioned schema, compatibility tests) so
+TUI/web/GUI/editors/scripts share wire format. Supersedes Phase 3 "UI via REST"; REST + SSE as protocol *projection*.
 
 - **13a — Protocol crate + schema. Done 2026-09-09** ([#41](https://github.com/PromptPasture/jan-klod/issues/41)).
   `jan-klod-protocol` in the core workspace: **eight** commands — the five planned
@@ -412,528 +328,90 @@ stdio JSON-RPC; REST + SSE tests still pass; protocol version negotiated at conn
 
 ## Phase 14 — Event-sourced session log
 
-**Goal:** the session's canonical record is the event stream the clients already
-consume, not a transcript. Transcript, `GET /session/:id`, and SSE become
-projections; resume, fork, replay and audit fall out.
+**Goal:** the session's canonical record is the event stream the clients already consume, not a transcript. Transcript, `GET /session/:id`, and SSE become projections; resume, fork, replay and audit all fall out.
 
 - **14a — Event table + writer sink. Done 2026-09-09** ([#44](https://github.com/PromptPasture/jan-klod/issues/44)).
-  The append-only `events` table (`session`, `seq`, `ts`, `kind`, `payload`,
-  keyed on `(session, seq)`) in the host-side SQLite `Store`; `PersistingSink`
-  fans out every conductor `Event` to the log without taking the stream from the
-  SSE/TUI sinks, and `PersistingDriver` records the `ask`, its answer and any
-  steering follow-up — the last of these beyond what this bullet asked for,
-  because a steered turn cannot be rebuilt without it. The user message is
-  logged first, so a session's log opens with its own input. The permission
-  decision needs no kind of its own: a denial is the `Warning` the conductor
-  already emits, an approval is the `ask`/`answer` pair. `EVENT_LOG_VERSION`
-  is independent of the protocol version. Wired in `run_and_persist`, the one
-  funnel all eight turn entry points share. Text deltas are not coalesced.
-  See [Architecture → Storage](architecture.md#storage).
+  The append-only `events` table (`session`, `seq`, `ts`, `kind`, `payload`, keyed on `(session, seq)`) in the host-side SQLite `Store`; `PersistingSink` fans out every conductor `Event` to the log without taking the stream from the SSE/TUI sinks, and `PersistingDriver` records the `ask`, its answer and any steering follow-up — the last of these required to rebuild steered turns. The user message is logged first, so a session's log opens with its own input. The permission decision needs no kind of its own: a denial is the `Warning` the conductor already emits, an approval is the `ask`/`answer` pair. `EVENT_LOG_VERSION` is independent of the protocol version. Wired in `run_and_persist`, the one funnel all eight turn entry points share. Text deltas are not coalesced. See [Architecture → Storage](architecture.md#storage).
 - **14b — Projections + resume + fork. Done 2026-09-09** ([#45](https://github.com/PromptPasture/jan-klod/issues/45)).
-  `core::projection::transcript` is a pure function over log rows; `replay`,
-  `AgentSession::transcript`, `list_sessions`, `GET /session/:id` (now serving
-  `messages`, not `turns`) and `GET /sessions` all read through it.
-  `POST /session/:id/fork` copies a prefix into a new session that then
-  diverges, with `session/fork` in the protocol crate as contract-only until a
-  transport lands. The `entries` transcript write is **gone**, and a one-shot
-  conversion at boot turns pre-log databases into events — required, not
-  optional, since the read surfaces no longer look at `entries`.
+  `core::projection::transcript` is a pure function over log rows; `replay`, `AgentSession::transcript`, `list_sessions`, `GET /session/:id` (now serving `messages`, not `turns`) and `GET /sessions` all read through it. `POST /session/:id/fork` copies a prefix into a new session that then diverges, with `session/fork` in the protocol crate as contract-only until a transport lands. The `entries` transcript write is **gone**, and a one-shot conversion at boot turns pre-log databases into events — required, not optional, since the read surfaces no longer look at `entries`.
 
-**Exit gate:** after a restart, a resumed session's transcript rebuilt from the log
-equals the pre-restart transcript; a fork from event *N* runs independently.
+**Exit gate:** after a restart, a resumed session's transcript rebuilt from the log equals the pre-restart transcript exactly; a fork from event *N* runs independently and stays correct after another restart, each with its own branch of the log.
 
 ## Phase 15 — OS-level effect sandbox
 
-**Goal:** confine what a `host-process` command *does*, not only who may call it.
-Closes the Phase 7 "OS isolation" carry-forward and the
-[security-model gap](security-model.md#known-gaps).
+**Goal:** confine what a `host-process` command *does*, not only who may call it. Closes the Phase 7 "OS isolation" carry-forward and the [security-model gap](security-model.md#known-gaps) it left.
 
 - **15a — Policy object + approval-only mode. Done 2026-09-09** ([#46](https://github.com/PromptPasture/jan-klod/issues/46)).
-  `execution.sandbox` in `config.yaml`: `mode: os | approval-only`,
-  `writable: [paths]`, `network: bool`, plus `require: bool` — which denies
-  `host-process` outright rather than degrading, for an operator who would rather
-  run no command than an unconfined one. `core::sandbox` holds the policy, the
-  `SandboxBackend` trait and `NoBackend`; boot resolves the effective mode and
-  prints the reason whenever it is not the one requested. No backend on any
-  platform yet, so every platform is approval-only (15b changed that for macOS).
-  **The per-turn warning is deferred to 16a**: nothing distinguishes a tool that
-  uses `host-process` from one that only reads files, so it would fire on every
-  tool-using turn. 16a's component-import introspection answers that exactly.
+  `execution.sandbox` in `config.yaml`: `mode: os | approval-only`, `writable: [paths]`, `network: bool`, `require: bool` (denies `host-process` outright rather than degrading, for operators who prefer no command to an unconfined one). `core::sandbox` holds policy; `SandboxBackend` trait and `NoBackend`; boot resolves effective mode and prints reason whenever it is not the one requested. No backend on any platform yet, so every platform is approval-only (15b changed that for macOS). Per-turn warning deferred to 16a — 16a's component-import introspection answers which tools use `host-process`.
 - **15b — macOS Seatbelt backend. Done 2026-09-10** ([#47](https://github.com/PromptPasture/jan-klod/issues/47)).
-  A generated `sandbox-exec` profile — `(deny default)`, reads allowed, writes
-  only under `writable`, network per policy — applied by rebuilding every command
-  as `sandbox-exec -p <profile> -- <command>`. Three things this bullet did not
-  anticipate:
-  - **Seatbelt matches the *resolved* path**, and getting that wrong looks
-    exactly like the sandbox working. A profile granting `/tmp/x` denies a write
-    to `/tmp/x/ok`, because `/tmp` is a symlink to `/private/tmp` — with
-    "Operation not permitted". Every test's temp directory is under a symlink, so
-    an uncanonicalized profile would have passed a suite asserting escapes are
-    denied *while denying every grant too*. The in-workspace-write test is what
-    catches that class, and it is the one test that a missing sandbox does not
-    trip.
-  - **15a's `SandboxBackend` could not express a wrapping mechanism.** It took
-    `&mut Command`, and a `Command`'s program cannot be changed — only read. It
-    now takes and returns an owned command, which fits both a wrapper (Seatbelt)
-    and an in-process mechanism (Landlock).
-  - **A path that cannot be written into a profile literally is refused, not
-    escaped.** SBPL is s-expressions, so a directory name containing `"` could
-    close the literal and have the rest read as policy.
-  On macOS `require: true` now *permits* commands rather than denying them, since
-  there is finally something to require. **Not verified by CI** — the tests are
-  macOS-only and CI is Linux
-  ([#95](https://github.com/PromptPasture/jan-klod/issues/95)).
+  A generated `sandbox-exec` profile — `(deny default)`, reads allowed, writes only under `writable`, network per policy — applied by rebuilding every command as `sandbox-exec -p <profile> -- <command>`. Three findings: (1) Seatbelt matches the *resolved* path; `/tmp` symlink to `/private/tmp` breaks uncanonicalized profiles; in-workspace-write test catches this. (2) `SandboxBackend` now takes and returns an owned command, fitting both wrapper (Seatbelt) and in-process (Landlock). (3) Paths with unescapable characters (e.g., `"` in SBPL) are refused, not escaped. On macOS `require: true` now permits commands. **Not verified by CI** — tests are macOS-only ([#95](https://github.com/PromptPasture/jan-klod/issues/95)).
 - **15c — Linux Landlock backend. Done 2026-09-10** ([#48](https://github.com/PromptPasture/jan-klod/issues/48)).
-  Landlock filesystem rules, network denial via Landlock's own net rules, and a
-  fallback to approval-only on kernels without Landlock. Three departures from
-  what this bullet expected:
-  - **No seccomp.** The bullet proposed a seccomp filter for network denial where
-    Landlock could not express it. Landlock ABI 4 (kernel 6.7) *can* express it,
-    and below that the runtime **refuses the command** rather than adding a second
-    mechanism — seccomp would have meant another dependency and almost certainly
-    hand-written `unsafe`, against a trait that says a backend must fail rather
-    than confine partially.
-  - **No `unsafe` either.** Applying a ruleset between `fork` and `exec` means
-    `pre_exec`, which is `unsafe`; the gateway instead re-executes itself under a
-    `confine` subcommand, restricts *itself*, and `exec`s the command — `exec`
-    being safe. Both backends now share that wrapper shape.
-  - **Verified on Linux before it was written**, in a container, because a test
-    that cannot be run cannot be probed to failure. That caught the design being
-    built on `ABI::new_current()`, which is not public API.
-  **CI runs these tests on every push** — `ubuntu-latest` has Landlock — which is
-  what 15b's did not have until `ci-macos.yml` landed (#95). Both halves are
-  guarded now; the Linux one is guarded more often, because it rides the gate
-  that already runs rather than a job filtered to keep macOS minutes down.
-- **15d — Windows spike. Deferred 2026-09-10** ([#49](https://github.com/PromptPasture/jan-klod/issues/49)),
-  until after the first release or until a Windows environment exists to run it
-  in. Feasibility of a restricted token / AppContainer for a spawned command,
-  recorded as a dated decision. **It does not gate this phase**, and the reason
-  it was deferred rather than attempted is the same standard 15b and 15c were
-  held to: the spike's whole value is a *verified* answer to "can this deny a
-  write outside the workspace, and deny the network, without admin", and there is
-  no Windows machine here to verify it on. A decision record assembled from
-  Microsoft's documentation without running anything would be precisely the
-  claim-without-evidence this phase exists to remove. A `windows-latest` runner
-  could host it, but iterating on Win32 APIs through CI is a slow loop billed at
-  2×, for a platform with no user yet.
+  Landlock filesystem rules, network denial via Landlock's own net rules, and fallback to approval-only on kernels without Landlock. Three findings: (1) No seccomp — Landlock ABI 4 (kernel 6.7) can express network denial; below that, runtime refuses the command rather than adding another mechanism. (2) No `unsafe` either — gateway re-executes itself under a `confine` subcommand, restricts itself, and `exec`s the command; both backends now share that wrapper shape. (3) Verified on Linux in container before it was written. **CI runs these tests on every push** — `ubuntu-latest` has Landlock; both halves guarded now.
+- **15d — Windows spike. Deferred 2026-09-10** ([#49](https://github.com/PromptPasture/jan-klod/issues/49)) until after the first release or until a Windows environment exists to run it in. Feasibility of a restricted token / AppContainer for a spawned command, recorded as a dated decision. **It does not gate this phase**; standard: spike's value is a *verified* answer to "can this deny a write and deny network, without admin", and there is no Windows machine here to verify it on. Approval-only stays the default: `host_backend()` returns `None`, effective mode resolves to `approval-only`, boot prints the reason naming the platform, `require: true` refuses execution outright. Windows is honest; 15d only decides whether it can be better.
 
-  Approval-only stays the Windows default meanwhile, and that is a real
-  guarantee rather than a gap: `host_backend()` returns `None`, the effective
-  mode resolves to `approval-only`, boot prints the reason naming the platform,
-  and `require: true` refuses execution outright. Windows is *honest* today; 15d
-  only decides whether it can be better.
-
-**Exit gate:** a `tool-shell` command writing outside the workspace is denied on
-macOS and Linux; elsewhere the run reports approval-only; the security-model row
-for `host-process` cites the new tests.
-
-The middle clause is the one to read carefully: it holds **by construction**, not
-by observation. `sandbox::tests::a_platform_with_no_backend_says_which_platform`
-asserts it, but it is `#[cfg(not(any(target_os = "macos", target_os = "linux")))]`
-and neither CI nor the machine this is developed on ever compiles it, let alone
-runs it — so no run of this suite has ever exercised it. Verifying it on
-a real Windows run is 15d's second Acceptance line, which is why the deferral
-above leaves this clause proved by reasoning rather than by a test result.
+**Exit gate:** a `tool-shell` command writing outside the workspace is denied on macOS and Linux; elsewhere the run reports approval-only; the security-model row for `host-process` cites the new tests. It holds **by construction**, not by observation. `sandbox::tests::a_platform_with_no_backend_says_which_platform` asserts it, but it is `#[cfg(not(any(target_os = "macos", target_os = "linux")))]` and neither CI nor the development machine this was written on ever compiles it, let alone runs it. Verifying it on a real Windows run is 15d's second Acceptance line, which is why the deferral above leaves this clause proved by reasoning rather than by a test result. The middle clause is the one to read carefully: the right guarantee is honest — Windows defaults to approval-only and states that plainly.
 
 ## Phase 16 — Capability manifest + signed registry
 
-**Goal:** an extension declares what it needs before it is loaded, the host
-cross-checks the declaration against the component's real imports, and installs
-are verified. Extends the Phase 5 "staging" carry-forward; prerequisite for a
-public extension ecosystem.
+**Goal:** an extension declares what it needs before it is loaded, the host cross-checks the declaration against the component's real imports, and installs are verified. Extends the Phase 5 "staging" carry-forward; prerequisite for a public extension ecosystem.
 
-- **16a — Manifest + boot cross-check.** Split in two ([#50](https://github.com/PromptPasture/jan-klod/issues/50)),
-  because the refusal cannot land before the manifests exist without breaking the
-  boot of every shipped guest at once.
-  - **16a-1 — the manifest format. Done 2026-09-09** ([#86](https://github.com/PromptPasture/jan-klod/issues/86)).
-    `ext/<name>.manifest.toml` beside each `.wasm`: `name`, `version`,
-    `api-version`, `kind`, `description`, and `capabilities` read from the
-    component's own imports rather than written by its author, so a manifest
-    cannot claim less than the artifact beside it. Generated by
-    `make -C src/extensions manifests`, not committed — `ext/` is build output,
-    and a committed manifest there would describe a component a bare clone does
-    not contain. Nothing reads one yet.
-  - **16a-2 — the boot cross-check. Done 2026-09-10** ([#87](https://github.com/PromptPasture/jan-klod/issues/87)).
-    `Runtime::boot` reads each component's real imports through wasmtime's
-    component-type API and refuses three things: a capability imported but not
-    declared (naming the interface), a component with no manifest at all, and
-    one built against an incompatible `jan-klod:interfaces` version (naming
-    both). Top-level `allow-unmanifested: true` is the named widening — *not*
-    `extensions.allow-unmanifested`, since every key there must be a category of
-    named instances. Over-declaring is deliberately allowed and grants nothing.
-    `make bundle` and the installed-layout fixture carry manifests, so a release
-    installs and boots with the refusal live. The per-extension import set is
-    kept, which is the fact
-    [#46](https://github.com/PromptPasture/jan-klod/issues/46)'s deferred
-    per-turn sandbox warning was waiting for.
-- **16b — WIT versioning policy.** Split three ways
-  ([#51](https://github.com/PromptPasture/jan-klod/issues/51)), because the
-  refusal already landed with 16a and the adaptation has nothing to adapt yet.
+- **16a — Manifest + boot cross-check.** Split in two ([#50](https://github.com/PromptPasture/jan-klod/issues/50)), because the refusal cannot land before the manifests exist without breaking the boot of every shipped guest at once.
+  - **16a-1 — manifest format. Done 2026-09-09** ([#86](https://github.com/PromptPasture/jan-klod/issues/86)).
+    `ext/<name>.manifest.toml` beside each `.wasm`: `name`, `version`, `api-version`, `kind`, `description`, and `capabilities` read from the component's own imports rather than written by its author, so a manifest cannot claim less than the artifact beside it. Generated by `make -C src/extensions manifests`, not committed — `ext/` is build output. Nothing reads one yet.
+  - **16a-2 — boot cross-check. Done 2026-09-10** ([#87](https://github.com/PromptPasture/jan-klod/issues/87)).
+    `Runtime::boot` reads each component's real imports through wasmtime's component-type API and refuses three things: a capability imported but not declared (naming the interface), a component with no manifest at all, and one built against an incompatible `jan-klod:interfaces` version (naming both). Top-level `allow-unmanifested: true` is the named widening. Over-declaring is deliberately allowed and grants nothing. Per-extension import set kept — fact [#46](https://github.com/PromptPasture/jan-klod/issues/46)'s deferred per-turn sandbox warning was waiting for.
+- **16b — WIT versioning policy.** Split three ways ([#51](https://github.com/PromptPasture/jan-klod/issues/51)), because the refusal already landed with 16a and the adaptation has nothing to adapt yet.
   - **16b-1 — the rules, written down. Done 2026-09-10** ([#88](https://github.com/PromptPasture/jan-klod/issues/88)).
-    [Contracts → Versioning](contracts.md#versioning) states what counts as a
-    major, minor or patch change to `wit/`, where the version lives, and why
-    **pre-1.0 is stricter** rather than laxer: a `0.x` version carries no
-    compatibility promise, so a differing minor is refused. Two changes that
-    look additive and are not — a field added to a record, a case added to an
-    `enum` — are called out, because the component model types both
-    structurally.
-  - **16b-2 — the version-bump check. Done 2026-09-10**
-    ([#89](https://github.com/PromptPasture/jan-klod/issues/89)).
-    `scripts/wit-version-check.sh`, run by `make wit`: warns when a `wit/*.wit`
-    changed without the package version moving. A warning until the freeze, a
-    failure after it. Three things this bullet did not anticipate:
-    - **There was no single reader of the version to reuse.** It was an inline
-      `sed` inside `manifests.sh`, so the check was extracted into
-      `scripts/wit-version.sh` first, taking a *directory* — which is what lets
-      the baseline's `wit/` (materialised with `git archive`) and the working
-      tree be read by the same code rather than by two parsers that can
-      disagree.
-    - **The baseline is the hard part, because nothing is tagged.** With no
-      `v*` tag, "since the last release" names nothing, so the check resolves
-      tag → merge-base with `origin/main` → `HEAD~1` → nothing, and **prints
-      which one it used**. A depth-1 clone lands in the last case, which is
-      what `actions/checkout` does by default — so `lint-test` now sets
-      `fetch-depth: 2`, without which the check would report "no baseline" on
-      every run and the job would stay green.
-    - **No job ran `make wit` at all.** `make test` and `make gate` reach
-      `wit/` only through the guests that bind it, so neither the contracts'
-      `wasm-tools` validation nor this check was in CI. `lint-test` now runs
-      the target.
-  - **16b-3 — N-1 minor compatibility** ([#90](https://github.com/PromptPasture/jan-klod/issues/90)):
-    deferred until the freeze. Below `1.0` a differing minor is refused by
-    policy, so there is no version pair an adapter would help.
+    [Contracts → Versioning](contracts.md#versioning) states what counts as a major, minor or patch change to `wit/`, where the version lives, and why **pre-1.0 is stricter** rather than laxer: a `0.x` version carries no compatibility promise, so a differing minor is refused. Two changes that look additive and are not — a field added to a record, a case added to an `enum` — are called out, because the component model types both structurally.
+  - **16b-2 — the version-bump check. Done 2026-09-10** ([#89](https://github.com/PromptPasture/jan-klod/issues/89)).
+    `scripts/wit-version-check.sh`, run by `make wit`: warns when a `wit/*.wit` changed without the package version moving. A warning until the freeze, a failure after it. `lint-test` now runs `make wit` and sets `fetch-depth: 2`.
+  - **16b-3 — N-1 minor compatibility** ([#90](https://github.com/PromptPasture/jan-klod/issues/90)): deferred until the freeze. Below `1.0` a differing minor is refused by policy, so there is no version pair an adapter would help.
 
-  **The freeze point.** Until the **first public release**, `wit/` may still
-  change freely and the rules above describe intent. From that release they
-  bind: a change to `wit/` requires the matching version bump, 16b-2's warning
-  becomes a failure, and an incompatible `api-version` is a compatibility
-  break rather than a development inconvenience. Nothing is tagged or released
-  yet, so that point is still ahead — which is exactly why the rules had to be
-  written before it rather than after.
-- **16c — `ext install` with provenance.** Split three ways
-  ([#52](https://github.com/PromptPasture/jan-klod/issues/52)), because the
-  local path carries the whole verification and the network only adds where the
-  bytes come from.
-  - **16c-1 — install from a local path, verified before it lands. Done
-    2026-09-11** ([#91](https://github.com/PromptPasture/jan-klod/issues/91)).
-    `ext install`, `ext list`, `ext remove`. The pair is staged in
-    `ext/.staging/<name>/` and checked — digest if given, minisign signature
-    over **both** files under a key from `registry.trusted-keys`, the component
-    compiles, its manifest matches its real imports — then moved with an atomic
-    rename. A refusal leaves `ext/` byte-identical. Four things this bullet did
-    not anticipate:
-    - **Boot's manifest cross-check had to become one function**, not two
-      callers of the same three primitives. `core::inspect` is now that
-      function: an install that accepted what boot refuses would be a silent,
-      security-relevant divergence, and reusing the pieces still leaves two
-      expressions of "consistent".
-    - **The signature covers the manifest too**, which is the point rather than
-      thoroughness. A manifest carries no provenance — the host trusts it at
-      boot purely for sitting beside the component — so signing the `.wasm`
-      alone verifies the artefact while trusting an attacker's description of
-      what it may ask for. That is worse than no signature, because it looks
-      like one.
-    - **The positive path needed a signer this machine does not have**, and a
-      suite of refusals alone would pass with a verifier that rejects
-      everything. Fixtures are built from `ring` (already in the lock) and
-      `blake2` — 2 packages total against 10 for the `minisign` crate — which
-      also forced the discovery that the installer must require *prehashed*
-      signatures, since `ring` alone could only produce the legacy form the
-      policy correctly rejects.
-    - **Reading the grant through `Config::from_path` made `ext install` demand
-      an API key.** It env-expands every enabled instance, so a key unrelated to
-      extensions dragged in provider credentials. `Config::top_level` stops
-      before the part that does not apply.
-  - **16c-2 — install from a URL. Done 2026-09-11**
-    ([#92](https://github.com/PromptPasture/jan-klod/issues/92)). The URL names
-    the component; the manifest and both `.minisig` files are fetched from
-    beside it, the same layout as on disk, and everything goes through 16c-1's
-    `install` unchanged so the download has no verification path of its own.
-    Three things this bullet did not anticipate:
-    - **The egress policy it "goes through" had a hole, and fixing that came
-      first** ([#107](https://github.com/PromptPasture/jan-klod/issues/107)).
-      `fetch_within` checked the policy once and let ureq follow ten redirects,
-      so a permitted origin could redirect to cloud metadata. Found while
-      planning this slice; it belonged to `host-http` and affected every guest.
-    - **`public_only()`, not the runtime's policy.** An origin trusted to answer
-      model calls is not thereby a place to fetch executable components from, so
-      a self-hosted source on a private address is refused with no grant to
-      widen it until there is a registry to host (16d). The runtime's policy also
-      needs a boot that expands `${VAR}` in every enabled instance — the trap
-      that had made `ext install` demand an API key.
-    - **A URL with a query is refused.** Companion URLs come from resolving a
-      relative reference, which drops the query, so `?token=abc` would fetch the
-      component authenticated and the manifest not — a 404 reading as "no
-      manifest published".
-  - **16c-3 — sign first-party releases and publish the key. Deferred 2026-09-11**
-    ([#93](https://github.com/PromptPasture/jan-klod/issues/93)) until before the
-    first release: `git tag` is empty and there are no releases, so there is no
-    unsigned release in the wild, and a signing identity is a thing to create
-    when it is about to be used. Until it lands, `registry.trusted-keys` has
-    nothing to put in it and every install needs `--allow-unsigned --sha256`.
+  **The freeze point.** Until the **first public release**, `wit/` may still change freely and the rules above describe intent. From that release they bind: a change to `wit/` requires the matching version bump, 16b-2's warning becomes a failure, and an incompatible `api-version` is a compatibility break. Nothing is tagged or released yet, so that point is still ahead — which is exactly why the rules had to be written before it rather than after.
+- **16c — `ext install` with provenance.** Split three ways ([#52](https://github.com/PromptPasture/jan-klod/issues/52)), because the local path carries the whole verification and the network only adds where the bytes come from.
+  - **16c-1 — install from a local path, verified before it lands. Done 2026-09-11** ([#91](https://github.com/PromptPasture/jan-klod/issues/91)).
+    `ext install`, `ext list`, `ext remove`. The pair is staged in `ext/.staging/<name>/` and checked — digest if given, minisign signature over **both** files under a key from `registry.trusted-keys`, the component compiles, its manifest matches its real imports — then moved with an atomic rename. A refusal leaves `ext/` byte-identical. Four findings: (1) boot's manifest cross-check became one `core::inspect` function (reusing prevents silent, security-relevant divergence); (2) signature covers manifest too (protects against attacker's description of capabilities); (3) fixtures from `ring` + `blake2` (discover installer needs prehashed signatures); (4) `Config::top_level` stops before env-expanding credentials.
+  - **16c-2 — install from a URL. Done 2026-09-11** ([#92](https://github.com/PromptPasture/jan-klod/issues/92)).
+    URL names the component; the manifest and both `.minisig` files are fetched from beside it, the same layout as on disk, and everything goes through 16c-1's `install` unchanged. Three findings: (1) fixed egress-policy hole ([#107](https://github.com/PromptPasture/jan-klod/issues/107)) — ureq followed redirects unchecked; (2) `public_only()` refuses private addresses; (3) rejects queries (relative resolution drops them).
+  - **16c-3 — sign first-party releases and publish the key. Deferred 2026-09-11** ([#93](https://github.com/PromptPasture/jan-klod/issues/93)) until before the first release. `git tag` is empty and there are no releases, so there is no unsigned release in the wild, and a signing identity is a thing to create when it is about to be used. Until it lands, `registry.trusted-keys` has nothing to put in it and every install needs `--allow-unsigned --sha256`. Decided while planning: release will publish per-component files at plain paths.
+- **16d — Registry index + `ext search`.** Split four ways ([#53](https://github.com/PromptPasture/jan-klod/issues/53)), one per subtree, because the original scope reached across a generator, `src/core/`, `.github/` and `docs/`. **Narrowed 2026-09-10:** the Configurator half left the slice ([#63](https://github.com/PromptPasture/jan-klod/issues/63)) — `pages/` is a static landing page and no interactive UI exists — so **`ext search` is the capability view** rather than a stand-in for one. **The artefact layout is already fixed by everything below it**, so the index has to describe that rather than a tarball: a publisher serves **four files per component at plain paths** — `<name>.wasm`, `<name>.manifest.toml`, and a `.minisig` for each. 16c-1 verifies that shape, 16c-2 derives companion URLs from it by relative resolution, and 16c-3's release decision commits to producing it. An index describing anything else would disagree with the installer about what a component is.
+  - **16d-1 — `index.json` and deterministic generator. Done 2026-09-12** ([#137](https://github.com/PromptPasture/jan-klod/issues/137)).
+    `make registry-index` writes name, version, `api-version`, kind, capabilities, description, author, url, `sha256`, signature and size per staged component. The generator is a `jan-klod-core` example rather than a shell script: six of the eleven fields are the manifest's own, and reading them through `ext::list` — the reader boot uses — is what stops the index describing a manifest differently from how the host enforces it. Two things this bullet did not anticipate: there was no committed artefact to diff (`.wasm` gitignored; Rust wasm not byte-stable across machines), so two runs over one directory agreeing is what matters; filesystem order can agree by luck, so sortedness and uniqueness are asserted as properties. All three checks are probed on every run.
+  - **16d-2 — `ext search` and `ext list --remote`. Done 2026-09-12** ([#138](https://github.com/PromptPasture/jan-klod/issues/138)).
+    `registry.url` names the index; `ext search <term>` prints each hit's identity and then what it asks the host for, and `ext install <name>` resolves through the index. An index is a **directory, not an authority** — the entry's digest becomes the digest the existing install checks, the signature is still verified against `registry.trusted-keys`, and the manifest cross-check is unchanged, so an index that lies produces a refusal rather than an unvouched component. Two decisions worth keeping: a `--sha256` the index contradicts stops the install instead of one winning (two disagreeing claims make neither trustworthy); an `http`/`https` `registry.url` is fetched under the egress policy and anything else is a path — enables offline mirrored index, tested with no socket.
+  - **16d-3 — release publishes the index. Done 2026-09-12** ([#139](https://github.com/PromptPasture/jan-klod/issues/139)).
+    `release.yml` generates the index on the linux/x86_64 leg — a guest is `wasm32-wasip2`, so four legs would build the same bytes — and the existing `release` job deploys `index.json` and the components it names to GitHub Pages. **Unverified until a tag is pushed**, and Pages is not enabled on the repository yet, so `configure-pages` runs with `enablement: true` and the first release also creates the site.
 
-    **Decided while planning it, and recorded here because three slices depend
-    on it: a release will publish per-component files as well as the tarballs**
-    — `<name>.wasm`, `<name>.manifest.toml` and a `.minisig` for each, at plain
-    paths. A release currently publishes only `*.tar.gz` and `SHA256SUMS.txt`,
-    and `ext install` verifies *per file*, so a component extracted from a
-    signed tarball arrives with no signature of its own and is refused. Signing
-    only the tarball would therefore leave the verified path unable to install
-    anything first-party, permanently — the `cp` route `ext install` exists to
-    replace. It is also the shape 16c-1 verifies, 16c-2 derives companion URLs
-    for, and 16d's index will describe.
-- **16d — Registry index + `ext search`.** Split four ways
-  ([#53](https://github.com/PromptPasture/jan-klod/issues/53)), one per subtree,
-  because the original scope reached across a generator, `src/core/`, `.github/`
-  and `docs/`. **Narrowed 2026-09-10:** the Configurator half left the slice —
-  `pages/` is a static landing page and no interactive UI exists
-  ([#63](https://github.com/PromptPasture/jan-klod/issues/63)) — so **`ext
-  search` is the capability view** rather than a stand-in for one.
+**Exit gate: passed 2026-09-12**, all four clauses. A component whose manifest omits a capability it imports is refused at boot (16a-2). A tampered download is refused by `ext install` — against a digest and against a signature, the second including bytes tampered in flight (16c-1, 16c-2). An install from a static index fixture works offline (16d-2, `ext_registry::a_name_from_a_local_index_installs_offline`). A WIT major mismatch is a clear error naming both versions (16a-2).
 
-  **The artefact layout is already fixed by everything below it**, so the index
-  has to describe that rather than a tarball: a publisher serves **four files
-  per component at plain paths** — `<name>.wasm`, `<name>.manifest.toml`, and a
-  `.minisig` for each. 16c-1 verifies that shape, 16c-2 derives companion URLs
-  from it by relative resolution, and 16c-3's release decision commits to
-  producing it. An index describing anything else would disagree with the
-  installer about what a component is.
-  - **16d-1 — `index.json` and a deterministic generator. Done 2026-09-12**
-    ([#137](https://github.com/PromptPasture/jan-klod/issues/137)).
-    `make registry-index` writes name, version, `api-version`, kind,
-    capabilities, description, author, url, `sha256`, signature and size per
-    staged component. The generator is a `jan-klod-core` example rather than a
-    shell script: six of the eleven fields are the manifest's own, and reading
-    them through `ext::list` — the reader boot uses — is what stops the index
-    describing a manifest differently from how the host enforces it. Two things
-    this bullet did not anticipate:
-    - **There was no committed artefact to diff against.** `src/web/dist/`'s
-      drift check compares a rebuild with committed bytes; `ext/*.wasm` is
-      gitignored and a Rust wasm build is not byte-stable across machines, so a
-      committed index would drift per clone. The property held instead is that
-      **two runs over one directory agree**, with the second run from another
-      working directory — which is what a published index needs to be
-      reproducible at all.
-    - **Agreeing twice is not sufficient**, since an order taken from the
-      filesystem can agree by luck, so sortedness and uniqueness are asserted as
-      properties. All three checks are probed on every run: a generator whose
-      output changes, an out-of-order index and a duplicate name must each be
-      refused.
-  - **16d-2 — `ext search` and `ext list --remote`. Done 2026-09-12**
-    ([#138](https://github.com/PromptPasture/jan-klod/issues/138)).
-    `registry.url` names the index; `ext search <term>` prints each hit's
-    identity and then what it asks the host for, and `ext install <name>`
-    resolves through the index. An index is a **directory, not an authority** —
-    the entry's digest becomes the digest the existing install checks, the
-    signature is still verified against `registry.trusted-keys`, and the
-    manifest cross-check is unchanged, so an index that lies produces a refusal
-    rather than an unvouched component. Two decisions worth keeping:
-    - **A `--sha256` the index contradicts stops the install** instead of one
-      winning. Two disagreeing claims about one set of bytes make neither
-      trustworthy, and nothing is fetched.
-    - **An `http`/`https` `registry.url` is fetched under the egress policy and
-      anything else is a path** — the same rule `ext install` already applies to
-      a source. That is what makes a mirrored index work offline, and it is how
-      the exit gate's "install from a static index fixture" is tested with no
-      socket at all.
-  - **16d-3 — a release publishes the index. Done 2026-09-12**
-    ([#139](https://github.com/PromptPasture/jan-klod/issues/139)).
-    `release.yml` generates the index on the linux/x86_64 leg — a guest is
-    `wasm32-wasip2`, so four legs would build the same bytes — and the existing
-    `release` job deploys `index.json` and the components it names to GitHub
-    Pages, at the paths `registry.url` and `REGISTRY_URL` assume. No new job:
-    runner spend is a cost decision (#95). **Unverified until a tag is pushed**,
-    and Pages is not enabled on the repository yet, so `configure-pages` runs
-    with `enablement: true` and the first release also creates the site.
-
-  - **16d-4 — recorded as built. Done 2026-09-12**
-    ([#140](https://github.com/PromptPasture/jan-klod/issues/140)).
-    [Configurator → Extension registry](configurator.md#extension-registry) now
-    describes the registry in the present tense, with the `ext search` output it
-    actually prints, and this section and the tracker row above say the phase is
-    done.
-
-**Exit gate: passed 2026-09-12**, all four clauses. A component whose manifest
-omits a capability it imports is refused at boot (16a-2). A tampered download is
-refused by `ext install` — against a digest and against a signature, the second
-including bytes tampered in flight (16c-1, 16c-2). An install from a static
-index fixture works offline (16d-2, `ext_registry::a_name_from_a_local_index_installs_offline`).
-A WIT major mismatch is a clear error naming both versions (16a-2).
-
-**What is deliberately not done.** 16b-3 (#90) waits for the interface freeze,
-which needs a first release. 16c-3 (#93) waits for the same release, so
-`registry.trusted-keys` ships empty and every first-party install still needs
-`--allow-unsigned --sha256` — which also means the index's `signature` field is
-empty today and says so rather than pretending. Neither is a gate clause; both
-are named here so the phase does not read as finished work with a quiet gap.
+**What is deliberately not done.** 16b-3 (#90) waits for the interface freeze, which needs a first release. Below `1.0` a differing minor is refused by policy, so there is no version pair an adapter would help. 16c-3 (#93) waits for the same release, so `registry.trusted-keys` ships empty and every first-party install still needs `--allow-unsigned --sha256` — which also means the index's `signature` field is empty today and says so rather than pretending. Neither is a gate clause; both are named here so the phase does not read as finished work with a quiet gap.
 
 ## Phase 17 — Web client + GUI shell
 
 **Goal:** one front-end codebase serves both the browser and the desktop window.
 
-**13c turned out not to be a prerequisite, and that is the phase's first
-finding.** This section used to say 17a owned the WebSocket decision 13c was
-deferred for. 17a answered it differently: the existing **REST + SSE** surface
-already pushes an `ask`, takes its answer and cancels, so the client was built on
-that and no socket was needed.
-[#43](https://github.com/PromptPasture/jan-klod/issues/43) stays deferred, now
-waiting on evidence rather than on a slice — if the SSE teardown-as-cancel proves
-wrong for a browser (reconnect churn, lost event ordering, a cancel that must
-leave the connection up), that is what turns 13c from a refinement into a
-requirement.
+**13c turned out not to be a prerequisite, and that is the phase's first finding.** The existing **REST + SSE** surface already pushes an `ask`, takes its answer and cancels, so the client was built on that and no socket was needed. [#43](https://github.com/PromptPasture/jan-klod/issues/43) stays deferred, now waiting on evidence rather than on a slice — if the SSE teardown-as-cancel proves wrong for a browser (reconnect churn, lost event ordering, a cancel that must leave the connection up), that is what turns 13c from a refinement into a requirement.
 
-- **17a — Web client. Done 2026-09-12**
-  ([#54](https://github.com/PromptPasture/jan-klod/issues/54)). A static,
-  dependency-light TypeScript SPA served by the core at `/`, over **REST + SSE**:
-  sessions, streaming, `ask` answered on a second request, and cancel as a stream
-  teardown the conductor turns into `Flow::Stop`. Four children:
-  [#118](https://github.com/PromptPasture/jan-klod/issues/118) the SPA,
-  [#119](https://github.com/PromptPasture/jan-klod/issues/119) serving it at `/`
-  from `include_str!`-embedded assets,
-  [#120](https://github.com/PromptPasture/jan-klod/issues/120) the npm
-  supply-chain leg, and this record. First first-party TypeScript in the repo,
-  and the supply-chain hygiene the roadmap's ground rule demands is part of it:
-  an exactly-pinned `esbuild`, a committed lockfile, `npm ci --dry-run && npm
-  audit` in CI. The committed bundle gained the drift check its three precedents
-  already had ([#127](https://github.com/PromptPasture/jan-klod/issues/127)) —
-  `src/web`'s own suite runs in CI too, which nothing did when it shipped.
-- **17b — Tauri shell. Done 2026-09-12**
-  ([#55](https://github.com/PromptPasture/jan-klod/issues/55)). `jan-klod --gui`
-  opens a Tauri 2 window over the same front-end the browser gets — system
-  webview, no bundled browser. Four children:
-  [#141](https://github.com/PromptPasture/jan-klod/issues/141) what Tauri costs,
-  [#142](https://github.com/PromptPasture/jan-klod/issues/142) the window,
-  [#143](https://github.com/PromptPasture/jan-klod/issues/143) packaging, and
-  [#144](https://github.com/PromptPasture/jan-klod/issues/144) this record. Four
-  things the one-line bullet above did not anticipate:
-  - **The cost question had to come first, and it nearly answered "don't."**
-    Tauri fails the unmodified root `deny.toml` on both axes this repository has
-    declined dependencies for before — five MPL-2.0 crates and six unmaintained
-    advisories with no safe upgrade — at **+256 packages**, 332 CPU-seconds and
-    838 MB of `target/`. Measured before any of it was written (#141), because
-    the answer changes the slice's shape rather than its finish. It was taken
-    deliberately, with eleven entries named crate by crate rather than a widened
-    `allow`, and a scope note saying they exist for `src/gui` alone.
-  - **The MPL floor is in `wry`, not in Tauri.** The obvious escape — drop Tauri,
-    drive the webview binding directly — was measured too, and fails the *same
-    five* licences, because `wry` depends on `dom_query` and `dirs` itself. There
-    is no thinner Rust path to a system webview that the policy accepts, so this
-    was genuinely take-it-or-leave-it rather than a choice between vendors.
-  - **It is its own cargo workspace, and that is what makes the cost bearable.**
-    In `src/core` those 256 packages would sit in its lock (406 → 663) and be
-    built by every `cargo test` and every CI run, for everyone. Outside it,
-    nothing on the default path reaches them — but `make lockfile`, `deny` and
-    `audit` all name it, so the tree the policy was widened for is not the one
-    that skips the policy.
-  - **`gui` is not a distribution, and the repository's own page said so first.**
-    #143 asked for a fourth directory beside `coding`/`headless-chat`/`minimal`;
-    `scripts/distributions/README.md` already read "a distribution says what a
-    jan-klod install is *for*. It is not a client choice." So `GUI=1` is a second
-    axis — `make bundle DIST=coding GUI=1` — and a new test fails the build if
-    `install.sh --gui` and the release workflow ever disagree about it.
+- **17a — Web client. Done 2026-09-12** ([#54](https://github.com/PromptPasture/jan-klod/issues/54)).
+  A static, dependency-light TypeScript SPA served by the core at `/`, over **REST + SSE**: sessions, streaming, `ask` answered on a second request, and cancel as a stream teardown the conductor turns into `Flow::Stop`. Four children: [#118](https://github.com/PromptPasture/jan-klod/issues/118) the SPA, [#119](https://github.com/PromptPasture/jan-klod/issues/119) serving it at `/` from `include_str!`-embedded assets, [#120](https://github.com/PromptPasture/jan-klod/issues/120) the npm supply-chain leg, and this record. First first-party TypeScript in the repo, and the supply-chain hygiene the roadmap's ground rule demands is part of it: an exactly-pinned `esbuild`, a committed lockfile, `npm ci --dry-run && npm audit` in CI. The committed bundle gained the drift check its three precedents already had ([#127](https://github.com/PromptPasture/jan-klod/issues/127)) — `src/web`'s own suite runs in CI too, which nothing did when it shipped.
+- **17b — Tauri shell. Done 2026-09-12** ([#55](https://github.com/PromptPasture/jan-klod/issues/55)).
+  `jan-klod --gui` opens a Tauri 2 window over the same front-end the browser gets — system webview, no bundled browser. Four children: [#141](https://github.com/PromptPasture/jan-klod/issues/141) what Tauri costs, [#142](https://github.com/PromptPasture/jan-klod/issues/142) the window, [#143](https://github.com/PromptPasture/jan-klod/issues/143) packaging, [#144](https://github.com/PromptPasture/jan-klod/issues/144) this record. Four findings: (1) Cost measured first — fails unmodified `deny.toml` on both axes: five MPL-2.0 crates, six unmaintained advisories (+256 packages, 332 CPU-sec, 838 MB target/); deliberate, named crate by crate, scoped to `src/gui`. (2) MPL floor in `wry`, not Tauri — direct webview binding hits same five. (3) Own cargo workspace — 256 packages in `src/core` would reach (406→663), built by every test and CI; outside default path, but `make lockfile`, `deny`, `audit` name it. (4) GUI is not a distribution — `GUI=1` second axis (`make bundle DIST=coding GUI=1`); test fails if `install.sh --gui` and release workflow disagree.
 
-**Exit gate:** a browser and a Tauri window drive a turn with `ask` + cancel from
-one front-end codebase. **Met for the browser** (17a, `host/tests/it/web_client.rs`).
-**For the window, met in part and stated precisely rather than rounded up:** the
-window runs the shipped SPA against a real gateway and authenticates with the
-seeded token — verified through a recording proxy, `GET /` → `GET /app.js` →
-`GET /sessions` with a bearer header — and the assets and transport are
-byte-identical to the browser's. What nobody has done is type into the window,
-answer an `ask` in it or press cancel in it; that needs a human at a screen, as
-#142 said when it split the automatable half from the visual one. Linux is
-entirely unexercised. The remaining check is a person on each platform, not more
-code.
+**Exit gate:** a browser and a Tauri window drive a turn with `ask` + cancel from one front-end codebase. **Met for the browser** (17a, `host/tests/it/web_client.rs`). **For the window, met in part and stated precisely rather than rounded up:** the window runs the shipped SPA against a real gateway and authenticates with the seeded token — verified through a recording proxy, `GET /` → `GET /app.js` → `GET /sessions` with a bearer header — and the assets and transport are byte-identical to the browser's. What nobody has done is type into the window, answer an `ask` in it or press cancel in it; that needs a human at a screen. Linux is entirely unexercised. The remaining check is a person on each platform, not more code.
 
 ## Phase 18 — Ecosystem ports
 
-**Goal:** MCP and ACP in both directions. The inbound halves exist (`registry-mcp`,
-`agent-*`); this phase adds the core *as* a server on each. Needs Phase 13a.
+**Goal:** MCP and ACP in both directions. The inbound halves exist (`registry-mcp`, `agent-*`); this phase adds the core *as* a server on each. Needs Phase 13a.
 
-- **18a — Core as an MCP server. Done 2026-09-11**
-  ([#56](https://github.com/PromptPasture/jan-klod/issues/56)). `jan-klod-gateway
-  mcp` exposes `ask`, `session_list` and `session_get` over MCP stdio. Three
-  things this bullet did not anticipate:
-  - **No SDK, and no dependency.** MCP's stdio transport *is* the framing `rpc`
-    already speaks — newline-delimited JSON-RPC 2.0, frames on stdout, logs on
-    stderr — so this is a method-name adapter over the same envelope. `rmcp`,
-    the official Rust SDK, is async on tokio, and this core is deliberately
-    synchronous; adopting it would have been an architectural change dressed as
-    a convenience.
-  - **`isError` is a field on a *successful* result**, the opposite of
-    `protocol::jsonrpc`'s `Outcome`, which makes result and error mutually
-    exclusive on purpose. Mapping a refused turn onto a JSON-RPC error would
-    make every permission refusal read to an editor as a broken server.
-  - **The driver had to be headless by construction.** stdin carries protocol
-    frames here, so a driver that prompted would read the client's next request
-    as an answer to a confirmation. Its default answer is a refusal, so the
-    right policy and the right protocol behaviour come from one choice — and the
-    refusal is asserted on the *effect* (the model asks to write a real path and
-    the file is not there), probed by disabling the gate to confirm the write
-    otherwise lands.
-- **18b — ACP server side. Done 2026-09-11**
-  ([#57](https://github.com/PromptPasture/jan-klod/issues/57)).
-  `jan-klod-gateway acp` serves `initialize`, `session/new`, `session/prompt`
-  with streamed `session/update`, `session/request_permission` and
-  `session/cancel`. Four things this bullet did not anticipate:
-  - **It is the first surface where the core is a JSON-RPC *client* as well as
-    a server on one pipe.** The agent originates
-    `session/request_permission` and blocks on the editor's answer, which is why
-    this needed `rpc`'s reader-thread shape where the MCP port did not.
-  - **`## Why` was wrong about the starting point.** It said jan-klod already
-    spoke ACP as a client; `delegate.rs` has a `# Not wired` section saying
-    otherwise, and the only endpoint in it is a fixture's. Nothing here knew
-    ACP's wire format.
-  - **`stopReason` is not MCP's `isError`.** A permission refusal is
-    `end_turn`, because `refusal` means the agent declined the whole exchange
-    and the spec lets an editor discard the user's prompt. A turn that genuinely
-    failed is a JSON-RPC error — the opposite placement from MCP.
-  - **The disconnect needed no timeout.** Acceptance asked for `PromptDriver`'s
-    semantics; over one pipe the channel closes on EOF, so a vanished editor is
-    detected rather than waited out. Better than the deadline REST needs, and
-    recorded in the security-model row.
-- **18c — `registry-mcp` stdio transport. Stands alone; did not gate the phase**
-  ([#58](https://github.com/PromptPasture/jan-klod/issues/58), split into
-  [#109](https://github.com/PromptPasture/jan-klod/issues/109) — long-lived
-  children granted by name, confined, dying with their component — and
-  [#110](https://github.com/PromptPasture/jan-klod/issues/110) — `registry-mcp`
-  over one). MCP servers over a long-lived child process, the Phase 7
-  "long-lived children" carry-forward, behind the Phase 15 policy. This is the
-  **inbound** direction: the core as an MCP *client*. Both exit-gate clauses
-  describe the core as a *server*, so closing the phase without this slice is
-  not a gap in the gate — it is what the gate says. 18c is also the phase's only
-  WIT contract change, which is why it was sequenced last.
-  - **18c-1 done 2026-09-12** (#109): the host capability, with no consumer yet.
-    `host-process` grew `spawn`/`write-stdin`/`read-stdout`/`is-running`/`kill`
-    over a `u32` handle — not a `resource`, because the host must own the
-    child's lifetime regardless, so a resource would have tidied the
-    guest-visible half without discharging the requirement, against two existing
-    handle precedents. The grant, `execution.long-lived`, **names processes**: a
-    guest asks for a name and the host supplies the command, so it is narrower
-    than `execution.enabled`, not a wider version of it. Confinement is not
-    re-implemented — both `exec` and `spawn` go through one
-    `ProcessRunner::prepared`. The child dies with the instance that started it,
-    proven by looking for the pid after the runtime drops rather than by reading
-    the code. The package version moved **0.1.0 → 0.2.0**, the repository's
-    first bump, which exposed two fixtures that had encoded the version they
-    were testing against.
-  - **18c-2 done 2026-09-12** (#110): `registry-mcp` speaks MCP over a stdio
-    child, so the inbound half of the ecosystem port reaches the servers most of
-    the ecosystem actually ships. A `Server` carries a `Wire` — HTTP or a child
-    handle — and one dispatch point means `tools/list`, `tools/call` and
-    `reconnect` are transport-agnostic rather than written twice. The framing is
-    newline-delimited JSON-RPC, accumulated until a newline because a read is
-    bounded by `output-cap` and one reply can span several, with an empty read
-    meaning "nothing yet" rather than EOF. A server that never answers is given
-    up on after ten seconds and reported down; the turn still runs. Required a
-    second package bump, **0.2.0 → 0.3.0**, because `mcp-registry-world` did not
-    import `host-process` at all — and the host half of that interface existed
-    only for `tool-*` guests, so the child table became a shared type rather
-    than a second copy of #109's lifetime guarantee.
+- **18a — Core as an MCP server. Done 2026-09-11** ([#56](https://github.com/PromptPasture/jan-klod/issues/56)).
+  `jan-klod-gateway mcp` exposes `ask`, `session_list` and `session_get` over MCP stdio. Three findings: (1) No SDK, and no dependency — MCP's stdio transport *is* the framing `rpc` already speaks (newline-delimited JSON-RPC 2.0, frames on stdout, logs on stderr), so this is a method-name adapter over the same envelope. `rmcp`, the official Rust SDK, is async on tokio, and this core is deliberately synchronous; adopting it would have been an architectural change dressed as a convenience. (2) `isError` is a field on a *successful* result, the opposite of `protocol::jsonrpc`'s `Outcome`, which makes result and error mutually exclusive on purpose. Mapping a refused turn onto a JSON-RPC error would make every permission refusal read to an editor as a broken server. (3) The driver had to be headless by construction — stdin carries protocol frames here, so a driver that prompted would read the client's next request as an answer to a confirmation.
+- **18b — ACP server side. Done 2026-09-11** ([#57](https://github.com/PromptPasture/jan-klod/issues/57)).
+  `jan-klod-gateway acp` serves `initialize`, `session/new`, `session/prompt` with streamed `session/update`, `session/request_permission` and `session/cancel`. Four findings: (1) It is the first surface where the core is a JSON-RPC *client* as well as a server on one pipe. The agent originates `session/request_permission` and blocks on the editor's answer, which is why this needed `rpc`'s reader-thread shape where the MCP port did not. (2) The initial assumption was wrong about the starting point — jan-klod already spoke ACP as a client; `delegate.rs` has a `# Not wired` section saying otherwise, and the only endpoint in it is a fixture's. Nothing here knew ACP's wire format. (3) `stopReason` is not MCP's `isError`. A permission refusal is `end_turn`, because `refusal` means the agent declined the whole exchange and the spec lets an editor discard the user's prompt. A turn that genuinely failed is a JSON-RPC error — the opposite placement from MCP. (4) The disconnect needed no timeout. Over one pipe the channel closes on EOF, so a vanished editor is detected rather than waited out.
+- **18c — `registry-mcp` stdio transport. Stands alone; did not gate the phase** ([#58](https://github.com/PromptPasture/jan-klod/issues/58), split into [#109](https://github.com/PromptPasture/jan-klod/issues/109) — long-lived children granted by name, confined, dying with their component — and [#110](https://github.com/PromptPasture/jan-klod/issues/110) — `registry-mcp` over one). MCP servers over a long-lived child process, the Phase 7 "long-lived children" carry-forward, behind the Phase 15 policy. This is the **inbound** direction: the core as an MCP *client*. Both exit-gate clauses describe the core as a *server*, so closing the phase without this slice is not a gap in the gate — it is what the gate says. 18c is also the phase's only WIT contract change, which is why it was sequenced last.
+  - **18c-1 done 2026-09-12** (#109): the host capability, with no consumer yet. `host-process` grew `spawn`/`write-stdin`/`read-stdout`/`is-running`/`kill` over a `u32` handle — not a `resource`, because the host must own the child's lifetime regardless, so a resource would have tidied the guest-visible half without discharging the requirement, against two existing handle precedents. The grant, `execution.long-lived`, **names processes**: a guest asks for a name and the host supplies the command, so it is narrower than `execution.enabled`, not a wider version of it. Confinement is not re-implemented — both `exec` and `spawn` go through one `ProcessRunner::prepared`. The child dies with the instance that started it, proven by looking for the pid after the runtime drops rather than by reading the code. The package version moved **0.1.0 → 0.2.0**, the repository's first bump, which exposed two fixtures that had encoded the version they were testing against.
+  - **18c-2 done 2026-09-12** (#110): `registry-mcp` speaks MCP over a stdio child, so the inbound half of the ecosystem port reaches the servers most of the ecosystem actually ships. A `Server` carries a `Wire` — HTTP or a child handle — and one dispatch point means `tools/list`, `tools/call` and `reconnect` are transport-agnostic rather than written twice. The framing is newline-delimited JSON-RPC, accumulated until a newline because a read is bounded by `output-cap` and one reply can span several, with an empty read meaning "nothing yet" rather than EOF. A server that never answers is given up on after ten seconds and reported down; the turn still runs. Required a second package bump, **0.2.0 → 0.3.0**, because `mcp-registry-world` did not import `host-process` at all — and the host half of that interface existed only for `tool-*` guests, so the child table became a shared type rather than a second copy of #109's lifetime guarantee.
 
-**Exit gate:** an ACP client fixture runs a turn against the core; an MCP client
-lists and calls a core-exposed tool — both offline. **Met 2026-09-11**, proven
-by `acp::a_prompt_streams_an_update_and_ends_the_turn` and
-`mcp::an_editor_initializes_lists_tools_and_calls_ask` in the host integration
-suite, which has no network.
+**Exit gate:** an ACP client fixture runs a turn against the core; an MCP client lists and calls a core-exposed tool — both offline. **Met 2026-09-11**, proven by `acp::a_prompt_streams_an_update_and_ends_the_turn` and `mcp::an_editor_initializes_lists_tools_and_calls_ask` in the host integration suite, which has no network access whatsoever.
 
 ## Phase 19 — Terminal client experience
 

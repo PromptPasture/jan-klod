@@ -1,11 +1,8 @@
-//! Tier-1 heuristics — English, microseconds, zero model cost.
+//! Tier-1 heuristics — English phrases, zero model cost.
 //!
-//! A short curated set of exact phrases (plus a few greeting prefixes) that are
-//! unambiguously *simple*: they can be answered inline with no tools, planning,
-//! or multi-step loop. Anything not matched here "passes" to the LLM classifier
-//! tier. Rules are **grouped by category**, not a flat pile — adding one is a
-//! single line in the right `const`. Keep each group conservative: a false
-//! `simple` skips the agent loop entirely, so when in doubt, let it pass.
+//! Curated phrases unambiguously answerable inline (no tools or multi-step loop).
+//! Unmatched cases pass to LLM tier. Rules grouped by category for easy addition.
+//! Conservative: false `simple` skips agent loop; when uncertain, pass through.
 
 /// Greetings answerable with a greeting.
 const GREETINGS: &[&str] = &[
@@ -26,10 +23,10 @@ const GREETINGS: &[&str] = &[
     "wassup",
 ];
 
-/// Greeting *prefixes* — the phrase may carry a trailing name/clause.
+/// Greeting prefixes (may have trailing name/clause).
 const GREETING_PREFIXES: &[&str] = &["good morning", "good afternoon", "good evening", "good day"];
 
-/// Farewells.
+/// Farewell phrases.
 const FAREWELLS: &[&str] = &[
     "bye",
     "goodbye",
@@ -46,7 +43,7 @@ const FAREWELLS: &[&str] = &[
     "gn",
 ];
 
-/// Affirmations, acknowledgements, and negations — conversational glue.
+/// Affirmations, acknowledgements, negations.
 const AFFIRMATIONS: &[&str] = &[
     "yes",
     "yeah",
@@ -76,7 +73,7 @@ const AFFIRMATIONS: &[&str] = &[
     "agreed",
 ];
 
-/// Thanks / politeness.
+/// Politeness and gratitude.
 const COURTESIES: &[&str] = &[
     "thanks",
     "thank you",
@@ -96,7 +93,7 @@ const COURTESIES: &[&str] = &[
     "my bad",
 ];
 
-/// Clarifications / conversation control.
+/// Conversation control.
 const CLARIFICATIONS: &[&str] = &[
     "never mind",
     "nevermind",
@@ -107,8 +104,7 @@ const CLARIFICATIONS: &[&str] = &[
     "moving on",
 ];
 
-/// Meta-queries about the assistant itself — answerable from a canned identity,
-/// no tools or planning needed.
+/// Meta-queries (answerable from canned identity).
 const META_QUERIES: &[&str] = &[
     "who are you",
     "what are you",
@@ -147,11 +143,10 @@ const EXACT_GROUPS: &[&[&str]] = &[
     FILLERS,
 ];
 
-/// Whether `text` is an obvious *simple* intent by heuristic alone.
+/// Test if text is obviously *simple* by heuristic alone.
 ///
-/// Empty input counts as simple (there is nothing to run an agent loop over).
-/// Otherwise the normalised text must exactly match a phrase in one of the
-/// [`EXACT_GROUPS`] or start with a [`GREETING_PREFIXES`] entry.
+/// Empty input is simple. Otherwise must exactly match a phrase in [`EXACT_GROUPS`]
+/// or start with a [`GREETING_PREFIXES`] entry (after normalization).
 pub fn is_simple(text: &str) -> bool {
     let normalized = normalize(text);
     if normalized.is_empty() {
@@ -168,9 +163,7 @@ pub fn is_simple(text: &str) -> bool {
         .any(|prefix| normalized == *prefix || normalized.starts_with(&format!("{prefix} ")))
 }
 
-/// Lower-case, drop punctuation (apostrophes kept so `"what's up"` still
-/// matches), and collapse whitespace — so `"Hello!"`, `"  hello  "`,
-/// `"who are you?"`, and `"good morning, Klod"` all normalise to their rule form.
+/// Lowercase, drop punctuation (keep apostrophes), collapse whitespace.
 fn normalize(text: &str) -> String {
     let cleaned: String = text
         .to_lowercase()
@@ -183,7 +176,7 @@ fn normalize(text: &str) -> String {
             }
         })
         .collect();
-    // Collapse any run of whitespace to a single space and trim the ends.
+    // Collapse runs of whitespace to single space, trim.
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -253,7 +246,7 @@ mod tests {
 
     #[test]
     fn greeting_prefix_does_not_over_match() {
-        // "good" alone is not a greeting; "good morning" is.
+        // "good" alone does not match; "good morning" does.
         assert!(!is_simple("good"));
         assert!(is_simple("good morning"));
     }

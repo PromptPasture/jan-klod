@@ -1,19 +1,11 @@
-//! `provider-openai` — an OpenAI-compatible implementation of the `llm-provider`
-//! interface, plus the universal `extension-lifecycle`.
+//! `provider-openai` — OpenAI-compatible implementation of `llm-provider`.
 //!
-//! It is the reference network extension: it imports `host-http` (its only
-//! outbound network access), `host-config` (to read its `base-url` / `api-key` /
-//! `model`), and `host-log`. A `complete` call builds a Chat Completions request,
-//! issues one blocking `host-http::fetch` (no streaming — `host-http` returns the
-//! whole body), parses the reply into completion chunks, and buffers them under a
-//! stream handle the host drains with `next-chunk`.
-//!
-//! Because `type: openai` is the default for any OpenAI-compatible endpoint
-//! (LM Studio, Groq, vLLM, …), one build serves them all — only `base-url`,
-//! `api-key`, and `model` differ, and those come from config.
+//! The reference network extension. Imports `host-http`, `host-config`, and `host-log`.
+//! `complete` builds a Chat Completions request, calls `host-http::fetch` (no streaming),
+//! parses the reply into chunks, and buffers them under a stream handle. One build serves
+//! all OpenAI-compatible endpoints (LM Studio, Groq, vLLM, …); `base-url`, `api-key`, and `model` differ.
 
-// Generated Component-Model bindings; lint exemptions (incl. the `unsafe` ABI
-// shims) scoped to the macro output.
+// Generated Component-Model bindings; lint exemptions (including `unsafe` ABI shims) scoped to the macro.
 #[allow(
     unsafe_code,
     missing_docs,
@@ -44,7 +36,7 @@ use bindings::jan_klod::interfaces::host_config;
 use bindings::jan_klod::interfaces::host_http::{self, HttpError, HttpHeader, HttpRequest};
 use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
 
-/// Resolved endpoint settings, read once from `host-config` at `init`.
+/// Resolved endpoint settings, read once at `init`.
 #[derive(Clone, Default)]
 struct ProviderConfig {
     /// API root, e.g. `https://api.openai.com/v1`.
@@ -58,10 +50,10 @@ struct ProviderConfig {
 thread_local! {
     /// Endpoint settings captured at `init`.
     static CONFIG: RefCell<ProviderConfig> = RefCell::new(ProviderConfig::default());
-    /// Open streams: handle -> queued chunks the host drains via `next-chunk`.
+    /// Open streams: handle -> chunks.
     static STREAMS: RefCell<HashMap<StreamHandle, VecDeque<CompletionChunk>>> =
         RefCell::new(HashMap::new());
-    /// Monotonic source of stream handles (starts at 1; 0 stays reserved).
+    /// Stream handle source (starts at 1; 0 reserved).
     static NEXT_HANDLE: RefCell<StreamHandle> = const { RefCell::new(1) };
 }
 
@@ -100,9 +92,8 @@ fn message_to_json(msg: &Message) -> Value {
     Value::Object(obj)
 }
 
-/// One tool definition in `OpenAI`'s `{type:"function", function:{…}}` shape. The
-/// guest's `parameters-schema` is already a JSON Schema string; pass it through,
-/// falling back to an empty object if it is not valid JSON.
+/// Convert a tool to OpenAI's `{type:"function", function:{…}}` shape.
+/// The `parameters-schema` is already JSON; fall back to `{}` if not valid JSON.
 fn tool_to_json(tool: &ToolDefinition) -> Value {
     let parameters: Value =
         serde_json::from_str(&tool.parameters_schema).unwrap_or_else(|_| json!({}));
@@ -116,9 +107,8 @@ fn tool_to_json(tool: &ToolDefinition) -> Value {
     })
 }
 
-/// Assemble the Chat Completions request body. `stream` is false — `host-http`
-/// buffers the whole response anyway, so server-sent events would add parsing
-/// with no latency win.
+/// Build the Chat Completions request body. `stream` is false —
+/// `host-http` buffers the whole response anyway.
 fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     let mut obj = Map::new();
     obj.insert("model".to_owned(), json!(model));
@@ -144,15 +134,14 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
         obj.insert("temperature".to_owned(), json!(temp));
     }
     if let Some(grammar) = &request.grammar {
-        // Not OpenAI-standard, but several compatible backends (llama.cpp, vLLM)
-        // accept a grammar for constrained decoding; pass it through.
+        // Not standard, but several compatible backends accept grammar for constrained decoding.
         obj.insert("grammar".to_owned(), json!(grammar));
     }
     Value::Object(obj)
 }
 
-/// Turn one Chat Completions response body into the ordered chunk stream the
-/// host will drain: any text, then any tool calls, always closed by `done`.
+/// Parse a Chat Completions response into an ordered chunk stream.
+/// Text, then tool calls, always closed by `done`.
 fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| ProviderError::Transient)?;
     let choice = value
@@ -162,10 +151,8 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     let message = choice.get("message").ok_or(ProviderError::Transient)?;
 
     let mut chunks = VecDeque::new();
-    // Text and tool calls both, not one or the other: a model often narrates
-    // before acting, and dropping that text would leave the UI blank while tools
-    // run and hide it from the next turn's context. Text precedes calls, matching
-    // emission order.
+    // Include both text and tool calls: models often narrate before acting.
+    // Text precedes calls, matching model emission order.
     if let Some(content) = message.get("content").and_then(Value::as_str) {
         if !content.is_empty() {
             chunks.push_back(CompletionChunk::TextDelta(content.to_owned()));
@@ -199,9 +186,7 @@ fn str_field(obj: &Value, key: &str) -> String {
         .to_owned()
 }
 
-/// A transport/status error from `host-http`, described in words rather than a
-/// generated binding variant name (e.g. `HttpError::ConnectionFailed`) — nobody
-/// reading a terminal or a provider error should see a Rust identifier.
+/// Describe a `host-http` error in words, not a Rust identifier (e.g. `HttpError::ConnectionFailed`).
 const fn describe_http(err: &HttpError) -> &'static str {
     match err {
         HttpError::ConnectionFailed => {
@@ -226,10 +211,8 @@ const fn map_http_error(err: HttpError) -> ProviderError {
         HttpError::ClientError(401 | 403) => ProviderError::AuthFailed,
         HttpError::ClientError(404) => ProviderError::ModelNotFound,
         HttpError::ClientError(429) => ProviderError::RateLimited,
-        // Unreachable, not transient: a refused connection, a DNS failure or a
-        // TLS error means the address is wrong, the server is not running, or
-        // egress is not granted for it. None of those is fixed by retrying, and
-        // calling them "transient" sends the reader looking for a flake.
+        // Not transient: refused connection, DNS failure, or TLS error means the address is wrong,
+        // server is down, or egress is denied. Retrying won't fix these.
         HttpError::ConnectionFailed | HttpError::Timeout | HttpError::TlsError => {
             ProviderError::Unreachable
         }
@@ -240,8 +223,8 @@ const fn map_http_error(err: HttpError) -> ProviderError {
     }
 }
 
-/// Allocate the next stream handle (wraps, skipping nothing — collisions with a
-/// still-open multi-billion-old handle are not a concern here).
+/// Allocate the next stream handle. Wrapping is fine; collisions with a still-open
+/// handle are not a concern here.
 fn next_handle() -> StreamHandle {
     NEXT_HANDLE.with(|h| {
         let mut n = h.borrow_mut();
@@ -266,7 +249,7 @@ impl Lifecycle for Component {
         if config.base_url.is_empty() {
             return Err("provider-openai: `base-url` is required".to_owned());
         }
-        // Never log the api-key.
+        // Never log the api-key
         log(
             LogLevel::Info,
             &format!(
@@ -377,8 +360,8 @@ impl LlmProvider for Component {
     }
 }
 
-// The `export!` macro emits the component's `unsafe extern "C"` ABI shims at its
-// call site, so scope the binding lints (incl. `unsafe_code`) to this glue too.
+// The `export!` macro emits the component's `unsafe extern "C"` ABI shims;
+// scope the binding lints to this glue.
 #[allow(
     unsafe_code,
     missing_docs,

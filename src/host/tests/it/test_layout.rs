@@ -1,10 +1,6 @@
-//! Every test directory in this repo belongs to a crate that cargo builds.
-//!
-//! A `tests/` dir beside a **virtual** manifest (`[workspace]`, no `[package]`)
-//! belongs to no crate — cargo silently builds nothing from it, and `cargo
-//! test` still reports green, because a test that's never compiled can't fail.
-//! This walks every `tests/` directory and flags any sitting beside a virtual
-//! manifest.
+//! Tests must belong to buildable crates. `tests/` beside a **virtual**
+//! manifest gets silently skipped by cargo (no compilation = green test).
+//! Walks all `tests/` dirs and flags those beside virtual manifests.
 
 use std::path::{Path, PathBuf};
 
@@ -13,7 +9,7 @@ use crate::common;
 /// Directories that are not ours to police.
 const IGNORED: [&str; 4] = ["target", ".git", "node_modules", "ext"];
 
-/// Every `tests/` directory under `root`, with the nearest manifest above it.
+/// Collect all `tests/` dirs under root.
 fn test_dirs(root: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -35,7 +31,7 @@ fn test_dirs(root: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// Whether `dir/Cargo.toml` declares a package (as opposed to a bare workspace).
+/// Does dir have package manifest (not bare workspace)?
 fn is_package(dir: &Path) -> Option<bool> {
     let manifest = dir.join("Cargo.toml");
     let text = std::fs::read_to_string(manifest).ok()?;
@@ -55,10 +51,9 @@ fn every_tests_directory_belongs_to_a_crate_cargo_builds() {
     let mut orphans = Vec::new();
     for dir in &dirs {
         let Some(parent) = dir.parent() else { continue };
-        // Otherwise: beside a package manifest (cargo builds it), or no
-        // manifest at all (e.g. a fixture dir) — nobody expects those built.
+        // Beside package manifest (cargo builds) or no manifest (fixture).
         if is_package(parent) == Some(false) {
-            // A `tests/` beside a virtual workspace manifest: cargo builds nothing.
+            // tests/ beside virtual manifest: cargo builds nothing.
             orphans.push(dir.clone());
         }
     }

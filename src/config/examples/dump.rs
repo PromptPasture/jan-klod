@@ -1,7 +1,6 @@
-//! Resolve a `config.yaml` and print the extension plan.
+//! Print the extension plan from `config.yaml`.
 //!
-//! Usage: `cargo run -p jan-klod-config --example dump -- [path]`
-//! (defaults to `config.yaml` in the current directory).
+//! Usage: `cargo run -p jan-klod-config --example dump -- [path]`; defaults to `config.yaml`.
 
 use jan_klod_config::Config;
 

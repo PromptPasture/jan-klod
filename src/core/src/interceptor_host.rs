@@ -1,18 +1,17 @@
 //! Wasm-guest adapter for the interceptor dispatch engine.
 //!
 //! [`crate::intercept::Dispatcher`] drives anything implementing the
-//! [`Interceptor`](crate::intercept::Interceptor) trait. This module is the
-//! adapter that makes a *sandboxed component* one such implementor: it
-//! `bindgen!`s the `interceptor-world`, instantiates a guest, satisfies the five
-//! imports that world declares (`host-log`, `host-config`, `host-event`,
-//! `host-storage`, `llm-provider`), and maps the host-side loop-state types
-//! (`intercept::*`) to and from the generated component types.
+//! [`Interceptor`](crate::intercept::Interceptor) trait. This module adapts
+//! a *sandboxed component* as one: `bindgen!`s the `interceptor-world`,
+//! instantiates a guest, satisfies its five imports (`host-log`, `host-config`,
+//! `host-event`, `host-storage`, `llm-provider`), and maps host-side loop-state
+//! types (`intercept::*`) to/from generated component types.
 //!
-//! Two imports are backed by real host state so an interceptor is exercisable
-//! offline: `host-storage` is an in-memory map, and `llm-provider` is an injected
-//! closure (a canned completion) — the same pattern as the routed provider's
-//! injected `host-http`. `host-event` is observation-only (publish logs; there is
-//! no in-loop subscriber yet).
+//! Two imports use real host state so interceptors are exercisable offline:
+//! `host-storage` is an in-memory map, `llm-provider` is an injected closure
+//! (canned completion) — the same pattern as the routed provider's injected
+//! `host-http`. `host-event` is observation-only (logs; no in-loop subscriber
+//! yet).
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -52,8 +51,8 @@ use bind::jan_klod::interfaces::llm_types as g_types;
 /// given the request the guest assembled, return the assistant text.
 ///
 /// Takes the **whole request**, not just the prompt: `interceptor-intent-router`
-/// constrains it with a grammar admitting exactly two labels, and a seam that
-/// passed only the last message would silently drop that constraint.
+/// constrains it with a grammar admitting exactly two labels, and a seam
+/// passing only the last message would silently drop that constraint.
 ///
 /// Injected so the tier runs offline in tests; `Runtime::build_agent` backs it
 /// with a real provider instance.
@@ -76,14 +75,14 @@ struct InterceptorHost {
 
 /// The backing for one interceptor's `host-storage`.
 ///
-/// Durable only for an instance whose config sets `persist: true` — the
-/// ephemeral default is load-bearing, since the permission gate's standing
-/// grants are documented as dying with the process; making every interceptor
-/// durable would quietly turn "always allow" into "allow forever".
+/// Durable only for instances whose config sets `persist: true` — ephemeral
+/// default is load-bearing, since permission gates' standing grants are
+/// documented as dying with the process; making every interceptor durable
+/// would quietly turn "always allow" into "allow forever".
 ///
-/// Every namespace is prefixed with the component's own id, so sharing one
-/// database does not let a guest name `session-abc` and read the transcript, or
-/// name a peer's namespace and read its decisions. The core's own namespaces
+/// Every namespace is prefixed with the component's id, so sharing one
+/// database doesn't let a guest name `session-abc` and read the transcript, or
+/// name a peer's namespace and read its decisions. The core's namespaces
 /// contain no `/`, so nothing a guest can ask for collides with them.
 enum Storage {
     /// A private map, for when no store is open (unit tests, offline harnesses).
@@ -112,7 +111,7 @@ impl Storage {
     }
 
     /// Undo [`Self::scope`], so returned entries name the namespace the guest
-    /// asked for rather than the one the host stored under.
+    /// asked for rather than what the host stored under.
     fn unscope(&self, namespace: &str) -> String {
         match self {
             Self::Ephemeral { .. } => namespace.to_string(),

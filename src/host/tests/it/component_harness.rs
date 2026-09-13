@@ -1,14 +1,12 @@
 //! Component test harness — load a staged guest, wire host capabilities, and
 //! verify its WIT interface end-to-end through the Component Model, offline and
-//! deterministically (unlike `provider_probe`, which drives a live endpoint). It
-//! instantiates each category world, backs imports with a reusable [`TestHost`]
-//! (config section, captured logs, a canned `host-http`), then runs lifecycle
-//! plus the guest's own interface.
+//! deterministically. It instantiates each category world, backs imports with
+//! a reusable [`TestHost`] (config section, captured logs, canned `host-http`),
+//! then runs lifecycle plus the guest's interface.
 //!
 //! Each test skips with a note when its component is not staged in `ext/`, so a
-//! bare `cargo test` (no guests built) stays green. Build the guests first
-//! (`make extensions`) or run the bundled target (`make harness`) to exercise
-//! them.
+//! bare `cargo test` stays green. Build guests first (`make extensions`) or
+//! run the bundled target (`make harness`).
 
 // Dominated by `bindgen!`-generated code; exempt from the workspace lints, as the
 // sibling `provider_probe` example is.
@@ -33,17 +31,16 @@ mod provider_bind {
 }
 
 /// A canned `host-http` reply. The harness mirrors the host boundary in
-/// [`jan_klod_core::http`]: 5xx -> `server-error`, 4xx -> `client-error`,
-/// everything else -> a successful response. One mock serves both the happy path
-/// and error-mapping tests.
+/// [`jan_klod_core::http`]: 5xx → `server-error`, 4xx → `client-error`, else
+/// → success. One mock serves both happy path and error-mapping tests.
 #[derive(Clone)]
 struct MockHttp {
     status: u16,
     body: Vec<u8>,
 }
 
-/// Reusable host backing every guest's imports in one struct: its config section,
-/// a log buffer the tests can assert against, and the canned HTTP reply.
+/// Reusable host backing every guest's imports: config section, log buffer,
+/// and canned HTTP reply.
 struct TestHost {
     wasi: WasiCtx,
     table: ResourceTable,
@@ -136,9 +133,8 @@ impl provider_bind::jan_klod::interfaces::host_http::Host for TestHost {
     }
 }
 
-/// Resolve a staged guest at `<repo>/ext/<file>`, relative to this crate. Returns
-/// `None` (with a skip note) when the component is absent, so an unbuilt tree
-/// still passes.
+/// Resolve a staged guest at `<repo>/ext/<file>`. Returns `None` (with a skip
+/// note) when absent, so an unbuilt tree still passes.
 fn staged_component(engine: &Engine, file: &str) -> Option<Component> {
     let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "ext", file]
         .iter()

@@ -1,14 +1,6 @@
-//! `interceptor-task-router` — the default `select-model` interceptor.
-//!
-//! Classifies the request into a task type with one constrained-decoding call to
-//! the routed `llm-provider`, then resolves the `routing:` table (task →
-//! `provider/model`, served through `host-config`) and sets
-//! `pending-request.model`. If classification or routing yields nothing, it
-//! proceeds and leaves the model unset (the loop falls back to the provider's
-//! configured default).
-//!
-//! The classification/route logic is pure Rust ([`routing`]) and unit-tested
-//! natively; the Component-Model glue only compiles for `wasm32`.
+//! Default `select-model` interceptor — classify request to task type,
+//! resolve routing table, set model. Pure Rust logic, unit-tested natively;
+//! Component-Model glue for `wasm32` only.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod routing;
@@ -50,7 +42,7 @@ mod component {
         host_log::log(level, "interceptor-task-router", message, &[]);
     }
 
-    /// Drain a provider stream handle to its concatenated text, then close it.
+    /// Collect stream text and close handle.
     fn drain_text(handle: llm_provider::StreamHandle) -> String {
         let mut text = String::new();
         loop {
@@ -64,8 +56,7 @@ mod component {
         text
     }
 
-    /// Classify `user_message` into one of the built-in tasks via a single
-    /// constrained-decoding call. Any failure yields `None` (caller defaults).
+    /// Classify message into built-in task via constrained-decoding call.
     fn classify(user_message: &str) -> Option<String> {
         let grammar = routing::classifier_grammar(routing::BUILT_IN_TASKS);
         let request = CompletionRequest {
@@ -137,7 +128,7 @@ mod component {
 
             let task = classify(&user_message).unwrap_or_else(|| routing::DEFAULT_TASK.to_string());
 
-            // Resolve the routing table entry (host-config serves `routing.<task>`).
+            // Resolve routing table entry.
             let Ok(raw) = host_config::get(&format!("routing.{task}")) else {
                 log(
                     LogLevel::Info,
@@ -145,22 +136,19 @@ mod component {
                 );
                 return Ok(Decision::Proceed);
             };
-            // host-config serves JSON, so a string value arrives quoted.
+            // host-config serves quoted JSON strings.
             let route = raw.trim().trim_matches('"');
             let Some(model) = routing::model_from_route(route) else {
                 return Ok(Decision::Proceed);
             };
 
             if let Some(provider) = routing::unhonoured_provider(route) {
-                // Said out loud rather than dropped: the chain is fixed at boot,
-                // so this names an endpoint the request will not go to.
+                // Log names the endpoint request won't reach (chain fixed at boot).
                 log(
                     LogLevel::Warn,
                     &format!(
-                        "route `{route}` names provider `{provider}`, which routing \
-                         cannot select — only the model is applied, and it goes to \
-                         whichever provider the fallback chain reaches. Use a bare \
-                         model name, or order `providers:` instead."
+                        "route `{route}` names provider `{provider}` (unreachable in \
+                         fallback chain). Use bare model name or reorder `providers:`."
                     ),
                 );
             }

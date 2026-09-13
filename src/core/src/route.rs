@@ -1,11 +1,10 @@
 //! Provider instantiation and the conductor's provider adapter.
 //!
-//! The core lets one extension consume another's interface by instantiating the
-//! implementing extension and delegating into it. The loop drives providers
-//! through the conductor's [`Completer`](crate::conductor::Completer) trait —
-//! see [`ProviderCompleter`]. The provider's `host-http` is injected as an
-//! [`HttpFn`] so a turn can run live (real client) or offline (canned reply)
-//! without changing the adapter.
+//! Extensions consume other extensions by instantiating them and delegating.
+//! The loop drives providers through the [`Completer`](crate::conductor::Completer)
+//! trait (see [`ProviderCompleter`]). The provider's `host-http` is injected as
+//! [`HttpFn`] so turns run live (real client) or offline (canned reply) without
+//! changing the adapter.
 
 use std::fmt::Write as _;
 
@@ -19,8 +18,8 @@ use crate::host::ConfigSection;
 use crate::http::{WireError, WireResponse};
 use crate::CoreError;
 
-// Generated bindings for the provider world (to *call* a provider's exports and
-// *satisfy* its host imports); lint exemptions scoped to the macro output.
+// Bindings for the provider world (*call* exports, *satisfy* imports); lint
+// exemptions scoped to macro output.
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod provider_bind {
     wasmtime::component::bindgen!({
@@ -31,19 +30,17 @@ mod provider_bind {
 
 use provider_bind::exports::jan_klod::interfaces::llm_provider as p_llm;
 
-/// Host-side HTTP backend injected into the provider's `host-http` import. The
-/// signature mirrors [`crate::http::fetch`], so a live caller passes that
-/// function and a test passes a canned closure.
+/// Host-side HTTP backend injected into the provider's `host-http` import.
+/// Signature mirrors [`crate::http::fetch`]: live code passes that function,
+/// tests pass a canned closure.
 pub type HttpFn = Box<
     dyn Fn(&str, &str, &[(String, String)], Option<&[u8]>, u32) -> Result<WireResponse, WireError>
         + Send
         + Sync,
 >;
 
-// ---------------------------------------------------------------------------
-// CapHost — host state for a provider instance: WASI + the provider-world host
-// capabilities, with an *injected* HTTP backend so a turn can run offline.
-// ---------------------------------------------------------------------------
+// CapHost — host state for a provider: WASI + provider-world capabilities +
+// injected HTTP backend so turns run offline.
 
 struct CapHost {
     wasi: WasiCtx,
@@ -159,12 +156,10 @@ impl provider_bind::jan_klod::interfaces::host_http::Host for CapHost {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Provider instantiation + the Completer adapter.
-// ---------------------------------------------------------------------------
+// Provider instantiation + Completer adapter
 
-/// Instantiate a provider extension in its own store with an injected `host-http`,
-/// and drive its lifecycle to `start`.
+/// Instantiate a provider in its store with injected `host-http`; drive
+/// lifecycle to `start`.
 fn instantiate_provider(
     engine: &Engine,
     inst: &ExtensionInstance,
@@ -202,8 +197,8 @@ fn instantiate_provider(
     Ok((store, world))
 }
 
-/// Collapse a lifecycle call's `Result<Result<(), String>, Error>` into a
-/// [`CoreError`]: a trap, or the extension's own rejection.
+/// Collapse lifecycle `Result<Result<(), String>, Error>` to [`CoreError`]:
+/// trap or extension rejection.
 fn drive(
     id: &str,
     result: wasmtime::Result<Result<(), String>>,
@@ -224,20 +219,18 @@ fn drive(
     }
 }
 
-/// A provider extension adapted to the conductor's [`Completer`](crate::conductor::Completer)
-/// trait: the provider becomes one link in the loop's fallback chain.
+/// A provider adapted to the [`Completer`](crate::conductor::Completer) trait:
+/// one link in the loop's fallback chain.
 pub struct ProviderCompleter {
     id: String,
-    /// The instance's configured endpoint, kept only to name it in a failure —
-    /// the likely causes (wrong URL, server down, egress denied) are all
-    /// questions about *which* endpoint.
+    /// Configured endpoint, kept only to name it in failures—wrong URL, server
+    /// down, egress denied are all questions about *which* endpoint.
     endpoint: String,
     store: Store<CapHost>,
     world: provider_bind::ProviderWorld,
 }
 
-/// A provider failure in the words the person running this needs, rather than
-/// the Debug output of a generated binding.
+/// Provider failure in human words, not Debug output of generated bindings.
 fn describe(err: p_llm::ProviderError, endpoint: &str) -> String {
     use p_llm::ProviderError as E;
     match err {
@@ -270,12 +263,11 @@ fn describe(err: p_llm::ProviderError, endpoint: &str) -> String {
 }
 
 impl ProviderCompleter {
-    /// Instantiate a provider component as a completer. `http` backs its
-    /// `host-http` (live client or a canned test reply).
+    /// Instantiate a provider as a completer. `http` backs `host-http` (live
+    /// client or canned test reply).
     ///
     /// # Errors
-    /// Returns a [`CoreError`] if the component cannot be wired, instantiated, or
-    /// started.
+    /// Returns [`CoreError`] if wiring, instantiation, or startup fails.
     pub fn instantiate(
         engine: &Engine,
         inst: &ExtensionInstance,
@@ -314,11 +306,11 @@ impl crate::conductor::Completer for ProviderCompleter {
             Err(_) => return Err("provider trapped".to_string()),
         };
 
-        // Drain the stream into text + tool calls.
+        // Drain stream into text + tool calls
         let mut text = String::new();
         let mut tool_calls = Vec::new();
         let mut finish_reason = String::new();
-        // Ok(None) / Err both end the stream by exiting the while-let.
+        // Ok(None) and Err both end the stream
         while let Ok(Some(chunk)) = iface.call_next_chunk(&mut self.store, handle) {
             match chunk {
                 p_llm::CompletionChunk::TextDelta(delta) => text.push_str(&delta),
@@ -344,7 +336,7 @@ impl crate::conductor::Completer for ProviderCompleter {
     }
 }
 
-/// Map the conductor's `pending-request` to the provider's `completion-request`.
+/// Map conductor's `pending-request` to provider's `completion-request`.
 fn intercept_to_p_request(request: &crate::intercept::PendingRequest) -> p_llm::CompletionRequest {
     use crate::intercept::Role;
     p_llm::CompletionRequest {

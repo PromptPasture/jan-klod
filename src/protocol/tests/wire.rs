@@ -8,9 +8,9 @@ use jan_klod_protocol::{jsonrpc, Command, HelloResult, Notification, PROTOCOL_VE
 
 /// The `method` each command must serialize to.
 ///
-/// The match is deliberately exhaustive — no wildcard arm — so adding a
-/// command stops this file from compiling until its wire name is written down
-/// here **and** a sample for it is added to [`every_command`] below.
+/// The match is exhaustive—no wildcard—so adding a command forces this file
+/// to compile-fail until its wire name is written here **and** a sample is
+/// added to [`every_command`] below.
 const fn expected_method(command: &Command) -> &'static str {
     match command {
         Command::Hello { .. } => "protocol/hello",
@@ -25,7 +25,7 @@ const fn expected_method(command: &Command) -> &'static str {
     }
 }
 
-/// One sample per command, with every field populated — an empty string would
+/// One sample per command, every field populated — an empty string would
 /// round-trip even if a field were dropped from the type.
 fn every_command() -> Vec<Command> {
     vec![
@@ -93,7 +93,7 @@ fn each_command_has_its_own_method() {
     );
 }
 
-/// Pins the shape a transport wraps, for both kinds of variant: a command with
+/// Pins the shape a transport wraps for both variant kinds: a command with
 /// params, and one without.
 #[test]
 fn the_envelope_is_method_plus_params() {
@@ -111,8 +111,8 @@ fn the_envelope_is_method_plus_params() {
     );
 }
 
-/// The `method` each notification must serialize to. Exhaustive for the same
-/// reason [`expected_method`] is.
+/// The `method` each notification must serialize to. Exhaustive like
+/// [`expected_method`].
 const fn expected_notification_method(notification: &Notification) -> &'static str {
     match notification {
         Notification::TextDelta { .. } => "text-delta",
@@ -126,7 +126,7 @@ const fn expected_notification_method(notification: &Notification) -> &'static s
     }
 }
 
-/// One sample per notification, every field populated.
+/// One sample per notification, all fields populated.
 fn every_notification() -> Vec<Notification> {
     vec![
         Notification::TextDelta {
@@ -241,8 +241,8 @@ fn the_protocol_version_is_semver() {
 // ─── The JSON-RPC envelope ───────────────────────────────────────────────────
 
 /// A frame is the command's own members plus the envelope's, in one flat
-/// object — asserted as exact text, because "flattened" is a claim about bytes
-/// on a pipe and a shape assertion would pass on `{"command":{…}}` too.
+/// object — asserted as exact text, because "flattened" is a claim about wire
+/// bytes and a shape assertion would pass on `{"command":{…}}` too.
 #[test]
 fn a_request_is_the_command_flattened_into_the_envelope() {
     assert_eq!(
@@ -268,9 +268,9 @@ fn a_request_is_the_command_flattened_into_the_envelope() {
     );
 }
 
-/// Every command survives the frame in both directions. The round-trip is the
-/// point: `flatten` is implemented by buffering, and a type it cannot buffer
-/// serializes happily and then fails to parse back.
+/// Every command survives the frame in both directions. The round-trip is
+/// critical: `flatten` is implemented by buffering, and a type it cannot
+/// buffer serializes happily then fails to parse back.
 #[test]
 fn every_command_round_trips_inside_a_frame() {
     for command in every_command() {
@@ -283,8 +283,7 @@ fn every_command_round_trips_inside_a_frame() {
     }
 }
 
-/// A notification has no `id`, which is exactly how JSON-RPC spells "nothing
-/// answers this".
+/// A notification has no `id`, the JSON-RPC way to say "nothing answers this".
 #[test]
 fn a_notification_frame_carries_no_id() {
     let text = serde_json::to_string(&jsonrpc::Notification::new(Notification::Done {
@@ -299,9 +298,8 @@ fn a_notification_frame_carries_no_id() {
     assert!(!text.contains("\"id\""), "no id member: {text}");
 }
 
-/// Both id spellings the spec allows, returned unchanged. A core that answered
-/// `"7"` with `7` would break a client keying its pending calls by the literal
-/// it sent.
+/// Both id spellings the spec allows, returned unchanged. A core answering
+/// `"7"` with `7` would break a client keying pending calls by the literal sent.
 #[test]
 fn an_id_comes_back_the_way_it_was_sent() {
     for id in [
@@ -321,9 +319,8 @@ fn an_id_comes_back_the_way_it_was_sent() {
     }
 }
 
-/// The two shapes the spec allows, and no third one: [`jsonrpc::Outcome`] is an
-/// enum, so a response with both members — or with neither — cannot be built to
-/// be tested against.
+/// The two shapes the spec allows, no third: [`jsonrpc::Outcome`] is an enum,
+/// so a response with both members — or neither — cannot be built.
 #[test]
 fn a_response_carries_either_a_result_or_an_error() {
     assert_eq!(
@@ -356,8 +353,8 @@ fn a_response_carries_either_a_result_or_an_error() {
     );
 }
 
-/// The reserved codes are the spec's, not ours. Getting one wrong makes a
-/// conforming client report the wrong failure to its user.
+/// The reserved codes are the spec's, not ours. Getting one wrong causes a
+/// conforming client to report the wrong failure.
 #[test]
 fn the_error_codes_are_the_ones_the_spec_reserves() {
     assert_eq!(jsonrpc::PARSE_ERROR, -32700);
@@ -374,12 +371,10 @@ fn the_error_codes_are_the_ones_the_spec_reserves() {
     );
 }
 
-/// `COMMAND_METHODS` is written by hand, so it is compared against the
-/// exhaustive `match` in [`expected_method`] **in both directions**: a command
-/// missing from the list would be reported as `method not found` by a
-/// transport, and a stale name still in it would be reported as `invalid
-/// params` — a method the core does not have, described as one whose arguments
-/// were wrong.
+/// `COMMAND_METHODS` is hand-written, compared against the exhaustive `match`
+/// in [`expected_method`] **in both directions**: a command missing from the
+/// list reports as `method not found`, and a stale name reports as `invalid
+/// params` — a method the core lacks, described as one whose arguments were wrong.
 #[test]
 fn the_method_list_holds_every_command_and_nothing_else() {
     let mut from_the_enum: Vec<&str> = every_command().iter().map(expected_method).collect();
@@ -392,8 +387,8 @@ fn the_method_list_holds_every_command_and_nothing_else() {
     );
 }
 
-/// The spec's answer to a frame it could not read an id from. Serde's untagged
-/// representation is what makes this work, and untagged unit variants are
+/// The spec's answer to a frame it could not read an id from. Serde's
+/// untagged representation makes this work; untagged unit variants are
 /// obscure enough to be worth pinning.
 #[test]
 fn an_unreadable_frame_is_answered_with_a_null_id() {
@@ -413,8 +408,8 @@ fn an_unreadable_frame_is_answered_with_a_null_id() {
     assert_ne!(jsonrpc::Id::Null, jsonrpc::Id::Text(String::new()));
 }
 
-/// While the protocol is `0.x`, a differing minor is a refusal — the whole
-/// reason this is not a major-only check.
+/// While the protocol is `0.x`, a differing minor is refused — the reason
+/// this is not a major-only check.
 #[test]
 fn a_differing_minor_is_refused_while_the_major_is_zero() {
     assert!(jan_klod_protocol::compatible("0.1.0", "0.1.0"));
@@ -439,9 +434,8 @@ fn a_differing_minor_is_refused_while_the_major_is_zero() {
     ));
 }
 
-/// A refused handshake is the one exchange that returns no [`HelloResult`], so
-/// the refusal itself has to say what this core speaks or the client is left
-/// guessing.
+/// A refused handshake returns no [`HelloResult`], so the refusal must say
+/// what this core speaks or the client is left guessing.
 #[test]
 fn a_refused_handshake_says_what_the_core_speaks() {
     let error = jsonrpc::incompatible_version("9.9.9");
@@ -460,12 +454,11 @@ fn a_refused_handshake_says_what_the_core_speaks() {
 
 // ─── JSON Schema export ──────────────────────────────────────────────────────
 //
-// The schema under `schema/` is what a non-Rust client generates types from, so
-// it has to describe these types and not a past version of them. It is written
-// by the generator below rather than by hand, and this file is the single source
-// of the samples both the wire tests and the schema are built from — so a new
-// command or notification cannot reach the schema without also reaching the
-// tests above.
+// The schema under `schema/` is what non-Rust clients generate types from,
+// so it must describe these types, not a past version. It is written by the
+// generator below rather than by hand, and this file is the single source of
+// the samples both wire tests and the schema use — so a new command or
+// notification cannot reach the schema without reaching the tests above.
 //
 // `schemars` would do this with a derive. It was measured and rejected: it adds
 // seven packages to the audited tree, one of them a second major version of

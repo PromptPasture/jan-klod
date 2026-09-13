@@ -2,17 +2,9 @@
 use jan_klod::{parse_frame, StreamEvent};
 use jan_klod_protocol::SSE_FRAME_KINDS;
 
-/// The guard this file most needs, and the one that did not exist when #81
-/// happened: a frame kind the core can send that this client has no answer for.
-///
-/// It matters more since an unknown kind became a silent drop. Before that a
-/// missing arm was at least loud, if wrongly so — it reached the user as an
-/// error. Now nothing at runtime would say a word, so this test is the only
-/// thing between a new frame kind and a client that quietly ignores it.
-///
-/// The list is `jan-klod-protocol`'s because this crate cannot see the core;
-/// `core/tests/protocol_events.rs` holds the other end, proving the same
-/// constant is exactly what `serve` emits for every `conductor::Event`.
+/// The guard #81 needs, and the one that did not exist when #81 happened:
+/// a frame kind the core can send but this client has no answer for. Unknown
+/// kinds became silent drops. This test ensures no new frame kinds are missed.
 #[test]
 fn every_sse_frame_kind_the_core_emits_is_handled() {
     for kind in SSE_FRAME_KINDS {
@@ -48,8 +40,8 @@ fn parse_frame_maps_each_event_kind() {
             failed: false,
         })
     );
-    // The flag is read, not merely carried (#162) — a frame saying the call
-    // failed must not arrive as one that succeeded.
+    // The `failed` flag is read, not merely carried (#162) — a frame saying
+    // the call failed must not arrive as one that succeeded.
     assert_eq!(
         parse_frame(
             "tool-result",
@@ -62,10 +54,8 @@ fn parse_frame_maps_each_event_kind() {
         })
     );
     // A core older than the flag sends no `failed` key. That is a compatible
-    // mismatch, not a malformed frame: refusing it would turn a version
-    // disagreement into a broken turn, and `hello` is where versions are
-    // supposed to be settled. Its failures then render as successes, which is
-    // exactly what happened before the flag existed.
+    // mismatch, not malformed: refusing it would turn a version disagreement
+    // into a broken turn. Its failures then render as successes (backward compat).
     assert_eq!(
         parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#),
         Some(StreamEvent::ToolResult {
@@ -88,11 +78,10 @@ fn parse_frame_maps_each_event_kind() {
     );
 }
 
-/// The regression this file exists to hold: the `tool-result` kind had no arm,
-/// so every tool result in a **healthy** turn took the fallback and reached the
-/// user as an "unknown event" error. Stated separately from the mapping test
-/// above because it is an invariant about the fallback rather than about a
-/// shape — it stays true if the variant's fields ever change.
+/// The regression this file holds: `tool-result` had no arm, so every tool
+/// result in a healthy turn took the fallback and reached the user as error.
+/// Separate from the mapping test because this is an invariant about the
+/// fallback itself, not the shape — stays true if fields change.
 #[test]
 fn a_tool_result_is_never_reported_as_an_error() {
     let ev = parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#);
@@ -102,10 +91,9 @@ fn a_tool_result_is_never_reported_as_an_error() {
     );
 }
 
-/// A kind this client does not know is **dropped**, not reported. It means the
-/// core is newer than this client, or a frame was added without updating it —
-/// neither is a failed turn, and calling it one is what #81 was. Drift is caught
-/// by a test instead, which is where a claim about two files belongs.
+/// A kind this client does not know is dropped, not reported. Means the core
+/// is newer, or a frame was added without updating it. Neither is a failed
+/// turn (#81 precedent). Drift is caught by tests instead.
 #[test]
 fn an_unknown_kind_is_dropped_rather_than_shown_as_a_failure() {
     assert_eq!(parse_frame("weird", "{}"), None);

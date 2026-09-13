@@ -1,12 +1,7 @@
-//! `interceptor-tool-selector` — the default `select-tools` interceptor.
+//! Default `select-tools` interceptor.
 //!
-//! Fills `pending-request.tools` with the active tool set the host advertises via
-//! `host-config` (`tools` — a JSON array of `{name, description, parameters-schema}`,
-//! served from the loop's `ToolFleet`). If none are advertised it proceeds
-//! unchanged. Per-step narrowing is a later refinement.
-//!
-//! Entirely Component-Model glue, so the crate only compiles for `wasm32`; on the
-//! host target it builds as an empty lib.
+//! Fills `pending-request.tools` from `host-config` (`tools` JSON array).
+//! Component-Model glue only; compiles for `wasm32`; empty on host.
 
 #[cfg(target_arch = "wasm32")]
 mod component {
@@ -38,7 +33,7 @@ mod component {
         host_log::log(level, "interceptor-tool-selector", message, &[]);
     }
 
-    /// The advertised tool set, read from the `tools` config key (a JSON array).
+    /// Advertised tool set from `tools` config key.
     fn advertised_tools() -> Vec<ToolDefinition> {
         let Ok(raw) = host_config::get("tools") else {
             return Vec::new();

@@ -7,19 +7,16 @@ created: 2026-06-28T00:00:00Z
 updated: 2026-09-08T00:00:00Z
 ---
 
-The Configurator is a Spring Initializr-style web UI. Users select extensions and provide settings; the UI generates a ready-to-run archive containing the core binary, selected `.wasm` extensions, and a pre-filled `config.yaml`.
+The Configurator is a Spring Initializr-style web UI: select extensions, provide settings, generate a ready-to-run archive with core, `.wasm` extensions, and `config.yaml`.
 
-Hosted publicly. Launch on **GitHub Pages**; migrate to `start.janklod.dev` once the domain is set up. Self-hosted mode always supported.
+Hosted on **GitHub Pages**; self-hosted mode always supported.
 
 ## UI flow
 
-1. Pick a **distribution** (what the install is for) or start from scratch, and
-   separately tick whether the desktop window ships — two questions, not one.
-   See [Distributions](#distributions) below for why that is not a `tui`/`gui`
-   preset.
-2. Select extensions from the registry (search, filter by role category).
-3. Fill in configuration values (LLM endpoint, API keys, storage backend, etc.).
-4. Click **Generate** — the server resolves the dependency graph, validates WIT interface compatibility, and builds the ZIP.
+1. Pick a **distribution** (the purpose: coding, headless-chat, minimal) or start from scratch.
+2. Select extensions from the registry (search, filter by role).
+3. Fill configuration values (LLM endpoint, API keys, storage backend).
+4. Click **Generate** — resolves dependency graph, validates compatibility, builds ZIP.
 
 ## ZIP layout — standard
 
@@ -41,16 +38,9 @@ jan-klod-<version>-<os>-<arch>[-<distribution>][-gui]/
 
 ## Distributions
 
-A distribution says what an install is **for**. It is not a client choice —
-whether you look at the runtime through a terminal, a window or a browser is
-decided at launch and is orthogonal to what the runtime carries. Naming bundles
-`tui`/`gui`/`full`, as this page used to, mixed those two questions under one
-word.
+A distribution says what an install is **for**. It is not a client choice — whether you view the runtime through terminal, window, or browser is decided at launch and is orthogonal to what the runtime carries.
 
-Every distribution ships the same `jan-klod` **core** binary plus a selected
-`.wasm` extension set. The core's **REST surface is built in** (host-side,
-`jan-klod-gateway serve`), so there is no `api-rest` guest to include; a UI
-client is a separate binary that connects to it.
+Every distribution ships the same `jan-klod` **core** binary plus a selected `.wasm` extension set. The core's **REST surface is built in** (host-side), so no `api-rest` guest is included; UI clients are separate binaries that connect to it.
 
 | Distribution | What it carries | For |
 |---|---|---|
@@ -68,56 +58,29 @@ With no `--dist` you get `coding`.
 
 ### They are data, not code
 
-Each distribution is a directory under `scripts/distributions/<name>/`: a
-`guests` list and a `config.yaml`. `make bundle DIST=<name>` builds an archive
-from the pair, and the release publishes all three per platform.
+Each distribution is a directory under `scripts/distributions/<name>/`: a `guests` list and `config.yaml`. `make bundle DIST=<name>` builds an archive from the pair; releases publish all three per platform.
 
-Three places name them — the definitions, `scripts/install.sh`, and
-`.github/workflows/release.yml` — and none can see the others, so
-`docs_match_config::the_installer_offers_the_distributions_the_release_builds`
-holds them to one set. A disagreement between any two would be a 404 at whoever
-ran the installer, and it would not surface until after a release.
+Three places name them — definitions, `scripts/install.sh`, and `.github/workflows/release.yml` — and none see the others, so a test holds them in sync. A disagreement surfaces as a 404 after release.
 
-**Adding a fourth is adding a directory.** Nothing here enumerates them: the
-tests read `scripts/distributions/` from disk, so a new one is covered the day
-it lands rather than the day somebody remembers this page exists.
+**Adding a fourth is adding a directory.** Tests read `scripts/distributions/` from disk, so a new one is covered the day it lands.
 
 ### When a Configurator UI arrives
 
-There is no interactive Configurator yet — the landing page is static. When one
-is built it reads these same definitions rather than carrying its own list, and
-the client choice (TUI, GUI, browser) is a separate toggle beside the
-distribution picker, because it is a separate question. That is why this section
-describes distributions as data and not as a menu: the menu is a view of the
-data, and the data is already here.
+No interactive Configurator yet — the landing page is static. When built, it reads the same definitions rather than carrying its own list. The client choice (TUI, GUI, browser) is a separate toggle beside the distribution picker because it is a separate question. Distributions are data, not a menu: the menu is a view of the data.
 
 ## Extension registry
 
-The registry is a simple HTTP file server: a directory of `.wasm` files with a metadata index. No crates.io, no npm. When a Configurator exists, extensions are downloaded at generation time and bundled into the ZIP; what is built today is the index and the `ext` commands that read it, below.
+The registry is a simple HTTP file server: a directory of `.wasm` files with a metadata index. No crates.io, no npm. When a Configurator exists, extensions download at generation time and bundle into the ZIP. Built today: the index and `ext` commands that read it.
 
 ### What is built
 
-The index is `index.json`, generated from the staged components by `make
-registry-index` and published beside them by a release. Per extension it
-carries the name, version, `api-version`, kind, **the capabilities the
-component's manifest declares**, a description, the publisher, the URL, a
-SHA-256, a signature and a size. The digest and the signature describe the
-individual `.wasm` and its `.minisig` rather than an archive, because `ext
-install` verifies per file.
+The index is `index.json`, generated from staged components by `make registry-index` and published by a release. Per extension: name, version, `api-version`, kind, **declared capabilities**, description, publisher, URL, SHA-256, signature, and size. Digest and signature describe the individual `.wasm` and `.minisig`, not an archive, because `ext install` verifies per file.
 
-The capability list is not typed by anyone: `scripts/manifests.sh` reads it
-from the component's real imports, and the generator reads the manifest through
-the same code the host uses at boot. So the line an index shows is the line the
-host will enforce.
+Capabilities are not hand-typed: `scripts/manifests.sh` reads them from the component's real imports; the generator reads the manifest through the same code the host uses at boot. The index line is what the host enforces.
 
-`registry.url` in `config.yaml` names the index. An `http`/`https` URL is
-fetched under the egress policy — public destinations only, every redirect hop
-re-checked — and anything else is a path, so a mirrored index on disk works
-with no network at all.
+`registry.url` in `config.yaml` names the index. An `http`/`https` URL is fetched under the egress policy — public destinations only, every redirect re-checked. Anything else is a path, so a mirrored index works offline.
 
-**`ext search` is the capability view.** There is no interactive Configurator
-(see above — the landing page is static), so the command is where an operator
-reads what a component asks for before downloading it:
+**`ext search` is the capability view.** No interactive Configurator yet (landing page is static), so the command is where an operator reads what a component asks for before downloading:
 
 ```console
 $ jan-klod-gateway ext search tool-fs
@@ -126,11 +89,4 @@ tool-fs  0.1.0  api 0.3.0  tool  147445 bytes  unsigned
   fs tool: read / write / grep a workspace file through host-fs, dispatched by an `op` argument.
 ```
 
-`ext list --remote` is the same view with nothing filtered out, and `ext
-install <name>` resolves a name through the index and hands the entry's URL and
-digest to the same verified install a path or a URL gets. Reading an index
-grants nothing: `registry.trusted-keys` still decides what may land in `ext/`,
-so with that list empty every install resolved this way is refused as untrusted
-— which is the correct answer until something first-party is signed. See the
-[security model](security-model.md) row for `registry.url`, and the
-[roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).
+`ext list --remote` shows everything unfiltered; `ext install <name>` resolves through the index and hands the entry's URL and digest to the same verified install a path or URL gets. Reading an index grants nothing: `registry.trusted-keys` decides what lands in `ext/`, so with that list empty every resolved install is refused as untrusted — correct until something first-party is signed. See [security model](security-model.md) and [roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).

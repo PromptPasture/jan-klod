@@ -1,32 +1,11 @@
-//! What a confined command can and cannot do, on Linux.
+//! Linux Landlock confinement tests (same four cases as `sandbox_seatbelt.rs`).
+//! Two backends, one standard; unconfined baseline catches test errors.
 //!
-//! The same four cases as `sandbox_seatbelt.rs`, deliberately — two backends
-//! confining the same policy should be held to one standard, and a reader
-//! comparing the files should see the mechanism differ and nothing else. Each
-//! runs its command **unconfined first**, because a missing binary, a bad cwd or
-//! a typo in the test fails exactly the way a denial does.
+//! Landlock is kernel-dependent (pre-5.13 or no CONFIG_SECURITY_LANDLOCK).
+//! Check availability first to avoid ambiguous failures.
 //!
-//! # Two things this module asserts that 15b's does not have to
-//!
-//! **The kernel is asked first.** Landlock is a kernel feature and can simply be
-//! absent (pre-5.13, or built without `CONFIG_SECURITY_LANDLOCK`), whereas
-//! `sandbox-exec` ships with every macOS. Without that check a kernel that
-//! cannot enforce anything would make the *escape* tests pass — the write fails
-//! because the wrapper refuses to run at all — while the in-workspace case fails
-//! confusingly. `available()` turns that into one clear message.
-//!
-//! **The wrapper is named explicitly.** `LandlockBackend` confines by
-//! re-executing the gateway, and under `cargo test` `current_exe()` is the *test
-//! binary*, which has no `confine` subcommand. Every command would then fail in
-//! a way that reads exactly like Landlock refusing. So these tests point the
-//! backend at `CARGO_BIN_EXE_jan-klod-gateway`, which is the seam
-//! `LandlockBackend::new` exists for.
-//!
-//! Linux-only by `#[cfg]`, because Landlock is. Unlike 15b's macOS tests, CI
-//! *does* run these — `ubuntu-latest` has Landlock — so this is the half of
-//! Phase 15 that a regression cannot slip past
-//! ([#95](https://github.com/PromptPasture/jan-klod/issues/95) is the other
-//! half).
+//! Backend path is explicit (CARGO_BIN_EXE_jan-klod-gateway) because
+//! `current_exe()` under `cargo test` is the test binary without `confine`.
 #![cfg(target_os = "linux")]
 
 use std::io::Read;
@@ -46,7 +25,7 @@ use wasmtime::Engine;
 
 use crate::common;
 
-/// A workspace and a sibling outside it, removed on drop.
+/// Workspace and external sibling; auto-cleaned.
 struct Dirs {
     root: PathBuf,
     workspace: PathBuf,
@@ -72,8 +51,7 @@ fn dirs(tag: &str) -> Dirs {
     }
 }
 
-/// Fails the test with one clear message when the kernel cannot enforce
-/// anything, rather than letting the denial cases pass for the wrong reason.
+/// Fail with clear message if Landlock unavailable (not ambiguous denial).
 fn require_landlock() {
     available().unwrap_or_else(|reason| {
         panic!("these tests assert Landlock's behaviour and it is unavailable: {reason}")
@@ -97,14 +75,13 @@ fn runner(workspace: &Path) -> ProcessRunner {
     )
 }
 
-/// A runner confined by the gateway this test build produced — see the module
-/// docs for why the path is named rather than discovered.
+/// Runner confined by gateway (path explicit; see module docs).
 fn confined(workspace: &Path) -> ProcessRunner {
     let backend = LandlockBackend::new(PathBuf::from(env!("CARGO_BIN_EXE_jan-klod-gateway")));
     runner(workspace).with_sandbox(std::sync::Arc::new(backend), policy(workspace))
 }
 
-/// The control for every case below.
+/// Baseline control (unconfined).
 fn unconfined(workspace: &Path) -> ProcessRunner {
     runner(workspace)
 }
@@ -124,8 +101,8 @@ fn a_confined_command_cannot_write_outside_the_workspace() {
     let target = dirs.outside.join("leak");
 
     assert_eq!(write_to(&unconfined(&dirs.workspace), &target), 0);
-    assert!(target.exists(), "the control wrote the file");
-    std::fs::remove_file(&target).expect("removes it again");
+    assert!(target.exists(), "control baseline");
+    std::fs::remove_file(&target).expect("cleanup");
 
     assert_ne!(
         write_to(&confined(&dirs.workspace), &target),
@@ -139,8 +116,7 @@ fn a_confined_command_cannot_write_outside_the_workspace() {
     );
 }
 
-/// The case that catches a *broken* sandbox rather than a missing one: if the
-/// wrapper cannot be found or the ruleset grants nothing, this is what fails.
+/// Catches broken sandbox (wrapper not found or ruleset empty).
 #[test]
 fn a_confined_command_can_still_write_inside_the_workspace() {
     require_landlock();
@@ -149,14 +125,12 @@ fn a_confined_command_can_still_write_inside_the_workspace() {
     assert_eq!(
         write_to(&confined(&dirs.workspace), &target),
         0,
-        "the grant the operator wrote still works — if this fails, either the wrapper was \
-         not reached or the ruleset is not granting what it was told to"
+        "grant works (wrapper found, ruleset correct)"
     );
     assert!(target.exists());
 }
 
-/// Network denial, asserted by what the listener did not see — a connection to
-/// a closed port fails the same way a denied one does.
+/// Network denial via listener (closed port and denial look the same).
 #[test]
 fn a_confined_command_cannot_reach_the_network() {
     require_landlock();

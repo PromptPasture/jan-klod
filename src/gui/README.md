@@ -1,18 +1,15 @@
 # `jan-klod-gui` — the desktop window
 
-A Tauri 2 window around **the web client the core already serves**. Not a third
-client codebase: `src/web` builds the page, `src/core` serves it at `/`, and this
-opens a system webview pointed at that address. Vision decision 5.
+Tauri 2 window around **the web client the core serves**. Not a third codebase: `src/web` builds, `src/core` serves at `/`, this opens a webview. Vision decision 5.
 
 ```sh
-make gui            # build it, staged beside the host workspace's binaries
-jan-klod --gui      # spawn-or-attach a gateway, then open the window
+make gui       # build, stage beside host binaries
+jan-klod --gui # spawn-or-attach gateway, open window
 ```
 
 ## Why this is its own cargo workspace
 
-Because of what Tauri costs, measured in [#141] **before** any of this was
-written, against a baseline of the host workspace at 406 packages:
+Tauri cost, measured in [#141] **before** this was written, against host baseline of 406 packages:
 
 | | |
 |---|---:|
@@ -23,73 +20,38 @@ written, against a baseline of the host workspace at 406 packages:
 | Release binary | **9.6 MB** |
 | `deny.toml` entries required | **11** |
 
-As a member of the host workspace, those 256 packages would be resolved and built by
-every `cargo test`, every `cargo clippy --workspace` and every CI run — by
-everyone, including everyone who never opens a window. Separate, they are behind
-`make gui` and nothing else. The cost of that separation is a second `target/`
-directory, which is the same trade `src/extensions` already makes.
+As a host member, those 256 would build on every test/clippy/CI run—by everyone, even those never opening a window. Separate, they hide behind `make gui`. Cost is a second `target/` (like `src/extensions` already trades).
 
-What separation explicitly does **not** buy is a pass on the supply-chain gates.
-The root `Makefile`'s `lockfile`, `deny` and `audit` targets each name all three
-workspaces, and `.github/workflows/ci.yml` has a `gui` job that builds, lints and
-tests this one under `xvfb`. The tree the policy was widened for is not the one
-that escapes the policy.
+Separation **does not** buy supply-chain gate pass. Root `Makefile` targets name all three workspaces; `.github/workflows/ci.yml` has a `gui` job (builds, lints, tests under `xvfb`). The policy-widened tree doesn't escape the policy.
 
 ## The eleven entries in `deny.toml`, and why they are not a widening
 
-`cargo deny` fails on Tauri's tree under the unmodified root policy:
-`advisories FAILED, licenses FAILED`. `cargo audit` passes — none of it is a
-vulnerability.
+`cargo deny` fails on Tauri's tree (`advisories FAILED, licenses FAILED`). `cargo audit` passes (none are vulnerabilities).
 
-- **5 MPL-2.0 crates**: `cssparser`, `cssparser-macros`, `dtoa-short`,
-  `selectors` (all via `dom_query`) and `option-ext` (via `dirs`). Named as
-  per-crate `exceptions` rather than adding `MPL-2.0` to `allow`, so a sixth MPL
-  crate appearing anywhere still fails the gate. MPL-2.0 is file-level copyleft:
-  linking these unmodified obliges us to make *their* source available and
-  imposes nothing on jan-klod's Apache-2.0 code.
-- **6 unmaintained advisories**: `proc-macro-error` (Linux only, via `gtk`) and
-  the five `unic-*` crates, which are one advisory-db event — the whole
-  `rust-unic` project — arriving through `urlpattern`. All say "No safe upgrade
-  is available!"
+- **5 MPL-2.0 crates**: `cssparser`, `cssparser-macros`, `dtoa-short`, `selectors` (via `dom_query`) and `option-ext` (via `dirs`). Per-crate exceptions (not `allow`), so a sixth still fails. File-level copyleft: linking requires their source; imposes nothing on Apache-2.0 code.
+- **6 unmaintained advisories**: `proc-macro-error` (Linux via `gtk`) and five `unic-*` crates (one advisory-db event, via `urlpattern`). All: "No safe upgrade available!"
 
-**None of this is avoidable by choosing something lighter than Tauri.** `wry`,
-the webview binding underneath it, depends on `dom_query` and `dirs` *itself*:
-measured at 238 packages on its own, it still fails the same five licences. The
-MPL floor is in the system-webview layer, not in Tauri.
+**Unavoidable—lighter choices don't help.** `wry` (webview binding) depends on `dom_query` and `dirs` itself: 238 packages, fails same five licenses. MPL floor is system-webview, not Tauri.
 
-The entries carry a scope note saying they exist for this crate alone. If the
-shell is ever dropped, they go with it rather than remaining as six standing
-exemptions for a tree nobody builds.
+Entries carry scope notes (this crate only). If shell drops, exemptions go too (rather than standing for unbuilt tree).
 
 [#141]: https://github.com/PromptPasture/jan-klod/issues/141
 
 ## What this binary does, and what it deliberately does not
 
-It is **only a window**. It does not spawn a gateway, resolve an address, or
-know what a session is:
+**Only a window.** No gateway spawn, address resolution, or session knowledge:
 
 ```
 jan-klod-gui --url <url> [--title <title>]
 ```
 
-`jan-klod --gui` does the rest — `ensure_gateway` (spawn-or-attach, already in
-`src/tui`), then launch this with a URL that is already answering. A second
-copy of spawn-or-attach would eventually find a different gateway than the REST
-path starts, which is the bug that split was drawn to avoid.
+`jan-klod --gui` handles it: `ensure_gateway` (spawn-or-attach, in `src/tui`), then launch with answering URL. Second spawn-or-attach risks finding different gateway—the bug the split avoids.
 
-It is found the way the gateway is: **sibling of the running executable, then
-`PATH`** (`jan_klod::sibling_bin`). A release bundle satisfies that by putting
-the three binaries side by side; a developer tree does not, because two
-workspaces mean two `target/` directories — which is what `make gui`'s staging
-step exists to fix, rather than teaching the client a second lookup rule that
-only a checkout would ever use.
+Found like the gateway: **sibling executable, then `PATH`** (`jan_klod::sibling_bin`). Release bundles satisfy this (three binaries side-by-side); dev trees don't (two workspaces). `make gui` staging fixes this (vs. a checkout-only lookup rule).
 
 ## The one thing here that is not a window
 
-The core's token lives in `sessionStorage` under `jan-klod-token`, where
-`src/web/src/api.ts` puts it after prompting. A window launched by a client that
-*already has* the token should not make the user retype it — so this seeds it,
-and that makes the window a credential boundary.
+Core token lives in `sessionStorage` (`jan-klod-token`, set by `src/web/src/api.ts`). Window with existing token shouldn't ask again—so this seeds it, making the window a credential boundary.
 
 Two rules, both tested, both cited from `docs/concepts/security-model.md`:
 
@@ -99,33 +61,21 @@ Two rules, both tested, both cited from `docs/concepts/security-model.md`:
 - **Navigation off that origin is refused** and handed to the system browser, so
   the origin check is a second line rather than the only one.
 
-A token is a credential from the environment that ends up inside a JavaScript
-string literal, so `serde_json` does the escaping;
-`a_token_with_javascript_metacharacters_is_escaped` is the test that would catch
-someone replacing it with `format!`.
+Token (from environment) → JavaScript string literal → `serde_json` escapes it. Test `a_token_with_javascript_metacharacters_is_escaped` catches `format!` replacement.
 
 ## Tests, and the half of the acceptance they cannot cover
 
-`cargo test` runs unit tests (argument parsing, the token script) and
-`tests/smoke.rs`, which starts the real binary against a forty-line `std::net`
-server and asks a real WebKit webview what it loaded — including reading the
-seeded token back out of `sessionStorage`.
+`cargo test` runs unit tests (args, token script) and `tests/smoke.rs` (real binary vs. 40-line server, WebKit webview loads it, reads token from `sessionStorage`).
 
-**Nobody here looks at a screen.** A webview fetching the page and running its
-script is strong evidence that a window rendered; it is not a sighting. [#142]
-asked for the two to be reported separately, so the visual check stays a manual
-step and `docs/changelog.md` records which platform it was actually done on.
+**No screen checks.** Webview fetching/running proves rendering, not sighting. [#142] split them; visual check remains manual (`docs/changelog.md` records platform).
 
-A webview needs a display server. On Linux without `DISPLAY`/`WAYLAND_DISPLAY`
-the smoke tests skip; `JK_REQUIRE_GUI=1` turns that skip into a failure, and CI
-sets it alongside `xvfb-run` so the flag asserts something true.
+Webview needs display server. Linux without `DISPLAY`/`WAYLAND_DISPLAY` skips smoke tests; `JK_REQUIRE_GUI=1` fails (CI sets with `xvfb-run`, asserting truth).
 
 [#142]: https://github.com/PromptPasture/jan-klod/issues/142
 
 ## Prerequisites
 
-**macOS** — nothing beyond the Xcode command line tools. The webview is
-WKWebView, part of the OS.
+**macOS** — Xcode CLI tools only (webview is WKWebView, OS-provided).
 
 **Linux** — the webview is a system package. To build:
 
@@ -134,11 +84,7 @@ sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
   libayatana-appindicator3-dev librsvg2-dev
 ```
 
-To run, the runtime halves (`libwebkit2gtk-4.1-0`,
-`libayatana-appindicator3-1`). A missing shared library stops the binary before
-`main`, so `jan-klod --gui` reports the non-zero exit and names the package
-rather than falling back to the TUI — a GUI that silently becomes a terminal has
-told the user the wrong thing about their machine.
+Runtime halves: `libwebkit2gtk-4.1-0`, `libayatana-appindicator3-1`. Missing library stops before `main`; `jan-klod --gui` reports exit + package name (vs. silent fallback—wrong signal to user).
 
 **Windows** — untried. There is no Windows runner (see [#49]), so the release
 matrix does not build one and nothing here has been verified on it.
@@ -147,6 +93,4 @@ matrix does not build one and nothing here has been verified on it.
 
 ## The icon is a placeholder
 
-`icons/icon.png` is a generated 512×512 `>_` prompt mark on the web client's
-slate, not a brand. It exists because `tauri::generate_context!` requires one at
-compile time. Replacing it is a design decision nobody has made yet.
+`icons/icon.png` is a generated `>_` on slate (not brand). Required by `tauri::generate_context!` at compile time. Replacing is undecided design.

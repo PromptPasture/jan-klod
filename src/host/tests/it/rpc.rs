@@ -1,19 +1,14 @@
-//! A client drives the core over newline-delimited JSON-RPC.
+//! Client drives core over newline-delimited JSON-RPC (no subprocess/threads).
+//! `rpc::serve` is generic over streams: Cursor in, Vec out. Read-only commands
+//! answered without core asking back (scripted client enough). Turn commands refused.
 //!
-//! No subprocess and no threads: `rpc::serve` is generic over its streams, so
-//! the whole exchange is a `Cursor` of frames in and a `Vec<u8>` of frames out.
-//! That works because every command here is answered without the core asking
-//! anything back — a scripted client is enough. The turn commands are not, and
-//! are refused for now, which is what the last case below asserts.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Skips if guests are not staged in `ext/`.
 
 use std::io::{BufRead, BufReader, Cursor, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-// The client's transport trait, so its methods are callable here the same way
-// the `jan-klod` binary calls them.
+// Client transport trait (same API as jan-klod binary).
 use jan_klod_client::transport::Transport as _;
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
@@ -23,12 +18,12 @@ use jan_klod_protocol::{jsonrpc, PROTOCOL_VERSION};
 
 use crate::common;
 
-/// Boot an offline agent with a canned "pong" provider.
+/// Offline agent with canned "pong" provider.
 fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
     booted_with(tag, || common::canned_http("pong"))
 }
 
-/// Boot an offline agent driven by `http`. No live endpoint either way.
+/// Offline agent with custom provider.
 fn booted_with(
     tag: &str,
     http: impl Fn() -> HttpFn,
@@ -68,9 +63,7 @@ enum Frame {
     Notification(jsonrpc::Notification),
 }
 
-/// Read the core's output back as frames. A response carries an `id` and a
-/// notification does not, which is the only thing that tells them apart — so
-/// that is what this uses, rather than guessing from the method name.
+/// Parse output as frames (response has id, notification doesn't).
 fn frames(output: Vec<u8>) -> Vec<Frame> {
     String::from_utf8(output)
         .expect("frames are utf-8")
@@ -86,10 +79,7 @@ fn frames(output: Vec<u8>) -> Vec<Frame> {
         .collect()
 }
 
-/// Drive a scripted exchange: every frame is queued up front, so this only
-/// works where the client needs to react to nothing. The turn commands are
-/// mostly like that — a cancel is not a reply to anything — but a confirmation
-/// is not, which is why the `ask` case below uses real pipes.
+/// Scripted exchange (all frames queued front; client doesn't react).
 fn exchange(agent: &mut jan_klod_core::AgentSession, script: &[&str]) -> Vec<Frame> {
     let input = Cursor::new(script.join("\n").into_bytes());
     let mut output = Vec::new();
@@ -97,7 +87,7 @@ fn exchange(agent: &mut jan_klod_core::AgentSession, script: &[&str]) -> Vec<Fra
     frames(output)
 }
 
-/// Just the answers, in order.
+/// Extract response frames in order.
 fn responses(frames: &[Frame]) -> Vec<&jsonrpc::Response> {
     frames
         .iter()
@@ -108,7 +98,7 @@ fn responses(frames: &[Frame]) -> Vec<&jsonrpc::Response> {
         .collect()
 }
 
-/// The method of every notification, in order.
+/// Extract notification methods in order.
 fn reported(frames: &[Frame]) -> Vec<String> {
     frames
         .iter()
@@ -124,7 +114,7 @@ fn reported(frames: &[Frame]) -> Vec<String> {
         .collect()
 }
 
-/// The code of an error response, or `None` when it carried a result.
+/// Error code or None for result.
 const fn code(response: &jsonrpc::Response) -> Option<i64> {
     match &response.outcome {
         jsonrpc::Outcome::Error(error) => Some(error.code),
@@ -132,7 +122,7 @@ const fn code(response: &jsonrpc::Response) -> Option<i64> {
     }
 }
 
-/// The result of a response, panicking with the error if it failed.
+/// Extract result or panic with error.
 fn result(response: &jsonrpc::Response) -> &serde_json::Value {
     match &response.outcome {
         jsonrpc::Outcome::Result(value) => value,
@@ -150,8 +140,7 @@ fn a_client_negotiates_then_drives_the_read_only_commands() {
     let served = exchange(
         &mut agent,
         &[
-            // Before the handshake: refused, because a version nobody agreed is
-            // a version nobody checked.
+            // Pre-handshake: refused (unverified version).
             r#"{"jsonrpc":"2.0","id":1,"method":"session/list"}"#,
             &format!(
                 r#"{{"jsonrpc":"2.0","id":2,"method":"protocol/hello","params":{{"version":"{PROTOCOL_VERSION}"}}}}"#
@@ -173,20 +162,20 @@ fn a_client_negotiates_then_drives_the_read_only_commands() {
     assert_eq!(code(responses[0]), Some(jsonrpc::INVALID_REQUEST));
     assert_eq!(responses[0].id, jsonrpc::Id::Number(1));
 
-    // 2 — the core answers with its own version.
+    // 2: core returns its version.
     assert_eq!(
         result(responses[1])["version"],
         serde_json::json!(PROTOCOL_VERSION)
     );
 
-    // 3 — a fresh session id, minted the way every transport mints them.
+    // 3: fresh session id.
     let created = result(responses[2])["id"]
         .as_str()
         .expect("an id")
         .to_owned();
     assert!(!created.is_empty(), "a created session has an id");
 
-    // 4 — the list is a list, and the string id came back a string.
+    // 4: list is array, string id preserved.
     assert_eq!(responses[3].id, jsonrpc::Id::Text("four".to_owned()));
     assert!(
         result(responses[3])["sessions"].is_array(),
@@ -194,21 +183,17 @@ fn a_client_negotiates_then_drives_the_read_only_commands() {
         result(responses[3])
     );
 
-    // 5 — an unknown session is an empty transcript, not an error. The same
-    // answer `GET /session/:id` gives, because it is the same projection.
+    // 5: unknown session is empty transcript (same as REST GET).
     assert_eq!(
         result(responses[4]),
         &serde_json::json!({ "id": "nothing-here", "messages": [] })
     );
 
-    // 6 — forking a session with no events is the caller's mistake, and is
-    // reported as one rather than as a broken store.
+    // 6: fork without events is caller error (not store failure).
     assert_eq!(code(responses[5]), Some(jsonrpc::INVALID_PARAMS));
 }
 
-/// The refusal has to *end* the connection, not merely say no. Asserted by
-/// sending a frame after it and showing nothing answers: an error the client can
-/// keep talking past is a warning, not a refusal.
+/// Incompatible version ends connection (not just error).
 #[test]
 fn an_incompatible_client_is_refused_and_hung_up_on() {
     let Some((_dir, mut agent)) = booted("version") else {
@@ -228,8 +213,7 @@ fn an_incompatible_client_is_refused_and_hung_up_on() {
         "the second frame was never served: {responses:#?}"
     );
     assert_eq!(code(responses[0]), Some(jsonrpc::INCOMPATIBLE_VERSION));
-    // And the refusal says what this core does speak, since the client gets no
-    // `HelloResult` to read it from.
+    // Refusal includes core's version (no HelloResult for client to read).
     let jsonrpc::Outcome::Error(error) = &responses[0].outcome else {
         panic!("an error")
     };
@@ -239,15 +223,13 @@ fn an_incompatible_client_is_refused_and_hung_up_on() {
     );
 }
 
-/// A `0.x` minor difference is incompatible too — the rule the protocol crate
-/// spells out, checked here at the transport where it actually decides.
+/// Minor version difference also incompatible (protocol rule).
 #[test]
 fn a_client_one_minor_behind_is_refused() {
     let Some((_dir, mut agent)) = booted("minor") else {
         return;
     };
-    // Guard the premise: if PROTOCOL_VERSION ever leaves 0.1, this frame stops
-    // testing what it says it tests.
+    // Guard: update frame if PROTOCOL_VERSION leaves 0.1.
     assert!(
         PROTOCOL_VERSION.starts_with("0.1."),
         "this case is written against a 0.1 core, not {PROTOCOL_VERSION}"
@@ -263,8 +245,7 @@ fn a_client_one_minor_behind_is_refused() {
 
 // ─── Turns ───────────────────────────────────────────────────────────────────
 
-/// The four guests a confirmation needs: something to route intent, something
-/// to pick a tool, and the gate that asks.
+/// Guests for gated confirmation: intent router, tool selector, permission gate.
 const GATED: [&str; 4] = [
     "provider-openai.wasm",
     "interceptor-intent-router.wasm",
@@ -272,20 +253,9 @@ const GATED: [&str; 4] = [
     "interceptor-permission.wasm",
 ];
 
-/// A provider that answers whatever it was actually asked.
-///
-/// Keyed off the request rather than off a call counter, because the first
-/// request of a turn is **not** the turn's: `interceptor-intent-router`
-/// classifies the message with its own grammar-constrained completion first.
-/// A counter-driven fake hands that one the turn's answer and the turn the
-/// classifier's, and then nothing behaves as the test says it does. (The
-/// equivalent helper in `api_prompt.rs` survives this only because each
-/// provider *instance* gets its own counter, so the classifier's instance eats
-/// the mismatch on its own.)
-///
-/// The returned count is of **post-tool** completions: exactly the request a
-/// turn makes after a tool has run, and exactly the one a cancelled turn never
-/// makes. That is the invariant, so that is what is counted.
+/// Provider answers by request content (not counter).
+/// Intent classifier runs first, so counter-keying swaps classifier/turn answers.
+/// Count post-tool completions (turn after tool runs, cancelled turn never makes).
 fn tool_then_answer() -> (Arc<AtomicU32>, impl Fn() -> HttpFn) {
     let resumed = Arc::new(AtomicU32::new(0));
     let shared = Arc::clone(&resumed);

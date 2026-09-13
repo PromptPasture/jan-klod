@@ -7,17 +7,13 @@ created: 2026-06-28T00:00:00Z
 updated: 2026-09-09T00:00:00Z
 ---
 
-Contracts are the stable interfaces that the core exposes and extensions consume or implement. They are the API surface that must not break — a breaking change here breaks all extensions.
+Contracts are stable interfaces the core exposes and extensions consume or implement. A breaking change breaks all extensions.
 
-Every extension is a sandboxed WASM component, so **WIT interfaces are the only
-extension contract** — there is no native/in-core extension tier. (UIs are not
-extensions; they connect to core over its host-side client surface — see
-[UI ↔ core](#ui--core-client-surface) below.)
+Every extension is a sandboxed WASM component, so **WIT interfaces are the only contract** — no native tier. UIs aren't extensions; they connect over the client surface — see [UI ↔ core](#ui--core-client-surface).
 
 ## WIT interface overview
 
-All interfaces live in `wit/` under the package `jan-klod:interfaces@0.1.0`. The
-package is validated with `wasm-tools component wit wit/`.
+All interfaces live in `wit/` under `jan-klod:interfaces@0.1.0`, validated with `wasm-tools component wit wit/`.
 
 ### Shared interfaces
 
@@ -41,28 +37,7 @@ Extensions implement these and the host routes calls between them.
 | `agent-delegate.wit` | `agent-delegate` | ACP agent delegation (streaming) | `agent-*` |
 | `tool-callable.wit` | `tool-callable` | Discrete callable tool | `tool-*` |
 
-**Interceptor dispatch is core-native.** The core loop invokes each enabled
-`interceptor-*` component's exported `interceptor` interface directly and acts on the
-returned `decision` (`proceed` / `replace` / `block` / `ask`). There is **no `host-hook`
-capability an extension imports** — dispatch is a synchronous, ordered call driven by the
-host, distinct from the observation-only `host-event` bus. The interface is **one generic
-function over a `phase` enum** (`session-start`, `before-loop`, `select-model`,
-`select-context`, `select-tools`, `after-response`, `tool-call`, `tool-result`,
-`on-error`, `finalize`, `prepare-next-turn`) — a new lifecycle point is a new enum case, never a new
-function. **Ordering is structural, not configured:** across phases it follows the enum;
-within a phase, deterministic extension load order. `config.yaml` **only enables/disables**
-interceptors — an interceptor declares the phases it wants via `subscribed-phases()`. The
-`ask` decision routes a question through the loop to the attached driver (which prompts in
-its own idiom) and resumes on the answer, so a rule-based permission gate can confirm with
-the user without touching a UI. `intercept` returns `result<decision, interceptor-error>`;
-on error or trap the host **fails closed at `tool-call`** and fails-open-with-log elsewhere.
-
-> **`context-manager` is subsumed into `interceptor-context`.** History trimming and
-> compression are no longer a loop-facing contract the host routes to; under the
-> generic-hook model the loop only knows the `interceptor` interface, and
-> `interceptor-context` performs history/compression *internally* at the
-> `select-context` phase. `context-manager.wit` is retained (if at all) only as an
-> internal type source, not a routed interface.
+**Interceptor dispatch is core-native.** The core loop invokes enabled `interceptor-*` components directly and acts on their returned `decision` (`proceed`/`replace`/`block`/`ask`). One generic function over a `phase` enum (`session-start`, `before-loop`, `select-model`, `select-context`, `select-tools`, `after-response`, `tool-call`, `tool-result`, `on-error`, `finalize`, `prepare-next-turn`) — new lifecycle points are new enum cases, never new functions. **Ordering is structural:** across phases it follows the enum; within a phase it's deterministic extension load order. `config.yaml` **only enables/disables** — interceptors declare phases via `subscribed-phases()`. `intercept` returns `result<decision, interceptor-error>`; errors/traps fail closed at `tool-call`, open-with-log elsewhere.
 
 ### Host-provided interfaces
 
@@ -78,36 +53,17 @@ Core grants these capabilities to every extension.
 | `host-event.wit` | `host-event` | Event bus publish/subscribe — **observation-only** (fire-and-forget); cannot shape the loop |
 | `host-storage.wit` | `host-storage` | Namespaced view of the core's own store. **Granted** (`persist: true`), never ambient; namespaces are prefixed with the calling component's id |
 
-Interceptor dispatch is **not** in this table: it is a core-native call of the
-extension-exported `interceptor` interface (above), not a capability extensions
-import.
+Interceptor dispatch isn't in this table: it's a core-native call of `interceptor` (above), not a capability.
 
-`host-serve` and `host-socket` are **planned** capabilities: they are what keep
-`api-*` (inbound listeners) and `chat-*` (long-lived connections) fully
-sandboxed instead of needing raw OS access. Today's `host-http` is
-outbound-request-only and does not cover either case.
+`host-serve` and `host-socket` are **planned** — they keep `api-*` and `chat-*` sandboxed instead of needing raw OS access. `host-http` today is outbound-only.
 
-Two further substrate capabilities are **not yet scoped**: **`host-fs`** (scoped
-workspace-filesystem access) for file-touching tools (read/write, edit, grep/find,
-git), and **`host-process`** (spawn/hold a long-lived child process) for execution
-tools — **code execution (`bash`/`eval`)**, ssh, and the LSP/DAP/browser bridges. Both
-are needed because the sandbox denies raw filesystem and process access by design.
-Recorded as the [file-workspace tier](roadmap.md#file-workspace-tier-not-yet-scoped);
-no contract is defined until that tier is scoped.
+**Not yet scoped**: `host-fs` (file tools) and `host-process` (long-lived children). Both needed because the sandbox denies raw access. See [file-workspace tier](roadmap.md#file-workspace-tier-not-yet-scoped).
 
 ## Streaming
 
-Streaming is first-class and mandatory in `llm-provider`. There is no synchronous completion path — providers that don't natively stream return a single-token stream. This ensures consistent UX (no blank-screen waits) across local models (llama.cpp, MLX, Ollama) and cloud APIs (OpenAI, Claude).
+Streaming is first-class and mandatory in `llm-provider` — no synchronous path. Non-streaming providers return single-token streams, ensuring consistent UX (no blank-screen waits) across local models and cloud APIs.
 
-Streaming uses a **poll-based handle** model rather than native WIT `stream<>`. (This was forced by `wit-bindgen-go` immaturity in the Go MVP; under Wasmtime + `wit-bindgen` the native `stream<>`/async path should be re-evaluated, but the poll-based handle remains the safe default until proven.) `complete` returns an opaque `stream-handle`; the host polls `next-chunk` until it yields `done`, then calls `close-stream`. The same pattern is used by `agent-delegate` (`delegate-handle`) and by the **core-exposed loop entry** that drivers (`api-*`/`chat-*`) call to run the agent (`run-handle`).
-
-> **`agent-manager` is retired as an extension interface.** Its `run` /
-> `next-event` / `cancel` / `close` surface described the old
-> `manager-agent-loop` extension. The loop is now core *mechanism*
-> ([Architecture](architecture.md#agent-loop-architecture)), so that surface — plus
-> steering / follow-up injection and a tool-result `terminate` — moves to a
-> **core-exposed driver interface** *(planned)*, and the decision logic it used to
-> hold moves to `interceptor-*` extensions. `agent-manager.wit` is superseded.
+Streaming uses **poll-based handles** rather than native WIT `stream<>` (forced by early `wit-bindgen-go` immaturity). `complete` returns an opaque `stream-handle`; the host polls `next-chunk` until `done`, then calls `close-stream`. Same pattern used by `agent-delegate` (`delegate-handle`) and the core-exposed loop entry drivers call (`run-handle`).
 
 ```wit
 interface llm-provider {
@@ -138,7 +94,7 @@ interface llm-provider {
 
 ## Multi-provider
 
-Multiple `llm-provider` extensions can be active simultaneously. `interceptor-task-router` selects the provider per-request (at the `select-model` phase) based on routing rules in `config.yaml` (e.g. route code tasks to `provider-ollama`, reasoning to `provider-anthropic`).
+Multiple `llm-provider` extensions can run simultaneously. `interceptor-task-router` selects per-request (at `select-model`) based on `config.yaml` routing rules (e.g. code → `provider-ollama`, reasoning → `provider-anthropic`).
 
 ## ACP — agent delegation
 
@@ -165,10 +121,10 @@ The full world for each extension type is in its respective `.wit` file.
 
 ## Core design rules
 
-- Core only depends on WIT interfaces, never on extension implementations.
-- Extensions declare which interfaces they require and which they provide.
-- Optional dependencies must degrade gracefully (feature off, not crash).
-- The host validates the dependency graph at boot and refuses to start with unsatisfied hard dependencies.
+- Core depends only on WIT interfaces.
+- Extensions declare required and provided interfaces.
+- Optional dependencies degrade gracefully.
+- Host validates the dependency graph at boot.
 
 ## Extension lifecycle (WIT)
 
@@ -192,31 +148,9 @@ interface extension-lifecycle {
 
 ## UI ↔ core (client surface)
 
-There is **no WIT UI contract.** UIs are not extensions and run in their own
-processes; they reach core the same way any external client does — over the
-core's host-side client surface, the LSP/server model. Today that surface is the
-REST + SSE API described in [Architecture → Transport](architecture.md#transport);
-it is built into the core binary since Phase 3, so the earlier question of a
-separate `api-rest` guest is closed.
+There is **no WIT UI contract.** UIs are not extensions and run in their own processes; they reach core the same way any external client does — over the core's host-side client surface. Today that surface is the REST + SSE API; it is built into the core binary since Phase 3.
 
-**Phase 13 — the client protocol is a contract of the same rank as WIT.** The
-`jan-klod-protocol` crate (`src/protocol`) holds the typed commands and
-notifications, `PROTOCOL_VERSION`, and a JSON Schema export in
-[`schema/protocol.schema.json`](../../src/protocol/schema/protocol.schema.json)
-— which is what a non-Rust client generates its types from. Each value
-serializes to the `method`/`params` pair; the `jsonrpc` module wraps that pair
-in the JSON-RPC 2.0 frame the transports send.
-
-**The framing moved into the contract in 13b, and that was a correction.** 13a
-put it in the transport, reasoning that framing is a transport's business. That
-holds for one transport and fails for two parties: the core writes frames and
-every client reads them, and `jan-klod` — the TUI client — deliberately depends
-on neither `jan-klod-core` nor Wasmtime. A frame type reachable only from the
-core would have been hand-rolled a second time in the client, which is the
-divergence this contract exists to prevent. What stayed in the transport is what
-is genuinely its own: the pipes, the sockets, the read loop. The schema export
-describes both — `Command`/`Notification` are the contract, the `jsonrpc.*`
-definitions are what goes over the wire.
+**Phase 13 — the client protocol is a contract of the same rank as WIT.** The `jan-klod-protocol` crate (`src/protocol`) holds the typed commands and notifications, `PROTOCOL_VERSION`, and a JSON Schema export in [`schema/protocol.schema.json`](../../src/protocol/schema/protocol.schema.json) — which is what a non-Rust client generates its types from.
 
 ### Transports
 
@@ -226,28 +160,15 @@ definitions are what goes over the wire.
 | REST + SSE | `POST /session/:id/message` against a running `serve`, streamed back as `event:`/`data:` | since Phase 3, now a projection |
 | WebSocket | — | 13c |
 
-**stdio is the default for `jan-klod`.** No port, no token, nothing left
-running: the client spawns the gateway and owns the process. **Stdout carries
-frames and nothing else** — every log line, the gateway's own and its guests',
-goes to stderr, because a client splitting the stream on newlines would read a
-stray `println!` as a frame.
+**stdio is the default for `jan-klod`.** No port, no token, nothing left running: client spawns the gateway and owns it. **Stdout carries frames only** — all logs go to stderr, so clients splitting on newlines don't read stray `println!` as frames.
 
-Three things differ between the two, and they are consequences of the shape
-rather than choices:
+Three differences follow from the shape:
 
-- **A confirmation** is answered on a second connection over REST; over stdio
-  there is one pipe, so a reader thread holds it while the turn runs and hands
-  frames to the loop between the turn's own events.
-- **A cancel** over REST is the client disconnecting — there is no route for it.
-  Over stdio `turn/cancel` is a frame, read at the same seam, and it cancels by
-  the same mechanism a disconnect does (the event sink returning `Stop`).
-- **Steering** (`turn/follow-up`) works over stdio and cannot over REST, which
-  has no way to deliver a message into a turn already running.
+- **Confirmation**: answered on a second REST connection; over stdio one pipe, a reader thread holds it while the turn runs and hands frames between events.
+- **Cancel**: REST is client disconnect (no route); stdio is `turn/cancel` frame read at the same seam.
+- **Steering** (`turn/follow-up`): works over stdio, not REST, which can't deliver messages into running turns.
 
-An answer that arrives when nothing asked is refused on both — `409` over REST,
-`invalid request` over stdio. Not stashed: a held answer would sit until the
-*next* question and approve it, which is how "yes" to reading a file becomes
-"yes" to running a command.
+An answer that arrives when nothing asked is refused on both — `409` over REST, `invalid request` over stdio. Not stashed: a held answer would sit until the *next* question and approve it.
 
 **Commands** (client → core):
 
@@ -263,21 +184,24 @@ An answer that arrives when nothing asked is refused on both — `409` over REST
 | `turn/cancel` | `session` | — (today: drop the SSE connection) |
 | `turn/follow-up` | `session`, `message` | — (no steering over REST) |
 
-**Two of those results are declared**, in the protocol crate and so in the
-schema: `protocol/hello` answers `HelloResult`, and `session/get` answers
-`SessionGetResult` — `{ id, messages }`, each message
-`{ seq, role, content, tool-call-id? }`. The rest are still shapes the core
-assembles and no client can generate from, which is a gap rather than a design.
+**Notifications** (core → client). The first five are `conductor::Event` one for one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable command, `session/updated` a transcript that moved:
 
-`seq` is the one worth reading twice. It is the log position the message was
-projected from, and it is exactly what `session/fork` takes as `at-seq` —
-inclusive, so forking at a message's seq yields a session whose transcript ends
-with that message. **It is not an index**: events that project to no message (an
-ask, an answer, a text delta) still consume a position, so the numbers are
-sparse and the gaps are not loss. Until
-[#106](https://github.com/PromptPasture/jan-klod/issues/106) the read side
-carried no position at all, so `session/fork` was reachable only by a caller that
-already knew the log's internals — which no client does.
+| Notification | Params | SSE frame today |
+|---|---|---|
+| `text-delta` | `text` | `delta` |
+| `tool-invoked` | `id`, `name`, `arguments` | `tool` (drops `arguments`) |
+| `tool-result` | `id`, `content` | `tool-result` |
+| `warning` | `message` | `warning` |
+| `done` | `answer`, `agentic` | `done` |
+| `ask` | `session`, `question`, `options`, `default` | `prompt` |
+| `error` | `message` | `error` (payload key `error`) |
+| `session/updated` | `session`, `preview` | — |
+
+REST + SSE is a **projection** of this, not a second contract, and it keeps its own older spellings — `delta`, `tool`, `prompt` — deliberately. Neither side is being renamed to match: `core/tests/protocol_events.rs` asserts every key an SSE frame carries reaches the notification with an equal value, which is what holds the two together.
+
+**Declared results**: `protocol/hello` answers `HelloResult`; `session/get` answers `SessionGetResult` — `{ id, messages }`, each message `{ seq, role, content, tool-call-id? }`.
+
+`seq` is the log position and `session/fork`'s `at-seq` parameter — inclusive, so forking at a message's seq yields a session whose transcript ends with that message. **It is not an index**: events that project to no message (an ask, an answer, a text delta) still consume a position, so the numbers are sparse and the gaps are not loss.
 
 **Notifications** (core → client). The first five are `conductor::Event` one for
 one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable
@@ -300,43 +224,15 @@ being renamed to match: `core/tests/protocol_events.rs` asserts every key an SSE
 frame carries reaches the notification with an equal value, which is what holds
 the two together. The projection may lose nothing; it may lag in naming.
 
-**Version rule.** `PROTOCOL_VERSION` is semver. Removing a command, renaming
-one, or removing a field bumps **major**; adding a command or an optional field
-bumps **minor**. A client sends the version it was built against in
-`protocol/hello` and the core answers with its own, so a mismatch surfaces at
-connect rather than mid-turn. The schema export carries the version too, so a
-bump cannot land without the schema being regenerated.
+**Version rule.** `PROTOCOL_VERSION` is semver: remove/rename command or field → **major**; add command/optional field → **minor**. Clients send built-against version in `protocol/hello`, core answers, mismatch surfaces at connect. Schema export carries version too; bumps need schema regeneration.
 
-`jan_klod_protocol::compatible` is what decides, and **while the version is
-`0.x` a differing minor is refused as well** — the same rule the WIT
-`api-version` follows for the same reason (see [Versioning](#versioning)
-below): every version in play is `0.x`, so a major-only check would wave a `0.9`
-client through to a `0.1` core and call that a negotiation. The two predicates
-are deliberately separate. The version lines are independent — a WIT change need
-not touch a command, and a new command need not touch WIT — so one function
-serving both would mean one line dragging the other to a decision it did not
-make. A refused handshake carries the core's own version in the error's `data`,
-because it is the one exchange that returns no `HelloResult` to read it from.
-
-**The open question the vision left — own schema, or ACP wholesale — is settled
-as: own schema.** ACP becomes an *adapter* over this contract in Phase 18, not
-the internal representation. The reason is ownership of the compatibility story:
-an editor protocol we do not control would decide when our own clients break,
-and three of the surfaces that must share this format (TUI, web, scripts) are
-not editors at all. An adapter costs one translation layer in one phase; adopting
-a foreign schema costs a veto over every future change. See the
-[vision](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions) and
-the [roadmap](roadmap.md#phase-13--client-protocol).
+While version is `0.x` a differing minor is refused too — same WIT rule: all versions are `0.x`, so major-only checks would pass `0.9` to `0.1` calling it negotiation.
 
 ## The extension manifest
 
-A contract that travels *with* a component, rather than one it implements. The
-WIT interfaces on this page say what a component may be asked to do; the
-manifest says what it needs in order to do it, in a form a registry can read
-before anything is downloaded and a host can check before anything runs.
+A contract that travels *with* a component, rather than one it implements. The WIT interfaces on this page say what a component may be asked to do; the manifest says what it needs in order to do it, in a form a registry can read before anything is downloaded and a host can check before anything runs.
 
-`ext/<name>.manifest.toml`, beside the `.wasm` — a sidecar rather than a custom
-wasm section, so it is inspectable without a wasm parser:
+`ext/<name>.manifest.toml`, beside the `.wasm` — a sidecar rather than a custom wasm section, so it is inspectable without a wasm parser:
 
 ```toml
 name = "tool-shell"
@@ -349,57 +245,21 @@ capabilities = [
 ]
 ```
 
-**`capabilities` is read from the component, not written by its author.** The
-generator (`scripts/manifests.sh`, run by `make -C src/extensions manifests`)
-takes the top-level world's `import` lines out of `wasm-tools component wit` and
-keeps the `host-*` interfaces. So a manifest cannot claim less than the artifact
-beside it does, and two things it would be easy to wrongly include are excluded
-deliberately:
+**`capabilities` is read from the component, not written by its author.** The generator (`scripts/manifests.sh`, run by `make -C src/extensions manifests`) takes the top-level world's `import` lines out of `wasm-tools component wit` and keeps the `host-*` interfaces. So a manifest cannot claim less than the artifact beside it does.
 
-- **Exports are not capabilities.** `tool-callable` and `extension-lifecycle`
-  are what a guest *implements*. A reading that took every `jan-klod:interfaces`
-  mention in the WIT output would list them.
-- **Type-only imports are not capabilities.** `llm-types` and `store-types` are
-  shapes; nothing is granted by importing one, and listing them would tell an
-  operator to allow `llm-types`, which means nothing.
+An empty list is written as `capabilities = []` rather than omitted: "needs nothing" is a claim worth making, and a missing key reads as unfilled.
 
-An empty list is written as `capabilities = []` rather than omitted: "needs
-nothing" is a claim worth making, and a missing key reads as unfilled.
+**The host reads it at boot, and refuses three things.** A component whose manifest omits a capability it imports; a component with no manifest at all, unless top-level `allow-unmanifested: true` says otherwise; and a component built against an incompatible `jan-klod:interfaces` version. Each refusal names the component and what is wrong with it.
 
-**The host reads it at boot, and refuses three things.** A component whose
-manifest omits a capability it imports; a component with no manifest at all,
-unless top-level `allow-unmanifested: true` says otherwise; and a component
-built against an incompatible `jan-klod:interfaces` version. Each refusal names
-the component and what is wrong with it — the interface that is undeclared, the
-grant that would permit an unmanifested load, or both versions.
+Two things it deliberately does **not** refuse. Declaring a capability `config.yaml` does not grant is fine and grants nothing, because every capability is default-deny where it is used. And a differing *minor* version from `1.0` on passes, since that is what a minor bump means — though while the package is `0.x` a differing minor is refused.
 
-Two things it deliberately does **not** refuse. Declaring a capability
-`config.yaml` does not grant is fine and grants nothing, because every
-capability is default-deny where it is used; refusing it would make the manifest
-a second place grants must be kept in step with, so an author would have to
-track every operator's config. And a differing *minor* version from `1.0` on
-passes, since that is what a minor bump means — though while the package is
-`0.x` a differing minor is refused, because a pre-release version carries no
-promise at all.
-
-What a manifest does not do is decide what a component may *do*. That is still
-`config.yaml`'s grants, each default-deny, unchanged by anything declared here.
-A manifest makes a component's needs **inspectable before it runs** and its
-description **checkable against itself**; it is not a permission.
+Manifests don't grant permissions — `config.yaml`'s grants do.
 
 ## Versioning
 
-`jan-klod:interfaces` is versioned as an ABI, because that is what it is: an
-extension is compiled against it and the host cannot recompile one.
+`jan-klod:interfaces` is versioned as an ABI, because that is what it is: an extension is compiled against it and the host cannot recompile one.
 
-**Where the version lives.** `package jan-klod:interfaces@X.Y.Z` at the top of
-every `wit/*.wit`, and every file must agree. Two versions leave no answer to
-which one the host speaks, so both readers of that number refuse rather than
-pick one: `scripts/manifests.sh` fails if `wit/` declares more than one, and
-`host/tests/it/manifest.rs::the_hosts_api_version_matches_the_wit_package`
-asserts the host's `core::manifest::API_VERSION` equals it. The host holds a
-constant rather than reading `wit/` because an installed gateway has no `wit/`
-beside it; that test is the price of the constant.
+**Where the version lives.** `package jan-klod:interfaces@X.Y.Z` at the top of every `wit/*.wit`, and every file must agree. Two versions leave no answer to which one the host speaks, so both readers of that number refuse rather than pick one: `scripts/manifests.sh` fails if `wit/` declares more than one. The host holds a constant rather than reading `wit/` because an installed gateway has no `wit/` beside it.
 
 **What counts as which bump.**
 
@@ -413,67 +273,37 @@ beside it; that test is the price of the constant.
 | A new function, interface, or record | **minor** |
 | Comments, doc text, formatting | **patch** |
 
-**Two rows look additive and are not**, which is the reason for a table rather
-than the sentence "additive is minor". The component model types records,
-enums and variants **structurally**: a record with one more field is a different
-type, not a compatible extension of the old one, so a guest built against the
-old shape cannot link against a host exporting the new one. The same goes for a
-case added to an `enum` or `variant` — and there a guest matching exhaustively
-over the old set does not cover the new case either. So both are major, by the
-test that defines major: an existing component cannot survive it.
+**What counts as which bump.**
 
-There is no such thing as an optional field to add. A field is part of the
-shape; optionality lives in its *type* (`option<T>`), which has to be there from
-the start to help.
+| Change to `wit/` | Bump |
+|---|---|
+| A function or interface removed or renamed | **major** |
+| A function's parameters or result re-typed | **major** |
+| A record field removed, renamed, or re-typed | **major** |
+| A case added to an `enum` or `variant` | **major** |
+| A field added to an existing record | **major** |
+| A new function, interface, or record | **minor** |
+| Comments, doc text, formatting | **patch** |
 
-**Pre-1.0 is stricter than semver-by-habit suggests.** While the major is `0`
-the package is free to change, so a `0.x` version carries no compatibility
-promise — and *because* it carries none, a differing **minor** is refused. Read
-quickly, semver says `0.1` and `0.9` differ only in a minor and might be
-compatible; here they are not, and the host says so.
-`core::manifest::api_compatible` implements exactly this: same major, and the
-same minor while the major is `0`. From `1.0` on, a differing minor passes,
-which is what a minor bump means. A version that does not parse is
-incompatible — guessing is how a check becomes decoration.
+**Two rows look additive and are not.** The component model types records, enums and variants **structurally**: a record with one more field is a different type, not a compatible extension of the old one, so a guest built against the old shape cannot link against a host exporting the new one. The same goes for a case added to an `enum` or `variant`.
 
-**What the host does with it today.** Every component ships an
-`api-version` in its [manifest](#the-extension-manifest), and `Runtime::boot`
-refuses an incompatible one, naming both versions and the component
-(`host/tests/it/manifest.rs::a_component_built_against_another_api_version_is_refused`).
-That is the whole of it, and two things it deliberately does **not** do are
-worth naming so nobody builds against them:
+There is no such thing as an optional field to add. A field is part of the shape; optionality lives in its *type* (`option<T>`), which has to be there from the start to help.
 
-- **There are no adapters.** An incompatible version is refused, not bridged.
-  Keeping N-1 minor compatibility by adapting — the Zed model — is
-  [slice 16b-3](https://github.com/PromptPasture/jan-klod/issues/90), deferred
-  until there is a version pair it would help; below `1.0` there is none.
-- **The version travels one way.** It reaches the host through the manifest.
-  `extension-lifecycle`'s `extension-context` carries the extension's *own*
-  build version (`version: string`), not the interface package's, so a guest
-  cannot currently read what the host speaks and adapt to it. That direction is
-  also #90.
+**Pre-1.0 is stricter than typical semver.** While major is `0` the package is free to change, so `0.x` carries no promise — differing **minor** is refused. Semver says `0.1` and `0.9` might be compatible; here they're not. `core::manifest::api_compatible` requires same major and same minor while major is `0`; from `1.0` on, differing minor passes.
 
-**The freeze.** Until the first public release these rules describe intent and
-`wit/` may still change freely; from that release they bind, and the
-version-bump check ([16b-2](https://github.com/PromptPasture/jan-klod/issues/89))
-becomes a failure rather than a warning. See the
-[roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).
+**What the host does with it today.** Every component ships an `api-version` in its [manifest](#the-extension-manifest), and `Runtime::boot` refuses an incompatible one, naming both versions and the component. That is the whole of it.
+
+There are no adapters. An incompatible version is refused, not bridged. The version travels one way: it reaches the host through the manifest. `extension-lifecycle`'s `extension-context` carries the extension's *own* build version (`version: string`), not the interface package's, so a guest cannot currently read what the host speaks and adapt to it.
+
+**The freeze**: Until first release, rules describe intent; from then, they bind. See [roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).
 
 ## Signed artefacts and the registry index
 
-**Planned, Phase 16.** Written before the slices that implement it —
-[16c-1](https://github.com/PromptPasture/jan-klod/issues/91) verifies,
-[16c-2](https://github.com/PromptPasture/jan-klod/issues/92) fetches,
-[16c-3](https://github.com/PromptPasture/jan-klod/issues/93) signs,
-[16d](https://github.com/PromptPasture/jan-klod/issues/53) indexes — because
-four slices reading one layout drift on the second unless the layout is written
-down first. Where a slice finds this page wrong, the slice changes the page in
-the same commit; nothing here is a promise until the first release.
+**Planned, Phase 16.** Written before the slices that implement it so the layout is written down first. Where a slice finds this page wrong, the slice changes the page in the same commit.
 
 ### What travels together
 
-A component is three files with one stem, beside each other wherever they are —
-a registry directory, a release archive, or `ext/`:
+A component is three files with one stem, beside each other wherever they are — a registry directory, a release archive, or `ext/`:
 
 | File | What it is | Who produces it |
 |---|---|---|
@@ -481,29 +311,13 @@ a registry directory, a release archive, or `ext/`:
 | `<name>.manifest.toml` | the [manifest](#the-extension-manifest), plus `sha256 = "<hex>"` of the `.wasm` beside it | `scripts/manifests.sh` |
 | `<name>.manifest.toml.minisig` | a [minisign](https://jedisct1.github.io/minisign/) signature **over the manifest** | the release workflow |
 
-**The signature is over the manifest, and the manifest carries the hash of the
-component.** That is one signature covering both files without inventing a
-container format: the signature proves who wrote the manifest, the manifest's
-`sha256` proves which bytes it describes. Signing the `.wasm` alone would verify
-the artefact while trusting an unsigned declaration of what it may do, which is
-worse than no check because it looks like one. Signing a concatenation would
-verify both and be checkable by nothing but our own tooling; this layout is
-checkable by hand with the stock `minisign` binary and `sha256sum`, which is the
-test a signature format has to pass.
+**The signature is over the manifest, and the manifest carries the hash of the component.** That is one signature covering both files without inventing a container format: the signature proves who wrote the manifest, the manifest's `sha256` proves which bytes it describes. This layout is checkable by hand with the stock `minisign` binary and `sha256sum`, which is the test a signature format has to pass.
 
-`sha256` is a generated field like `capabilities`: the generator computes it from
-the staged `.wasm`, so a manifest cannot describe a component other than the one
-beside it. The host does not check it at boot — `Runtime::boot` checks the
-manifest against the component's *imports*, and a file already in `ext/` is
-trusted the way `config.yaml` is. It is checked at **install**, which is the
-moment bytes cross from untrusted to trusted.
+`sha256` is a generated field: the generator computes it from the staged `.wasm`, so a manifest cannot describe a component other than the one beside it. The host does not check it at boot — a file already in `ext/` is trusted the way `config.yaml` is. It is checked at **install**, which is the moment bytes cross from untrusted to trusted.
 
 ### Keys
 
-Minisign keys. The public key is the one-line format `minisign` itself writes
-(`untrusted comment:` line, then base64) and is named in `config.yaml` as a
-grant, per the repo's rule that a widening is a named thing and never a mode
-flag:
+Minisign keys. The public key is the one-line format `minisign` itself writes and is named in `config.yaml` as a grant:
 
 ```yaml
 registry:
@@ -512,46 +326,21 @@ registry:
       key: "RWQ…"        # the base64 line of the .pub file, inline
 ```
 
-The key is inline rather than a path so a config is self-contained and a
-`${VAR}` cannot swap it. **With no `trusted-keys`, every install is refused as
-unsigned** unless the installer is told, per install, to allow it; that flag is
-the narrow widening and prints that it was used. The first-party release key is
-published in the repository and on the landing page, since a key nobody can find
-is a signature nobody can check. Rotation and revocation are not designed here —
-they need a registry with more than one publisher to be worth designing
-([#53](https://github.com/PromptPasture/jan-klod/issues/53) and beyond).
+The key is inline rather than a path so a config is self-contained and a `${VAR}` cannot swap it. **With no `trusted-keys`, every install is refused as unsigned** unless the installer is told, per install, to allow it; that flag is the narrow widening.
 
 ### What install verifies, in order
 
-Nothing half-verified is ever visible in `ext/`: everything below happens in a
-staging directory, and the last step is one atomic rename. Each refusal has its
-**own** message naming what is wrong, because four refusals that all say
-"install failed" make the check useless for finding out what is.
+Nothing half-verified is ever visible in `ext/`: everything below happens in a staging directory, and the last step is one atomic rename. Each refusal has its **own** message naming what is wrong.
 
-1. **Checksum**, when the caller supplied one, against the `.wasm`. Optional for
-   a local path — the bytes are already on the machine and hashing them with a
-   value computed from the same file checks nothing. **Required for a URL**,
-   with no flag to skip it: a signature proves the publisher, not that this is
-   the version the user meant, and the value pasted from a release page is the
-   only thing tying the download to the intent. The registry index carries it,
-   so an install *by name* fills it in.
-2. **Signature** of `<name>.manifest.toml` against `registry.trusted-keys`,
-   then the manifest's `sha256` against the `.wasm`. Refused when the key is
-   valid but not trusted, when the signature is valid but the hash is not, and
-   when there is no signature — the last one unless explicitly allowed.
-3. **It is a component.** `Component::from_file` succeeds; a core module or
-   arbitrary bytes are refused here, not later at boot.
-4. **The manifest agrees with the component**: the same import cross-check boot
-   performs (`core::manifest`), run once more on the staged copy, so a signed
-   manifest that lies about its own component is refused before it lands.
-5. **Rename into `ext/`.** A failure at any earlier step removes the staging
-   directory and leaves `ext/` byte-identical.
+1. **Checksum**, when the caller supplied one, against the `.wasm`. Optional for a local path — the bytes are already on the machine and hashing them with a value computed from the same file checks nothing. **Required for a URL**, with no flag to skip it: a signature proves the publisher, not that this is the version the user meant, and the value pasted from a release page is the only thing tying the download to the intent.
+2. **Signature** of `<name>.manifest.toml` against `registry.trusted-keys`, then the manifest's `sha256` against the `.wasm`. Refused when the key is valid but not trusted, when the signature is valid but the hash is not, and when there is no signature — the last one unless explicitly allowed.
+3. **It is a component.** `Component::from_file` succeeds; a core module or arbitrary bytes are refused here, not later at boot.
+4. **The manifest agrees with the component**: the same import cross-check boot performs, run once more on the staged copy, so a signed manifest that lies about its own component is refused before it lands.
+5. **Rename into `ext/`.** A failure at any earlier step removes the staging directory and leaves `ext/` byte-identical.
 
 ### The index
 
-A registry is a directory served over HTTPS with an `index.toml` at its root —
-TOML like the manifests, so the one parser already in the tree reads both, and
-a file a person can read without tooling:
+A registry is a directory served over HTTPS with an `index.toml` at its root — TOML like the manifests, so the one parser already in the tree reads both, and a file a person can read without tooling:
 
 ```toml
 # index.toml
@@ -569,40 +358,15 @@ path = "tool-shell/0.1.0/tool-shell.wasm" # relative to the index; siblings by s
 signed-by = "jan-klod-release"           # a key name a config can be expected to hold
 ```
 
-- **Every per-extension field is copied from the manifest**, so an index entry
-  can be checked against the manifest it points at, and `ext search` can show
-  requested capabilities *before* a byte is downloaded — which is the reason the
-  index has them. `format` is the index's own version, bumped when the shape
-  changes; a reader refuses a `format` it does not know rather than guessing.
-- **`path` names the `.wasm`; the manifest and signature are its siblings by
-  stem.** One field, not three, so the three files cannot be listed in three
-  places and disagree. Relative to the index URL, so a registry can be moved or
-  mirrored by copying a directory.
-- **The index is signed too**: `index.toml.minisig`, by the same key, verified
-  on fetch when a trusted key exists. It is served over TLS regardless; the
-  signature is what stops a substituted index from pointing every entry at an
-  older, still-signed version. The artefacts are verified on their own terms
-  either way — the index signature is a check on the *listing*, not a shortcut
-  past steps 1–4.
-- **One index, one publisher.** A `signed-by` other than a configured key is an
-  entry the installer cannot use and says so; federating indexes is not designed
-  here.
+- **Every per-extension field is copied from the manifest**, so an index entry can be checked against the manifest it points at, and `ext search` can show requested capabilities *before* a byte is downloaded — which is the reason the index has them. `format` is the index's own version, bumped when the shape changes; a reader refuses a `format` it does not know rather than guessing.
+- **`path` names the `.wasm`; the manifest and signature are its siblings by stem.** One field, not three, so the three files cannot be listed in three places and disagree. Relative to the index URL, so a registry can be moved or mirrored by copying a directory.
+- **The index is signed too**: `index.toml.minisig`, by the same key, verified on fetch when a trusted key exists. It is served over TLS regardless; the signature is what stops a substituted index from pointing every entry at an older, still-signed version.
+- **One index, one publisher.** A `signed-by` other than a configured key is an entry the installer cannot use and says so; federating indexes is not designed here.
 
-What this is not: a package manager. No dependency resolution, no version
-ranges, no update channel — an entry is an exact artefact, and installing it is
-the five steps above. See the
-[roadmap](roadmap.md#phase-16--capability-manifest--signed-registry) and
-[Configurator → Extension registry](configurator.md#extension-registry).
+What this is not: a package manager. No dependency resolution, no version ranges, no update channel — an entry is an exact artefact, and installing it is the five steps above. See [roadmap](roadmap.md#phase-16--capability-manifest--signed-registry).
 
 ## Storage is not a contract extensions implement
 
-There was a `memory-store.wit` here, and a `store-*` component family in the
-architecture notes. One component was ever written against it (`store-memory`),
-and the core never called it once: persistence has always been host-side, for the
-reason [Architecture](architecture.md#storage) records — the sandbox has no
-filesystem, so a store guest would need one granted back, and the transcript is
-the most sensitive thing the runtime holds. The contract and the family are gone;
-`host-storage` is how a guest reaches storage, and the top-level `storage:` block
-is how an operator configures it.
+There was a `memory-store.wit` here, and a `store-*` component family in the architecture notes. One component was ever written against it (`store-memory`), and the core never called it once: persistence has always been host-side, for the reason [Architecture](architecture.md#storage) records — the sandbox has no filesystem, so a store guest would need one granted back, and the transcript is the most sensitive thing the runtime holds. The contract and the family are gone; `host-storage` is how a guest reaches storage, and the top-level `storage:` block is how an operator configures it.
 
 See [decisions/2026-06-29-component-model-rust/Handoff.md](../decisions/2026-06-29-component-model-rust/Handoff.md) for the current foundation decision (Rust + Wasmtime + Component Model), which supersedes the host language and runtime of the earlier [2026-06-28 Go + Wazero stack](../decisions/2026-06-28-go-wasm-stack/Handoff.md). The WIT contracts on this page are unchanged by that pivot.

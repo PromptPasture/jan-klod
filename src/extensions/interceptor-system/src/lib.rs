@@ -1,36 +1,30 @@
-//! `interceptor-system` — the standing instructions a turn runs under. Without
-//! it, the model gets the raw conversation with no framing: it isn't told it's
-//! an agent, that paths are workspace-relative, or that writes get confirmed —
-//! for the small models this runtime targets, that framing is most of the
-//! difference between a tool call and a paragraph describing one.
+//! `interceptor-system` — the standing instructions a turn runs under.
+//! Without it, the model gets raw conversation with no framing: it isn't told
+//! it's an agent, that paths are workspace-relative, or that writes get confirmed.
+//! For small models, that framing is critical.
 //!
 //! ## Why an extension, and why `select-model`
 //!
-//! A system prompt is policy, so it lives in a swappable/reconfigurable guest
-//! rather than core.
-//!
-//! It runs at `select-model` (not the more obvious `select-context`) because
-//! that phase runs first: the prompt must already be in the message list when
-//! `interceptor-context` measures the token budget, or those tokens go uncounted.
+//! A system prompt is policy, so it lives in a swappable guest rather than core.
+//! It runs at `select-model` (not `select-context`) because that phase runs first:
+//! the prompt must be in the message list when `interceptor-context` measures
+//! the token budget, or those tokens go uncounted.
 //!
 //! ## Idempotence
 //!
-//! Prepends only when no system message is already present, so a turn that
-//! already has one (driver-set, another interceptor, a replayed conversation)
-//! doesn't accumulate copies.
+//! Prepends only when no system message exists, so a turn that already has one
+//! (driver-set, another interceptor, replayed) doesn't accumulate copies.
 //!
-//! The assembly is pure Rust (unit-tested natively); the Component-Model glue
-//! below only compiles for `wasm32`.
+//! The assembly is pure Rust (unit-tested natively); the glue compiles for `wasm32`.
 
-// Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
+// Pure logic: unit-tested natively; CM glue compiles for wasm32 only.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod prompt {
     /// The built-in instructions, used when config supplies no `prompt`.
     ///
-    /// Each line earns its place by naming something the runtime actually
-    /// enforces, so the model's expectations match the sandbox's behaviour rather
-    /// than being surprised by it: paths are jailed, writes are confirmed,
-    /// partial edits are anchored, and output goes into the context budget.
+    /// Each line names something the runtime actually enforces, so the model's
+    /// expectations match the sandbox's behaviour: paths are jailed, writes are
+    /// confirmed, partial edits are anchored, and output goes into the budget.
     pub const DEFAULT: &str = "\
 You are jan-klod, a coding agent working inside one workspace directory.
 
@@ -50,9 +44,8 @@ files you read.";
 
     /// The system text for this turn: the configured `prompt`, else [`DEFAULT`].
     ///
-    /// An empty or whitespace-only configured value means "no system prompt" —
-    /// an explicit way to switch the instructions off without disabling the
-    /// extension and losing the ability to turn it back on from config alone.
+    /// An empty or whitespace-only value means "no system prompt" — an explicit
+    /// way to switch instructions off without disabling the extension.
     #[must_use]
     pub fn resolve(configured: Option<&str>) -> Option<String> {
         match configured {
@@ -65,13 +58,11 @@ files you read.";
     /// The standing instructions plus the project's own (`AGENTS.md`), if any.
     ///
     /// Appended and labelled rather than merged: the standing prompt states what
-    /// the *runtime* enforces (true regardless of the repo), while project
-    /// instructions are a request from the codebase — a model that can't tell
-    /// them apart would treat "you may write anywhere" in a checked-in file as a
-    /// fact about the sandbox.
+    /// the *runtime* enforces (true regardless of repo), while project instructions
+    /// are a request from the codebase — a model that can't distinguish them would
+    /// treat "you may write anywhere" in a checked-in file as a sandbox fact.
     ///
-    /// `prompt: ""` drops the project section too — an explicit "no system
-    /// message" and honouring half of it would be worse than either answer.
+    /// `prompt: ""` drops the project section too — an explicit "no system message".
     #[must_use]
     pub fn resolve_with_project(configured: Option<&str>, project: Option<&str>) -> Option<String> {
         let base = resolve(configured)?;

@@ -18,12 +18,9 @@ const MIN_TRANSCRIPT_HEIGHT: u16 = 5;
 /// The smallest a bordered composer can be: one row of text, two of border.
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 
-/// The frame's regions for one `(width, height)`.
-///
-/// `header` and `sidebar` are `None` exactly where #104's responsive table
-/// says they are hidden. `content` is the combined transcript+composer area —
-/// [`crate::tui::render`] splits it the way it already did, since that split
-/// depends on the composer's buffer rather than on the terminal's size.
+/// Frame regions for one `(width, height)` (#104's responsive table).
+/// `header` and `sidebar` are `None` where hidden. `content` is transcript+composer
+/// (split later depends on composer buffer, not terminal size).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Frame {
     /// The one-row header, when the terminal is tall enough for it.
@@ -129,8 +126,7 @@ mod tests {
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
     }
 
-    /// No two regions overlap, and none reaches past the terminal's own
-    /// bounds — "clipped mid-glyph" starts with a rect that does not fit.
+    /// No overlaps, no regions exceed terminal bounds ("clipped mid-glyph" starts with bad rect).
     fn assert_tiles_cleanly(frame: Frame, width: u16, height: u16) {
         let mut present: Vec<ratatui::layout::Rect> = vec![frame.content, frame.status];
         present.extend(frame.header);
@@ -209,9 +205,7 @@ mod tests {
         assert_tiles_cleanly(frame, 60, 8);
     }
 
-    /// The four region-set tests above are the acceptance's own sizes; this
-    /// sweeps a wider range so the invariant is not merely true at those four
-    /// points.
+    /// Above tests check the acceptance's four points; this sweeps wider to ensure invariant holds.
     #[test]
     fn regions_never_overlap_or_run_past_the_terminal_at_any_size() {
         for width in [10, 30, 59, 60, 79, 80, 99, 100, 200] {

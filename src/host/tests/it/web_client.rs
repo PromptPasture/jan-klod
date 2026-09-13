@@ -17,15 +17,15 @@
 //! the pair is broken: (1) passes on a handler that serves everything, and (2)
 //! passes on a build that serves nothing.
 //!
-//! Bodies are asserted, not just status codes — an empty `dist/` would answer
-//! `200` to both routes and prove nothing about the bundle.
+//! Bodies are asserted, not codes alone — an empty `dist/` would answer `200`
+//! to both routes and prove nothing about the bundle.
 //!
 //! # What proves Acceptance line 1, and what does not
 //!
 //! [#119](https://github.com/PromptPasture/jan-klod/issues/119) asks that a
-//! browser at `/` run a full turn with `ask` and cancel. No browser runs in
-//! this suite, and pretending otherwise by ticking the line on a served file is
-//! what the plan for this box forbade. The honest split:
+//! browser at `/` run a full turn with `ask` and cancel. No browser runs here;
+//! pretending otherwise by ticking a served file violates the plan. The honest
+//! split:
 //!
 //! **Asserted, in this gate.** The core serves the real bundle at the two paths
 //! above and refuses the API without a token (this file). The routes that
@@ -63,9 +63,8 @@ use crate::common;
 
 const TOKEN: &str = "s3cret-token";
 
-/// The smallest config that boots an agent. Nothing here reaches a provider:
-/// neither route under test touches the agent at all, but `serve_once_authed`
-/// needs one to hand the other routes.
+/// Minimal config to boot an agent. Neither route touches the agent, but
+/// `serve_once_authed` needs one to hand the other routes.
 fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -84,8 +83,8 @@ extensions:
     config
 }
 
-/// `GET <target>` with no `Authorization` header at all — a browser's first
-/// request for a page it has never seen.
+/// `GET <target>` with no `Authorization` header — a browser's first request
+/// for an unfamiliar page.
 fn get_unauthenticated(port: u16, target: &str) -> String {
     let raw = format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
@@ -119,8 +118,7 @@ fn the_web_client_is_served_without_a_token() {
         (page, script)
     });
     // A token *is* configured. Serving these two anyway is the exemption under
-    // test; with `None` here the test would pass on a surface with no gate at
-    // all.
+    // test; with `None`, the test would pass on any surface.
     for _ in 0..2 {
         serve_once_authed(&server, &mut agent, Some(TOKEN)).expect("serves");
     }
@@ -131,8 +129,8 @@ fn the_web_client_is_served_without_a_token() {
         page.contains("text/html"),
         "and as HTML, or the browser shows the source: {page}"
     );
-    // Not just any 200: the bytes are the committed bundle's. `dist/index.html`
-    // loads exactly one script, and its name is the other route below.
+    // Not just any 200: the bytes are the committed bundle's, and its name is
+    // the other route below.
     assert!(
         page.contains("app.js"),
         "the page served is the bundle's index, which loads app.js: {page}"
@@ -166,12 +164,11 @@ fn the_web_client_is_served_without_a_token() {
 /// already shipped. The TUI called every `tool-result` an unknown frame while
 /// the stdio transport dropped them without a word.
 ///
-/// This reads the TypeScript as text rather than running Node, because
-/// [#119](https://github.com/PromptPasture/jan-klod/issues/119) box 1 decided
-/// the core must build without Node on the path. A seven-string list is within
-/// what a grep can check honestly; anything more would be a parser, and a
-/// parser that silently matches nothing is the failure this test exists to
-/// prevent — hence the count assertion before the comparison.
+/// This reads the TypeScript as text instead of running Node, since the core
+/// builds without Node on the path. A seven-string list is within what a grep
+/// can check honestly; anything more would be a parser, and a parser that
+/// silently matches nothing is the failure this test exists to prevent — hence
+/// the count assertion before the comparison.
 #[test]
 fn the_web_client_answers_every_frame_the_core_emits() {
     let path = common::repo_root().join("src/web/src/frames.ts");

@@ -1,14 +1,5 @@
-//! Interceptors reach a real model.
-//!
-//! `interceptor-intent-router` uses the model tier to decide simple-vs-agentic
-//! when heuristics can't. `build_agent` used to pass a closure hardcoded to
-//! `"agentic"`, so the classifier never actually ran in any shipped config.
-//!
-//! These drive `build_agent` against a canned provider and assert the
-//! classifier is consulted, its verdict acted on, and a provider failure
-//! degrades to the conservative label rather than failing the turn.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! `interceptor-intent-router` uses model tier for simple-vs-agentic.
+//! Tests: assert classifier consulted, verdict acted on, provider failure degrades.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -22,9 +13,7 @@ use crate::common;
 
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "interceptor-intent-router.wasm"];
 
-/// A provider whose answer depends on which instance called it, so the test can
-/// tell a classification call from the turn's own completion: the classifier is
-/// pointed at `judge` (a distinct `base-url`) and everything else at `main`.
+/// Provider varies by instance: `judge` for classification, `main` for turns
 fn split_http(classifications: &Arc<AtomicU32>, verdict: &'static str) -> HttpFn {
     let classifications = Arc::clone(classifications);
     Box::new(move |_m, url: &str, _h, _b, _t| {
@@ -92,8 +81,7 @@ fn the_classifier_is_consulted_and_its_verdict_is_acted_on() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // `classifier: judge` points the model tier at the cheap instance — the
-    // reason the key exists, since classification is a two-token question.
+    // `classifier: judge` routes to cheap instance for classification
     let config = write_config(&dir, "classifier: judge\n");
     let calls = Arc::new(AtomicU32::new(0));
 
@@ -113,8 +101,7 @@ fn the_classifier_is_consulted_and_its_verdict_is_acted_on() {
         1,
         "the classifier was actually consulted"
     );
-    // `simple` short-circuits the agentic path: the answer comes back marked
-    // non-agentic, which is the whole point of classifying.
+    // `simple` verdict short-circuits agentic path
     match out {
         RunResult::Answered { agentic, .. } => {
             assert!(!agentic, "a `simple` verdict skips the agentic path");
@@ -134,7 +121,7 @@ fn a_classifier_failure_takes_the_conservative_path() {
     let _guard = common::TempDir(dir.clone());
     let config = write_config(&dir, "classifier: judge\n");
 
-    // The classifier errors; the turn must still run, on the agentic path.
+    // Classifier errors; turn runs agentic path (fallback)
     let http = || -> HttpFn {
         Box::new(move |_m, url: &str, _h, _b, _t| {
             if url.contains("judge") {
@@ -189,8 +176,7 @@ fn an_unknown_classifier_name_does_not_break_the_agent() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // Names a provider nobody enabled: a warning and the conservative default,
-    // not a boot failure — the same posture as the fallback chain's own list.
+    // Unknown provider: warning + conservative default
     let config = write_config(&dir, "classifier: nonexistent\n");
     let calls = Arc::new(AtomicU32::new(0));
     let counted = Arc::clone(&calls);

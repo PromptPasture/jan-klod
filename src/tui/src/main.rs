@@ -147,12 +147,8 @@ enum Mode {
     Gui,
 }
 
-/// Strip a leading `tui`/`--tui` or `gui`/`--gui` mode word.
-///
-/// Still only the *first* argument, as it was when `tui` was the only one: a
-/// mode is which program you are running, not an option to it, and accepting
-/// `jan-klod my-session --gui` would invite the reading that the session
-/// survives into the window. It does not — see [`gui`].
+/// Strip leading `tui`/`--tui` or `gui`/`--gui` (first arg only; mode is which program,
+/// not an option; `jan-klod my-session --gui` would falsely suggest session survives).
 fn split_mode(args: &[String]) -> (Mode, Vec<String>) {
     match args.split_first() {
         Some((first, rest)) if first == "tui" || first == "--tui" => (Mode::Tui, rest.to_vec()),
@@ -203,9 +199,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
-/// Whether a positional argument looks like a `host:port` rather than a session
-/// id. Deliberately narrow: the tail must be digits, so a session id with a
-/// colon in it is left alone.
+/// Check if positional arg looks like `host:port` (narrow: port tail must be digits).
 fn looks_like_an_address(arg: &str) -> bool {
     let Some((host, port)) = arg.rsplit_once(':') else {
         return false;
@@ -296,12 +290,8 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `--gui`: make sure a gateway is listening, then open the web client it serves
-/// in the Tauri window from `src/gui`.
-///
-/// Everything fallible here is reported rather than worked around. There is no
-/// fallback to the TUI: somebody who asked for a window and silently got a
-/// terminal has been told the wrong thing about their machine.
+/// `--gui`: ensure gateway listening, open web client in Tauri window (`src/gui`).
+/// All failures reported; no fallback to TUI (wrong machine info is worse than failing).
 fn gui(addr: Option<&str>, session: Option<&str>) -> ExitCode {
     // A session id would be a promise this cannot keep: the web client picks
     // its own session in the page and has no URL parameter for one. Refused
@@ -366,15 +356,8 @@ fn gui(addr: Option<&str>, session: Option<&str>) -> ExitCode {
     }
 }
 
-/// What to suggest when the window failed to come up.
-///
-/// Platform-specific because the answer is: on macOS the webview is part of the
-/// OS and a failure is not a missing prerequisite, while on Linux it is a
-/// package and naming it is the whole of the fix (#141 measured which one).
-///
-/// Deliberately phrased as a conditional rather than a diagnosis — the exit
-/// status alone does not prove the webview was the problem, and this function
-/// cannot see the loader error the user just read above it.
+/// Platform-specific hint (macOS: webview is OS; Linux: package) when window fails.
+/// Conditional, not diagnosis (exit status alone doesn't prove webview was the problem).
 const fn webview_prerequisite_hint() -> &'static str {
     if cfg!(target_os = "linux") {
         "if it reported a missing shared library, the system webview is not \
@@ -388,12 +371,8 @@ const fn webview_prerequisite_hint() -> &'static str {
     }
 }
 
-/// Check if a gateway is reachable at `addr`; if not, spawn one and wait until
-/// it answers a TCP connection (up to 10 s). Returns the child handle so the
-/// caller keeps it alive for the duration of the process.
-///
-/// Only the `--addr` path needs this. The stdio transport spawns its own
-/// gateway and owns the pipes, so there is no port to poll.
+/// Check if gateway reachable at `addr`; if not, spawn and wait (up to 10s).
+/// Returns child handle to keep alive. (stdio transport spawns its own gateway.)
 fn ensure_gateway(addr: &str) -> Option<Child> {
     if is_up(addr) {
         return None;

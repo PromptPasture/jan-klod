@@ -1,9 +1,7 @@
-//! Host adapter for `tool-*` extensions.
-//!
-//! Instantiates a `tool-world` guest, satisfies its imports (`host-log`,
-//! `host-config`, `host-http`, `host-fs`), and exposes its `tool-callable`
-//! exports (`meta`/`invoke`). `host-fs` is backed by an optional [`Workspace`]:
-//! default-deny — with no workspace configured every op returns `denied`.
+//! Host adapter for `tool-*` extensions. Instantiates `tool-world` guest,
+//! satisfies imports (`host-log`, `host-config`, `host-http`, `host-fs`),
+//! exposes `tool-callable` exports (`meta`/`invoke`). `host-fs` backed by
+//! optional [`Workspace`]: default-deny without workspace.
 
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
@@ -37,19 +35,13 @@ struct ToolHost {
     /// The bounded command runner (default-deny unless enabled) (`host-process`).
     process: ProcessRunner,
     /// Outbound HTTP, or `None` for default-deny (`host-http`).
-    ///
-    /// Having the interface imported and having egress granted are different
-    /// things — a file tool suddenly making network calls is what the sandbox
-    /// guards against. `None` unless the instance's config opts in.
+    /// Interface imported ≠ egress granted; sandbox guards against file tools
+    /// making network calls.
     http: Option<crate::route::HttpFn>,
-    /// Long-lived children this instance started, by handle (#109).
-    ///
-    /// **Owned here, not in `ProcessRunner`, because this is the lifetime.**
-    /// `ToolHost` is per-instance and dies with it, so the children die with it
-    /// too — `LiveChild`'s `Drop` kills what it holds, and that runs whether the
-    /// instance stops cleanly, errors, or goes down with the runtime. Keeping
-    /// them in the runner would not have that property: the runner is `Clone`,
-    /// and a child in a clone belongs to nothing in particular.
+    /// Long-lived children this instance started (#109). **Owned here (not
+    /// `ProcessRunner`) because `ToolHost` per-instance dies with its children.**
+    /// `LiveChild::Drop` runs on clean stop, error, or runtime crash. Runner is
+    /// `Clone`; a child in a clone belongs to nothing.
     children: crate::host_process::Children,
 }
 
@@ -194,21 +186,13 @@ impl g_proc::Host for ToolHost {
     }
 
     // ── Long-lived children (Slice 18c-1, #109) ──────────────────────────────
-    //
-    // Every call goes through `self.children`, which is keyed by a handle this
-    // host issued. An unknown handle is `Denied` rather than a panic or a
-    // silent success: a guest can pass any integer, and the answer to one it
-    // was never given is the same answer it gets for a child it was never
-    // granted.
+    // Every call goes through `self.children`, keyed by host-issued handles.
+    // Unknown handle = `Denied` (not panic/silent): guest can pass any integer.
 
     fn spawn(&mut self, name: String) -> Result<u32, g_proc::ProcError> {
-        // The admission decision, and it happens **before** anything is
-        // started. An implementation that spawned and then checked would have a
-        // window in which it had done neither, and a window is all a capability
-        // like this needs to stop being default-deny.
-        //
-        // `proc-error` carries no payload, so the reason goes to the host log —
-        // the same answer `exec` gives, and the reason the interface says so.
+        // Admission **before** spawn (not after). A spawn-then-check window is all
+        // a capability needs to break default-deny. `proc-error` carries no payload;
+        // reason goes to host log (same as `exec`).
         self.children
             .spawn(&self.process, &name)
             .map_err(to_gen_proc_error)
@@ -299,9 +283,8 @@ impl ToolExtension {
         g_proc::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = ToolHost {
-            // `inherit_stderr`, not `inherit_stdio`: inheriting stdin would let a
-            // guest read the terminal, including a human's answer to a permission
-            // prompt. stderr stays for panic diagnostics; it grants no authority.
+            // `inherit_stderr` (not stdio): stdin would let guests read terminal,
+            // including permission prompt answers. stderr stays for diagnostics.
             wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: id.to_string(),
@@ -376,19 +359,17 @@ pub struct ToolMeta {
     pub arguments_schema: String,
 }
 
-/// A set of instantiated `tool-*` extensions, dispatched by tool name.
+/// Instantiated `tool-*` extensions, dispatched by name.
 ///
 /// Implements [`ToolInvoker`](crate::conductor::ToolInvoker) so the loop can call
-/// tools: a model's `tool-call` name is matched to the extension that advertises it,
-/// and its `invoke` runs. Unknown names return `None` (skip-if-absent).
+/// tools by matching the model's `tool-call` name. Unknown names return `None`.
 pub struct ToolFleet {
     /// (advertised metadata, extension), metadata resolved once via `meta`.
     tools: Vec<(ToolMeta, ToolExtension)>,
 }
 
 impl ToolFleet {
-    /// Build a fleet from instantiated extensions, resolving each tool's metadata
-    /// (falling back to the instance id if `meta` traps).
+    /// Build fleet from extensions, resolving each tool's metadata (fallback to id).
     #[must_use]
     pub fn new(extensions: Vec<ToolExtension>) -> Self {
         let tools = extensions
@@ -453,11 +434,9 @@ impl crate::conductor::ToolInvoker for ToolFleet {
 
 // ─── LazyToolFleet ───────────────────────────────────────────────────────────
 
-/// One `tool-*` instance's compiled component and the wiring it will need to
-/// instantiate — held, not yet used. Everything here is cheap: `component` is
-/// a Wasmtime handle (an `Arc` under the hood, already produced by
-/// `Runtime::boot`'s compile step), and the rest are values the caller already
-/// built for the eager path (`workspace`, `process`, `http`).
+/// One `tool-*` instance's compiled component and wiring, held uninstantiated.
+/// All cheap: `component` is a Wasmtime `Arc` handle (from `Runtime::boot`),
+/// and the rest are values the caller already built (`workspace`, `process`, `http`).
 struct PendingTool {
     id: String,
     component: Component,
@@ -466,28 +445,18 @@ struct PendingTool {
     http: Option<crate::route::HttpFn>,
 }
 
-/// A tool fleet whose guests are compiled but not yet instantiated (#59).
+/// Tool fleet with guests compiled but not yet instantiated (#59).
 ///
-/// `Runtime::boot` still compiles every enabled `tool-*` component, same as
-/// before — that part is unchanged and stays cheap (parses and validates the
-/// module, does not run it). What moves is the next step: creating the guest's
-/// `Store`, linking it, and driving `init`/`start` — the part that actually
-/// allocates the guest's linear memory and runs its setup code. That now
-/// happens the first time the fleet is asked for something, not unconditionally
-/// during `Runtime::build_agent`.
+/// `Runtime::boot` still compiles every `tool-*` (unchanged, cheap). What moves:
+/// `Store` creation, linking, and `init`/`start` (allocates guest memory, runs setup)
+/// now happens on first use, not unconditionally in `build_agent`.
 ///
-/// **The whole pending set resolves together, not just the tool asked for.**
-/// A model's `select-tools` advertisement is one JSON array describing every
-/// enabled tool at once ([`ToolFleet::metas`]), so the first thing that needs
-/// any of it needs all of it — there is no cheaper way to answer "what tools
-/// exist" than asking every one of them, because that answer (`tool-callable`'s
-/// `meta` export) is guest-authored data the host cannot derive any other way.
-/// Finer-grained laziness — instantiating only the one tool a model actually
-/// calls, never touching the rest even for `select-tools` — needs that catalog
-/// to live somewhere static (the manifest, or `config.yaml`) instead of inside
-/// the guest. That is a real, separate change with its own risk (the manifest
-/// and the guest's own `meta` could then disagree), noted in #59's PR rather
-/// than attempted here.
+/// **Whole pending set resolves together, not just the tool asked for.** A model's
+/// `select-tools` advertisement is one JSON array for every enabled tool, so the
+/// first request for any needs all of it. There's no cheaper way because that answer
+/// (`tool-callable`'s `meta` export) is guest-authored; host can't derive it.
+/// Per-tool laziness needs static catalog (manifest/config) instead of guest code
+/// — a separate change with its own risk, noted in #59's PR.
 pub struct LazyToolFleet {
     engine: Engine,
     pending: Vec<PendingTool>,
@@ -523,18 +492,15 @@ impl LazyToolFleet {
         });
     }
 
-    /// Whether every pending tool has already been instantiated. `false` until
-    /// the first [`Self::metas`]/[`Self::tool_names`]/`invoke` call — the fact
-    /// a test asserting laziness checks before touching the fleet.
+    /// Whether every pending tool has been instantiated. `false` until first
+    /// [`Self::metas`]/[`Self::tool_names`]/`invoke` call.
     #[must_use]
     pub const fn is_instantiated(&self) -> bool {
         self.live.is_some()
     }
 
-    /// Instantiate every pending tool (once; memoized), and hand back the live
-    /// fleet. A component that fails to instantiate or refuses to start is
-    /// reported the same way the eager path always was — a [`CoreError`] — just
-    /// raised here instead of during `build_agent`.
+    /// Instantiate every pending tool once (memoized). Failures reported like
+    /// the eager path: [`CoreError`], just here instead of `build_agent`.
     fn ensure(&mut self) -> Result<&mut ToolFleet, CoreError> {
         if self.live.is_none() {
             let mut extensions = Vec::with_capacity(self.pending.len());
@@ -543,8 +509,7 @@ impl LazyToolFleet {
             }
             self.live = Some(ToolFleet::new(extensions));
         }
-        // The `if` above guarantees this, but the borrow checker cannot see
-        // through `Option::is_none()` followed by a fresh `.as_mut()`.
+        // `if` above guarantees this; borrow checker cannot see through `is_none()`.
         Ok(self.live.as_mut().expect("just set above"))
     }
 
@@ -562,8 +527,7 @@ impl LazyToolFleet {
         )
     }
 
-    /// The advertised metadata for every tool, instantiating the whole pending
-    /// set if this is the first call.
+    /// Advertised metadata for every tool, instantiating pending set on first call.
     ///
     /// # Errors
     /// Returns a [`CoreError`] if a pending tool fails to instantiate or start.
@@ -571,8 +535,7 @@ impl LazyToolFleet {
         Ok(self.ensure()?.metas())
     }
 
-    /// The advertised tool names, instantiating the whole pending set if this
-    /// is the first call.
+    /// Advertised tool names, instantiating pending set on first call.
     ///
     /// # Errors
     /// Returns a [`CoreError`] if a pending tool fails to instantiate or start.
@@ -588,10 +551,8 @@ impl crate::conductor::ToolInvoker for LazyToolFleet {
     ) -> Option<crate::conductor::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
-            // Consistent with a live tool's own error handling (`ToolFleet::invoke`,
-            // `ToolExtension::invoke`): fed back to the model as the call's result,
-            // not an abort — a lazily-failing guest costs this one tool call, not
-            // the turn.
+            // Like live tools: error fed to model as result, not abort.
+            // Lazy failure costs one tool call, not the turn.
             Err(err) => Some(crate::conductor::ToolInvocation {
                 content: format!("tool fleet failed to instantiate: {err}"),
                 failed: true,

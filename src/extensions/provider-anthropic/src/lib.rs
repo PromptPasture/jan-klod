@@ -1,12 +1,8 @@
-//! `provider-anthropic` — native Anthropic Messages API implementation of the
-//! `llm-provider` interface.
+//! `provider-anthropic` — Anthropic Messages API implementation.
 //!
-//! Calls `/v1/messages` via `host-http`. Handles:
-//! - System messages → top-level `system` field (not in the messages array).
-//! - Tool-result messages → `{"role":"user","content":[{"type":"tool_result",…}]}`.
-//! - Tool-use blocks → `CompletionChunk::ToolCallRequest`.
-//! - `401/403` → `AuthFailed`, `429` → `RateLimited`.
-//! - `api-key` is never logged.
+//! Posts to `/v1/messages` via `host-http`. System messages go to the top-level `system`
+//! field; tool results become `{"role":"user","content":[{"type":"tool_result",…}]}`.
+//! Maps `401/403` → `AuthFailed`, `429` → `RateLimited`. Never logs `api-key`.
 
 #[allow(
     unsafe_code,
@@ -85,15 +81,12 @@ fn str_field(obj: &Value, key: &str) -> String {
         .to_owned()
 }
 
-/// Convert one WIT message to Anthropic API JSON.
-///
-/// System messages must be extracted separately (see `build_request_body`).
-/// Tool-result messages become `{"role":"user","content":[{"type":"tool_result",…}]}`.
+/// Convert a WIT message to Anthropic API JSON.
+/// System messages are extracted separately; tool results become `{"role":"user","content":[{"type":"tool_result",…}]}`.
 fn message_to_json(msg: &Message) -> Value {
     match msg.role {
         Role::System => {
-            // Should have been stripped out before this is called; include as user
-            // fallback so the conversation still makes sense.
+            // Should be stripped before this is called; fallback so conversation makes sense.
             json!({"role": "user", "content": msg.content})
         }
         Role::User => json!({"role": "user", "content": msg.content}),
@@ -124,9 +117,7 @@ fn tool_to_json(tool: &ToolDefinition) -> Value {
 }
 
 /// Build the Anthropic `/v1/messages` request body.
-///
-/// Extracts the first `Role::System` message into the top-level `system` field;
-/// all others are serialised in order into `messages`.
+/// Extracts the first `Role::System` message to the top-level `system` field; others go to `messages`.
 fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     let mut obj = Map::new();
     obj.insert("model".to_owned(), json!(model));
@@ -135,7 +126,7 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
         json!(request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
     );
 
-    // Extract system prompt (Anthropic puts it at the top level, not in messages).
+    // Extract system prompt to top level (not in messages).
     let system: Option<String> = request
         .messages
         .iter()
@@ -170,7 +161,7 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
 fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| ProviderError::Transient)?;
 
-    // Surface API-level errors embedded in a 200 body (rare but possible).
+    // Surface API errors in a 200 body.
     if value.get("type").and_then(Value::as_str) == Some("error") {
         let kind = value
             .pointer("/error/type")
@@ -223,7 +214,7 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
         .and_then(Value::as_str)
         .unwrap_or("end_turn")
         .to_owned();
-    // Normalise to the common finish-reason vocabulary the core expects.
+    // Normalize to the core's finish-reason vocabulary.
     let finish = match stop_reason.as_str() {
         "tool_use" => "tool-calls",
         "max_tokens" => "length",
@@ -233,9 +224,7 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     Ok(chunks)
 }
 
-/// A transport/status error from `host-http`, described in words rather than a
-/// generated binding variant name (e.g. `HttpError::ConnectionFailed`) — nobody
-/// reading a terminal or a provider error should see a Rust identifier.
+/// Describe a `host-http` error in words, not a Rust identifier (e.g. `HttpError::ConnectionFailed`).
 const fn describe_http(err: &HttpError) -> &'static str {
     match err {
         HttpError::ConnectionFailed => {
@@ -260,10 +249,8 @@ const fn map_http_error(err: HttpError) -> ProviderError {
         HttpError::ClientError(401 | 403) => ProviderError::AuthFailed,
         HttpError::ClientError(404) => ProviderError::ModelNotFound,
         HttpError::ClientError(429) => ProviderError::RateLimited,
-        // Unreachable, not transient: a refused connection, a DNS failure or a
-        // TLS error means the address is wrong, the server is not running, or
-        // egress is not granted for it. None of those is fixed by retrying, and
-        // calling them "transient" sends the reader looking for a flake.
+        // Not transient: refused connection, DNS failure, or TLS error means the address is wrong,
+        // server is down, or egress is denied. Retrying won't fix these.
         HttpError::ConnectionFailed | HttpError::Timeout | HttpError::TlsError => {
             ProviderError::Unreachable
         }

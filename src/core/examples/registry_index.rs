@@ -40,7 +40,7 @@ use std::path::Path;
 
 use jan_klod_core::ext::{list, Declaration};
 
-/// The index format's own version, so a reader can refuse one it does not
+/// The index format's own version, so a reader can refuse one it doesn't
 /// understand rather than guessing at missing keys.
 const INDEX_VERSION: u32 = 1;
 
@@ -78,7 +78,7 @@ fn fail(message: &str) -> ! {
 }
 
 /// A SHA-256 digest as lowercase hex — the spelling `ext install --sha256`
-/// compares against.
+/// uses.
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes.iter().fold(String::new(), |mut out, byte| {
@@ -89,11 +89,11 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Where the component will be served from.
 ///
-/// The base is refused if it carries a query or a fragment, for the reason
-/// `ext::ExtError::OpaqueUrl` gives: the manifest and signature URLs are
-/// derived as siblings by relative resolution, which drops a query — so an
-/// index built on such a base would name component URLs whose companions
-/// 404. Better to refuse while generating than to publish it.
+/// The base is refused if it carries a query or fragment per
+/// `ext::ExtError::OpaqueUrl`: the manifest and signature URLs are
+/// derived as siblings via relative resolution, which drops a query — so an
+/// index built on such a base would name components whose companions 404.
+/// Better to refuse while generating than to publish it.
 fn component_url(base: &str, name: &str) -> String {
     let parsed =
         url::Url::parse(base).unwrap_or_else(|err| fail(&format!("{base} is not a URL: {err}")));
@@ -111,14 +111,13 @@ fn component_url(base: &str, name: &str) -> String {
 ///
 /// Empty until something signs the first-party components — that is
 /// [#93](https://github.com/PromptPasture/jan-klod/issues/93), deferred until
-/// before the first release. Emitting `""` rather than omitting the key says
-/// "nothing vouches for these bytes yet", which is the true statement; a
-/// reader that requires provenance can then refuse the entry instead of
-/// finding no key and assuming the index is an older shape.
+/// before the first release. Emitting `""` says "nothing vouches for these
+/// bytes yet", the true statement; a reader requiring provenance can refuse
+/// the entry instead of finding no key and assuming the index is older.
 ///
-/// The whole `.minisig` text, not just its base64 line: that is what
-/// `minisign_verify::Signature::decode` takes, so a reader can verify from the
-/// index without a second fetch.
+/// The whole `.minisig` text, not just its base64 line: what
+/// `minisign_verify::Signature::decode` takes, so a reader can verify from
+/// the index without a second fetch.
 fn signature_beside(component: &Path) -> String {
     let mut name = component.as_os_str().to_os_string();
     name.push(".minisig");
@@ -135,11 +134,11 @@ fn main() {
 
     let mut extensions = Vec::with_capacity(staged.len());
     for component in staged {
-        // A component whose manifest is absent or broken is not described
-        // rather than described vaguely: every field below the name comes from
-        // that manifest, and an entry carrying guesses is worse than an index
-        // that is short by one. It is also a refusal with a fix — `make ext`
-        // regenerates the manifest — so failing here is the message.
+        // A component whose manifest is absent or broken is not described,
+        // not vaguely: every field below the name comes from that manifest,
+        // an entry with guesses is worse than an index that is short. It's a
+        // refusal with a fix — `make ext` regenerates the manifest — so
+        // failing here is the message.
         let manifest = match component.declaration {
             Declaration::Present(manifest) => manifest,
             Declaration::Absent => fail(&format!(
@@ -158,9 +157,9 @@ fn main() {
             url: component_url(base_url, &manifest.name),
             sha256: hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes)),
             signature: signature_beside(&component.component),
-            // `try_from` rather than `as`: a size that did not convert would
-            // be a wrong number in a published index, and there is no sensible
-            // wrong number for "how many bytes will you download".
+            // `try_from` not `as`: a size that didn't convert would be wrong
+            // in a published index, no sensible wrong number for "how many
+            // bytes will you download".
             size: u64::try_from(bytes.len())
                 .unwrap_or_else(|err| fail(&format!("{} is unmeasurable: {err}", manifest.name))),
             name: manifest.name,
@@ -179,8 +178,8 @@ fn main() {
     };
     let mut json = serde_json::to_string_pretty(&index)
         .unwrap_or_else(|err| fail(&format!("serializing the index: {err}")));
-    // A trailing newline, so the file is a text file and a diff of two of them
-    // reads as lines rather than as one changed line.
+    // A trailing newline, so the file is a text file and a diff reads as
+    // lines rather than as one changed line.
     json.push('\n');
 
     let path = Path::new(out);
@@ -190,8 +189,8 @@ fn main() {
                 .unwrap_or_else(|err| fail(&format!("{}: {err}", parent.display())));
         }
     }
-    // Written once, at the end: a generator that refuses half way through must
-    // not leave a truncated index behind for the next reader to believe.
+    // Written once, at the end: a generator that refuses halfway must not
+    // leave a truncated index behind for the next reader to believe.
     std::fs::write(path, &json).unwrap_or_else(|err| fail(&format!("{out}: {err}")));
 
     println!(

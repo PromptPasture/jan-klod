@@ -1,10 +1,8 @@
-//! `tool-proc-probe` — a `tool-callable` guest exercising the `host-process`
-//! capability.
+//! `tool-proc-probe` — exercises the `host-process` capability.
 //!
-//! Its `invoke({ "command", "args"? })` runs the command through `host-process`
-//! and returns its stdout — proving `host-process` works across the Component-Model
-//! boundary (and that default-deny / bounds surface as errors). Component-Model glue
-//! only, so it compiles for `wasm32` only.
+//! `invoke({ "command", "args"? })` runs the command through `host-process` and
+//! returns stdout, proving the capability works across the Component-Model boundary.
+//! Component-Model glue only (wasm32 only).
 
 #[cfg(target_arch = "wasm32")]
 mod component {
@@ -79,12 +77,9 @@ mod component {
             let value: serde_json::Value =
                 serde_json::from_str(&arguments).map_err(|_| ToolError::InvalidArguments)?;
 
-            // `{"spawn": "<name>"}` asks for a long-lived child instead of a
-            // one-shot command (#109). The outcome comes back as **text rather
-            // than an error**, deliberately: `ToolError` carries no message, so
-            // a refusal returned as an error is indistinguishable from a crash
-            // by the time it reaches the model — and the refusal is the thing
-            // under test here.
+            // `{"spawn": "<name>"}` asks for a long-lived child (#109).
+            // Outcome comes back as text, not error: ToolError carries no message,
+            // so a refusal as error is indistinguishable from a crash.
             if let Some(name) = value.get("spawn").and_then(serde_json::Value::as_str) {
                 let child = match host_process::spawn(name) {
                     Ok(child) => child,
@@ -93,9 +88,8 @@ mod component {
                         return Ok(format!("spawn-refused {name} {err:?}"));
                     }
                 };
-                // The whole round trip, because a handle alone proves only that
-                // a number was issued. Writing and reading back is what says a
-                // process is on the other end of it.
+                // The whole round trip; a handle alone proves only a number was issued.
+                // Writing and reading back says a process is there.
                 if let Some(send) = value.get("send").and_then(serde_json::Value::as_str) {
                     if let Err(err) = host_process::write_stdin(child, send) {
                         log(LogLevel::Warn, &format!("write-stdin failed ({err:?})"));
@@ -103,10 +97,8 @@ mod component {
                 }
                 let out = host_process::read_stdout(child, 4096, 2000).unwrap_or_default();
                 let running = host_process::is_running(child);
-                // `{"leak": true}` returns without killing — the ugly case the
-                // host's lifetime guarantee exists for. A guest that forgets, or
-                // that never gets the chance because it trapped, must not leave
-                // a process behind.
+                // `{"leak": true}` returns without killing — testing the case the
+                // host's lifetime guarantee exists for.
                 if !value
                     .get("leak")
                     .and_then(serde_json::Value::as_bool)

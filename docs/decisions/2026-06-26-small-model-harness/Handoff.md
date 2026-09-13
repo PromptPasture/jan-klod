@@ -16,30 +16,29 @@ updated: 2026-06-26
 
 ## Context
 
-The user is trying to solve a practical deployment problem: enabling users to run LLM agents **without a large GPU cluster or cloud API access**. The target model size is **9–12B parameters**, running locally.
+Enable agents on **9–12B models locally** without large GPU clusters or cloud API.
 
 ---
 
-## What Was Discussed
+## Discussion
 
-A full architectural breakdown of why small models fail in standard agent loops and how to compensate:
+Why small models fail + compensations:
 
-### Root causes of small-model agent failures
+### Failures
+- Poor instruction following (complex prompts)
+- Tool call hallucinations
+- Context/state loss
+- Over-planning / stuck loops
 
-- Poor instruction following on long/complex system prompts
-- Tool call formatting hallucinations
-- Context/state loss over long loops
-- Over-planning or stuck reasoning loops
+### Mitigations (priority order)
 
-### Key design mitigations (in priority order)
-
-1. **Constrained decoding** — grammar-constrained token generation (llama.cpp `grammar` param, Outlines, vLLM guided decoding) forces valid JSON tool calls. Biggest single win.
-2. **Dynamic tool injection** — only expose tools relevant to the current step, not all tools at once.
-3. **External state management** — maintain a working memory dict outside the model; compress/summarize history before it bloats context.
-4. **Tiny, surgical prompts** — few-shot examples per tool, rewritten per step by a controller layer.
-5. **ReAct loop preferred** over Plan-and-Execute for small models.
-6. **Deterministic router** — classify simple intents and handle them without LLM; only route genuinely complex cases into the agent loop.
-7. **Retry/correction in the harness** — on malformed output, inject a correction hint and retry (up to N times) before failing.
+1. **Constrained decoding** — grammar forces valid JSON tool calls (Outlines, vLLM). Biggest win.
+2. **Dynamic tool injection** — expose only current-step tools.
+3. **External state** — working memory dict; compress history before bloat.
+4. **Surgical prompts** — few-shot per tool, rewritten per step.
+5. **ReAct** over Plan-Execute.
+6. **Deterministic router** — handle simple intents without LLM.
+7. **Retry/correction** — hint + retry on malformed output (up to N times).
 
 ### Recommended models (instruction-tuned)
 
@@ -84,23 +83,22 @@ Answer extractor
 
 ---
 
-## Open Questions / Next Steps
+## Next Steps
 
-- **Target deployment not confirmed** — the user was asked about bare metal vs. edge vs. framework preference but did not answer before ending the session. This is the most important thing to clarify first.
-- Potential next steps depending on answer:
-  - Prototype a minimal harness (Python, specific framework TBD)
-  - Benchmark Qwen2.5 vs Llama-3.1 on a tool-calling eval
-  - Design the constrained decoding integration layer
-  - Design the dynamic tool injection / prompt controller
+**Clarify target deployment first** (bare metal/edge/framework). Then:
+- Prototype minimal harness
+- Benchmark Qwen2.5 vs Llama-3.1
+- Design constrained decoding integration
+- Design tool injection / prompt controller
 
 ---
 
-## Suggested Skills
+## Skills
 
-- `/plan` — if the user wants to sequence implementation into milestones
-- `/brainstorm` — if exploring harness design options further before committing
-- `/write-prd` — if formalizing requirements for the harness product
-- `/write-ticket` — if breaking work into implementation tickets
+- `/plan` — sequence milestones
+- `/brainstorm` — explore design further
+- `/write-prd` — formalize requirements
+- `/write-ticket` — break into work items
 
 ---
 

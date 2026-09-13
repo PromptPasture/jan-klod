@@ -4,24 +4,15 @@
 //! them, and something else decides what that looks like. That split is what
 //! lets every test here run without a terminal, the way `App` already does.
 //!
-//! # Graphemes, because `char` is the wrong unit and this repository has paid
-//! for that once already
+//! # Graphemes, not `char` (lesson learned: emoji + pop left a stray joiner)
 //!
-//! The buffer this replaces was a `String` with `push` and `pop`. `pop` removes
-//! one `char` — so backspacing an emoji left a stray joiner behind, and the next
-//! keystroke appended to a cluster that no longer meant anything. Every motion
-//! and every deletion here is over **grapheme clusters**, and the caret is a
-//! byte index that is always on a cluster boundary.
+//! All motion and deletion use **grapheme clusters**, caret always on boundary.
+//! `unicode-segmentation` is free (via [`crate::wrap`], from `ratatui-core`).
 //!
-//! `unicode-segmentation` is already a dependency: it came with
-//! [`crate::wrap`] and cost zero packages, being one of `ratatui-core`'s.
+//! # A word is run of non-whitespace
 //!
-//! # A word is a run of non-whitespace
-//!
-//! Stated rather than assumed, because "word" has several defensible meanings
-//! and the one a reader expects from `Ctrl+W` is the shell's: delete back to the
-//! last space. Unicode word boundaries would split `foo.bar` into three, which
-//! is not what anybody pressing `Ctrl+W` after typing a path wants.
+//! Shell convention: `Ctrl+W` deletes to last space, not Unicode word boundaries
+//! (which would split `foo.bar` into three words — not what users typing paths want).
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -54,11 +45,7 @@ impl Composer {
         self.caret
     }
 
-    /// Whether there is anything to send.
-    ///
-    /// Whitespace-only counts as empty: it is what decides whether `Ctrl+U`
-    /// scrolls the transcript or kills a line, and a buffer holding one space
-    /// should behave like one holding nothing.
+    /// Whether there is anything to send (whitespace-only = empty for `Ctrl+U` dispatch).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.text.trim().is_empty()
@@ -223,19 +210,10 @@ impl Composer {
     /// The most rows the composer occupies before it scrolls instead of growing.
     pub const MAX_ROWS: usize = 8;
 
-    /// One wrapped row: where it starts, its text, and whether its end is a
-    /// **hard** one — a newline or the end of the buffer.
-    ///
-    /// The byte offset is what makes vertical motion possible: a row on screen
-    /// has to be turned back into a position in the text, and a `Vec<String>`
-    /// has thrown that away.
-    ///
-    /// The hard/soft flag is subtler and was found by a failing test. Where a
-    /// row is *soft*-wrapped, its last byte and the next row's first byte are
-    /// **the same offset** — there is no character between them — so a caret
-    /// placed at "the end of row 1" is indistinguishable from one at "the start
-    /// of row 2", and `up` from row 2 would land back on row 2. Vertical motion
-    /// therefore stops one grapheme short on a soft-wrapped row.
+    /// One wrapped row: start byte, text, hard end (newline or buffer end)?
+    /// Byte offset enables vertical motion (Vec<String> loses that info).
+    /// Soft wrap: last byte of row 1 == first byte of row 2 (no char between),
+    /// so up from row 2 would land back on row 2; thus stops one grapheme short on soft wraps.
     fn layout(&self, width: usize) -> (Vec<Row>, (usize, usize)) {
         let width = width.max(1);
         let mut rows: Vec<Row> = Vec::new();
@@ -277,17 +255,10 @@ impl Composer {
         (rows, caret)
     }
 
-    /// The wrapped rows, and the caret's `(row, column)` within them.
-    ///
-    /// **Not [`crate::wrap::wrap`].** That one is for display text: it breaks on
-    /// word boundaries and collapses runs of whitespace, which is right for a
-    /// rendered message and wrong for a buffer somebody is typing into — it
-    /// would eat the second space of a double space and move the caret out from
-    /// under their fingers. This wraps at the pane edge, between graphemes,
-    /// preserving every byte.
-    ///
-    /// Columns are **display cells**, so a caret after a CJK character sits two
-    /// columns along rather than one.
+    /// Wrapped rows and caret position `(row, column)`.
+    /// Not [`crate::wrap::wrap`] (breaks on words, collapses whitespace—wrong for editing).
+    /// Wraps at pane edge between graphemes, preserving every byte.
+    /// Columns are display cells (CJK chars are 2 cells wide).
     #[must_use]
     pub fn rows(&self, width: usize) -> (Vec<String>, (usize, usize)) {
         let (rows, caret) = self.layout(width);
@@ -330,16 +301,8 @@ impl Composer {
         row + 1 >= rows.len()
     }
 
-    /// Move the caret one **visual row** up, keeping its column where it can.
-    ///
-    /// Visual rather than logical: the composer wraps, and somebody pressing
-    /// `↑` on the second row of a wrapped line means the first row of that line,
-    /// not the previous message line.
-    ///
-    /// The column is taken from where the caret is now rather than remembered
-    /// across presses. A remembered column is nicer in a long editing session
-    /// and is not what this slice is for; if it is added later, this is the one
-    /// place it belongs.
+    /// Move caret one visual row up (not logical: `↑` from wrapped line row 2 → row 1 of same line).
+    /// Column taken from current position, not remembered (if added, belongs here).
     pub fn up(&mut self, width: usize) {
         let (rows, (row, col)) = self.layout(width);
         if row == 0 {

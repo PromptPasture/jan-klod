@@ -9,12 +9,12 @@ updated: 2026-09-12
 
 # Writing an extension
 
-An extension is a WebAssembly component. The core loads it, hands it the host
-interfaces it declared, and calls the one interface its kind exports. This page
-goes from nothing to a guest that is generated, built, tested and installed.
+An extension is a WebAssembly component. The core loads it, provides the host
+interfaces it declared, and calls its kind's exported interface. This page covers
+generating, building, testing, and installing a guest.
 
-Three commands do the first three of those. The fourth has a catch, and it is
-the reason the last section exists.
+The first three steps are straightforward. The fourth — installing — has a catch
+explained in the final section.
 
 ## 1. Generate the crate
 
@@ -22,9 +22,7 @@ the reason the last section exists.
 $ make ext-new NAME=tool-greet KIND=tool
 ```
 
-Pick your own name — `tool-hello` is taken. It is the committed example this
-repository keeps byte-identical to the generator's output, so `ext-new` refuses
-to overwrite it.
+Pick any name except `tool-hello`, which is the committed example `ext-new` refuses to overwrite.
 
 `KIND` is one of:
 
@@ -36,15 +34,10 @@ to overwrite it.
 | `registry-skills` | `skill-registry-world` | `skill-registry` — offers skills |
 | `registry-mcp` | `mcp-registry-world` | `mcp-registry` — proxies MCP servers |
 
-There is no `agent` kind. `configuration.md` lists `agent` among the config
-*categories*, but `wit/` has no agent guest world and the runtime has no arm
-for one — a crate generated for it would compile against nothing and never
-load. The category list documents a naming scheme, not a set of implemented
-kinds.
+There is no `agent` kind. `configuration.md` lists it as a category, but `wit/`
+has no agent world and the runtime has no handler — it would never load.
 
-`ext-new` does more than write files: it adds the crate to the extensions
-workspace and to the Makefile's `GUESTS`, then formats it. That is why the next
-step is a build and not more setup.
+`ext-new` registers the crate in the workspace and Makefile. The next step is build, not setup.
 
 ## 2. Build it
 
@@ -52,10 +45,8 @@ step is a build and not more setup.
 $ make extensions
 ```
 
-This compiles every guest to `wasm32-wasip2`, stages them in `ext/`, and
-**generates each one's manifest from the component's real imports**. You do not
-write a manifest. You cannot make one claim a capability the component does not
-import, because it is read out of the artefact rather than written beside it.
+Compiles guests to `wasm32-wasip2`, stages them in `ext/`, and generates manifests
+from real imports. You don't write a manifest; it's extracted from the component.
 
 Look at what yours declared:
 
@@ -63,38 +54,28 @@ Look at what yours declared:
 $ cat ext/tool-greet.manifest.toml
 ```
 
-A freshly generated tool declares `host-log` and nothing else, because logging
-is all the template uses. Call `host-fs` from your `invoke` and `host-fs`
-appears here the next time you build — and `config.yaml` still has to grant it
-before the host will wire it up. Declaring is not being granted.
+A fresh tool declares only `host-log` (all the template uses). Add a `host-fs` call
+to your code and it appears in the manifest on the next build — but `config.yaml`
+must grant it before the host wires it up. Declaration is not permission.
 
 ## 3. Test it
 
-The generated crate compiles. That is not the same as working, and the host
-suite is where the difference shows:
+Compiling is not the same as working. Test with the host suite:
 
 ```console
 $ cd src && cargo nextest run -p jan-klod-host --features jan-klod-host/integration generated_guest::
 ```
 
-`src/host/tests/it/generated_guest.rs` is written to be copied. Its module
-docs name the three things that are yours — the component, the instance id, and
-the assertions — and say the rest is harness. It loads the component and calls
-it directly, with no `Runtime`, no config and no provider, because while you are
-writing a guest a whole agent tells you less and takes longer to fail.
+`src/host/tests/it/generated_guest.rs` is a template. Copy it, change the three
+things marked yours (component, instance id, assertions), and add `mod your_module;`
+to `src/host/tests/it/main.rs`. Do not create a new file — one test binary is
+intentional because `wasmtime` links statically.
 
-Copy it, change those three things, and add `mod your_module;` to
-`src/host/tests/it/main.rs`. **Not a new file beside it**: that is one test
-binary on purpose, because `wasmtime` links statically and every extra
-integration target is another multi-gigabyte link.
-
-That file also carries a table of how it is known to fail. It is worth reading
-before you trust your copy of it: a harness that loads nothing passes exactly as
-quietly as one that loads a working component.
+Read the failure table before trusting your copy — an empty harness passes as silently as a working one.
 
 ## 4. Enable it
 
-A staged component does nothing until `config.yaml` names it:
+A staged component is inert until `config.yaml` enables it:
 
 ```yaml
 extensions:
@@ -103,13 +84,11 @@ extensions:
       enabled: true
 ```
 
-The category and the name are how the host finds the component — `tool` +
-`greet` resolves to `ext/tool-greet.wasm`.
+The host resolves `tool` + `greet` to `ext/tool-greet.wasm`.
 
-## 5. Install one somebody else built
+## 5. Install from elsewhere
 
-Everything above builds a guest inside this repository. To take a component
-from elsewhere:
+To use a component built outside this repository:
 
 ```console
 $ jan-klod-gateway ext install ./tool-theirs.wasm
@@ -122,24 +101,19 @@ jan-klod: no signature at ./tool-theirs.wasm.minisig. Sign it, name the key in
 `registry.trusted-keys`, or pass --allow-unsigned with --sha256
 ```
 
-An install is verified against a minisign signature over *both* the component
-and its manifest, from a key named in `registry.trusted-keys` — and that list
-ships **empty**. So until a key is published, every signed install is refused
-because there is nobody trusted to have signed it.
+Installs are verified against minisign signatures from keys in `registry.trusted-keys` —
+which ships empty. Every signed install is refused until a trusted key is added.
 
-The way through today is to say plainly that you are not verifying a signature,
-and to pin what you are installing instead:
+For now, pin the bytes instead:
 
 ```console
 $ shasum -a 256 ./tool-theirs.wasm        # sha256sum on Linux
 $ jan-klod-gateway ext install ./tool-theirs.wasm --allow-unsigned --sha256 <hex>
 ```
 
-`--allow-unsigned` **requires** `--sha256`. That is deliberate: waiving the
-signature and waiving the digest would land a component with no evidence at all,
-so the flags do not compose that way. A digest is weaker than a signature — it
-says the bytes are the ones you looked at, not that anyone vouched for them —
-which is why this is the fallback and not the default.
+`--allow-unsigned` requires `--sha256` — both flags together only. A hash is weaker
+than a signature (it says these are the bytes you saw, not that anyone vouched for
+them) — hence the requirement and why it's the fallback, not the default.
 
 The full command surface:
 
@@ -149,8 +123,7 @@ $ jan-klod-gateway ext install <path.wasm|url> [ext-dir] [--sha256 <hex>] [--all
 $ jan-klod-gateway ext remove <name>
 ```
 
-A remote source has to be a public address, refused before a byte moves and
-re-checked on every redirect hop.
+Remote sources must be public; URLs are validated before download and on every redirect.
 
 ## Where to look next
 

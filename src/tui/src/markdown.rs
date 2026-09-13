@@ -2,31 +2,19 @@
 //!
 //! # Greys, and why bold is not a colour
 //!
-//! Markdown gets **no accent colours**. The four accents each mean exactly one
-//! thing — focus, added, removed, attention — and "this is a heading" is none of
-//! them; spending one on document structure would leave the interface with
-//! three meanings and a decoration. So emphasis is carried by *modifiers* (bold,
-//! italic) over the same ramp roles everything else uses, which is also what
-//! keeps it legible under `Mode::Mono`, where every role resolves to
-//! `Color::Reset` and a colour-only distinction disappears.
+//! **No accent colours**: four accents (focus, added, removed, attention) are spent.
+//! Emphasis uses modifiers (bold/italic) over same-ramp roles, survives `Mode::Mono`.
 //!
-//! # An unterminated fence stays plain, and that is the streaming rule
+//! # Unterminated fence = normal (streaming rule)
 //!
-//! This renders text that is still arriving. A fence that has opened and not yet
-//! closed is therefore the **normal** case, not an edge one — and
-//! `pulldown-cmark` closes it implicitly at end of input, which would style a
-//! half-arrived block and then restyle it when the closing backticks land. That
-//! flicker is worse than never styling at all, so the text is split at an
-//! unterminated fence: everything before it is Markdown, and the fence and what
-//! follows are shown verbatim, backticks included, until it closes.
+//! Rendering text still arriving; unterminated fence is **normal** case.
+//! `pulldown-cmark` auto-closes (flickering when backticks land), so split at fence:
+//! before = Markdown; fence + after = verbatim with backticks shown.
 //!
-//! # Wrapping happens after styling, not before
+//! # Wrap after styling (not before)
 //!
-//! A paragraph is a run of styled spans, and wrapping it means breaking between
-//! words that may sit in different spans. [`flow`] does that, so `**bold** and
-//! plain` wrapped at a narrow width keeps its bold on the half that was bold.
-//! Wrapping the plain text first and styling afterwards would lose exactly the
-//! information Markdown was parsed to recover.
+//! [`flow`] wraps styled spans (preserves bold across line breaks).
+//! Wrapping plain text first, then styling, loses Markdown information.
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -57,12 +45,8 @@ fn unterminated_fence(text: &str) -> Option<usize> {
     open_at
 }
 
-/// Lay styled spans out across lines of at most `max` cells.
-///
-/// Breaks between words, which may fall inside or between spans; a word wider
-/// than the pane is emitted on its own line rather than overflowing. `prefix` is
-/// repeated on every line — list markers and quote gutters are part of the
-/// block, not of its first row.
+/// Lay styled spans across lines (≤ `max` cells), breaking between words.
+/// Wide words get own line; `prefix` repeats (list markers, quote gutters on every line).
 fn flow(spans: &[(String, Style)], max: usize, prefix: &(String, Style)) -> Vec<Line<'static>> {
     let inner = max.saturating_sub(width(&prefix.0)).max(1);
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -116,12 +100,8 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
     )
 }
 
-/// Emit `text` as it stands, wrapped, in one style, behind `indent`.
-///
-/// The indent is not decoration. A code block is marked by `code_surface()`,
-/// which under `Mode::Mono` resolves to `Color::Reset` — so a block identified
-/// only by its background is a block that vanishes on a monochrome terminal.
-/// Indentation is structure, and structure is what survives there.
+/// Emit `text` wrapped, one style, `indent` prefix.
+/// Indent is structure (survives `Mode::Mono`); `code_surface()` alone would vanish.
 pub(crate) fn verbatim(text: &str, max: usize, indent: &str, style: Style) -> Vec<Line<'static>> {
     let inner = max.saturating_sub(width(indent)).max(1);
     text.lines()

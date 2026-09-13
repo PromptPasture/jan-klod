@@ -22,11 +22,11 @@ use crate::blocks;
 use crate::diff;
 use crate::theme::{Glyph, Theme};
 
-/// Facts about this connection, fixed for the run.
+/// Connection facts, fixed for the run.
 ///
-/// Handed in rather than read from the model — the client learned them at
-/// start-up (the session id it opened, how it reached the core, where it was
-/// run from), and the sidebar only ever displays them.
+/// Passed in rather than read from the model — the client learned them at
+/// start-up (the session id it opened, how it reached the core, where it ran),
+/// and the sidebar only ever displays them.
 #[derive(Debug, Clone, Copy)]
 pub struct SessionInfo<'a> {
     /// The session id.
@@ -106,8 +106,8 @@ fn row(lines: &mut Vec<Line<'static>>, text: String, theme: Theme) {
     )));
 }
 
-/// Truncated from the left, so the leaf — the part someone actually reads —
-/// stays on screen rather than the root of a long path.
+/// Truncated from left: the readable part (the leaf) stays visible, not the
+/// root of a long path.
 fn truncate_from_left(theme: Theme, text: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
@@ -129,9 +129,8 @@ fn truncate_from_left(theme: Theme, text: &str, max: usize) -> String {
 }
 
 /// The tool calls belonging to the turn in progress — every [`Entry::Tool`]
-/// after the most recent [`Who::You`] line, in call order. Cleared the moment
-/// a new turn's message is recorded, because that is the line after which
-/// they start counting again.
+/// after the most recent [`Who::You`] line, in call order. Cleared when
+/// a new turn's message is recorded, since counting resumes after it.
 fn this_turn_tools(app: &App) -> Vec<&ToolBlock> {
     let start = app
         .transcript

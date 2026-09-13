@@ -1,12 +1,11 @@
 //! #59: a `tool-*` guest is compiled at boot but not instantiated until the
-//! fleet is actually asked for something.
+//! fleet is asked for something.
 //!
-//! This is the direct, mechanism-level proof the issue asked for: not an
-//! indirect signal (RSS, timing) but a flag on the fleet itself, checked
-//! before and after each trigger. `ToolFleet`/`ToolExtension` are untouched —
-//! every other test in `tool_fleet.rs` still builds a fleet from an
-//! already-live `ToolExtension` — `LazyToolFleet` is the new layer above them
-//! that defers the instantiate step those tests take for granted.
+//! Direct, mechanism-level proof: not an indirect signal (RSS, timing) but a
+//! flag on the fleet itself, checked before and after each trigger.
+//! `ToolFleet`/`ToolExtension` are untouched — every other test in `tool_fleet.rs`
+//! still builds a fleet from an already-live `ToolExtension` — `LazyToolFleet`
+//! defers the instantiate step above them that those tests take for granted.
 //!
 //! Skips (passes as a no-op) when `tool-fs.wasm` isn't staged in `ext/`.
 
@@ -56,14 +55,14 @@ fn a_pending_tool_is_not_instantiated_until_metadata_is_asked_for() {
     );
 
     // Compiled (by the caller, above) is not instantiated: pushing a pending
-    // tool must not itself run the guest.
+    // tool must not run the guest.
     assert!(
         !fleet.is_instantiated(),
         "a freshly-pushed pending tool must not be live yet"
     );
 
-    // The first thing that asks for metadata is what triggers it — the
-    // `select-tools` advertising path in `build_agent`.
+    // Metadata request triggers it — the `select-tools` advertising path
+    // in `build_agent`.
     let names = fleet.tool_names().expect("the pending tool instantiates");
     assert_eq!(names, vec!["fs".to_string()]);
     assert!(
@@ -92,8 +91,8 @@ fn a_pending_tool_is_not_instantiated_until_invoked() {
     );
     assert!(!fleet.is_instantiated());
 
-    // Metadata was never asked for; the first `invoke` is what triggers it —
-    // the actual `tool-call` dispatch path, distinct from advertising.
+    // First `invoke` triggers it — the actual `tool-call` dispatch path,
+    // distinct from advertising.
     let result = fleet.invoke(&call(
         "fs",
         r#"{"op":"write","path":"a.txt","contents":"hi"}"#,

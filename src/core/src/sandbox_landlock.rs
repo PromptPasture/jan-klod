@@ -1,44 +1,27 @@
-//! Landlock: confine a command by re-executing the gateway, which restricts
-//! itself and then becomes the command.
+//! Landlock: confine a command by re-executing the gateway, which applies
+//! restrictions and execs the command (becoming it).
 //!
-//! # Why a re-exec rather than `pre_exec`
+//! # Why re-exec not `pre_exec`
 //!
-//! Landlock restricts *the calling process* and its children, so the obvious
-//! shape is to apply it between `fork` and `exec` — `CommandExt::pre_exec`,
-//! which is an `unsafe fn`. This workspace sets `unsafe_code = "deny"` with the
-//! note "hand-written unsafe is forbidden", and there is no hand-written
-//! `unsafe` anywhere else in the core; the sandbox is the last place to
-//! introduce the first. `CommandExt::exec` is **safe**, so the same confinement
-//! is available without it: the command is rewritten as
+//! Landlock restricts the calling process + children, so `CommandExt::pre_exec`
+//! (unsafe) between fork/exec is obvious. Workspace denies hand-written unsafe.
+//! `CommandExt::exec` is safe: rewrite to `<gateway> confine --writable <dir>
+//! [--network] -- <command> <args…>`. Child applies ruleset, execs command.
+//! Verified on Linux (#48): restriction survives exec.
 //!
-//! ```text
-//! <gateway> confine --writable <dir> [--network] -- <command> <args…>
-//! ```
+//! `pre_exec` needs async-signal-safe work; building a ruleset allocates.
 //!
-//! and that child applies the ruleset to itself and `exec`s the command,
-//! *becoming* it. Verified on Linux before this was written (#48): the
-//! restriction survives the `exec`, which is the premise the whole design rests
-//! on.
+//! # No quoting problem (unlike Seatbelt)
 //!
-//! `pre_exec` would also have needed an argument, not just an `#[allow]`: only
-//! async-signal-safe work belongs between `fork` and `exec`, and building a
-//! ruleset allocates.
+//! Seatbelt embeds paths in policy language, refusing literals with quotes
+//! (would inject s-expressions). Landlock takes argv entries—no syntax—so any
+//! path (including quotes) reaches intact. Interface difference, not policy.
 //!
-//! # No quoting problem here, unlike Seatbelt
+//! # Platform independence
 //!
-//! [`crate::sandbox_seatbelt`] embeds paths in a *policy language* and therefore
-//! has to refuse a path it cannot write literally, because a `"` would inject
-//! s-expressions. Landlock takes paths as argv entries, which carry no syntax at
-//! all — so any path the operator can name reaches the ruleset intact, including
-//! one with a quote in it. Two backends, and the difference is the interface's,
-//! not the policy's.
-//!
-//! # What is where
-//!
-//! This module is platform-independent on purpose: it rewrites a command and
-//! nothing more, so it compiles and is tested on every platform. Applying the
-//! ruleset is the gateway's `confine` subcommand, which is Linux-only and is
-//! where the `landlock` dependency lives.
+//! This module rewrites commands (platform-independent, tested everywhere).
+//! The gateway's `confine` subcommand (Linux-only, has `landlock` dependency)
+//! applies the ruleset.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

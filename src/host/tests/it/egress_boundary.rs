@@ -1,20 +1,15 @@
-//! A component granted the network cannot reach the machine it runs on.
-//! `tool-fetch`'s SSRF guard runs *inside the sandbox*, so it protects against a
-//! confused model, not a malicious component that simply omits the check —
-//! `host-http` otherwise hands out an unrestricted client. These tests stand up
-//! a real HTTP server on loopback and assert on *its* request count, not a
-//! returned error, since only that distinguishes a real boundary from a
-//! guest-side courtesy.
+//! Network-granted components cannot reach their own machine. `tool-fetch`'s SSRF
+//! guard runs in-sandbox, catching confused models not malicious omissions.
+//! Tests assert on real HTTP server request counts, not errors, distinguishing a
+//! real boundary from guest-side courtesy.
 //!
-//! They drive `fetch_within` (the host backend) directly rather than a staged
-//! guest: an honest guest self-censors before this boundary is ever exercised,
-//! so testing through one made every assertion here vacuous.
+//! Tests drive `fetch_within` (host backend) directly: honest guests self-censor
+//! before boundary exercised, so testing through one vacuates assertions.
 //!
-//! Verified: the policy derived from a real `config.yaml` refuses an
-//! unconfigured local service and permits the operator-named one, at the
-//! function every guest-facing backend calls; and
-//! [`every_guest_facing_backend_goes_through_the_policy`] checks no backend has
-//! quietly gone back to the unbounded client.
+//! Verifies: policy from `config.yaml` refuses unconfigured locals, permits
+//! operator-named ones at the function every backend calls; and
+//! [`every_guest_facing_backend_goes_through_the_policy`] ensures no backend
+//! reverts to the unbounded client.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -27,21 +22,19 @@ use jan_klod_core::Runtime;
 
 use crate::common;
 
-/// Long enough that a healthy request never reaches it, so it bounds only the
-/// failure case rather than pacing the test. Mirrors `local_model.rs`'s
-/// `FakeOllama`, which carries the same constant for the same reason.
+/// Long enough to bound failure, not healthy requests, so it doesn't pace the
+/// test. Mirrors `local_model.rs` `FakeOllama` constant.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 
-/// A loopback server that counts requests and answers every one, so a guest that
-/// got through would see a plausible reply rather than a connection error.
+/// Loopback server counting requests, answering all — so successful guest
+/// escapes see plausible replies, not connection errors.
 struct Sentinel {
     port: u16,
     hits: Arc<AtomicU32>,
     stop: Arc<AtomicU32>,
-    /// I/O the sentinel could not complete. Discarding these is what let it
-    /// answer a request it had not read, so a test that trusts `hits()` has to
-    /// assert this is empty first — see #78 and #83, the local-model and
-    /// egress-boundary copies of the exact same defect.
+    /// I/O failures. Discarding them let it answer before reading, the defect
+    /// in #78 and #83. Tests trusting `hits()` must assert this is empty
+    /// first.
     faults: Arc<Mutex<Vec<String>>>,
 }
 
@@ -49,12 +42,9 @@ impl Sentinel {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
-        // The listener stays blocking: BSD `accept()` hands back a socket that
-        // inherited the listener's `O_NONBLOCK` (established under #78), so a
-        // non-blocking listener silently made every accepted socket
-        // non-blocking on macOS and blocking on Linux. `Drop` unblocks the
-        // accept loop itself by connecting, so there is no poll-with-a-sleep
-        // to race against.
+        // Listener stays blocking: BSD `accept()` inherits `O_NONBLOCK` (#78).
+        // Non-blocking listeners made sockets non-blocking on macOS, blocking on
+        // Linux. Drop unblocks accept by connecting, no poll-sleep races.
         let hits = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicU32::new(0));
         let faults = Arc::new(Mutex::new(Vec::new()));
@@ -69,19 +59,17 @@ impl Sentinel {
             loop {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
-                        // The connection `Drop` makes to release this accept
-                        // carries no request, so leave before counting it.
+                        // Drop's connection carries no request, leave before
+                        // counting.
                         if stopped.load(Ordering::Relaxed) != 0 {
                             break;
                         }
                         counted.fetch_add(1, Ordering::Relaxed);
-                        // Read the whole request under a deadline before
-                        // answering: one `read` can return part of it or none
-                        // of it, and answering early leaves the rest unread,
-                        // so the close sends RST instead of FIN and the RST
-                        // discards the response already written — the client
-                        // then sees a failed request for a call this sentinel
-                        // already counted as a hit.
+                        // Read whole request under deadline before answering: one
+                        // `read` may return partial/nothing, answering early
+                        // leaves rest unread. Close sends RST not FIN, RST
+                        // discards written response — client sees failure for
+                        // already-counted hit.
                         if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
                             fault("set_read_timeout", &e);
                         }
@@ -95,9 +83,8 @@ impl Sentinel {
                             fault("write_all", &e);
                         }
                     }
-                    // A listener that cannot accept serves nothing, so say so
-                    // rather than spinning: a test reads `faults` before it
-                    // trusts anything this sentinel saw.
+                    // Listener that can't accept serves nothing — break rather
+                    // than spin. Tests read `faults` before trusting sentinel.
                     Err(e) => {
                         fault("accept", &e);
                         break;
@@ -117,11 +104,9 @@ impl Sentinel {
         self.hits.load(Ordering::Relaxed)
     }
 
-    /// Asserts the sentinel's own I/O completed, so `hits()` reflects requests
-    /// it actually read rather than ones it answered blind. Call this before
-    /// trusting `hits()`, the same ordering `FakeOllama`'s test uses and for
-    /// the same reason: a silently discarded read is what let an endpoint
-    /// answer a request it had not read.
+    /// Assert sentinel's I/O succeeded so `hits()` reflects read requests, not
+    /// blind answers. Call before trusting `hits()` — same as `FakeOllama`: a
+    /// silent read discard let endpoints answer unread requests.
     fn assert_no_faults(&self) {
         let faults = self.faults.lock().expect("not poisoned").clone();
         assert!(
@@ -135,7 +120,7 @@ impl Sentinel {
 impl Drop for Sentinel {
     fn drop(&mut self) {
         self.stop.store(1, Ordering::Relaxed);
-        // Unblock the accept loop so the thread notices.
+        // Unblock the accept loop.
         let _ = TcpStream::connect(("127.0.0.1", self.port));
     }
 }
@@ -165,8 +150,8 @@ extensions:
     path
 }
 
-/// The policy the runtime derives from `config`, then one request through the
-/// host's real HTTP backend — the exact function served to a guest's `host-http`.
+/// Policy derived from `config`, then one request through host's real HTTP
+/// backend — the exact function served to guest's `host-http`.
 fn request_through_the_host(config: &std::path::Path, url: &str) -> Result<(), ()> {
     let runtime = Runtime::boot(config, common::repo_root().join("ext")).expect("boots");
     let policy = runtime.egress_policy();
@@ -190,8 +175,7 @@ fn a_live_local_service_is_not_reachable() {
     );
 
     sentinel.assert_no_faults();
-    // The assertion that distinguishes a boundary from a courtesy: the server
-    // itself never saw anything.
+    // Boundary vs. courtesy: server never saw any request.
     assert_eq!(
         sentinel.hits(),
         0,
@@ -201,8 +185,8 @@ fn a_live_local_service_is_not_reachable() {
     );
 }
 
-/// The rule is per-origin, not a global switch: a self-hosted model lives on
-/// loopback too, and a blanket refusal would make it unreachable.
+/// Rule is per-origin, not a global switch: self-hosted models on loopback
+/// need reachability.
 #[test]
 fn an_endpoint_named_in_config_is_reachable() {
     let dir = std::env::temp_dir().join(format!("jk-egress-ok-{}", std::process::id()));
@@ -210,7 +194,7 @@ fn an_endpoint_named_in_config_is_reachable() {
     let _guard = common::TempDir(dir.clone());
 
     let sentinel = Sentinel::start();
-    // Written the way an operator names a local Ollama or MCP server.
+    // How operators name local Ollama or MCP servers.
     let allow = format!(
         "\nnetwork:\n  allow:\n    - http://127.0.0.1:{}\n",
         sentinel.port
@@ -222,15 +206,14 @@ fn an_endpoint_named_in_config_is_reachable() {
         request_through_the_host(&config, &url).is_ok(),
         "the named origin answers"
     );
-    // Before trusting `hits()`: a request the sentinel answered without fully
-    // reading it is exactly the shape of bug #83 records — it can pass this
-    // count while the assertion above genuinely failed for socket reasons.
+    // Before trusting `hits()`: unread-request answers (#83 shape) can pass
+    // count while assertion failed for socket reasons.
     sentinel.assert_no_faults();
     assert_eq!(sentinel.hits(), 1, "and the request actually arrived");
 }
 
-/// A provider's `base-url` is a named endpoint too — the common case, since that
-/// is where a local model is configured, and nobody should have to write it twice.
+/// Provider `base-url` is an allowlisted endpoint — the common case for local
+/// model config; no need to name it twice.
 #[test]
 fn a_providers_base_url_is_allowed_without_naming_it_again() {
     let dir = std::env::temp_dir().join(format!("jk-egress-base-{}", std::process::id()));
@@ -266,7 +249,7 @@ extensions:
     assert_eq!(sentinel.hits(), 1);
 }
 
-/// Naming one local origin must not open the machine.
+/// Granting one origin must not open the machine.
 #[test]
 fn a_grant_covers_one_origin_and_not_its_neighbours() {
     let dir = std::env::temp_dir().join(format!("jk-egress-nb-{}", std::process::id()));
@@ -290,14 +273,12 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
     );
 }
 
-/// Every place the host serves `host-http` to a guest must consult the policy.
-/// One backend still calling the unbounded client would reopen the whole hole
-/// while the tests above stay green, since they only exercise other backends.
-/// This scans the sources for the unbounded `http::fetch` instead.
+/// Every host-http serving point must consult policy. One backend calling
+/// unbounded client reopens hole undetected by above tests. Scans for unbounded
+/// `http::fetch` instead.
 #[test]
 fn every_guest_facing_backend_goes_through_the_policy() {
-    // Discovered by scanning, not a hard-coded file list — a literal list can't
-    // notice a new backend added after it was written.
+    // Scanned, not hard-coded — literal list misses new backends added later.
     let core = common::repo_root().join("src/core/src");
     let mut backends = Vec::new();
     for entry in std::fs::read_dir(&core)
@@ -309,8 +290,8 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             continue;
         }
         let text = std::fs::read_to_string(&path).expect("a core source is readable");
-        // Any host-side implementation of a guest's `host-http` import, whatever
-        // the binding module happens to be called.
+        // Host-side implementations of guest's `host-http` import, any binding
+        // module name.
         if text.contains("_http::Host for") {
             backends.push((path, text));
         }
@@ -329,13 +310,13 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             .to_string_lossy()
             .into_owned();
         for (number, line) in text.lines().enumerate() {
-            // Code only — matching comments would flag prose describing the ban.
+            // Code only — skip comments would flag ban prose.
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") {
                 continue;
             }
-            // `contains`, not `starts_with`: call sites read `let result =
-            // crate::http::fetch(`. Trailing `(` keeps `fetch_within(` from matching.
+            // `contains` not `starts_with`: call sites `let result = crate::http::fetch(`.
+            // Trailing `(` excludes `fetch_within(`.
             assert!(
                 !line.contains("crate::http::fetch(")
                     && !line.contains("jan_klod_core::http::fetch("),
@@ -347,16 +328,13 @@ fn every_guest_facing_backend_goes_through_the_policy() {
         }
     }
 
-    // The other way in: a caller that *hands* a guest the unbounded client.
-    // Providers and tools receive an `HttpFn` from whoever builds them, so a
-    // binary passing `Box::new(http::fetch)` reopens the hole without touching
-    // any file scanned above.
+    // Other entry: callers *handing* guests the unbounded client. Providers and
+    // tools get HttpFn from builders, so binary passing `Box::new(http::fetch)`
+    // reopens hole without touching scanned files.
     //
-    // Read with `expect`, not a silent `continue`: this loop names its files by
-    // hand, and a rename that moved one out from under the path left the check
-    // scanning nothing while still reporting green — which is what happened when
-    // `ui/` became `tui/` and the crates moved out of `src/core/`. A missing file
-    // here is a broken test, not an absent binary.
+    // `expect` not silent `continue`: hand-named files; rename moving one out
+    // leaves check green with nothing scanned (happened with `ui/` → `tui/`).
+    // Missing file = broken test, not absent binary.
     for binary in ["host/src/main.rs", "tui/src/main.rs"] {
         let path = common::repo_root().join("src").join(binary);
         let text = std::fs::read_to_string(&path)
@@ -379,7 +357,7 @@ fn every_guest_facing_backend_goes_through_the_policy() {
 
 // ---- Redirects (#107) ----
 
-/// A server that answers every request with `302` to `target`, and counts.
+/// Server answering all requests with `302` to `target`, counts hits.
 pub fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
     let port = listener.local_addr().expect("has an address").port();
@@ -409,11 +387,9 @@ pub fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
     (port, hits)
 }
 
-/// A permitted origin cannot redirect the host to one the policy refuses.
-///
-/// The shape that makes this a real test: the *redirector* is explicitly
-/// allowed, so the policy says yes to the URL the caller passed. Everything
-/// after that is the redirect's doing, which is what the policy never saw.
+/// Permitted origins cannot redirect to refused ones. The redirector is
+/// explicitly allowed so policy says yes to caller's URL. Beyond that, the
+/// redirect's doing — the policy never saw it.
 #[test]
 fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
     let forbidden = common::Countable::start();
@@ -421,44 +397,42 @@ fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
     let (redirect_port, redirect_hits) = redirector_to(target);
     let entry = format!("http://127.0.0.1:{redirect_port}/start");
 
-    // The redirector is named by the operator; the sentinel is not.
+    // Redirector operator-named; sentinel is not.
     let policy = jan_klod_core::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{redirect_port}"));
 
     let outcome = jan_klod_core::http::fetch_within(&policy, "GET", &entry, &[], None, 2_000);
 
-    // The control: the request really did reach the permitted origin, so a
-    // clean `hits == 0` below cannot be explained by nothing having happened.
+    // Control: request reached permitted origin, so hits == 0 can't mean nothing
+    // happened.
     assert_eq!(
         redirect_hits.load(Ordering::SeqCst),
         1,
         "the permitted origin was reached — otherwise this test proves nothing"
     );
 
-    // The caller gets the *policy's* refusal, not a puzzling 302. That is what
-    // the per-hop loop changed: #107's first box merely declined to follow and
-    // surfaced the redirect; now the hop is checked and refused, which is both
-    // safe and legible.
+    // Caller gets *policy* refusal, not 302. Per-hop loop changed this: #107's
+    // first box declined-then-surfaced; now hop checked and refused (safe,
+    // legible).
     assert_eq!(
         outcome.err(),
         Some(jan_klod_core::http::WireError::ConnectionFailed),
         "the refused hop is reported as the policy refusing it"
     );
 
-    // And the assertion this test exists for.
+    // The assertion this test exists for.
     forbidden.only_hit();
 }
 
-/// A server that redirects once, then serves — and records the headers and
-/// method of every request, so what survived a hop can be asserted.
+/// Server redirecting once, then serving — records headers and method of all
+/// requests to assert what survived hops.
 struct Hops {
     port: u16,
     seen: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Hops {
-    /// `first` is answered with `status` and a `Location` of `location`;
-    /// everything after is answered `200 landed`.
+    /// First request gets `status` and `Location`, rest get `200 landed`.
     fn start(status: u16, location: String) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
@@ -498,11 +472,11 @@ impl Hops {
     }
 }
 
-/// A redirect to a destination the policy permits is still followed — the fix
-/// for #107 must not be "break every redirect".
+/// Redirects to permitted destinations still follow — fix for #107 isn't
+/// "break all redirects".
 #[test]
 fn a_redirect_to_a_permitted_destination_is_followed() {
-    // Same origin, so one grant covers both hops.
+    // Same origin: one grant covers both hops.
     let hops = Hops::start(302, "/landed".to_owned());
     let policy = jan_klod_core::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{}", hops.port));
@@ -520,17 +494,15 @@ fn a_redirect_to_a_permitted_destination_is_followed() {
     assert_eq!(requests.len(), 2, "two hops were made: {requests:?}");
     assert!(
         requests[1].starts_with("GET /landed"),
-        "the relative Location resolved against the first URL: {:?}",
+        "relative Location resolves against first URL: {:?}",
         requests[1]
     );
 }
 
-/// `Authorization` does not survive a redirect.
-///
-/// ureq stripped it for us (`RedirectAuthHeaders::Never`); following redirects
-/// by hand means doing that deliberately, and forgetting would send a
-/// provider's API key to wherever the redirect pointed — a credential leak
-/// introduced *by* the fix for a policy bypass.
+/// `Authorization` doesn't survive redirects. ureq stripped it
+/// (`RedirectAuthHeaders::Never`); hand-following means deliberate stripping,
+/// else API keys leak to redirect targets — credential leak introduced by
+/// policy-bypass fix.
 #[test]
 fn credentials_do_not_survive_a_redirect() {
     let hops = Hops::start(302, "/landed".to_owned());
@@ -549,25 +521,23 @@ fn credentials_do_not_survive_a_redirect() {
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert!(
         requests[0].contains("sk-secret"),
-        "the first hop did carry it, or this test proves nothing: {:?}",
+        "first hop carried it, else test proves nothing: {:?}",
         requests[0]
     );
     assert!(
         !requests[1].contains("sk-secret"),
-        "and the second did not: {:?}",
+        "second did not: {:?}",
         requests[1]
     );
     assert!(
         requests[1].to_ascii_lowercase().contains("x-kept"),
-        "while an ordinary header still travels — names arrive lowercased: {:?}",
+        "ordinary headers travel (lowercased): {:?}",
         requests[1]
     );
 }
 
-/// A `302` turns a POST into a GET and drops the body; a `307` does not.
-///
-/// Getting this wrong is silent: the request still succeeds, just with a method
-/// or a body the caller did not send.
+/// `302` turns POST→GET, drops body; `307` preserves method and body. Silent
+/// when wrong: request succeeds with unexpected method/body.
 #[test]
 fn a_302_becomes_a_get_and_a_307_keeps_the_post() {
     for (status, expected) in [(302_u16, "GET"), (307, "POST")] {
@@ -583,7 +553,7 @@ fn a_302_becomes_a_get_and_a_307_keeps_the_post() {
         assert_eq!(requests.len(), 2, "{status}: {requests:?}");
         assert!(
             requests[1].starts_with(&format!("{expected} /landed")),
-            "{status} should arrive as {expected}: {:?}",
+            "{status} arrives as {expected}: {:?}",
             requests[1]
         );
     }

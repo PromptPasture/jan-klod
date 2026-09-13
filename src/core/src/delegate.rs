@@ -1,22 +1,18 @@
 //! Outbound `agent-*` ACP delegation.
 //!
-//! Delegating a subtask to another AI agent is something the loop *calls*, like a
-//! tool — so it plugs into the conductor's existing [`ToolInvoker`] seam. The
-//! model emits a `delegate` tool call (`{ "agent", "task", "context"? }`);
-//! [`AgentDelegate`] resolves the agent to its ACP endpoint and forwards the task
-//! over an injected [`AgentTransport`], returning the remote agent's answer as
-//! the tool result. The wire format lives behind the transport, so the seam is
-//! unit-tested offline.
+//! Model emits a `delegate` tool call (`{ "agent", "task", "context"? }`).
+//! [`AgentDelegate`] resolves the agent to its ACP endpoint and forwards to an
+//! injected [`AgentTransport`], returning the remote agent's answer.
+//! Wire format is transport-specific; the seam is unit-tested offline.
 //!
-//! Inbound delegation (core called *by* another ACP orchestrator) needs no new
-//! code — it's just the host-side REST surface (`jan_klod_core::serve`).
+//! Inbound delegation (core called *by* another ACP orchestrator) is just the
+//! host-side REST surface (`jan_klod_core::serve`).
 //!
 //! # Not wired
 //!
-//! Nothing constructs this yet: `Runtime::build_agent` never instantiates the
-//! `agent` category, so a `delegate` tool call today gets "no tool named
-//! `delegate`". Kept rather than deleted since it's host-side and harmless to
-//! leave unused; needs a transport and one line in `build_agent` to activate.
+//! `Runtime::build_agent` never instantiates the `agent` category; `delegate`
+//! calls get "no tool named `delegate`". Kept unused but harmless; needs a
+//! transport and one line in `build_agent` to activate.
 
 use std::collections::HashMap;
 
@@ -26,36 +22,34 @@ use crate::intercept::{ToolCall, ToolDefinition};
 /// The tool name the model uses to delegate to another agent.
 pub const DELEGATE_TOOL: &str = "delegate";
 
-/// Carries a task to a remote agent's ACP endpoint and returns its answer text.
-/// Injected so the delegation seam is testable without a live agent; the concrete
-/// ACP-over-HTTP client is one implementor.
+/// Carries a task to a remote agent's ACP endpoint and returns the answer.
+/// Injected for testability without a live agent; ACP-over-HTTP is one impl.
 pub trait AgentTransport {
     /// Delegate `task` (with optional JSON `context`) to the agent at `endpoint`.
     ///
     /// # Errors
-    /// Returns a human-readable error if the remote agent is unreachable, rejects
-    /// the task, times out, or speaks a bad protocol.
+    /// Human-readable error if the agent is unreachable, rejects the task,
+    /// times out, or speaks a bad protocol.
     fn delegate(&self, endpoint: &str, task: &str, context: Option<&str>)
         -> Result<String, String>;
 }
 
-/// A [`ToolInvoker`] that services `delegate` tool calls by forwarding to a remote
-/// agent. Non-`delegate` calls are ignored (returns `None`, so it composes as the
-/// delegation half of a larger tool set).
+/// [`ToolInvoker`] that services `delegate` calls by forwarding to a remote agent.
+/// Non-`delegate` calls return `None` (composable).
 pub struct AgentDelegate<T> {
     transport: T,
-    /// Agent id → ACP endpoint (from `config.yaml`'s `agent.*` instances).
+    /// Agent id → ACP endpoint (from `config.yaml`).
     agents: HashMap<String, String>,
 }
 
 impl<T: AgentTransport> AgentDelegate<T> {
-    /// Build a delegator over `transport` with the known `agents` (id → endpoint).
+    /// Build a delegator with the known `agents` (id → endpoint).
     #[must_use]
     pub const fn new(transport: T, agents: HashMap<String, String>) -> Self {
         Self { transport, agents }
     }
 
-    /// The tool definition to advertise to the model (so it can choose to delegate).
+    /// Tool definition to advertise to the model.
     #[must_use]
     pub fn tool_definition() -> ToolDefinition {
         ToolDefinition {
@@ -80,7 +74,7 @@ impl<T: AgentTransport> AgentDelegate<T> {
 impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
     fn invoke(&mut self, call: &ToolCall) -> Option<crate::conductor::ToolInvocation> {
         if call.name != DELEGATE_TOOL {
-            return None; // not ours — skip-if-absent
+            return None; // skip if not ours
         }
         let args: serde_json::Value = serde_json::from_str(&call.arguments).ok()?;
         let agent = args.get("agent").and_then(serde_json::Value::as_str)?;
@@ -111,7 +105,7 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    /// A transport that records what it was asked and returns a canned answer.
+    /// Transport that records calls and returns a canned answer.
     struct StubTransport {
         seen: RefCell<Vec<(String, String)>>,
         reply: Result<String, String>,

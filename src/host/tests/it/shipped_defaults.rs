@@ -1,15 +1,12 @@
-//! The **shipped defaults** gate: does the product a user installs actually work?
-//! Every other test here builds its own `config.yaml` and test doubles, the right
-//! shape for testing a mechanism — but that shape let several boot-path defects
-//! (empty `extensions.tool`, `start_all` failing on the real config, the REST
-//! surface silently denying instead of asking) reach a green suite. This file
-//! loads the repo's own `config.yaml`, boots the real `Runtime`, serves the real
-//! REST surface, and drives it with the real UI client library
-//! (`jan_klod_client`, the `stream_turn` a user's TUI calls). Only the
-//! provider's HTTP and the workspace root (a temp dir, so a test can't write
-//! into the repo it runs from) are faked.
+//! Does the shipped product actually work? Most tests here build custom
+//! `config.yaml` and test doubles. That let boot defects slip through: empty
+//! `extensions.tool`, `start_all` failing, REST surface silently denying
+//! instead of asking. This file loads the real `config.yaml`, boots the real
+//! `Runtime` and REST surface, drives it with the real client library
+//! (`jan_klod_client`, what the TUI calls). Only provider HTTP and workspace
+//! root (temp dir) are faked.
 //!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Skips when guests not staged in `ext/`.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -26,11 +23,9 @@ use tiny_http::Server;
 
 use crate::common;
 
-/// The env vars the shipped config expands. Set to placeholders: the provider's
-/// HTTP is faked, so no key is ever used — but boot must not fail on a missing one.
+/// Stub env vars the shipped config expands (placeholder values; no provider HTTP uses them).
 fn stub_env() {
-    // Idempotent writes, since every test in this binary sets the same values
-    // concurrently before its own `Runtime::boot`.
+    // Idempotent (all tests set these concurrently).
     #[allow(unsafe_code)]
     for key in [
         "OPENAI_API_KEY",
@@ -42,9 +37,7 @@ fn stub_env() {
     }
 }
 
-/// The shipped `config.yaml`, with a workspace root pointed at `dir` — the only
-/// edit to the real file, so the test doesn't write into `$PWD` (the upstream
-/// default) and edit the repo it runs from.
+/// Shipped `config.yaml` with workspace root pointing at `dir` (test-only edit to avoid repo mutations).
 fn shipped_config_with_workspace(dir: &std::path::Path) -> String {
     let shipped = std::fs::read_to_string(common::repo_root().join("config.yaml"))
         .expect("the shipped config.yaml is readable");
@@ -67,9 +60,7 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("the shipped config boots");
 
-    // Nothing the shipped config enables may be missing from a built `ext/`.
-    // Asserted on resolved state, not the rendered report — the summary line
-    // always says "0 missing", so string-matching it would be vacuously true.
+    // All enabled defaults must be staged (check state, not report string which always says "0 missing").
     let absent: Vec<&str> = runtime
         .extensions()
         .iter()
@@ -82,14 +73,9 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
         runtime.report()
     );
 
-    // And every one of them must actually instantiate and start. This is the
-    // assertion `start_all`'s neutral-linker bug failed for months.
-    //
-    // `start_all_eager`, not `start_all`: since #59 the plain `start_all` is
-    // lazy for `tool-*`/`registry-*` and would not touch `tool.fs` et al. at
-    // all, which is the right call for the boot-plan path but would make this
-    // specific assertion — that the shipped tools genuinely instantiate —
-    // vacuous. This is that dependency made explicit rather than dropped.
+    // Every default must instantiate and start (the neutral-linker bug failed this for months).
+    // Use `start_all_eager` not `start_all`: since #59 plain `start_all` is lazy for `tool-*`,
+    // but shipped tools must truly instantiate. Explicit dependency rather than dropped.
     let started = runtime
         .start_all_eager()
         .expect("every enabled extension starts");
@@ -106,13 +92,10 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
     }
 }
 
-/// #59's boot-plan claim, proved against the real shipped config rather than a
-/// synthetic one: `start_all` (the default, no-subcommand `jan-klod` path)
-/// starts providers and interceptors but leaves every `tool.*` uninstantiated,
-/// while `start_all_eager` (what `verify` uses) still starts all of them —
-/// same runtime, same config, the only difference is which method is called.
-/// Paired with the test above so a regression that makes `start_all` eager
-/// again, or `start_all_eager` lazy, fails one of the two.
+/// #59's boot-plan claim against real config: `start_all` (default) starts
+/// providers/interceptors but leaves `tool.*` lazy, while `start_all_eager`
+/// starts all. Same runtime, same config, different methods. Paired with the
+/// test above so regressions (eager `start_all` or lazy `start_all_eager`) fail.
 #[test]
 fn the_shipped_configs_tools_are_lazy_under_start_all_but_not_start_all_eager() {
     let ext_dir = common::repo_root().join("ext");
@@ -147,9 +130,7 @@ fn the_shipped_configs_tools_are_lazy_under_start_all_but_not_start_all_eager() 
         );
     }
 
-    // The same runtime, forced eager, does instantiate them — proving the
-    // difference above is `start_all`'s laziness and not, say, the shipped
-    // config being unable to start its tools at all.
+    // Same runtime forced eager proves the difference is `start_all`'s laziness, not config.
     let eager = runtime
         .start_all_eager()
         .expect("every enabled extension starts");
@@ -161,8 +142,7 @@ fn the_shipped_configs_tools_are_lazy_under_start_all_but_not_start_all_eager() 
     }
 }
 
-/// A provider that asks to write a file, then reports done — the shape of the
-/// first thing anyone tries with a coding agent.
+/// Mock provider: request file write on first call, report done on second.
 fn write_then_answer_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -199,7 +179,7 @@ fn write_then_answer_http() -> HttpFn {
     })
 }
 
-/// POST an answer to a pending confirmation (a second connection, mid-turn).
+/// POST answer to a pending confirmation (second connection, mid-turn).
 fn post_answer(port: u16, session: &str, answer: &str) -> String {
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(
@@ -235,8 +215,7 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
         .build_agent(&factory)
         .expect("the shipped config builds an agent");
 
-    // The default tool set must actually reach the model, or none of the rest of
-    // this can happen (the "shipped config had no tools" defect).
+    // Default tools must reach the model (or the "no tools" defect hides).
     let advertised = agent.tool_names();
     for expected in ["fs", "edit", "find"] {
         assert!(
@@ -249,7 +228,7 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
     let port = server.server_addr().to_ip().expect("ip addr").port();
     let addr = format!("127.0.0.1:{port}");
 
-    // The client is the real UI library — the same call the TUI makes.
+    // Real UI library (same as TUI).
     let client = thread::spawn(move || {
         let mut asked = None;
         let mut answer = String::new();

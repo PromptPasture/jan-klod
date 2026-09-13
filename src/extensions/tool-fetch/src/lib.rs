@@ -1,35 +1,24 @@
-//! `tool-fetch` — retrieve a URL through `host-http`, as readable text.
+//! `tool-fetch` — retrieve a URL through `host-http` as readable text.
 //!
-//! `{ "url": "https://example.com/docs" }` → the page with its markup stripped.
+//! `{ "url": "https://example.com/docs" }` → stripped page text.
 //!
 //! ## The address is the attack surface
 //!
-//! Every other tool is bounded by a substrate (`host-fs` jails paths,
-//! `host-process` jails commands); `host-http` has none — it's outbound network
-//! access to a model-supplied destination, textbook SSRF. On a self-hosted agent
-//! the reachable targets are the interesting ones: cloud instance metadata
-//! (`169.254.169.254`), jan-klod's own REST surface (`127.0.0.1:8787`), the LAN,
-//! and non-HTTP `file://` URLs the model may try.
+//! Unlike other tools (bounded by `host-fs`, `host-process`), `host-http` is unrestricted
+//! outbound access to model-supplied destinations (textbook SSRF). Reachable targets:
+//! cloud metadata (`169.254.169.254`), jan-klod REST (`127.0.0.1:8787`), LAN, `file://`.
 //!
-//! [`vet`] runs before every request: https/http only, and no loopback,
-//! link-local, private, or non-public destination unless `allow-private` opts
-//! in. Obfuscated address forms (integer IPs, octal octets) are refused rather
-//! than normalised — canonicalising every encoding just means eventually
-//! disagreeing with the resolver.
+//! [`vet`] runs before every request: https/http only, no loopback/link-local/private
+//! (unless `allow-private` opted in). Obfuscated addresses refused, not normalized.
+//! In-sandbox guard stops confused models, not hostile components. Real boundary is
+//! host-side `core::egress`, which resolves hostnames before deciding.
 //!
-//! This guard runs inside the sandbox: it stops a confused model, not a hostile
-//! component (a component can skip a check it runs on itself). The real
-//! boundary is host-side, in `core::egress`, which resolves hostnames before
-//! deciding and so catches a public name pointing at `127.0.0.1`.
+//! ## Why disabled by default
 //!
-//! ## Why it ships disabled
+//! Fetch is a read, but URL is an exfiltration channel (path/query carry workspace data).
+//! `tool.fetch` is `enabled: false`; enabling is a deployment decision.
 //!
-//! A fetch is a read, but the URL is also an exfiltration channel — path and
-//! query can carry workspace data to an attacker one GET at a time. `tool.fetch`
-//! is `enabled: false` by default; enabling it is a deployment decision.
-//!
-//! The vetting and text extraction are pure Rust (unit-tested natively); the
-//! Component-Model glue below only compiles for `wasm32`.
+//! Vetting and extraction are pure Rust (unit-tested); glue only for wasm32.
 
 /// Request timeout in milliseconds; a page that will not answer is not an answer.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -43,11 +32,9 @@ mod fetch {
     /// Suffixes that name a private or link-local naming scope.
     const LOCAL_SUFFIXES: [&str; 4] = [".localhost", ".local", ".internal", ".home.arpa"];
 
-    /// Check a model-supplied URL before it becomes a request.
-    ///
+    /// Vet a model-supplied URL before making a request.
     /// # Errors
-    /// Returns a caller-facing refusal naming the reason, so a model can correct
-    /// itself (try the public URL) rather than retrying the same blocked address.
+    /// Caller-facing refusal (model can correct and retry).
     pub fn vet(url: &str, allow_private: bool) -> Result<(), String> {
         let lowered = url.trim().to_lowercase();
         let rest = if let Some(rest) = lowered.strip_prefix("https://") {
@@ -61,10 +48,9 @@ mod fetch {
             ));
         };
 
-        // Authority ends at the first `/`, `?` or `#`.
+        // Authority ends at first `/`, `?`, or `#`.
         let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-        // `user@host` — the host is what follows the *last* `@`, which is how
-        // `http://example.com@127.0.0.1/` disguises its real destination.
+        // `user@host`: host follows the last `@` (disguises `http://example.com@127.0.0.1/`).
         let hostport = authority.rsplit('@').next().unwrap_or("");
         let host = strip_port(hostport);
         if host.is_empty() {

@@ -1,29 +1,11 @@
-//! Host-side inbound HTTP surface — resource-model REST API.
+//! REST API surface (v0.1.0). Routes: GET /health, GET /sessions, POST /sessions,
+//! GET /session/:id, POST /session/:id/message (SSE or JSON), answer, fork.
+//! Synchronous/blocking (tiny_http): one request at a time.
 //!
-//! Routes (v0.1.0):
-//!   GET  /health                   liveness probe
-//!   GET  /sessions                 list session ids + previews
-//!   POST /sessions                 create session → `{"id":"<id>"}`
-//!   GET  /session/:id              message list, projected from the event log
-//!   POST /session/:id/message      send a message; SSE or JSON response
-//!   POST /session/:id/answer       answer a pending confirmation
-//!   POST /session/:id/fork         new session from a prefix of this one
-//!
-//! Synchronous/blocking (`tiny_http`) — one request is served at a time on the
-//! thread that owns the `!Send` `AgentSession`.
-//!
-//! ## Answering a mid-turn confirmation without threads
-//!
-//! An interceptor (e.g. the permission gate) can stop a turn to ask the user
-//! something; the loop is synchronous, so it *blocks* inside `Driver::ask`, and
-//! the answer must arrive on a different, concurrent request.
-//!
-//! Rather than make `AgentSession` `Send` and use worker threads, the waiting
-//! driver **serves the socket itself**: it emits a `prompt` SSE frame, then calls
-//! `Server::recv_timeout` in a loop until a matching `POST /session/:id/answer`
-//! arrives, replying `409` to anything else. Concurrency stays at one request at
-//! a time. An unanswered prompt times out at [`DEFAULT_ANSWER_TIMEOUT`] and takes
-//! the prompt's own default (a denial, for the permission gate).
+//! Mid-turn confirmations without threads: interceptors block in `Driver::ask`;
+//! the waiting driver serves the socket itself via `recv_timeout` loop until
+//! `POST /session/:id/answer` arrives (409 to others). Unanswered prompts timeout
+//! at [`DEFAULT_ANSWER_TIMEOUT`], taking the prompt's default.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -42,28 +24,19 @@ use crate::AgentSession;
 #[allow(clippy::duration_suboptimal_units)] // no stable `Duration::from_mins`
 const DEFAULT_ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Overrides [`DEFAULT_ANSWER_TIMEOUT`], in seconds.
-///
-/// Three minutes is right for a person and wrong for a test: a test whose answer
-/// goes astray would otherwise wait out the whole timeout and still *pass*
-/// (default answer is a denial, assertions still hold), just slow. Read per wait
-/// rather than cached, so a test can set it per process.
+/// Overrides [`DEFAULT_ANSWER_TIMEOUT`], in seconds. Read per wait, not cached,
+/// so a test can set it per process; three minutes is right for humans, wrong
+/// for tests (unanswered tests still pass with default answer, just slowly).
 const TIMEOUT_ENV: &str = "JK_ANSWER_TIMEOUT_SECS";
 
-/// How often the wait pokes the event stream while parked.
-///
-/// A client that disappears after the first write leaves a socket that looks
-/// fine until the FIN is processed, which can take the whole timeout. Each tick
-/// writes an SSE comment: a dead peer surfaces as a write error within one
-/// interval, and a live stream gets bytes that keep a reverse proxy from closing
-/// it as idle. Comments (`:`-prefixed lines) are the protocol's own no-op.
+/// How often the wait pokes the event stream while parked. A vanished client
+/// (post-write) looks fine until FIN is processed; each tick writes an SSE
+/// comment: dead peers surface as write errors within one interval, and live
+/// streams get keepalive bytes. Comments (`:` lines) are protocol no-ops.
 const HEARTBEAT: Duration = Duration::from_secs(5);
 
-/// The configured confirmation timeout.
-///
-/// `pub` so the stdio transport parks for the same length of time this one
-/// does: an answer window that depended on which transport a client happened to
-/// use would be a surprise nobody could have read anywhere.
+/// The configured confirmation timeout. Exported so both REST and stdio
+/// transports use the same window; varying by transport would surprise users.
 #[must_use]
 pub fn answer_timeout() -> Duration {
     std::env::var(TIMEOUT_ENV)
@@ -111,14 +84,12 @@ pub fn serve_once_authed(
     // Strip query string for routing.
     let path = url.split('?').next().unwrap_or(&url);
 
-    // Auth first, before any route can act. `/health` stays open: it carries no
-    // session data and the blue/green supervisor probes it without credentials.
+    // Auth first. `/health` stays open: no session data, supervisor probes unauthed.
     if !authorised(&request, token, path) {
         return respond_json(request, error_reply(401, "missing or invalid bearer token"));
     }
 
     // GET / and its one asset — the web client, embedded above.
-    //
     // Two exact paths, not a prefix: `starts_with("/")` would match every route
     // on this surface, and a static-file handler that shadows the API is a
     // worse bug than no web client at all.
@@ -153,9 +124,8 @@ pub fn serve_once_authed(
         }
     }
 
-    // POST /session/:id/answer — only meaningful while a turn is waiting; the
-    // waiting driver intercepts it there. Reaching the main loop means nothing
-    // asked, so say that rather than 404-ing on a route that does exist.
+    // POST /session/:id/answer — intercepted by waiting driver. Reaching here
+    // means no turn is waiting; return 409, not 404.
     if method == Method::Post {
         if let Some(rest) = strip_prefix(path, "/session/") {
             if rest.strip_suffix("/answer").is_some() {
@@ -209,19 +179,16 @@ pub fn health() -> Reply {
 
 /// Every session with a preview, as any transport reports it.
 ///
-/// Here rather than in [`crate::rpc`] because this is where it was written, and
-/// one shape is the point: a client that lists sessions over stdio and over
-/// REST must not have to render two.
+/// Shared across transports so a client that lists sessions over stdio and over
+/// REST must render one shape, not two.
 #[must_use]
 pub fn sessions_payload(agent: &AgentSession) -> serde_json::Value {
     let sessions: Vec<serde_json::Value> = agent
         .list_sessions()
         .into_iter()
         .map(|id| {
-            // The first thing the user said, which is what makes a session
-            // recognisable in a picker. Taken from the projection rather than
-            // from row 1 of the log, because row 1 need not be a user message
-            // in a session whose first turn was steered or interrupted.
+            // First user message (readable in picker). From projection, not log
+            // row 1, as row 1 need not be a user message (steered/interrupted turns).
             let preview = agent
                 .transcript(&id)
                 .into_iter()
@@ -251,12 +218,9 @@ fn handle_create_session() -> Reply {
     }
 }
 
-/// `POST /session/:id/fork` — start a new session from a prefix of this one.
-///
-/// The child's id is generated here, as `POST /sessions` generates one: a
-/// client naming it could collide with a live session, and `fork_events`
-/// refuses to write into a log that already exists, so the failure would be a
-/// confusing 500 rather than an id the client cannot pick wrongly.
+/// `POST /session/:id/fork` — start a new session from a prefix. Child id
+/// generated here (like POST /sessions) to avoid collisions; client-picked ids
+/// could collide with live sessions, causing confusing 500s.
 fn handle_fork_session(agent: &AgentSession, id: &str, body: &str) -> Reply {
     let at_seq = match parse_at_seq(body) {
         Ok(at_seq) => at_seq,
@@ -275,10 +239,9 @@ fn handle_fork_session(agent: &AgentSession, id: &str, body: &str) -> Reply {
 /// What a fork did, in the three ways it can end.
 ///
 /// Three variants rather than `Result<Value, String>` because the two failures
-/// are not the same failure, and every transport has to say so in its own
-/// vocabulary: the caller asked for something that is not there (`404`, or
-/// JSON-RPC `invalid params`) or the store broke (`500`, or `internal error`).
-/// Collapsing them would make a mistyped `at-seq` look like a broken database.
+/// are not the same: the caller asked for something missing (`404`) or the store
+/// broke (`500`). Collapsing them would make a mistyped `at-seq` look like
+/// a broken database.
 pub enum Forked {
     /// The child session, as `{"id": …, "copied": …}`.
     Created(serde_json::Value),
@@ -288,20 +251,14 @@ pub enum Forked {
     Failed(String),
 }
 
-/// Fork `id` at `at_seq` into a freshly generated child session.
-///
-/// The child's id is generated here, as `POST /sessions` generates one: a
-/// client naming it could collide with a live session, and `fork_events`
-/// refuses to write into a log that already exists, so the failure would be a
-/// confusing internal error rather than an id the client cannot pick wrongly.
+/// Fork `id` at `at_seq` into a freshly generated child session. Generated id
+/// avoids collisions; client-picked ids could collide with live sessions.
 #[must_use]
 pub fn fork(agent: &AgentSession, id: &str, at_seq: u64) -> Forked {
     let child = new_session_id();
     match agent.fork_session(id, at_seq, &child) {
-        // Copying nothing means the fork would start empty, which creating a
-        // session already does better. Almost always a wrong `at-seq` or a
-        // wrong session id, so it is reported rather than returning a session
-        // that silently is not a fork of anything.
+        // Empty fork (no events at seq) usually means wrong `at-seq` or session id;
+        // report it rather than silently returning a non-fork.
         Ok(0) => Forked::Empty(format!(
             "session `{id}` has no events at or before seq {at_seq}"
         )),
@@ -321,8 +278,7 @@ fn parse_at_seq(body: &str) -> Result<u64, String> {
         .ok_or_else(|| "`at-seq` must be a non-negative whole number".to_owned())
 }
 
-/// One session's message list, as any transport reports it. Shared for the same
-/// reason [`sessions_payload`] is.
+/// One session's message list. Shared across transports like [`sessions_payload`].
 #[must_use]
 pub fn session_payload(agent: &AgentSession, id: &str) -> serde_json::Value {
     let messages: Vec<serde_json::Value> = agent
@@ -343,12 +299,10 @@ fn handle_get_session(agent: &AgentSession, id: &str) -> Reply {
 
 /// One message as this surface serves it.
 ///
-/// `messages`, not the `turns` this used to return. A turn was a
-/// `{user, answer}` pair because that is what the transcript row held; the
-/// session is now projected from its event log, which has tool results in it
-/// too, and pairing those back into turns would have to either drop them or
-/// invent a shape for them. A message list is what the projection produces and
-/// what a client can render without guessing.
+/// `messages`, not the `turns` this used to return. A turn was a `{user, answer}`
+/// pair because that's what the transcript row held; now the session projects from
+/// its event log, which includes tool results. Pairing those back into turns would
+/// drop them or invent a shape. A message list is what the projection produces.
 fn as_json(seq: u64, message: &Message) -> serde_json::Value {
     let role = match message.role {
         Role::System => "system",
@@ -356,17 +310,11 @@ fn as_json(seq: u64, message: &Message) -> serde_json::Value {
         Role::Assistant => "assistant",
         Role::Tool => "tool",
     };
-    // `seq` is the log position this message was projected from, and it is what
-    // `session/fork` takes as `at-seq`. Without it a client holds the messages
-    // and not their places, so "fork from here" cannot be spelled at all
-    // ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
-    //
-    // Sparse on purpose: events that project to no message (an ask, an answer,
-    // a text delta) still consume a seq, so this is a position in the log and
-    // not an index into `messages`.
+    // `seq` is the log position; it is what `session/fork` takes as `at-seq`.
+    // Without it, clients cannot specify a fork point (#106). Sparse on purpose:
+    // events with no message (ask, answer, delta) still consume a seq.
     let mut object = serde_json::json!({ "seq": seq, "role": role, "content": message.content });
-    // Present only where it means something — on a tool result, tying it to the
-    // call it answers.
+    // Present only on tool results, tying it to the call it answers.
     if let Some(id) = &message.tool_call_id {
         object["tool-call-id"] = serde_json::json!(id);
     }
@@ -437,9 +385,8 @@ struct PromptDriver<'a> {
     server: &'a Server,
     writer: SharedWriter,
     session: String,
-    /// The bearer token, if one is configured. Checked here explicitly, since
-    /// this driver serves the socket itself while a turn is parked and never
-    /// passes through `serve_once_authed`.
+    /// The bearer token, checked here explicitly since this driver serves
+    /// the socket while a turn is parked, never passing through `serve_once_authed`.
     token: Option<&'a str>,
 }
 
@@ -456,18 +403,15 @@ impl Driver for PromptDriver<'_> {
 }
 
 impl PromptDriver<'_> {
-    /// Serve the socket until this session's answer arrives, or the wait expires.
-    ///
-    /// Anything else received meanwhile is refused with `409` rather than queued:
-    /// the agent is mid-turn and single-threaded, and a client that is told
-    /// "busy" can retry, while one left hanging cannot.
+    /// Serve socket until this session's answer arrives or timeout expires.
+    /// Other requests refused with 409, not queued: agent is mid-turn and
+    /// single-threaded; "busy" clients can retry, hanging ones cannot.
     fn wait_for_answer(&self) -> Option<String> {
         let deadline = Instant::now() + answer_timeout();
         let route = format!("/session/{}/answer", self.session);
         loop {
             let remaining = deadline.checked_duration_since(Instant::now())?;
-            // Wake at least every HEARTBEAT so a vanished client is noticed in
-            // seconds rather than at the far end of the timeout.
+            // Wake every HEARTBEAT so vanished clients are noticed quickly, not at timeout end.
             let slice = remaining.min(HEARTBEAT);
             let Some(mut request) = self.server.recv_timeout(slice).ok().flatten() else {
                 if remaining <= slice {
@@ -482,14 +426,11 @@ impl PromptDriver<'_> {
             };
             let path = request.url().split('?').next().unwrap_or("").to_string();
             if !authorised(&request, self.token, &path) {
-                // Drain before replying: the body is still in the socket, and
-                // answering a POST without consuming it leaves the connection
-                // mid-message — the client then waits for bytes that never come.
+                // Drain before replying: unanswered POST leaves connection mid-message.
                 let mut discard = String::new();
                 let _ = request.as_reader().read_to_string(&mut discard);
-                // Refuse and keep waiting: an unauthenticated caller must not be
-                // able to answer a permission prompt, nor to cancel one by
-                // consuming the wait.
+                // Refuse and keep waiting: unauthenticated callers cannot answer
+                // or consume the wait.
                 let _ = respond_json(request, error_reply(401, "missing or invalid bearer token"));
                 continue;
             }
@@ -531,19 +472,13 @@ impl PromptDriver<'_> {
 /// `None` means no token is configured and everything is allowed — the default
 /// bind is loopback, so requiring a secret to talk to your own machine would be
 /// friction without a threat. When a token *is* configured it is required
-/// everywhere except `/health`, which the supervisor probes and which leaks
-/// nothing.
+/// everywhere except `/health`, which the supervisor probes and which leaks nothing.
 fn authorised(request: &Request, token: Option<&str>, path: &str) -> bool {
     let Some(expected) = token else { return true };
-    // `/health` is probed by the blue/green supervisor without credentials.
-    //
-    // The page and its bundle are open for a different reason, and it is worth
-    // being precise about it: they carry no session data and grant nothing. The
-    // client they contain cannot read a session, send a message or answer a
-    // prompt without a token — every one of those goes through a route below
-    // this line. Handing out the page is handing out a login form, which is why
-    // `an_api_route_still_refuses_without_a_token` sits beside the test that
-    // the page is served: the second is only safe because the first holds.
+    // `/health` is probed by the supervisor without credentials.
+    // The page and bundle are open because they carry no session data and grant
+    // nothing. Clients need tokens to read sessions, send messages, or answer
+    // prompts — all routes below. See test `an_api_route_still_refuses_without_a_token`.
     if matches!(path, "/health" | "/" | "/app.js") {
         return true;
     }
@@ -573,14 +508,9 @@ fn accepts_event_stream(request: &Request) -> bool {
     })
 }
 
-/// Write a single JSON reply and finish the request.
-/// The web client, compiled into the binary.
-///
-/// `include_str!`, so the gateway carries the page and there is no directory to
-/// ship beside it. It resolves at **compile time**, which is why
-/// `src/web/dist/` is committed rather than built in CI — an absent bundle
-/// would make Node a dependency of every `cargo build`. The reasoning, and what
-/// that choice costs, is in
+/// The web client, compiled into the binary via `include_str!`. No directory
+/// needed; resolves at **compile time**. `src/web/dist/` committed rather than
+/// built in CI to avoid making Node a build dependency. See
 /// `docs/concepts/architecture.md#user-interfaces-separate-clients` (#119).
 const WEB_INDEX: &str = include_str!("../../web/dist/index.html");
 const WEB_APP_JS: &str = include_str!("../../web/dist/app.js");
@@ -611,24 +541,20 @@ struct SseSink {
 /// Separate from [`SseSink::emit`], which owns the socket and the liveness
 /// tracking, so the projection itself can be asserted without one. The client
 /// protocol's notifications are the other projection of the same events, and
-/// `core/tests/protocol_events.rs` checks this one loses nothing they keep.
+/// `protocol_events.rs` checks this one loses nothing they keep.
 #[must_use]
 pub fn sse_frame(event: &Event) -> (&'static str, serde_json::Value) {
     match event {
         Event::TextDelta(text) => ("delta", serde_json::json!({ "text": text })),
         Event::ToolInvoked(call) => (
             "tool",
-            // `arguments` used to be dropped here, so REST+SSE could not render
-            // what a client's collapsed tool-block line names (the edited path,
-            // say) while stdio could — `--addr` is a connection detail, and it
-            // was changing what the transcript could say (#161).
+            // `arguments` used to be dropped here (REST+SSE couldn't render
+            // collapsed tool-block lines), but that was a connection-detail bug (#161).
             serde_json::json!({ "id": call.id, "name": call.name, "arguments": call.arguments }),
         ),
         Event::ToolResult(outcome) => (
             "tool-result",
-            // `failed` (#162): a client used to be able to tell a failure from
-            // a success only by sniffing the prose the core wrote into
-            // `content` — this is the fact itself.
+            // `failed` (#162): clients used to infer from prose; now it's explicit.
             serde_json::json!({
                 "id": outcome.tool_call_id,
                 "content": outcome.content,
@@ -643,10 +569,8 @@ pub fn sse_frame(event: &Event) -> (&'static str, serde_json::Value) {
     }
 }
 
-/// The `prompt` frame: an interceptor's question, put to the client.
-///
-/// Extracted alongside [`sse_frame`] for the same reason — [`PromptDriver::ask`]
-/// needs a live `Server` to run, this needs nothing.
+/// The `prompt` frame: an interceptor's question. Extracted like [`sse_frame`]
+/// so it can be tested without a live `Server`.
 #[must_use]
 pub fn prompt_frame(prompt: &UserPrompt, session: &str) -> (&'static str, serde_json::Value) {
     (
@@ -660,10 +584,8 @@ pub fn prompt_frame(prompt: &UserPrompt, session: &str) -> (&'static str, serde_
     )
 }
 
-/// The `error` frame: an unservable request, or a turn that failed.
-///
-/// Both call sites went through the same inline `json!`; naming it keeps them
-/// from drifting apart and lets the compatibility test see the shape.
+/// The `error` frame. Named so both call sites don't drift apart and the
+/// compatibility test can see the shape.
 #[must_use]
 pub fn error_frame(message: &str) -> (&'static str, serde_json::Value) {
     ("error", serde_json::json!({ "error": message }))
@@ -683,17 +605,14 @@ impl EventSink for SseSink {
     }
 }
 
-/// Write one SSE frame: `event: <kind>\ndata: <json>\n\n`, flushed.
+/// Write SSE frame `event: <kind>\ndata: <json>\n\n`, flushed.
 fn write_frame(writer: &mut dyn Write, kind: &str, data: &str) -> std::io::Result<()> {
     write!(writer, "event: {kind}\ndata: {data}\n\n")?;
     writer.flush()
 }
 
-/// Write an SSE comment: a `:`-prefixed line a conformant client ignores.
-///
-/// Not an empty `event:` frame — the UI client's parser reports an unknown event
-/// kind, so a keepalive would surface to the user as an error. The protocol has a
-/// no-op for exactly this and it costs three bytes.
+/// Write SSE comment (`:` line). Not an empty `event:` (UI parser would report
+/// unknown kind as error). Protocol has this no-op for keepalives.
 fn write_comment(writer: &mut dyn Write) -> std::io::Result<()> {
     write!(writer, ": waiting for an answer\n\n")?;
     writer.flush()
@@ -739,14 +658,12 @@ fn json_content_type() -> Header {
     })
 }
 
-/// Generate a random hex session id (16 hex chars, using stdlib only).
-///
-/// `pub` so every transport mints them the same way — two schemes would
-/// eventually collide, and the collision would land in the store.
+/// Generate random 16-hex-char session id (stdlib only). Exported so all
+/// transports mint the same way; different schemes would collide in the store.
 #[must_use]
 pub fn new_session_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    // Mix timestamp nanos with a counter to get unique ids without a rand dep.
+    // Mix timestamp nanos + counter for uniqueness without rand dependency.
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -805,9 +722,8 @@ mod tests {
         }
     }
 
-    /// The id is present only on a message that has one. A `"tool-call-id":
-    /// null` on every user message would invite a client to read it as a field
-    /// that is sometimes empty rather than sometimes absent.
+    /// The id is present only on messages that have one, not null on others.
+    /// Absent field avoids inviting clients to read it as "sometimes empty".
     #[test]
     fn only_a_tool_result_carries_a_call_id() {
         let plain = as_json(
@@ -830,9 +746,8 @@ mod tests {
         );
         assert_eq!(result["tool-call-id"], serde_json::json!("call-1"));
         assert_eq!(result["content"], serde_json::json!("# Jan-Klod"));
-        // The log position travels with the message: it is what `session/fork`
-        // takes as `at-seq`, and without it a client cannot name a fork point
-        // ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
+        // Log position travels with message; used by `session/fork` as `at-seq`.
+        // Without it, clients cannot specify fork points (#106).
         assert_eq!(result["seq"], serde_json::json!(4));
         assert_eq!(plain["seq"], serde_json::json!(1));
     }

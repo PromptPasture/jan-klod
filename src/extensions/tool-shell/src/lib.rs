@@ -1,9 +1,8 @@
 //! `tool-shell` — run a command in the workspace through `host-process`.
 //!
-//! `invoke({ "command", "args"? })` → `{ code, stdout, stderr }` (JSON). Named
-//! `shell` so the loop gates it at `tool-call` (`interceptor-permission` treats it
-//! as dangerous). Bounded + workspace-jailed by the `host-process` substrate.
-//! Component-Model glue only; compiles for `wasm32`.
+//! `invoke({ "command", "args"? })` → `{ code, stdout, stderr }` (JSON).
+//! Gated by `tool-call` permission. Workspace-jailed by `host-process` substrate.
+//! Component-Model glue only (wasm32 only).
 
 #[cfg(target_arch = "wasm32")]
 mod component {

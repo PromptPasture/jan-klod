@@ -1,7 +1,7 @@
 # Extension Technologies (2026-06-29)
 
-Language/toolchain policy for our own first-party extensions.
+Language/toolchain policy for first-party extensions.
 
-- [Brainstorm](BRAINSTORM.md) — selection rule (maturity + supply-chain gated, per-extension best-fit), the language menu (default Rust; TinyGo case-by-case as gate canary; TS/Python case-by-case; Kotlin excluded for now), and provisional near-term assignments.
-- [Plan](PLAN.md) — living Phase 1 execution checklist (walking skeleton + foundation gate); decided `src/` repo layout; status flags mirroring the roadmap tracker.
-- [Slice 1a Gate](SLICE-1A-GATE.md) — go/no-go verdict (**PASS**, 2026-06-29): Rust + Wasmtime loads a TinyGo component over the Component Model; the `wasi:cli` quirk resolution; the host async-model decision (sync baseline, `tokio` at `host-http`).
+- [Brainstorm](BRAINSTORM.md) — selection rule (maturity + supply-chain), language menu (Rust default; TinyGo/TS/Python case-by-case; Kotlin excluded), near-term assignments.
+- [Plan](PLAN.md) — Phase 1 checklist (skeleton + gate); `src/` layout; roadmap status.
+- [Slice 1a Gate](SLICE-1A-GATE.md) — **PASS** (2026-06-29): Rust+Wasmtime load TinyGo; `wasi:cli` quirk; sync baseline, `tokio` at `host-http`.

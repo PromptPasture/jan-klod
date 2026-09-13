@@ -1,26 +1,21 @@
 //! Wrapping that counts display cells and never splits a grapheme (#147).
 //!
-//! # Three numbers, and only one of them is the right one
+//! # Three units: bytes, chars, cells
 //!
-//! `str::len()` is bytes, `chars().count()` is scalar values, and neither is
-//! what a terminal draws. An emoji is one grapheme, several chars, several
-//! bytes and **two cells**; a CJK ideograph is one of each and two cells; a
-//! combining accent is a char that occupies none. Code that conflates them
-//! wraps correctly for ASCII and corrupts the first time somebody pastes a path
-//! with an accent in it — which is why the tests below are written in CJK and
-//! emoji rather than in `aaa bbb`.
+//! `str::len()` counts bytes, `chars().count()` counts scalar values, but
+//! terminals draw by **cells**. An emoji is one grapheme, multiple chars,
+//! multiple bytes, **two cells**; CJK ideographs are two cells each; combining
+//! marks occupy none. Tests use CJK and emoji rather than ASCII to catch
+//! these cases.
 //!
-//! So: widths come from `unicode-width`, and the unit that is never split is
-//! the grapheme cluster from `unicode-segmentation`. Both are already
-//! `ratatui-core` dependencies at the versions named in `Cargo.toml`, so naming
-//! them directly cost zero packages — measured rather than assumed.
+//! Widths use `unicode-width`; grapheme clusters use `unicode-segmentation`.
+//! Both are `ratatui-core` dependencies (already in `Cargo.toml`), so zero new
+//! packages.
 //!
 //! # What it does
 //!
-//! Breaks on word boundaries, preserves the first line's leading indentation on
-//! every continuation line, and hard-breaks a single word that is wider than
-//! the pane rather than letting it overflow. It returns lines; it draws
-//! nothing, so every test here runs without a terminal.
+//! Breaks on word boundaries, preserves leading indentation, and hard-breaks
+//! words wider than the pane. Returns lines only; runs without a terminal.
 
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -104,17 +99,13 @@ pub fn wrap(text: &str, max: usize) -> Vec<String> {
     lines
 }
 
-/// Break `text` every `max` cells, changing nothing else.
+/// Break `text` every `max` cells, preserving all whitespace.
 ///
-/// The counterpart to [`wrap`], and the difference is the whole reason it
-/// exists: `wrap` is built on `split_whitespace`, so a run of spaces *inside* a
-/// line becomes one space. That is right for prose and wrong for anything whose
-/// alignment is the content — a diff (#156) above all, where two spaces against
-/// four is the change being shown.
+/// Unlike [`wrap`], this does not collapse spaces: `wrap` uses
+/// `split_whitespace`, losing runs of spaces. For diffs (#156) where alignment
+/// is content, that breaks the output.
 ///
-/// Breaks between grapheme clusters, for the same reason [`wrap`] does: a split
-/// inside a cluster leaves a stray combining mark that no width arithmetic
-/// recovers from.
+/// Breaks between grapheme clusters to avoid stray combining marks.
 #[must_use]
 pub fn hard_wrap(text: &str, max: usize) -> Vec<String> {
     if max == 0 {
@@ -173,11 +164,8 @@ mod tests {
         }
     }
 
-    /// The test #147's Acceptance names, and the reason this module exists.
-    ///
-    /// Each CJK ideograph is **two** cells, so a 10-cell pane holds five of
-    /// them — a wrapper counting `chars()` would fit ten and overflow the pane
-    /// by a factor of two while believing itself correct.
+    /// CJK ideographs are two cells each; reason this module exists.
+    /// Counting `chars()` would overflow a 10-cell pane by 2x.
     #[test]
     fn cjk_counts_two_cells_each_and_never_overflows() {
         let text = "日本語のテキストです";
@@ -190,9 +178,8 @@ mod tests {
         assert_eq!(lines.concat(), text, "no character was dropped");
     }
 
-    /// An emoji with a modifier is one grapheme made of several chars. Breaking
-    /// inside it leaves a stray modifier on the next line, which no width
-    /// arithmetic recovers from.
+    /// Grapheme clusters (emoji with modifiers) must not be split; stray
+    /// modifiers on the next line break width arithmetic.
     #[test]
     fn a_grapheme_cluster_is_never_split() {
         // Family emoji: multiple scalars joined by zero-width joiners.
@@ -243,8 +230,7 @@ mod tests {
         assert_eq!(hard_wrap(aligned, 80), vec![aligned.to_string()]);
         assert!(
             !wrap(aligned, 80)[0].contains("      "),
-            "this test exists because `wrap` collapses that run, and if it \
-             stops doing so, `hard_wrap` has lost its reason to exist"
+            "`wrap` collapses runs of spaces; if it stops, `hard_wrap` loses purpose"
         );
 
         let lines = hard_wrap(aligned, 12);

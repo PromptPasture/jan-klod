@@ -1,28 +1,17 @@
 # Phase 1 Plan — Walking Skeleton + Foundation Gate
 
-Living execution checklist for Phase 1 of the
-[Roadmap](../../concepts/roadmap.md). Update the flags here and in the roadmap
-[Status tracker](../../concepts/roadmap.md#status-tracker) as work proceeds.
+Living checklist for Phase 1 of [Roadmap](../../concepts/roadmap.md). Update flags as work proceeds.
 
-Decisions & rationale:
-[Component Model on Rust + Wasmtime](../2026-06-29-component-model-rust/Handoff.md) ·
-[Extension Technologies](BRAINSTORM.md).
+[Component Model](../2026-06-29-component-model-rust/Handoff.md) · [Extension Tech](BRAINSTORM.md).
 
-## Repo layout (decided)
-
-All implementation code lives under `src/` (never the project root):
+## Repo layout
 
 ```
 src/
-  core/            # Rust host: Wasmtime + Component Model. Cargo workspace root.
-  extensions/
-    <name>/        # one dir per guest (Rust by default; cargo-component)
-wit/               # language-agnostic WIT contracts — kept at repo root
+  core/       # Rust host (Wasmtime + Component Model). Workspace root.
+  extensions/ # one dir per guest (Rust by default)
+wit/          # language-neutral contracts (repo root, polyglot consumption)
 ```
-
-`wit/` stays at the root deliberately: the contracts are language-neutral and
-consumed across the polyglot `src/` tree, so they sit above any single language's
-code.
 
 ## Status
 
@@ -31,7 +20,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | Item | Flag |
 |---|---|
 | Slice 1a — gate | `done` — **PASSED** ([verdict](SLICE-1A-GATE.md)) |
-| Slice 1b — MVP parity | `done` — core skeleton + all three host caps (`host-log`/`host-config`/`host-http`) done; three guests built (`store-memory` + `provider-openai` + `manager-agent-loop`); the component harness verifies each guest offline; the **exit gate is met for real** — the `manager-agent-loop` *extension* runs one turn (completion → store) with **core only routing** its `llm-provider`/`memory-store` imports into the implementing extensions (`jan_klod_core::route`), proven by `tests/routing.rs`. The agent loop is a sandboxed guest, not core, per [architecture](../../concepts/architecture.md). The supply-chain CI gates now close the slice: [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml) enforces lint + harness + `cargo-audit`/`cargo-deny`/`govulncheck` + SBOM, all via `make`. **Phase 1 done.** |
+| Slice 1b — MVP parity | `done` — core skeleton + 3 host caps (`host-log`/config/http); 3 guests (`store-memory`, `provider-openai`, `manager-agent-loop`); component harness verifies offline. **Gate met:** sandboxed `manager-agent-loop` runs one turn (complete → store) with core routing its imports into implementations (`jan_klod_core::route`), proven by `tests/routing.rs`. Agent loop in guest per [architecture](../../concepts/architecture.md). Supply-chain CI ([`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml)): lint + harness + audits + SBOM via `make`. **Phase 1 done.** |
 
 ## Slice 1a — the gate (go/no-go)
 
@@ -47,11 +36,11 @@ Reproduce with `make gate`.
 
 ## Slice 1b — build out to MVP parity (only after the gate passes)
 
-- [x] Rust core skeleton: `jan-klod.yaml` loader (`jan-klod-config`); extension registry + boot ordering (category-tier; full dependency-graph deferred until managers declare deps); lifecycle drive (`init`→`start`); component host loading `ext/*.wasm` — `jan-klod-core` crate, `Runtime::boot`/`start_all`. The core instantiates every guest as the category-neutral `extension-world` (imports the full host-cap set, exports only `extension-lifecycle`) so one target drives lifecycle on any guest, store or provider, without depending on a category interface.
-- [x] Host capabilities as CM imports: `host-log` ✓ + `host-config` ✓ + `host-http` ✓. `host-http` is now a real **blocking** client — `ureq` 3 (synchronous, rustls TLS, **no `tokio`**: the async-at-host-http contingency was not needed; the sync Wasmtime baseline holds). Implemented capability-neutral in [`jan_klod_core::http`](../../../src/core/core/src/http.rs) (plain types) so both the core's `host-http::Host` and the `provider_probe` example adapt onto one impl; 4xx→`client-error`, 5xx→`server-error`, transport failures→matching variant.
-- [x] `store-memory` (Rust) — real `memory-store` component, in-memory `HashMap` backend. Built with the `wit-bindgen` crate + the `wasm32-wasip2` target (emits a component directly; **no `cargo-component` needed**). Loads through the core, drives `init`→`start`, and round-trips both host caps it imports (`host-log` lines tagged `[store.memory]`, `host-config` `all()` returns its section). Loads via the category-neutral `extension-world` (see the core-skeleton item above).
-- [x] `provider-openai` (Rust) — OpenAI-compatible `llm-provider` over `host-http`. `complete` builds a Chat Completions request, issues **one blocking `host-http::fetch`** (non-streaming — the host buffers the whole body), parses `choices[0].message` into ordered chunks (`tool-call-request`s or a `text-delta`, closed by `done`) buffered under a stream handle the host drains via `next-chunk`. Status/transport errors → `provider-error` (401/403→`auth-failed`, 404→`model-not-found`, 429→`rate-limited`, else `transient`). `type: openai` is the default, so one build serves every OpenAI-compatible endpoint (LM Studio, Groq, vLLM, …); only `base-url`/`api-key`/`model` (from `host-config`) differ. **End-to-end proven** by `provider_probe` (below).
-- [x] Inter-component routing (`jan_klod_core::route`) + `manager-agent-loop` guest — the core capability that lets one extension consume another's interface, and the v0 agent loop that exercises it. The guest is authored against a reduced `agent-loop-world` (imports `host-log` + `llm-provider` + `memory-store`, exports `extension-lifecycle` + a minimal `agent-loop.run(prompt) -> string`); `host-config`/`context-manager`/tools/fallback are deferred to the future `agent-manager`. The core **broker** instantiates the provider + store, then satisfies the manager's *imported* `llm-provider`/`memory-store` by delegating each call into the implementing instance (cross-store, sync; stream handles pass through; the structurally-identical generated types are converted at the boundary). `Runtime::route_agent_loop` resolves the enabled manager/provider/store, wires the routing, drives all three lifecycles, and returns a `RoutedAgentLoop`; `run` forwards to the guest. The provider's `host-http` is injected (`route::HttpFn`) so a turn runs live or offline. **YAGNI:** v0 is hand-wired for the two deps — generalised only when a third appears.
+- [x] Core skeleton: `jan-klod.yaml` loader; registry + boot ordering (category-tier); lifecycle (`init`→`start`); component host `ext/*.wasm`. Category-neutral `extension-world` (imports all host-caps, exports `lifecycle`) drives all guests uniformly.
+- [x] Host caps: `host-log`, `host-config`, `host-http` ✓. HTTP is blocking (`ureq` 3, sync, no `tokio`; async contingency unneeded). Capability-neutral impl in [`jan_klod_core::http`](../../../src/core/core/src/http.rs); 4xx/5xx/transport → typed errors.
+- [x] `store-memory` (Rust) — real component, HashMap backend. `wit-bindgen` crate + `wasm32-wasip2` target (component directly, no `cargo-component`). Loads, drives lifecycle, round-trips host-caps. Loads via category-neutral `extension-world`.
+- [x] `provider-openai` (Rust) — OpenAI-compatible LLM over `host-http`. One blocking fetch (non-streaming, host buffers), parses into chunks (tool-calls or text-delta) under stream handles. Status/transport → typed errors. Default endpoint, OpenAI-compatible servers differ by config (url/key/model). Proven by `provider_probe`.
+- [x] Routing (`jan_klod_core::route`) + agent-loop guest — lets extensions consume others' interfaces. Guest imports `host-log`/`llm-provider`/`memory-store`, exports lifecycle + minimal `run(prompt) → string`. Core brokers the provider/store, satisfies imports by delegating (sync, types converted). `Runtime::route_agent_loop` resolves, wires, drives lifecycles. Injected `host-http` allows live/offline. v0 hand-wired for two deps; generalized when needed.
 - [x] Build: `Makefile` — `make run` boots the core; `make gate` reproduces Slice 1a (now an example); `make store-memory` / `make provider-openai` / `make manager-agent-loop` build the guests (`cargo build --target wasm32-wasip2`), `*-docker` variants are the no-rustup container fallback (`rust:1-slim`); `make probe` runs the live-completion probe; `make harness` runs the offline component + routing tests; `tinygo`+`wkg` retained only for the Slice 1a gate canary
 - [x] Supply-chain CI gates: a `.github/workflows/ci.yml` that installs the tooling and then calls the same `make` targets a developer runs locally. **Rust** — `make audit` (`cargo-audit`, RUSTSEC) and `make deny` (`cargo-deny`) run over the host workspace *and* every guest crate (each a standalone `Cargo.lock`); one shared [`deny.toml`](../../../deny.toml) at the repo root holds the license / advisory / source policy (license `allow` list derived from `cargo metadata` — copyleft/unknown denied by omission); CI also asserts every `Cargo.lock` is current with `cargo metadata --locked`. **Go** (Slice 1a canary only) — `make -C src/extensions go-supply-chain` globs every `src/extensions/*/go.mod` and runs `go mod verify` + `govulncheck ./...` under `GOFLAGS=-mod=readonly`. **SBOM** — `make sbom` (`cargo-cyclonedx`, CycloneDX JSON) covers the Rust workspace; Go modules are excluded (only the Slice 1a canary exists and is covered by `govulncheck`). Uploaded as a CI artifact. Verified locally where tooling exists (`cargo-audit` clean across all four crates, all locks current, `go mod verify` passes); `cargo-deny`/`cargo-cyclonedx` are not installed on the dev host and execute first on the initial CI run. `govulncheck` is invoked via `go run` — no install required.
 - [x] Tests: `cargo test` ✓ (14 host-side; ureq status-mapping + config/boot). Component-level harness ([src/core/host/tests/component_harness.rs](../../../src/core/host/tests/component_harness.rs)) — the generalization of the `provider_probe` example into the "load a guest, verify its WIT interface" harness the plan called for: it binds both category worlds, backs their imports with one reusable `TestHost` (config section, captured logs, a **canned** `host-http` so the provider runs offline), then verifies each staged guest end-to-end — `store-memory` lifecycle + full `memory-store` round-trip, and `provider-openai` lifecycle + `complete` (canned 200 → text-delta/done, and 401 → `auth-failed`). Each test skips when its component is not staged, so a bare `cargo test` stays green; `make harness` builds the guests then runs them. The `provider_probe` example remains the **live**-endpoint path (`make probe`)

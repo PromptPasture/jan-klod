@@ -1,33 +1,6 @@
-//! Putting components into `ext/`, reading what is there, and taking them out.
-//!
-//! # What `install` checks, and what it does not yet
-//!
-//! Structural integrity: the file is a WebAssembly component, a manifest is
-//! beside it, and the manifest matches the component's real imports — decided
-//! by the same [`crate::inspect`] the boot path uses, so an install cannot
-//! accept what boot would refuse.
-//!
-//! Integrity, when the caller supplies a digest — see [`Checks`] for why that
-//! is optional for a local path and what makes it stop being optional.
-//!
-//! Provenance: a minisign signature over **both** files, under a key the
-//! operator named in `registry.trusted-keys`. Signed is the default; the only
-//! way past it is `allow_unsigned`, which then requires a digest, so no
-//! combination of flags lands a component with nothing vouching for it.
-//!
-//! What is still unchecked is *where the bytes came from* — remote fetching is
-//! [#92](https://github.com/PromptPasture/jan-klod/issues/92) — and nothing
-//! first-party is signed yet, which is
-//! [#93](https://github.com/PromptPasture/jan-klod/issues/93). A signature
-//! check with no published key to check against verifies nobody's components
-//! until there is one, and that is the honest state today.
-//!
-//! # Why `list` reads manifests rather than filenames
-//!
-//! `ls ext/` already lists files. What an operator cannot see that way is what
-//! each component may *ask the host for* — and that is the number that matters,
-//! since a capability is granted by being declared and cross-checked at boot
-//! rather than by anything visible in the filename.
+//! Component lifecycle: install, list, remove from `ext/`.
+//! Checks integrity (via [`crate::inspect`]), SHA-256, minisign. Remote fetch is #92;
+//! first-party signatures are #93. `list` reads manifests for declared capabilities.
 
 use std::path::{Path, PathBuf};
 
@@ -40,75 +13,34 @@ use crate::{inspect, Verdict};
 /// The extension of a staged component.
 const COMPONENT_EXT: &str = "wasm";
 
-/// What `install` should verify beyond the component being well-formed.
+/// What `install` verifies beyond component well-formedness.
 ///
-/// # Why the checksum is optional here, and when it stops being
-///
-/// A digest is only evidence if it reached you by a **different route than the
-/// bytes did** — a release note, a repository page, a message from whoever
-/// built it. Requiring one for a local path would mostly produce the opposite:
-/// an operator computing the digest of the very file they are installing, which
-/// proves the file equals itself. That is a check that reads green while
-/// proving nothing, and worse, it trains people to paste digests they just
-/// generated.
-///
-/// So: **supplied is enforced, absent is allowed only while the signature is
-/// not.** The invariant is not "always a digest" but "never nothing": a digest
-/// is **required** wherever the signature is waived with
-/// [`Checks::allow_unsigned`], which is the state a URL install (#92) falls
-/// into when no key covers it. #92 therefore does not have to invent a
-/// policy.
+/// Digest optional but enforced when supplied. Only evidence if received via
+/// different route than bytes (release notes, repo page). Local path: operator
+/// computing self-digest proves nothing. **Invariant: never nothing** — digest
+/// required where signature is waived (see [`Checks::allow_unsigned`]).
 #[derive(Debug, Clone, Default)]
 pub struct Checks {
-    /// Expected SHA-256 of the **component**, as hex. Case-insensitive.
-    ///
-    /// The component only, not the manifest. The signature covers both
-    /// (box 4), and it is the signature that establishes provenance; what a
-    /// tampered manifest could do here is already bounded by
-    /// [`crate::inspect`], which refuses a manifest that *hides* an import.
-    /// The remaining direction — a manifest claiming more than the component
-    /// uses — makes an operator grant more than necessary but cannot let the
-    /// component reach it, since a capability it does not import is one it
-    /// cannot call.
+    /// Expected SHA-256 (component only, not manifest; case-insensitive).
+    /// Signature covers both and establishes provenance; [`crate::inspect`]
+    /// bounds tampered manifests.
     pub sha256: Option<String>,
 
-    /// The minisign public keys an install may be signed by, base64 as minisign
-    /// writes them, from the top-level `registry.trusted-keys`.
-    ///
-    /// **Empty means nothing is trusted, not "skip the check".** That is the
-    /// repository's default-deny rule applied here: a capability is granted by
-    /// being named in `config.yaml`, so an operator who has named no keys has
-    /// granted nothing, and an install refuses rather than accepting whatever
-    /// turns up. Treating an empty list as "unsigned is fine" would make the
-    /// whole check vanish for exactly the operator who never configured it.
+    /// Minisign public keys (base64), from `registry.trusted-keys`.
+    /// Empty = nothing trusted (default-deny, not "skip check").
     pub trusted_keys: Vec<String>,
 
-    /// Waive the signature requirement, deliberately and by name.
-    ///
-    /// Paired with `sha256`: see [`Checks::sha256`]. Waiving the signature
-    /// makes the digest **required**, so there is no combination of flags that
-    /// lands a component with no integrity evidence at all.
+    /// Waive signature requirement (requires digest; see [`Checks::sha256`]).
     pub allow_unsigned: bool,
 }
 
 impl Checks {
-    /// Read `registry.trusted-keys` from the top-level `registry` block.
-    ///
-    /// `registry` is opaque JSON as the config crate preserved it, the same way
-    /// [`crate::sandbox::SandboxPolicy::from_config`] takes `execution`.
-    ///
-    /// Note this is the **top-level** `registry`, not the `extensions.registry`
-    /// category that holds `skills` and `mcp`. Two different things that share
-    /// a word.
-    ///
-    /// Strict, because neither fallback is safe: silently dropping a malformed
-    /// entry would leave an operator believing a key is trusted when it is not,
-    /// and refusing the whole list is the only reading that cannot quietly
-    /// widen or narrow what they asked for.
+    /// Read `registry.trusted-keys` from top-level `registry` block
+    /// (not `extensions.registry` which holds `skills`/`mcp`).
+    /// Strict: malformed entries must fail (never silently drop or widen).
     ///
     /// # Errors
-    /// [`ExtError::TrustedKeysNotAList`] when `trusted-keys` is present and is
-    /// not a list of strings.
+    /// [`ExtError::TrustedKeysNotAList`] if `trusted-keys` is not a string list.
     pub fn from_config(registry: Option<&serde_json::Value>) -> Result<Self, ExtError> {
         let keys = match registry.and_then(|block| block.get("trusted-keys")) {
             None => Vec::new(),
@@ -129,22 +61,13 @@ impl Checks {
         })
     }
 
-    /// Read the grant straight from a `config.yaml`.
-    ///
-    /// Here rather than in the gateway binary because this crate already
-    /// depends on the config crate and the binary does not — the same division
-    /// as [`crate::Runtime::boot`], which takes a path and does the reading
-    /// itself. A CLI that parsed config would be a second reader of it.
+    /// Read grant from `config.yaml` (here, not gateway: config crate dependency).
+    /// Same division as [`crate::Runtime::boot`].
     ///
     /// # Errors
-    /// [`ExtError::Config`] if the file cannot be read or parsed, and whatever
-    /// [`Checks::from_config`] refuses.
+    /// [`ExtError::Config`] if file can't be read/parsed or [`Checks::from_config`] refuses.
     pub fn from_config_path(path: &Path) -> Result<Self, ExtError> {
-        // `top_level` rather than `from_path`: the latter expands `${VAR}` in
-        // every enabled instance and fails when one is unset, so reading a key
-        // that has nothing to do with extensions would make `ext install`
-        // refuse to run without a provider's API key in the environment.
-        // Found by running it, not by reading it.
+        // top_level: avoid expanding ${VAR} in enabled instances (no provider API key needed).
         let registry = jan_klod_config::Config::top_level(path, "registry").map_err(|err| {
             ExtError::Config {
                 path: path.display().to_string(),
@@ -164,46 +87,26 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Whether an `install` argument names a remote source rather than a file.
-///
-/// Only `http` and `https`. A bare path is a path, and every other scheme is a
-/// path too — `file:///x` is refused as a missing file rather than fetched,
-/// which is the honest answer for an installer that fetches over HTTP.
+/// Whether `install` argument is remote (http/https only; others are paths).
 #[must_use]
 pub fn looks_remote(spec: &str) -> bool {
     let lower = spec.to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
-/// Refuse a remote source the egress policy would not permit, **before a byte
-/// moves**.
+/// Refuse remote sources the policy would not permit, before bytes move.
 ///
-/// # Which policy, and why not the runtime's
-///
-/// [`crate::egress::EgressPolicy::public_only`], not
-/// [`crate::Runtime::egress_policy`]. The runtime's version also permits every
-/// origin an extension instance names in `base-url`/`endpoint`/`url`, and an
-/// origin trusted to answer model calls is not thereby a place to fetch
-/// executable components from. Two different grants that happen to be URLs.
-///
-/// It also cannot be obtained cheaply: `Runtime::egress_policy` needs a booted
-/// runtime, and booting expands `${VAR}` in every enabled instance — the same
-/// reason [`Checks::from_config_path`] reads one key instead of the whole
-/// config. An installer that demanded a model API key to reject a loopback URL
-/// would be absurd twice over.
-///
-/// A self-hosted component source on a private address is therefore refused,
-/// and deliberately has no grant yet: nothing needs one until there is a
-/// registry to host ([#53](https://github.com/PromptPasture/jan-klod/issues/53)),
-/// and inventing `registry.sources` now would be a widening with no caller.
+/// Uses [`crate::egress::EgressPolicy::public_only`] (not runtime version):
+/// origins trusted for model calls ≠ places to fetch components from.
+/// Runtime version needs booted runtime (expensive: expands ${VAR} in instances).
+/// Private component sources currently refused, no grant yet.
 ///
 /// # Errors
-/// [`ExtError::RefusedByPolicy`] naming the URL and what the policy said.
+/// [`ExtError::RefusedByPolicy`] naming the URL and policy rationale.
 pub fn check_remote(url: &str) -> Result<(), ExtError> {
     crate::egress::EgressPolicy::public_only()
         .check(url)
-        // The addresses are of no use here: this refuses a source before a byte
-        // moves, and the fetch that follows runs its own check per hop.
+        // Addresses unused: refusal before bytes move; fetch re-checks per hop.
         .map(|_| ())
         .map_err(|err| ExtError::RefusedByPolicy {
             url: url.to_owned(),
@@ -211,29 +114,17 @@ pub fn check_remote(url: &str) -> Result<(), ExtError> {
         })
 }
 
-/// What a remote install has to fetch, and what to call each file locally.
+/// Remote install fetch list (URL names component; siblings inferred).
 ///
-/// # The convention, and why it is a convention rather than four arguments
-///
-/// The URL names the **component**; everything else sits beside it, exactly as
-/// it does on disk. `https://h/p/tool-fs.wasm` implies
-/// `tool-fs.manifest.toml`, and — unless the signature is waived —
-/// `tool-fs.wasm.minisig` and `tool-fs.manifest.toml.minisig`. That mirrors the
-/// local layout the verifier already requires, so one rule covers both cases
-/// and a release that publishes an installable directory publishes the same
-/// shape either way.
-///
-/// Only the signatures are conditional: with `allow_unsigned` there is nothing
-/// to verify them against, and fetching files to ignore would make a 404 on a
-/// `.minisig` fail an install that never wanted one.
+/// Convention: `https://h/p/tool-fs.wasm` → `tool-fs.manifest.toml`,
+/// `tool-fs.wasm.minisig`, `tool-fs.manifest.toml.minisig` (unless unsigned).
+/// Mirrors on-disk layout; one rule covers both cases.
+/// Signatures conditional: unsigned means no `.minisig` files to fetch.
 ///
 /// # Errors
-/// [`ExtError::NotAWasm`] unless the URL's last segment ends in `.wasm`, and
-/// [`ExtError::OpaqueUrl`] for a query or fragment. The second matters: sibling
-/// URLs are derived by resolving a relative reference, which **drops** a query
-/// — so a URL carrying an access token would silently produce sibling URLs
-/// without it, and a 404 would look like a missing manifest rather than a
-/// mangled request. Refusing says so instead of guessing.
+/// [`ExtError::NotAWasm`] unless URL ends in `.wasm`.
+/// [`ExtError::OpaqueUrl`] for query/fragment (relative reference drops queries,
+/// access tokens would silently disappear from sibling URLs).
 fn wanted(url: &str, allow_unsigned: bool) -> Result<Vec<(String, String)>, ExtError> {
     let parsed = url::Url::parse(url).map_err(|_| ExtError::NotAWasm {
         path: url.to_owned(),
@@ -278,18 +169,9 @@ fn wanted(url: &str, allow_unsigned: bool) -> Result<Vec<(String, String)>, ExtE
         .collect()
 }
 
-/// The HTTP client a remote install should be given.
-///
-/// Here rather than in the gateway so there is **one** construction of it and
-/// no way to pass a weaker one by accident. `fetch_within` with
-/// [`crate::egress::EgressPolicy::public_only`] means every redirect hop is
-/// re-checked ([#107](https://github.com/PromptPasture/jan-klod/issues/107)),
-/// and `Authorization` does not survive a hop.
-///
-/// [`install_from_url`] still takes the client as an argument, because a test
-/// has to be able to serve bytes without a socket — but a caller reaching for
-/// a client now finds this one first, which is a better guarantee than a guard
-/// that notices afterwards.
+/// Policy-bound HTTP client for remote installs (single construction, no weak pass).
+/// Every redirect re-checked (#107); `Authorization` doesn't survive hops.
+/// Testable with fake client; [`install_from_url`] takes it as argument.
 #[must_use]
 pub fn policy_bound_http() -> crate::route::HttpFn {
     Box::new(|method, url, headers, body, timeout| {
@@ -304,26 +186,16 @@ pub fn policy_bound_http() -> crate::route::HttpFn {
     })
 }
 
-/// Fetch a component and its companions, then install them as if they had been
-/// on disk all along.
+/// Fetch a component and companions, then install as if on-disk (download adds
+/// bytes location, nothing else; goes through [`install`] unchanged).
 ///
-/// The download **adds where the bytes come from and nothing else**: the files
-/// land in a scratch directory and go through [`install`] unchanged, so there
-/// is no second, weaker verification path to keep in step with the first. That
-/// was the reason for splitting 16c this way.
-///
-/// `http` is injected so a test can serve bytes without a socket. The egress
-/// policy is *not* injected: [`check_remote`] is called for every URL before it
-/// is requested, and the caller's `http` is expected to be policy-bound too
-/// (`http::fetch_within` checks each redirect hop). Both, because the first
-/// gives the operator a message naming the policy and the second is what
-/// actually holds when a server redirects.
+/// `http` injected for testability. Policy not injected: [`check_remote`] checks
+/// all URLs first; caller's `http` should be policy-bound (checks per hop).
+/// Both: first gives operator a message, second holds on redirect.
 ///
 /// # Errors
-/// [`ExtError::RefusedByPolicy`] for a destination the policy denies,
-/// [`ExtError::Fetch`] when a request fails or answers non-200, whatever
-/// [`wanted`] refuses about the URL's shape, and every refusal [`install`]
-/// can produce.
+/// [`ExtError::RefusedByPolicy`] if policy denies, [`ExtError::Fetch`] on
+/// request failure/non-200, [`wanted`] errors, or [`install`] refusals.
 pub fn install_from_url(
     dir: &Path,
     url: &str,
@@ -333,12 +205,7 @@ pub fn install_from_url(
     let wanted = wanted(url, checks.allow_unsigned)?;
     let incoming = staging_dir();
     let _ = std::fs::remove_dir_all(&incoming);
-    // Private, because what lands here is a component and its signature
-    // **before either has been verified**, read back out of this directory to
-    // be checked. `create_dir_all` alone leaves it world-readable at a
-    // guessable path in a shared `/tmp`. `security-model.md` already makes this
-    // argument for the compile cache, whose contents this process at least
-    // produced itself.
+    // Private dir: unverified component/signature staged before checking.
     crate::wasm_cache::ensure_private_dir(&incoming).map_err(|source| ExtError::Staging {
         path: incoming.display().to_string(),
         source,
@@ -350,20 +217,11 @@ pub fn install_from_url(
     outcome
 }
 
-/// Distinguishes one `install_from_url`'s staging directory from another's.
-///
-/// A counter rather than a timestamp: macOS's clock has microsecond
-/// granularity, so two calls in the same microsecond would collide again — the
-/// exact way #165 did, which is where this defect was noticed.
+/// Counter for distinct staging dirs per call (macOS clock granularity: #165).
 static NEXT_STAGING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Where one `install_from_url` stages its downloads before they are verified.
-///
-/// Per **call**, not per process (#168). The name used to be
-/// `jk-ext-fetch-<pid>`, and `install_from_url` `remove_dir_all`s it at both
-/// ends — so two installs in one process wiped each other's half-fetched files.
-/// The integration suite showed it as a `.minisig` that had been downloaded and
-/// then deleted by a neighbouring test.
+/// Staging dir per call (not per process: #168). Per-process would wipe
+/// neighbours' half-fetched files.
 fn staging_dir() -> PathBuf {
     std::env::temp_dir().join(format!(
         "jk-ext-fetch-{}-{}",
@@ -372,15 +230,14 @@ fn staging_dir() -> PathBuf {
     ))
 }
 
-/// Fetch each wanted file into `incoming`, returning the component's name.
+/// Fetch wanted files into `incoming`, return component name.
 fn fetch_all(
     incoming: &Path,
     wanted: &[(String, String)],
     http: &crate::route::HttpFn,
 ) -> Result<String, ExtError> {
     for (remote, file) in wanted {
-        // Before a byte moves, and per file: a manifest or signature URL is as
-        // much a destination as the component's.
+        // Check each URL (manifest and signature URLs are destinations too).
         check_remote(remote)?;
         let response = http("GET", remote, &[], None, 0).map_err(|err| ExtError::Fetch {
             url: remote.clone(),
@@ -408,25 +265,15 @@ fn fetch_all(
         })
 }
 
-/// Where a file's detached signature lives: `<file>.minisig`, as minisign
-/// writes it by default.
+/// File's detached signature path (`<file>.minisig`).
 fn signature_path(file: &Path) -> PathBuf {
     let mut name = file.as_os_str().to_os_string();
     name.push(".minisig");
     PathBuf::from(name)
 }
 
-/// Verify `file` against its `.minisig` under any of `keys`.
-///
-/// `content` is the staged copy — the bytes that will land — while the
-/// `.minisig` is read from beside `beside`, the file as the operator offered
-/// it. Verifying the staged bytes means a copy that went wrong fails here too.
-///
-/// **Prehashed signatures only** — `allow_legacy: false`. The legacy format is
-/// Ed25519 over the raw file rather than over its `BLAKE2b-512` hash, and
-/// minisign has moved on from it; accepting it would widen what the installer
-/// trusts in exchange for nothing, since nothing has ever been signed for this
-/// project and so there is no legacy signature to stay compatible with.
+/// Verify `content` (staged bytes) against `.minisig` (beside operator's original).
+/// Prehashed signatures only: legacy format (raw file) not accepted (no project usage).
 fn verify_signature(
     content: &Path,
     beside: &Path,
@@ -455,8 +302,7 @@ fn verify_signature(
 
     for (index, key) in keys.iter().enumerate() {
         let key = minisign_verify::PublicKey::from_base64(key.trim()).map_err(|err| {
-            // A key the operator wrote that cannot be parsed is their mistake to
-            // see, not something to skip past on the way to "untrusted".
+            // Unparseable operator key: show error, don't skip to "untrusted".
             ExtError::MalformedTrustedKey {
                 index,
                 detail: err.to_string(),
@@ -472,57 +318,46 @@ fn verify_signature(
     })
 }
 
-/// Whether `text` could be a SHA-256 digest at all.
-///
-/// Checked before comparing, so a truncated or mistyped digest is reported as
-/// malformed rather than as a mismatch: those are different mistakes, and
-/// "your digest is 63 characters" is the more useful of the two messages.
+/// Whether text looks like a SHA-256 digest (64 hex chars; errors reported as
+/// malformed before comparison, not mismatch).
 fn looks_like_a_digest(text: &str) -> bool {
     text.len() == 64 && text.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Where an install is assembled and checked before anything lands in `ext/`.
-///
-/// Inside `ext/` rather than a temp directory so the final move is a rename
-/// within one filesystem — a rename across devices is a copy, and a copy is
-/// exactly the non-atomic step this staging exists to avoid.
+/// Install staging dir (inside `ext/` so final move is same-filesystem rename).
 const STAGING: &str = ".staging";
 
-/// What a component's manifest turned out to be.
-///
-/// Three states rather than an `Option`, because "absent" and "present but
-/// unusable" are different problems with different fixes, and collapsing them
-/// would report a typo in a manifest as a missing one.
+/// Component manifest status (three states: present, absent, broken).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Declaration {
-    /// A manifest that reads.
+    /// Manifest reads.
     Present(Manifest),
-    /// No manifest file beside the component. The boot path refuses this.
+    /// No manifest file beside component.
     Absent,
-    /// A manifest is there and could not be used; the reason, rendered.
+    /// Manifest present but unusable (reason included).
     Broken(String),
 }
 
-/// One staged component, and what it declares.
+/// Staged component and its manifest status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
-    /// File stem — the name [`remove`] takes.
+    /// File stem (name for [`remove`]).
     pub name: String,
-    /// The component file itself.
+    /// Component file.
     pub component: PathBuf,
-    /// Its manifest, or why there is not a usable one.
+    /// Manifest or reason there isn't one.
     pub declaration: Declaration,
 }
 
-/// Why an `ext` operation could not be completed.
+/// Extension operation failure.
 #[derive(Debug, thiserror::Error)]
 pub enum ExtError {
-    /// The extension directory could not be read.
+    /// Extension directory unreadable.
     #[error("reading {path}")]
     Unreadable {
-        /// The directory that could not be read.
+        /// Directory path.
         path: String,
-        /// The underlying I/O error.
+        /// I/O error.
         #[source]
         source: std::io::Error,
     },

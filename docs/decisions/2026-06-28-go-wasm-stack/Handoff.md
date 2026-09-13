@@ -11,26 +11,19 @@ updated: 2026-06-28
 
 ## What this is
 
-A design session that replaced the original Java/Quarkus stack with **Go + Wazero + WASM component model**. All architectural concepts (extension model, blue/green deployment, configurator, agent loop) carry forward unchanged. Only the implementation language and extension loading mechanism changed.
+Replaced Java/Quarkus with **Go + Wazero + WASM component model**. Architecture (extensions, blue/green, configurator, loop) unchanged; only language + loading changed.
 
-The original decisions are preserved in:
-- [2026-06-16-jan-klod/Handoff.md](../2026-06-16-jan-klod/Handoff.md) — original Java/Quarkus design
-- [2026-06-16-jan-klod/BRAINSTORM.md](../2026-06-16-jan-klod/BRAINSTORM.md) — full original brainstorm
+Original: [2026-06-16-jan-klod](../2026-06-16-jan-klod/)
 
 ---
 
-## Decision path
+## Why Go + Wazero
 
-The session explored these options in order before landing on Go:
-
-| Option | Rejected because |
+| Option | Issue |
 |---|---|
-| Java + Quarkus | JVM extension ABI fragile, no sandboxing |
-| Kotlin + Quarkus | Mutiny vs coroutines friction; same ABI problem |
-| Kotlin + Micronaut | Kotlin/WASM WASI target not production-ready |
-| Spring Boot | AOT footprint too large, ~50–100ms startup |
-| Rust + Wasmtime | Best footprint + WASM maturity, but borrow checker hardness unacceptable when Claude Code is primary author |
-| **Go + Wazero** | ✅ Chosen — low hardness, good footprint, production-ready WASM host |
+| Java/Kotlin/Spring | ABI fragile, no sandbox, large footprint |
+| Rust + Wasmtime | Best, but borrow checker too hard for AI authoring |
+| **Go + Wazero** | ✅ Low hardness, good footprint, production WASM |
 
 ---
 
@@ -41,18 +34,15 @@ The session explored these options in order before landing on Go:
 | Core language | Go | Low hardness for AI-generated code; single binary; no borrow checker |
 | WASM host | Wazero (pure Go, no CGo) | Production-ready; no native dependencies |
 | Extension format | WASM component model + WIT | Stable ABI; language-agnostic; sandboxed |
-| HTTP | `chi` + `net/http` (REST + SSE) | Curl-debuggable; SSE for streaming; browser-compatible |
-| SQL layer | `sqlc` | Type-safe, generated from SQL; no ORM magic |
-| Default storage | `modernc/sqlite` (pure Go) | Zero-ops; no CGo; embedded |
-| Storage extensions | `store-postgres.wasm`, `store-supabase.wasm` | Postgres for self-hosted; Supabase for managed cloud |
-| UI | Native Go extensions (`ui-tui`, `ui-web`, `ui-gui`) implementing `UIProvider` interface; compiled into binary; selected by CLI flag | WASM sandbox cannot access terminal/window; native Go is the exception for OS-level access |
-| API | Native Go extensions (`api-rest`, `api-grpc`, `api-graphql`); pluggable, not built into core | Exposes agent-manager to external consumers; user picks API surface in config |
-| Chat integrations | Native Go extensions (`chat-slack`, `chat-telegram`, `chat-whatsapp`, `chat-mattermost`); long-lived connections to messaging platforms | Same agent and memory regardless of channel; configured in jan-klod.yaml |
-| Core delivery | Go module (library); binary assembled by thin `cmd/jan-klod/main.go` | Core rarely changes; native extensions change more often; WASM extensions update without recompile |
-| Observability | Structured logging + Prometheus + OpenTelemetry | Bundled in core |
-| Launcher | Core Go binary itself | No separate supervisor needed |
-| Build | Go modules (no Gradle/Maven) | Go toolchain is the build system |
-| Linting | `golangci-lint` | User preference |
+| HTTP | `chi` + `net/http` (REST + SSE) | Curl-debuggable; streaming + browser-compatible |
+| SQL | `sqlc` (generated, no ORM) | Type-safe |
+| Storage | `modernc/sqlite` (pure Go) | Zero-ops; embedded |
+| UI | Native Go (`ui-tui`, `ui-web`, `ui-gui`) | WASM can't access terminal; native exception |
+| API | Native Go (`api-rest`, `api-grpc`, `api-graphql`) | Pluggable; user picks in config |
+| Chat | Native Go (`chat-slack`, `chat-telegram`, etc.) | Long-lived connections; unified memory |
+| Core | Go module + thin `main.go` | Stable; extensions update freely |
+| Observability | Structured logging + Prometheus + OTEL | Bundled |
+| Build | Go modules | No Gradle/Maven |
 | Config format | YAML only (`jan-klod.yaml`) | Carried from original design |
 
 ---
@@ -88,32 +78,32 @@ The session explored these options in order before landing on Go:
 
 ---
 
-## Open questions (carried forward, still unresolved)
+## Resolved
 
-1. ~~Can multiple `llm-provider` extensions be active simultaneously, or only one?~~ **Resolved:** multiple active; `manager-agent-loop` selects per-request.
-2. ~~Does `llm-provider` expose a streaming function, or is streaming a capability flag?~~ **Resolved:** streaming is first-class and mandatory; no synchronous path.
-3. ~~Do extensions version independently, or does a Jan-Klod release version all together?~~ **Resolved:** independent versioning.
-4. ~~How does `registry-mcp` handle MCP server restarts / crashes?~~ **Resolved:** mark server down, remove its tools from active set, emit event to UI, reconnect on exponential backoff. No crash propagates to core.
-5. ~~Config hot-reload: can extensions pick up YAML changes without restart?~~ **Resolved:** yes; core watches config file, notifies extensions via event bus.
-6. ~~Configurator hosting: self-hosted only, or a public `start.janklod.dev`?~~ **Resolved:** public; GitHub Pages first, `start.janklod.dev` later.
-7. ~~Target deployment environment?~~ **Resolved:** desktop (macOS/Windows/Linux), ARM home server/NAS, Docker, Kubernetes.
-8. ~~ACP — separate category or under `provider-*`?~~ **Resolved:** new `agent-*` category; `agent-delegate` WIT interface; jan-klod speaks ACP as client and server.
-
----
-
-## Honest caveats
-
-- `wit-bindgen-go` (WIT bindings for Go) is ~1 year behind the Rust equivalent in maturity. Core WASM loading via Wazero is solid; the WIT component model layer in Go is newer.
-- Kotlin/WASM WASI is not production-ready. Extensions must be written in Rust, Go, C, or JS today. Kotlin extension authoring is a future possibility.
-- The 15–20MB Go RSS vs 8MB Rust RSS gap is real but irrelevant for a network-bound agent runtime waiting on LLM responses.
+1. Multi `llm-provider`: **active per-request selection**
+2. Streaming: **first-class, mandatory**
+3. Extension versioning: **independent**
+4. MCP crashes: **mark down, remove tools, reconnect exponentially**
+5. Config hot-reload: **yes, via event bus**
+6. Configurator: **public (GitHub Pages → start.janklod.dev)**
+7. Deployment: **desktop, ARM home, Docker, Kubernetes**
+8. ACP: **new `agent-*` category; WIT `agent-delegate`**
 
 ---
 
-## Suggested next steps
+## Caveats
 
-1. **WIT contract design** — write `.wit` files for the six core interfaces; resolve open questions 1–3 first as they shape signatures directly.
-2. **Go project scaffold** — `go mod init`, directory layout, `wazero` dependency, `chi` HTTP skeleton.
-3. **First extension** — `store-sqlite.wasm` in Rust (most mature WASM target) to validate the host/guest WIT roundtrip.
+- `wit-bindgen-go` ~1 year behind Rust; Wazero solid, component model newer.
+- Kotlin/WASM not production-ready; use Rust/Go/C/JS for extensions.
+- Go RSS 15–20MB vs Rust 8MB; irrelevant for network-bound agent.
+
+---
+
+## Next
+
+1. **WIT contracts** — write `.wit` for core interfaces
+2. **Go scaffold** — `go mod init`, layout, `wazero` + `chi`
+3. **First extension** — `store-sqlite.wasm` in Rust (validate WIT roundtrip)
 
 ---
 

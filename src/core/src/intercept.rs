@@ -2,20 +2,20 @@
 //! architecture ([decisions/2026-07-01-thin-loop-interceptors]).
 //!
 //! The core loop holds *no policy*: at each [`Phase`] it calls every enabled
-//! interceptor that subscribed to that phase and acts on the returned
-//! [`Decision`]. This module is the phase-agnostic engine that does exactly that,
-//! plus the fail-closed / fail-open error policy. It is deliberately decoupled
-//! from Wasmtime: an interceptor is anything implementing [`Interceptor`], so the
+//! interceptor subscribed to that phase and acts on the returned [`Decision`].
+//! This module is the phase-agnostic engine that does exactly that, plus the
+//! fail-closed / fail-open error policy. It is deliberately decoupled from
+//! Wasmtime: an interceptor is anything implementing [`Interceptor`], so the
 //! engine is unit-testable with plain stubs, and the wasm-guest adapter (which
 //! owns a `Store` + generated bindings) is just one implementor.
 //!
 //! These types mirror `wit/interceptor.wit`; they are the host-side loop-state
-//! the guest adapter maps to and from the generated component bindings.
+//! the guest adapter maps to/from generated component bindings.
 //!
 //! Ordering is structural, never config-driven:
-//! - *across* phases: the conductor calls [`Dispatcher::dispatch`] once per phase,
-//!   in [`Phase`] declaration order;
-//! - *within* one phase: the load order the interceptors were registered in.
+//! - *across* phases: the conductor calls [`Dispatcher::dispatch`] once per
+//!   phase, in [`Phase`] declaration order;
+//! - *within* one phase: the load order interceptors were registered in.
 
 /// The lifecycle points, in dispatch order. Mirrors the `phase` enum in
 /// `wit/interceptor.wit`.
@@ -110,7 +110,7 @@ pub struct PendingRequest {
 ///
 /// The match is **exhaustive on purpose**: adding a [`Phase`] variant won't
 /// compile until someone says here whether the loop reaches it — otherwise an
-/// extension could subscribe to a phase that silently never runs.
+/// extension could silently subscribe to a phase that never runs.
 #[must_use]
 pub const fn is_dispatched(phase: Phase) -> bool {
     match phase {
@@ -166,8 +166,8 @@ pub struct ToolOutcome {
     pub content: String,
     /// Whether the call failed (#162). **Not** part of `wit/interceptor.wit`'s
     /// `tool-outcome` record — a wasm `tool-result` interceptor may replace
-    /// `content`, but whether the call failed is not its call to make, so the
-    /// wasm adapter (`interceptor_host.rs`) restores this field across such a
+    /// `content`, but whether it failed isn't its call to make, so the wasm
+    /// adapter (`interceptor_host.rs`) restores this field across such a
     /// replace rather than letting the guest set it.
     pub failed: bool,
 }
@@ -258,8 +258,8 @@ pub struct InterceptInput {
 }
 
 /// One interceptor the engine can drive. A wasm guest adapter owns a `Store` +
-/// generated bindings and implements this by calling the guest's exports; the
-/// tests implement it with plain stubs.
+/// generated bindings and implements this by calling the guest's exports; tests
+/// implement it with plain stubs.
 pub trait Interceptor {
     /// Stable id, used in logs and fail-closed reasons.
     fn id(&self) -> &str;
@@ -271,8 +271,8 @@ pub trait Interceptor {
     ///
     /// # Errors
     /// Returns [`InterceptorError`] when the interceptor itself malfunctions
-    /// (not to be confused with a [`Decision::Block`], which is a normal
-    /// outcome). The engine applies the fail-closed-at-`tool-call` policy.
+    /// (not to be confused with [`Decision::Block`], a normal outcome). The
+    /// engine applies the fail-closed-at-`tool-call` policy.
     fn intercept(&mut self, input: &InterceptInput) -> Result<Decision, InterceptorError>;
 }
 

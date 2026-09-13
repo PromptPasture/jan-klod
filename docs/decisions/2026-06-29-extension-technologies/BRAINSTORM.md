@@ -13,87 +13,38 @@ related:
 
 ## Goal
 
-Decide which languages/toolchains we use for our **own first-party ("built")
-extensions** — `provider-*`, `store-*`, `manager-*`, `registry-*`, `tool-*`,
-`api-*`, `chat-*`. The architecture is already polyglot (any `wit-bindgen`
-language can author a component); this brainstorm narrows *our* picks, not the
-ecosystem's freedom.
+Choose languages/toolchains for **first-party extensions** (`provider-*`, `store-*`, `manager-*`, `registry-*`, `tool-*`, `api-*`, `chat-*`). Architecture is polyglot; this narrows *our* picks, not ecosystem freedom.
 
 ## Context
 
-- `core` is Rust-only; extensions are sandboxed WASM components against the
-  canonical `wit/` contracts (see
-  [Component Model on Rust + Wasmtime](../2026-06-29-component-model-rust/Handoff.md)).
-- **Polyglot in principle ≠ mature CM toolchain today.** Our own history is the
-  warning: `wit-bindgen-go` immaturity in the Go/wazero MVP forced the poll-based
-  streaming workaround (see [Contracts](../../concepts/contracts.md#streaming)).
-- The project premise is **"nothing is trusted"**, which the user extended to the
-  *build pipeline*: recent npm registry worms (token-stealing, self-republishing
-  packages) make supply-chain posture a first-class selection criterion.
-
-## Agenda
-
-1. Strategy: one default language vs per-extension best-fit.
-2. The maturity-vs-ecosystem tension (what wins when they disagree).
-3. Supply-chain / security posture as a selection criterion.
-4. The approved language menu + tentative near-term assignments + tracking.
+- `core` is Rust; extensions are sandboxed WASM [components](../2026-06-29-component-model-rust/Handoff.md).
+- Polyglot ≠ mature CM toolchain. Warning: `wit-bindgen-go` immaturity forced workarounds.
+- "Nothing trusted" extends to build pipeline: npm worms make supply-chain first-class criterion.
 
 ## Ideas Considered
 
-### Per-extension best-fit, maturity- and security-gated (chosen)
+### Per-extension best-fit, gated (chosen)
+Best tool per job, gated by CM maturity → supply-chain → fit. Honest about toolchain reality; genuine polyglot. Downside: multiple toolchains, drift risk without written rules.
 
-- **Description:** Choose language per extension, but gate the choice by (1) CM-guest
-  toolchain maturity, (2) supply-chain posture, then (3) ecosystem fit, with
-  case-by-case overrides.
-- **Benefits:** Best tool per job; honest about toolchain reality; keeps the build
-  pipeline off the worst attack surfaces; still genuinely polyglot.
-- **Trade-offs:** More than one toolchain to maintain/CI; needs a written rule so
-  "best-fit" doesn't drift into "whatever's trendy."
+### Single default language
+One toolchain, consistent, simplest CI. Downside: wastes Component Model; poor fit on integration extensions.
 
-### Single default language for everything
-
-- **Description:** Pick one language for ~all our extensions.
-- **Benefits:** One toolchain, consistent codebase, simplest CI.
-- **Trade-offs:** Throws away the Component Model's core payoff; forces a poor fit on
-  integration extensions whose best library lives elsewhere.
-
-### Ecosystem-first (absorb toolchain pain)
-
-- **Description:** Always pick the best-SDK language even if its CM path is immature.
-- **Benefits:** Maximum per-extension ecosystem fit.
-- **Trade-offs:** Repeats the Go-streaming-workaround experience; couples us to
-  forks/pre-release toolchains; ignores supply-chain risk.
+### Ecosystem-first
+Best-SDK language even if CM immature. Max fit. Downside: Go-streaming-workaround repeats; pre-release coupling; supply-chain ignored.
 
 ## Outcomes
 
 ### Summary
 
-We adopt **per-extension best-fit, gated**. The build pipeline is *not* protected by
-our runtime WASM sandbox (npm-style worms fire at install/build time on dev/CI
-machines), so supply-chain posture weighs alongside toolchain maturity. That pushes
-the default to **Go (TinyGo) or Rust** — both CM-mature with strong supply-chain
-posture — and demotes large/scripted package ecosystems to case-by-case use.
+Per-extension best-fit, gated. Build pipeline unprotected (npm worms fire at install/build), so supply-chain weighs alongside maturity. Default: Go (TinyGo) or Rust (CM-mature, strong supply-chain). Large/scripted ecosystems case-by-case.
 
-### Amendment (2026-06-29) — Default flipped to Rust
+### Amendment — Default flipped to Rust
 
-The original decision named **Go (TinyGo) as the default** for our extensions,
-resting on "team familiarity" and "orchestration fit." Neither holds: the team and
-codebase are **Rust-first** (`core` is Rust), and `wasip2` gives no goroutine/threading
-payoff, while Rust's `cargo-component` path is *more* mature than TinyGo's. So the
-default is flipped:
+Original: Go (TinyGo) default. False premises: team/codebase are Rust-first; `cargo-component` more mature than TinyGo. **Rust now default** for first-party extensions.
 
-- **Rust is the default for all first-party extensions.** One language across `core`
-  and extensions buys shared types, a single CI/lockfile/audit path, smaller binaries,
-  and no GC caveat. The original gates (CM-maturity → supply-chain → fit) still apply
-  to any *non-Rust* choice, which is now a deliberate exception when a library/constraint
-  is decisive — not the baseline.
-- **The polyglot guarantee is unchanged.** It was never about shipping our own code in
-  Go; the architecture stays polyglot for the *ecosystem*. Our proof that the CM
-  boundary works across languages is the **Slice 1a TinyGo gate**, which stays in the
-  repo and is re-runnable via `make gate` — a standing polyglot canary at no
-  per-extension cost.
+**One language across core + extensions:** shared types, single CI/audit, smaller binaries, no GC. Original gates apply to non-Rust *exceptions* (library decisive).
 
-The decisions, language menu, and near-term assignments below reflect this amendment.
+**Polyglot guarantee unchanged.** Proof: **Slice 1a TinyGo gate** (`make gate`) — standing polyglot canary, no per-extension cost.
 
 ### Decisions
 
@@ -154,10 +105,8 @@ attack surface. Status flags here mirror the phase tracker in
 - Define the concrete CI hygiene checklist (SBOM tool, per-ecosystem audit tooling).
 - Revisit Kotlin/JVM once Kotlin/Wasm leaves Beta and WASI threading lands.
 
-## Next Steps
+## Next
 
-1. Record the language policy as a ground rule in [Roadmap](../../concepts/roadmap.md)
-   and add a phase status tracker so phases run as a resumable loop.
-2. At the Phase 1 gate, stand up the TinyGo component toolchain + the supply-chain
-   CI controls.
-3. Promote this brainstorm's decision into the phase work as each extension is built.
+1. Record language policy in [Roadmap](../../concepts/roadmap.md) + add status tracker.
+2. At Phase 1 gate: TinyGo toolchain + supply-chain CI.
+3. Apply decision per extension as built.

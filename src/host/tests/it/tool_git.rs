@@ -1,12 +1,5 @@
-//! `tool-git` across the Component-Model boundary.
-//!
-//! Drives the read-only ops end to end against a real repo in a path-jailed
-//! workspace: `status`/`log`/`diff` report real state through `host-process`,
-//! a mutating subcommand is refused before any process spawns, and with
-//! execution disabled everything is denied. Offline.
-//!
-//! Skips (passes as a no-op) when the guest isn't staged in `ext/`, or `git`
-//! isn't on PATH.
+//! Tool-git: read-only ops against real repo, mutations refused, execution
+//! disabled denies all. Offline. Skips when guest not staged or git unavailable.
 
 use std::time::Duration;
 
@@ -53,8 +46,7 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         git(&workspace_dir, &["init", "--quiet"]),
         "git init succeeds"
     );
-    // A committer identity, set locally so the test never depends on (or touches)
-    // the machine's global git config.
+    // Local identity (doesn't touch machine's git config).
     git(
         &workspace_dir,
         &["config", "user.email", "test@example.com"],
@@ -66,7 +58,7 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         git(&workspace_dir, &["commit", "--quiet", "-m", "add main"]),
         "commit succeeds"
     );
-    // An uncommitted edit, so `status` and `diff` have something to report.
+    // Uncommitted edit (status/diff have something to report).
     std::fs::write(workspace_dir.join("main.rs"), "fn main() { todo!() }\n").unwrap();
 
     let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
@@ -95,8 +87,7 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         "the working-tree change is reported: {diff}"
     );
 
-    // Nothing is staged, so the staged diff is empty — and says so rather than
-    // returning a bare empty string the model would have to interpret.
+    // Staged diff empty; says so, not bare string.
     let staged = tool
         .invoke(r#"{"op":"diff","staged":true}"#)
         .expect("staged diff succeeds");
@@ -107,8 +98,7 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         .expect("show succeeds");
     assert!(show.contains("add main"), "the commit is shown: {show}");
 
-    // The write half of git is not expressible: refused by the guest, so no
-    // process is spawned at all.
+    // Mutating ops refused by guest (no process spawned).
     for mutating in [
         r#"{"op":"commit"}"#,
         r#"{"op":"push"}"#,
@@ -125,13 +115,13 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         assert!(out.contains("reads a repository only"), "{out}");
     }
 
-    // An argument that would smuggle a flag past the op allowlist is refused too.
+    // Flag smuggling refused (op allowlist enforced).
     let smuggled = tool
         .invoke(r#"{"op":"show","rev":"--upload-pack=touch /tmp/pwned"}"#)
         .expect("a refusal is a result");
     assert!(smuggled.starts_with("REFUSED:"), "{smuggled}");
 
-    // The repository is exactly as it was: read-only means read-only.
+    // Repository unchanged (read-only means read-only).
     let after = tool
         .invoke(r#"{"op":"log","count":5}"#)
         .expect("log succeeds");
@@ -145,7 +135,7 @@ fn tool_git_is_default_deny_without_execution() {
         return;
     };
 
-    // A workspace but no execution substrate: the tool loads and still cannot run.
+    // Workspace but no execution: tool loads but cannot run.
     let workspace_dir =
         std::env::temp_dir().join(format!("jk-toolgit-deny-{}", std::process::id()));
     std::fs::create_dir_all(&workspace_dir).unwrap();
@@ -164,6 +154,6 @@ fn tool_git_is_default_deny_without_execution() {
     let out = tool.invoke(r#"{"op":"status"}"#);
     assert!(
         out.is_err(),
-        "with execution disabled, host-process must deny: {out:?}"
+        "execution disabled denies all operations: {out:?}"
     );
 }

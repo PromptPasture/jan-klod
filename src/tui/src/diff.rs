@@ -2,48 +2,21 @@
 //!
 //! # Nothing here computes a diff
 //!
-//! `tool-git`'s `op=diff` runs `git diff --no-ext-diff --no-textconv` and hands
-//! back git's own stdout, so a tool result already *contains* a unified diff.
-//! This module parses and renders that text; `src/tui/README.md` records
-//! the measurement, and it is why this crate carries no diff engine.
+//! `tool-git op=diff` runs git and returns git's stdout (already a unified diff).
+//! This parses and renders it; see `src/tui/README.md` for measurements.
 //!
 //! # The sign is a character, not a colour
 //!
-//! Under [`Mode::Mono`](crate::theme::Mode::Mono) every role resolves to
-//! `Color::Reset`, so a diff distinguished only by tint is a wall of identical
-//! text. `+` and `-` are therefore real characters in **column 0** of the
-//! rendered line, and the `Mono` render differs from the colour one in nothing
-//! but its styles. The layout is:
+//! Under [`Mode::Mono`](crate::theme::Mode::Mono), colour is irrelevant.
+//! `+` and `-` are **real characters in column 0**, not styled glyphs.
+//! Number column width from largest line number in whole diff (not per-hunk),
+//! so signs stay aligned. Unified, not split (split needs 100 cols, client reads at 60).
 //!
-//! ```text
-//! @@ -1,3 +1,4 @@ fn main
-//!  1 1 unchanged
-//! -2   removed
-//! +  2 added
-//! ```
+//! # Not a diff is common; wrong guess costs nothing
 //!
-//! The number column is as wide as the largest line number **in the whole
-//! diff**, not per hunk: a gutter that changed width partway down would make
-//! the signs stop lining up, which is the one thing this layout is for.
-//!
-//! Unified rather than split, because a split diff needs about a hundred columns
-//! and this client has to read at sixty.
-//!
-//! # Not a diff is the common case, so it costs nothing to be wrong about
-//!
-//! [`render`] returns `None` for anything that does not parse, and the caller
-//! falls back to plain text. A tool's output is not a contract: `tool-git`
-//! answers an empty diff with the words `(no output)`, `tool-edit` answers in
-//! prose, and any tool at all may print something that merely starts with a `-`.
-//! Guessing wrong has to cost the reader nothing.
-//!
-//! The one shape that is *not* a guess is truncation. Every guest passes its
-//! output through `guest_fs::truncate`, which cuts at a byte cap and appends
-//! `…[truncated: N bytes omitted]` on its own line — so a long diff arrives with
-//! a hunk shorter than its header claims and a trailing line that is not diff
-//! syntax. Refusing to render that would send the most useful diffs, the big
-//! ones, down the plain-text path. It is recognised instead, and shown for what
-//! it is.
+//! [`render`] returns `None` for non-diffs; caller falls back to plain text.
+//! Tool output isn't a contract (`tool-git` uses `(no output)`, `tool-edit` uses prose).
+//! Exception: truncation marker (from `guest_fs::truncate`) is recognized and shown.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -117,11 +90,8 @@ fn is_file_header(line: &str) -> bool {
         || line == "+++ /dev/null"
 }
 
-/// Parse `text` as a unified diff.
-///
-/// `None` the moment a line cannot be accounted for. That strictness is the
-/// point: a lenient parser renders half of somebody's log output as a diff and
-/// is *convincing* about it, which is worse than not trying.
+/// Parse `text` as a unified diff, returning `None` if any line doesn't fit.
+/// Strict: lenient parsing renders half a log as a diff (worse than failing).
 fn parse(text: &str) -> Option<Vec<Row<'_>>> {
     let mut rows = Vec::new();
     let mut counters: Option<(usize, usize)> = None;
@@ -151,15 +121,12 @@ fn parse(text: &str) -> Option<Vec<Row<'_>>> {
             Some('+') => ('+', &line[1..]),
             Some('-') => ('-', &line[1..]),
             Some(' ') => (' ', &line[1..]),
-            // git writes `\ No newline at end of file` against either side.
             Some('\\') => {
                 rows.push(Row::Note(line));
                 continue;
             }
-            // An empty line inside a hunk is a context line whose trailing
-            // space something stripped — mail, a copy-paste, a tool trimming
-            // its own output. Treating it as prose would reject most diffs
-            // that have been through anything at all.
+            // Empty line = context line with trailing space stripped (mail, paste, tool trim).
+            // Treating as prose rejects most diffs that passed through anything.
             None => (' ', ""),
             Some(_) => return None,
         };
@@ -224,9 +191,8 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Option<Vec<Line<'static>>
     let rows = parse(text)?;
     let surface = theme.code_surface();
 
-    // One column width for the whole diff, from the largest number in it: a
-    // gutter that changed width per hunk would make the signs stop lining up,
-    // which is the one thing this layout exists to keep.
+    // One column width for whole diff (from largest line number);
+    // changing per-hunk would break sign alignment—this layout's purpose.
     let digits = rows
         .iter()
         .filter_map(|row| match row {

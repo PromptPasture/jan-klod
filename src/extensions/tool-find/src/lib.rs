@@ -1,24 +1,15 @@
-//! `tool-find` — glob search over the workspace tree, routed through `host-fs`.
+//! `tool-find` — glob search over the workspace tree through `host-fs`.
 //!
-//! Exposes one tool named `find`:
+//! - `{ "pattern": "**/*.rs" }` → Rust files in workspace
+//! - `{ "pattern": "*.toml", "path": "src" }` → matches under `src/`
 //!
-//! - `{ "pattern": "**/*.rs" }`               → every Rust file in the workspace.
-//! - `{ "pattern": "*.toml", "path": "src" }` → matches directly under `src/`.
-//!
-//! The tool is the discovery half of the file fleet: `tool-fs` can `read`/`grep` a
-//! path it was *given*, but nothing could enumerate paths. The walk is guest-side
-//! over [`host-fs`]'s `list-dir`, so it sees exactly what the jail exposes and
-//! nothing else — there is no host-side directory-walking capability to grant.
-//!
-//! The matcher, the bounded walk, and the output cap live in the shared
-//! [`guest_fs`] library (unit-tested natively there); this crate holds only the
-//! rendering and the Component-Model glue, which compiles for `wasm32` alone.
+//! Discovery half of the file fleet: `tool-fs` can read/grep given paths, but can't enumerate.
+//! Walk is guest-side over `list-dir`, seeing only what the jail exposes.
+//! Matcher, walk, and output cap in shared `guest_fs` (unit-tested natively);
+//! this crate renders and holds Component-Model glue (wasm32 only).
 
-/// Format a walk as tool output: matching paths, or an explicit no-match line,
-/// plus a note whenever a bound (or the byte cap) held results back.
-///
-/// A truncated tree must never read as an exhaustive one, so every way the result
-/// was held back is stated in the result itself.
+/// Format walk outcome as tool output: matching paths or no-match line,
+/// plus notes for any bounds or truncation (truncated tree never reads as exhaustive).
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn render(pattern: &str, outcome: &guest_fs::Outcome) -> String {
     if outcome.paths.is_empty() {

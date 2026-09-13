@@ -1,13 +1,13 @@
 //! Host-side `host-process` backend — bounded command execution.
 //!
-//! This is code execution, so mediation is the point: default-deny (disabled
-//! unless a workspace is configured), cwd jailed to the workspace (reusing
-//! [`Workspace::resolve`]), and each run bounded by a timeout and output cap.
-//! Runs to completion by polling `try_wait`, killing on timeout.
+//! Code execution requires mediation: default-deny (disabled unless workspace
+//! configured), cwd jailed to workspace (via [`Workspace::resolve`]), each run
+//! bounded by timeout and output cap. Runs to completion by polling `try_wait`,
+//! killing on timeout.
 //!
-//! Caveat: output is read after the child exits, so a command that fills the OS
-//! pipe buffer before exiting could block — bounded by the timeout. Streaming
-//! children are unsupported.
+//! Caveat: output is read after child exits, so a command filling the OS pipe
+//! buffer before exiting could block — bounded by timeout. Streaming children
+//! are unsupported.
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -18,11 +18,11 @@ use crate::sandbox::{SandboxBackend, SandboxPolicy};
 
 /// The only environment variables a child process inherits by default.
 ///
-/// The environment is cleared and rebuilt from this allowlist instead of
-/// inherited wholesale: the host's env holds secrets (`OPENAI_API_KEY`,
-/// `JAN_KLOD_TOKEN`), and a plain `env` through `tool-shell` would put them in
-/// tool output, then the transcript, then the next request to the model. Each
-/// entry below is a name a coding agent's commands actually need:
+/// Environment is cleared and rebuilt from this allowlist, not inherited: the
+/// host's env holds secrets (`OPENAI_API_KEY`, `JAN_KLOD_TOKEN`), and a plain
+/// `env` through `tool-shell` would leak them to tool output, transcript, and
+/// the next model request. Each name below is one a coding agent's commands
+/// actually need:
 ///
 /// - `PATH` — command resolution.
 /// - `HOME` — git/cargo config.
@@ -30,8 +30,8 @@ use crate::sandbox::{SandboxBackend, SandboxPolicy};
 /// - `TMPDIR` — tools assume one exists.
 /// - `LANG`, `LC_ALL`, `LC_CTYPE` — text encoding, so output isn't mojibake.
 ///
-/// `TERM` is deliberately excluded: ANSI colour escapes in tool output are
-/// context the model pays for and cannot use.
+/// `TERM` is deliberately excluded: ANSI color escapes in tool output cost
+/// tokens the model cannot use.
 pub const BASE_ENV: [&str; 8] = [
     "PATH",
     "HOME",
@@ -76,10 +76,10 @@ pub struct ProcessRunner {
     env_passthrough: Vec<String>,
     /// What confines the command itself, when anything does.
     ///
-    /// `None` is approval-only: the bounds above still apply — they bound the
-    /// *caller* — and the command runs with the user's privileges. The boot path
-    /// only fills this in when it has already reported the mode as `Os`, so that
-    /// what the runtime says about confinement and what it does cannot diverge.
+    /// `None` is approval-only: bounds above still apply — they bound the
+    /// *caller* — and the command runs with user privileges. Boot path fills
+    /// this only after reporting the mode as `Os`, so what the runtime says
+    /// about confinement and what it does cannot diverge.
     confinement: Option<Confinement>,
     /// The long-lived children an operator named in `execution.long-lived`.
     ///
@@ -130,8 +130,8 @@ impl ProcessRunner {
         }
     }
 
-    /// A runner rooted at `workspace`, with a per-command `timeout` and `output_cap`
-    /// (bytes) applied to each captured stream.
+    /// A runner rooted at `workspace`, with per-command `timeout` and
+    /// `output_cap` (bytes) applied to each captured stream.
     #[must_use]
     pub const fn new(workspace: Workspace, timeout: Duration, output_cap: usize) -> Self {
         Self {
@@ -139,21 +139,21 @@ impl ProcessRunner {
             timeout,
             output_cap,
             env_passthrough: Vec::new(),
-            // Nothing confines a command until the boot path says so, and it
-            // says so only when it has reported the mode as `Os`.
+            // Nothing confines a command until boot path says so, only when
+            // it has reported the mode as `Os`.
             confinement: None,
-            // Naming a command to run is a separate grant from being allowed to
-            // run commands, so `execution.enabled` alone grants none.
+            // Naming a command to run is a separate grant from being allowed
+            // to run commands, so `execution.enabled` alone grants none.
             long_lived: Vec::new(),
         }
     }
 
     /// Confine every command with `backend` under `policy`.
     ///
-    /// Called by the boot path only when the effective mode is
-    /// [`SandboxMode::Os`](crate::sandbox::SandboxMode::Os), which is also what
-    /// it printed — the two are set from the same decision so the boot line
-    /// cannot claim confinement that is not wired up.
+    /// Called by boot path only when the effective mode is
+    /// [`SandboxMode::Os`](crate::sandbox::SandboxMode::Os), also what it
+    /// printed — the two are set from the same decision so boot line cannot
+    /// claim confinement that is not wired up.
     #[must_use]
     pub fn with_sandbox(
         mut self,
@@ -166,8 +166,8 @@ impl ProcessRunner {
 
     /// Additionally pass these environment variables through to child processes.
     ///
-    /// A grant, one name at a time, like `network.allow`. For the command that
-    /// genuinely needs `GITHUB_TOKEN` — and nothing else.
+    /// A grant, one name at a time, like `network.allow`. For commands that
+    /// genuinely need `GITHUB_TOKEN` — and nothing else.
     #[must_use]
     pub fn with_env_passthrough(mut self, names: Vec<String>) -> Self {
         self.env_passthrough = names;
@@ -183,16 +183,16 @@ impl ProcessRunner {
 
     /// The grant for `name`, or `None` if the operator did not name it.
     ///
-    /// The whole of the admission decision: a guest supplies a name and gets
-    /// back what to run, or gets back nothing. There is no path by which a
-    /// guest's own string becomes a program.
+    /// The entire admission decision: a guest supplies a name and gets back
+    /// what to run, or gets back nothing. No path exists by which a guest's
+    /// string becomes a program.
     #[must_use]
     pub fn long_lived_grant(&self, name: &str) -> Option<&LongLived> {
         self.long_lived.iter().find(|child| child.name == name)
     }
 
-    /// The environment a child process gets: [`BASE_ENV`] plus whatever the
-    /// operator granted, and nothing else.
+    /// The environment a child gets: [`BASE_ENV`] plus whatever the operator
+    /// granted, and nothing else.
     fn environment(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = BASE_ENV
             .iter()
@@ -207,27 +207,26 @@ impl ProcessRunner {
                 out.push((name.clone(), value));
             }
         }
-        // Not inherited, deliberately set: without `TERM` most tools already drop
-        // colour, and this makes it explicit. ANSI escapes in tool output are
-        // context the model pays for and cannot use.
+        // Deliberately set, not inherited: without `TERM` most tools drop color
+        // anyway, this makes it explicit. ANSI escapes cost the model tokens
+        // it cannot use.
         out.push(("NO_COLOR".to_string(), "1".to_string()));
         out
     }
 
     /// A `Command` confined and configured, ready to spawn.
     ///
-    /// Shared by [`Self::exec`] and [`Self::spawn_long_lived`] so confinement is
-    /// **reused rather than restated**: a long-lived child that outlives its
-    /// call is more exposed than a one-shot command, not less, so the one place
-    /// that decides how a command is bounded has to be the one place both go
-    /// through. Everything here is identical for both; they differ only in what
-    /// they do with the `Child`.
+    /// Shared by [`Self::exec`] and [`Self::spawn_long_lived`] so confinement
+    /// **reuses rather than restates**: a long-lived child is more exposed than
+    /// a one-shot command, so the place deciding confinement bounds must be the
+    /// one both go through. Everything here is identical for both; they differ
+    /// only in what they do with the `Child`.
     ///
     /// Confined *before* being configured: a backend can only carry the program
-    /// and its arguments across (there is no getter for stdio, and `get_envs`
-    /// cannot say whether `env_clear` was called), so cwd, the scrubbed
-    /// environment and the pipes are applied to whatever it hands back — which
-    /// for a wrapping mechanism is a different process.
+    /// and arguments across (no getter for stdio, `get_envs` cannot say whether
+    /// `env_clear` was called), so cwd, scrubbed environment and pipes are
+    /// applied to whatever it hands back — which for a wrapping mechanism is a
+    /// different process.
     ///
     /// # Errors
     /// [`ProcError::Denied`] if the backend refuses to confine the command.
@@ -271,8 +270,8 @@ impl ProcessRunner {
     /// Start the long-lived child granted under `name`, confined exactly as a
     /// one-shot command is.
     ///
-    /// The command and its arguments come from the grant, never from the
-    /// caller — see [`LongLived`].
+    /// The command and arguments come from the grant, never from the caller —
+    /// see [`LongLived`].
     ///
     /// # Errors
     /// [`ProcError::Denied`] when no grant carries `name`, when there is no
@@ -282,13 +281,12 @@ impl ProcessRunner {
         let Some(workspace) = &self.workspace else {
             return Err(ProcError::Denied);
         };
-        // The admission decision, and it happens **before** anything starts. An
-        // implementation that spawned and then checked would have a window in
-        // which it had done neither, and a window is all a capability like this
-        // needs to stop being default-deny.
+        // The admission decision happens **before** anything starts. Spawning
+        // then checking would have a window where neither had happened, and a
+        // window is all a default-deny capability needs to break.
         //
-        // `proc-error` carries no payload, so the reason goes to the host log —
-        // the same answer `exec` gives when a backend refuses to confine.
+        // `proc-error` carries no payload, so the reason goes to host log —
+        // same answer `exec` gives when a backend refuses to confine.
         let Some(grant) = self.long_lived_grant(name) else {
             eprintln!(
                 "WARN [core] host-process: no long-lived child named `{name}` — \
@@ -302,8 +300,8 @@ impl ProcessRunner {
         Ok(LiveChild::new(child, self.output_cap, name.to_string()))
     }
 
-    /// Run `command` with `args`, an optional workspace-relative `cwd`, and optional
-    /// `stdin`.
+    /// Run `command` with `args`, an optional workspace-relative `cwd`, and
+    /// optional `stdin`.
     ///
     /// # Errors
     /// [`ProcError::Denied`] (disabled or `cwd` escape), [`ProcError::SpawnFailed`],
@@ -362,28 +360,26 @@ impl ProcessRunner {
 
 /// How long the death report waits for the stderr tail to arrive (#133).
 ///
-/// Long enough that a thread which has already read the bytes gets scheduled,
-/// short enough that nobody notices it on the path where a child was killed
-/// deliberately and said nothing.
+/// Long enough that a scheduled thread reads bytes, short enough that nobody
+/// notices when a child was killed deliberately and said nothing.
 const STDERR_DRAIN: Duration = Duration::from_millis(200);
 
 /// A long-lived child the host is holding open for a guest (#109).
 ///
 /// # Why a reader thread rather than a poll
 ///
-/// The core is single-threaded, and `read` on a pipe blocks until there is
-/// something to read. A child that says nothing — which a stdio server does
-/// whenever it has no reply yet — would therefore hang the runtime, taking the
-/// turn, the transport and every other instance with it. So one thread per child
-/// does the blocking read and hands whole chunks over a channel, and the guest
-/// -facing read is a `recv_timeout` that always returns. The same shape
-/// `core::acp`'s `drain` uses for the editor's pipe, and for the same reason.
+/// The core is single-threaded, and `read` on a pipe blocks until there's
+/// something to read. A silent child — a stdio server with no reply yet —
+/// would hang the runtime, taking the turn, transport and every instance.
+/// So one thread per child does the blocking read and hands chunks over a
+/// channel, and the guest-facing read is `recv_timeout` that always returns.
+/// Same shape `core::acp`'s `drain` uses for the editor's pipe.
 ///
-/// The thread ends when the pipe closes, which is when the child exits, so
-/// nothing has to stop it.
+/// The thread ends when the pipe closes, when the child exits, so nothing
+/// must stop it.
 ///
-/// There are two such threads: one for stdout, which the guest reads, and one
-/// for stderr, which only the host log ever sees (#133).
+/// Two such threads exist: one for stdout (guest reads) and one for stderr
+/// (host log only, #133).
 pub struct LiveChild {
     child: std::process::Child,
     stdin: Option<std::process::ChildStdin>,
@@ -391,28 +387,26 @@ pub struct LiveChild {
     stdout: std::sync::mpsc::Receiver<Vec<u8>>,
     /// The tail of stderr, delivered once when that pipe reaches EOF (#133).
     ///
-    /// A whole channel for one message, because the alternative — a shared
-    /// buffer read at the moment the exit is noticed — loses the race it most
-    /// needs to win. A child writes its complaint and *then* exits, so the bytes
-    /// are still in the pipe when `try_wait` first reports the death, and a
-    /// reader thread that has not been scheduled yet leaves the buffer empty at
-    /// exactly the moment the buffer is worth reading. EOF is the only signal
-    /// that says "this stream is finished", and the thread is the only thing
-    /// that sees it.
+    /// A whole channel for one message: a shared buffer read when exit is
+    /// noticed loses the race it most needs to win. A child writes its complaint
+    /// *then* exits, so bytes are still in the pipe when `try_wait` reports
+    /// death, and an unscheduled reader thread leaves the buffer empty exactly
+    /// when it's worth reading. EOF is the only signal saying "stream finished",
+    /// and only the thread sees it.
     stderr: std::sync::mpsc::Receiver<String>,
-    /// What a previous read did not take, kept so `max_bytes` bounds the
-    /// *answer* rather than discarding the remainder of a chunk.
+    /// What a previous read didn't take, kept so `max_bytes` bounds the
+    /// *answer* not the remainder of a chunk.
     pending: Vec<u8>,
     /// The runner's output cap, applied per read.
     cap: usize,
-    /// The grant this child was started under, so a log line can name it.
+    /// The grant this child was started under, so logs can name it.
     name: String,
     /// Whether the death has already been reported (#133).
     ///
-    /// `is_running` is polled in a loop, and `try_wait` keeps returning the same
-    /// `Ok(Some(status))` once it has reaped — so without this, "log the status
-    /// when the child has exited" is a line per poll, which is a different bug
-    /// from the silence it replaces.
+    /// `is_running` is polled in a loop, and `try_wait` returns the same
+    /// `Ok(Some(status))` once reaped — so without this, "log status when
+    /// child exits" is a line per poll, a different bug from the silence it
+    /// replaces.
     exit_reported: bool,
 }
 

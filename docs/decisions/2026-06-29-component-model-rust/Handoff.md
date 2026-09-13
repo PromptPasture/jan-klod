@@ -11,38 +11,23 @@ updated: 2026-06-29
 
 ## What this is
 
-A re-evaluation of the extension runtime foundation, triggered by the finding
-(from [2026-06-28-mvp-wasm-host](../2026-06-28-mvp-wasm-host/Handoff.md)) that
-**wazero has no Component Model support**, forcing a hand-rolled JSON-over-linear-memory
-ABI. We stepped back to ask whether the basement was right before building higher.
+Re-evaluated runtime foundation. [2026-06-28](../2026-06-28-mvp-wasm-host/Handoff.md) found wazero has no Component Model, forcing JSON-ABI.
 
-**Outcome: we are adopting the WebAssembly Component Model, hosted on
-Rust + Wasmtime.** This supersedes the *runtime mechanism and host language* of
-the Go + Wazero stack. The architectural concepts — extension taxonomy, agent
-loop, lifecycle, provider/store split, blue/green deployment, configurator — all
-carry forward unchanged. The WIT contracts remain canonical.
+**Outcome: adopt WebAssembly Component Model on Rust + Wasmtime.** Supersedes Go's runtime/host language. Architecture (taxonomy, loop, lifecycle, split, deployment, configurator) unchanged.
 
-The prior decisions are preserved for history:
-- [2026-06-28 — MVP WASM Host](../2026-06-28-mvp-wasm-host/Handoff.md) — Go + wazero + JSON-ABI (superseded by this)
-- [2026-06-28 — Go + Wazero + WASM Stack](../2026-06-28-go-wasm-stack/Handoff.md) — Java→Go switch (host language now superseded)
-- [2026-06-16 — Jan-Klod Initial Design](../2026-06-16-jan-klod/Handoff.md) — original Java/Quarkus vision
+Prior: [2026-06-28 MVP](../2026-06-28-mvp-wasm-host/Handoff.md), [2026-06-28 Go+Wazero](../2026-06-28-go-wasm-stack/Handoff.md), [2026-06-16 Initial](../2026-06-16-jan-klod/Handoff.md)
 
 ---
 
-## Why we reopened the decision
+## Why reopen?
 
-The Go + Wazero work (4 working slices) proved the *architecture* end-to-end, but
-exposed one wound: to talk across the sandbox boundary we hand-rolled a JSON ABI,
-because **no mature pure-Go host supports the Component Model**. Before building
-the agent loop on top, we tested whether that wound was load-bearing.
+Go+Wazero proved architecture end-to-end but revealed: no mature pure-Go Component Model host (forced JSON-ABI). Before building on top, we checked if the wound was load-bearing.
 
-The deciding question turned out to be the **extension trust model**, and the
-answer was explicit:
+**Deciding question: extension trust model.**
 
-> **Extensions are untrusted — the host must enforce a hard, capability-based
-> sandbox.**
+> **Extensions are untrusted — host enforces capability-based sandbox.**
 
-That single requirement reshapes everything below.
+This requirement reshapes everything.
 
 ---
 
@@ -55,55 +40,35 @@ That single requirement reshapes everything below.
 | Out-of-process gRPC subprocess (HashiCorp `go-plugin`, VSCode/LSP, Terraform) | OS process only | ❌ No — needs per-platform seccomp/containers bolted on |
 | **In-process WASM sandbox** (Zed) | capability-based, in-process | ✅ **Yes** |
 
-→ **Untrusted ⇒ WASM.** This confirms the original Zed-inspired instinct. The
-gRPC/subprocess "microservices-in-tree" model (attractive for contracts and
-language-freedom) was rejected here *only* because it cannot safely run untrusted
-code without heavy, non-portable OS sandboxing.
+→ **Untrusted ⇒ WASM.** Confirms Zed-inspired approach. gRPC/subprocess (contracts + language-freedom) rejected: can't safely sandbox untrusted code without heavy OS work.
 
-### Step 2 — WASM contract style: Component Model vs hand-rolled ABI
+### Step 2 — Contract style: Component Model vs JSON-ABI
 
-We prefer **clear, first-class contracts** and a **low-friction story for
-community extension authors**. The Component Model (WIT + `wit-bindgen`) delivers
-typed bindings in many guest languages with no hand-written wire glue. A
-hand-rolled JSON-ABI works, but every author must learn a bespoke encoding.
+Prefer **clear contracts** + **low friction for authors**. Component Model (WIT + `wit-bindgen`) delivers typed bindings (any language); JSON-ABI requires custom encoding per author.
 
-→ **Component Model**, the contract style the broader ecosystem (Wasmtime,
-`wit-bindgen`, Zed) is standardizing on.
+→ **Component Model** (ecosystem standard: Wasmtime, `wit-bindgen`, Zed).
 
-### Step 3 — Host language is forced by Steps 1+2
+### Step 3 — Host language forced by Steps 1+2
 
-**There is no mature pure-Go Component Model host.** That leaves three coherent
-foundations:
+No mature pure-Go Component Model host.
 
-| | Sandbox | CM contracts | Host lang | CGo | Community story |
+| | Sandbox | CM | Host | CGo | Community |
 |---|---|---|---|---|---|
-| A. Go + wazero + JSON-ABI (prior MVP) | ✅ | ❌ hand-rolled | Go | No | weak — bespoke ABI |
-| B. Go + `wasmtime-go` + CM | ✅ | ✅ | Go | **Yes** | good |
-| **C. Rust + Wasmtime + CM** | ✅ | ✅ first-class | Rust | No | **best — `wit-bindgen`, any guest lang** |
+| A. Go+wazero+JSON | ✅ | ❌ | Go | No | weak |
+| B. Go+wasmtime-go+CM | ✅ | ✅ | Go | **Yes** | good |
+| **C. Rust+Wasmtime+CM** | ✅ | ✅ | Rust | No | **best** |
 
-**Option B is the trap:** it pays CGo's full cost (no static binary, C toolchain
-on every build host, painful cross-compilation, a C ABI boundary) *and* gives up
-the pleasant pure-Go experience — the only reason Go was chosen — without
-compensating benefit. Once CGo is on the table, Go is no longer the obvious host.
+B is a trap: CGo cost (no static binary, toolchain, cross-compile friction) without Go's benefit. Once CGo enters, Go isn't obvious.
 
-→ **Option C.** For an untrusted-WASM host, Rust is the paved road, not
-incidental hardness: Wasmtime, `wit-bindgen`, and the Component Model toolchain
-are all Rust-native. Host and guest contract types derive from one WIT source.
+→ **C.** Rust is the paved road for untrusted WASM: Wasmtime, `wit-bindgen`, component toolchain all Rust-native.
 
-### Reversing the earlier Rust rejection
+### Reversing Rust rejection
 
-The [2026-06-28 stack doc](../2026-06-28-go-wasm-stack/Handoff.md) rejected Rust
-because "borrow-checker hardness [is] unacceptable when Claude Code is primary
-author." That rejection assumed **easy > correct**. The user reframed the
-priority explicitly:
+[2026-06-28](../2026-06-28-go-wasm-stack/Handoff.md) rejected Rust (borrow-checker hardness). Assumed **easy > correct**. User reframed:
 
-> "It is not about simple or hard, it's about doing thing right and good. If we
-> place bad decisions in the basement, the whole tower will go down."
+> "Do it right and good. Bad decisions in basement collapse the tower."
 
-With an **untrusted-code requirement** added, contract correctness and a sound
-capability model are load-bearing, and the Rust ecosystem is where that is done
-right. The earlier rejection is therefore **consciously reversed** for the host —
-not forgotten, but re-weighed under a changed priority and a new requirement.
+Untrusted-code + capability-correctness are load-bearing; Rust ecosystem does this right. Rejection **consciously reversed** — re-weighted, not forgotten.
 
 ---
 
@@ -141,60 +106,29 @@ variable this decision resolves.
 
 ---
 
-## Runtime topology & trust (refinement)
+## Runtime topology & trust
 
-Re-confirmed against the original brainstorm and tightened in this session:
-
-- **Nothing is trusted at the plugin layer.** Every extension is a sandboxed
-  WASM component confined to host-granted capabilities. **There is no
-  native/in-core extension tier** — the earlier "native Go/Rust extension"
-  idea (compiling UI/api/chat into the binary) was a Go-era artifact and is
-  dropped. It conflated *"needs OS access ⇒ not a WASM guest"* with *"⇒ compiled
-  into core,"* which does not follow.
-- **`core` runs as a standalone process under the user's own privileges**
-  (not a system daemon), and is headless-capable. It is the deploy unit — on a
-  Raspberry Pi or in a container it is the only thing you run. Untrusted plugins
-  are sandboxed *inside* that user-level process.
-- **The agent loop is an extension** (`manager-agent-loop`), not core — Option A
-  from the original design ("zero agent behaviour in core"). Confirmed.
-- **`api-*` and `chat-*` are ordinary sandboxed WASM extensions**, user-selected
-  (several `api-*` exist; the user picks one or none; `chat-*` is fully
-  optional). They reach the network only through new host capabilities —
-  `host-serve` (inbound listener) and `host-socket` (long-lived connection) —
-  since today's `host-http` is outbound-request-only.
-- **UIs are not extensions.** TUI/GUI/web are optional, *separate client
-  processes* that connect to core over an `api-*` HTTP+SSE surface (the LSP
-  model: core is the server, the UI is a thin client). A single client binary
-  selects TUI vs GUI by launch mode. A headless deployment runs no UI client.
+- **Nothing trusted at plugin layer.** All extensions: sandboxed WASM. No native tier. Drop "needs OS ⇒ compiled-in" conflation.
+- **`core`: standalone user-process** (not daemon), headless-capable, deploy unit.
+- **Agent loop is extension** (`manager-agent-loop`), not core.
+- **`api-*` & `chat-*`: sandboxed WASM**, user-selected. Network via new `host-serve` (inbound) + `host-socket` (long-lived).
+- **UIs: separate clients**, not extensions. Connect via `api-*` HTTP+SSE (LSP model). Single binary picks TUI/GUI. Headless: no UI.
 
 ---
 
-## Validation before full commit (one-day spike)
+## Validation spike (one day)
 
-To make the decision *felt*, not assumed, build a minimal spike before porting:
+Test decision before porting:
 
-1. A trivial `provider` WIT interface (single `complete` function).
-2. A Rust + Wasmtime host that loads a component and calls it across the CM boundary.
-3. **One non-Rust guest** (language chosen for convenience — JS/`jco`,
-   Python/`componentize-py`, or Go) — confirms `wit-bindgen`'s polyglot
-   authoring works end to end against our host. One guest proves the mechanism;
-   the breadth comes free from the ecosystem.
+1. Trivial `provider` WIT (single `complete`).
+2. Rust+Wasmtime host loads component, calls across boundary.
+3. **One non-Rust guest** (JS/`jco`, Python/`componentize-py`, or Go) — proves polyglot authoring.
 
-Exit criteria: if CM-in-Rust feels as clean as expected and the non-Rust guest
-proves multi-language authoring, commit and port the slices. If the toolchain
-friction outweighs the payoff, fall back to Go + wazero + JSON-ABI (Option A)
-with eyes open.
+**Exit:** CM-in-Rust clean + multi-language works → commit. Friction outweighs payoff → fallback to Go+wazero+JSON-ABI.
 
-### A note on TinyGo's role (not a guest-language proxy)
+### TinyGo's role
 
-TinyGo is **not** the community-author proxy for the spike, and not part of the
-host. Its planned role is a **small standalone supervisor/updater**: it stages a
-new version, performs the blue/green flip, restarts, health-checks, and rolls
-back on failure. It is deliberately a separate process from the Rust core
-*because it must survive a core swap* — the thing performing the switch cannot be
-the binary being switched. See
-[Blue/Green Deployment](../../concepts/blue-green-deployment.md). Any guest
-language used in the spike is incidental to that role.
+TinyGo **not** community author proxy; separate supervisor/updater: stages version, blue/green flip, restart, health-check, rollback. Must survive core swap (switcher can't be switched binary). See [Blue/Green Deployment](../../concepts/blue-green-deployment.md).
 
 ---
 

@@ -2,19 +2,18 @@
 //!
 //! The three behaviours Slice 15b exists for — an escape write is denied, an
 //! in-workspace write is allowed, the network is refused — driven through the
-//! real [`ProcessRunner`], plus the same denial through the Component-Model
-//! boundary so the guest's path is covered and not only the runner's.
+//! real [`ProcessRunner`], plus through Component-Model boundary to cover the
+//! guest's path.
 //!
 //! **The in-workspace write is not a formality.** Seatbelt matches the resolved
 //! path, and every temp directory here is under a symlink (`/var` →
 //! `/private/var`), so a profile carrying the unresolved path denies *everything*
 //! — including the grant. A suite with only the escape test would be green and
-//! meaningless. That case is the one that fails if canonicalization is ever
-//! dropped.
+//! hollow. That case fails if canonicalization is ever dropped.
 //!
-//! macOS-only by `#[cfg]`, because Seatbelt is. On Linux these tests do not
-//! exist, which is the gap [#95](https://github.com/PromptPasture/jan-klod/issues/95)
-//! records: CI runs on Linux, so nothing here is CI-verified.
+//! macOS-only by `#[cfg]`, because Seatbelt is. On Linux these don't exist,
+//! which [#95](https://github.com/PromptPasture/jan-klod/issues/95) records:
+//! CI runs on Linux, so nothing here is verified there.
 #![cfg(target_os = "macos")]
 
 use std::io::Read;
@@ -59,8 +58,7 @@ fn dirs(tag: &str) -> Sandboxed {
     }
 }
 
-/// The policy the boot path would build for `workspace`: `os` mode, that one
-/// directory writable, no network.
+/// Policy for `workspace`: `os` mode, one directory writable, no network.
 fn policy(workspace: &Path) -> SandboxPolicy {
     SandboxPolicy {
         mode: SandboxMode::Os,
@@ -70,7 +68,7 @@ fn policy(workspace: &Path) -> SandboxPolicy {
     }
 }
 
-/// A runner over `workspace`, confined by the host's backend.
+/// A runner over `workspace`, confined by the host backend.
 fn confined(workspace: &Path) -> ProcessRunner {
     let backend = sandbox::host_backend().expect("macOS has a backend; see sandbox.rs's own test");
     ProcessRunner::new(
@@ -82,8 +80,8 @@ fn confined(workspace: &Path) -> ProcessRunner {
 }
 
 /// The same runner with nothing confining it — the control for every case
-/// below. Without it, "the command failed" proves nothing: a missing binary, a
-/// bad cwd or a typo in the test fails identically.
+/// below. Without it, a failure proves nothing — a missing binary or bad cwd
+/// fails identically.
 fn unconfined(workspace: &Path) -> ProcessRunner {
     ProcessRunner::new(
         Workspace::open(workspace).expect("the workspace opens"),
@@ -92,7 +90,7 @@ fn unconfined(workspace: &Path) -> ProcessRunner {
     )
 }
 
-/// `sh -c "echo x > <target>"`, as the guest would ask for it.
+/// `sh -c "echo x > <target>"`, as a guest would request.
 fn write_to(runner: &ProcessRunner, target: &Path) -> i32 {
     let args = vec!["-c".to_owned(), format!("echo x > {}", target.display())];
     runner
@@ -106,8 +104,8 @@ fn a_confined_command_cannot_write_outside_the_workspace() {
     let dirs = dirs("escape");
     let target = dirs.outside.join("leak");
 
-    // The control first: unconfined, this write succeeds. That is what makes
-    // the denial below attributable to the sandbox.
+    // Control first: unconfined, this succeeds. That makes the denial below
+    // attributable to the sandbox.
     assert_eq!(write_to(&unconfined(&dirs.workspace), &target), 0);
     assert!(target.exists(), "the control wrote the file");
     std::fs::remove_file(&target).expect("removes it again");
@@ -124,7 +122,7 @@ fn a_confined_command_cannot_write_outside_the_workspace() {
     );
 }
 
-/// The case that catches the canonicalization class. See the module docs.
+/// The case that catches canonicalization bugs. See the module docs.
 #[test]
 fn a_confined_command_can_still_write_inside_the_workspace() {
     let dirs = dirs("inside");
@@ -132,8 +130,8 @@ fn a_confined_command_can_still_write_inside_the_workspace() {
     assert_eq!(
         write_to(&confined(&dirs.workspace), &target),
         0,
-        "the grant the operator wrote still works — if this fails, the profile is \
-         carrying an unresolved path and is denying everything"
+        "the grant the operator wrote still works — if this fails, the profile \
+         carries an unresolved path"
     );
     assert!(target.exists());
 }
@@ -154,8 +152,8 @@ fn a_confined_command_cannot_reach_the_network() {
     let (arrived, connections) = mpsc::channel();
     thread::spawn(move || {
         for stream in listener.incoming() {
-            // Read a little so the client is not left writing into a void, then
-            // report that someone got through.
+            // Read briefly so the client isn't left writing into a void, then
+            // report that someone arrived.
             if let Ok(mut stream) = stream {
                 let mut discard = [0_u8; 64];
                 let _ = stream.read(&mut discard);
@@ -178,8 +176,8 @@ fn a_confined_command_cannot_reach_the_network() {
     let _ = unconfined(&dirs.workspace).exec("/usr/bin/curl", &args, None, None);
     assert!(
         connections.recv_timeout(Duration::from_secs(5)).is_ok(),
-        "the control never arrived either, so the case above proved nothing about \
-         the sandbox — check that curl works and the listener is accepting"
+        "the control didn't arrive either, so the case proved nothing — check \
+         curl and the listener"
     );
 }
 
@@ -219,7 +217,7 @@ fn a_guest_running_a_command_is_confined_too() {
     let _ = tool.invoke(&request).expect("the call is served");
     assert!(
         target.exists(),
-        "the control wrote through the guest, so the denial below is the sandbox's"
+        "the control wrote through the guest, so the denial below is from the sandbox"
     );
     std::fs::remove_file(&target).expect("removes it again");
 

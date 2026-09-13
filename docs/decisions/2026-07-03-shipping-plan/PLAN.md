@@ -11,185 +11,112 @@ updated: 2026-07-03
 
 ## Context
 
-Phases 1–8 are all done and gated in CI. The WASM Component Model host, full v1
-interceptor set, persistence, REST surface, TUI client, streaming, file-workspace
-substrate, and tool fleet (`tool-fs` + `tool-shell`) are all proven end-to-end. The
-gap to a daily-usable coding agent is not architectural — it is the functional and
-distribution layer a user actually touches.
+Phases 1–8 done + gated. Component Model host, v1 interceptors, persistence, REST, TUI, streaming, file-workspace, tools all proven end-to-end. Gap to daily-usable agent: not architecture — functional + distribution layers.
 
 ## Comparison baseline
 
-Reviewed against [earendil-works/pi](https://github.com/earendil-works/pi) (2026-07-03).
-Pi is the production reference: shipping product, multi-provider, rich TUI, skills,
-TypeScript extension system with no permission boundary. Jan-Klod's differentiator is
-structural: WASM Component Model boundaries give per-extension sandboxing, typed WIT
-contracts, and a fail-closed permission gate — without requiring a container.
+Reviewed vs. [earendil-works/pi](https://github.com/earendil-works/pi) (2026-07-03). Pi: production, multi-provider, rich TUI, skills, TypeScript extensions (no boundary). Jan-Klod differentiator: WASM Component Model boundaries give per-extension sandboxing, typed WIT contracts, fail-closed permission gate — no container.
 
-## What blocks v0.1.0
+## Blockers for v0.1.0
 
-| # | Item | Blocking because |
+| # | Item | Why |
 |---|---|---|
-| 9 | Anthropic provider | Most target users run Claude; OpenAI proxy works but loses native streaming + extended thinking |
-| 10 | Skills + MCP registry | Without named workflows or ecosystem tool access, the agent is narrower than Pi out of the box |
-| 11 | UX polish | Per-token streaming in TUI is a Phase 6 carry-forward; session resume is a daily-use requirement |
-| 12 | Release layer | GitHub releases + Pages + install script + quickstart = how users actually get and try Jan-Klod |
+| 9 | Anthropic provider | Most users run Claude; OpenAI proxy loses native streaming + extended thinking. |
+| 10 | Skills + MCP | No named workflows or ecosystem tools → narrower than Pi out-of-box. |
+| 11 | UX polish | Per-token TUI streaming (Phase 6 carry-forward); session resume daily-use requirement. |
+| 12 | Release | GitHub releases + Pages + install + quickstart = how users get jan-klod. |
 
 ---
 
 ## Phase 9 — Anthropic provider
 
-**Goal:** Claude works natively without an OpenAI-compat proxy.
+**Goal:** Claude natively, no OpenAI-compat proxy.
 
-- **`provider-anthropic` extension** — Rust guest implementing `llm-provider`. Calls
-  the Anthropic Messages API (`/v1/messages`) directly via `host-http`. Handles:
-  streaming SSE response from Anthropic's format → `completion-chunk` sequence the
-  conductor expects; native tool-call blocks (`tool_use` content) → `tool-call-request`
-  chunks; `401/403` → `auth-failed`, `429` → `rate-limited`, else `transient`.
-  `init` reads `api-key` + `model` from `host-config` (never logs the key).
-  Extended thinking passthrough via `host-config` flag.
-- **Config entry** — `extensions.provider.anthropic: {enabled: true, api-key:
-  ${ANTHROPIC_API_KEY}, model: claude-sonnet-4-6}` in `config.yaml`. One wasm for
-  all Anthropic models (model is config, not code).
-- **Supply-chain** — same `cargo-audit`/`cargo-deny` path as `provider-openai`.
+- **`provider-anthropic`** — Rust guest, `llm-provider`, calls Messages API via `host-http`. Handles: Anthropic SSE → `completion-chunk`s; `tool_use` → `tool-call-request`; status codes; extended-thinking flag. `init` reads `api-key`/`model` from `host-config` (no key logging). One wasm for all models.
+- **Config** — `extensions.provider.anthropic: {enabled: true, api-key: ${ANTHROPIC_API_KEY}, model: claude-sonnet-4-6}`. Model config, not code.
+- **Supply-chain** — same audit/deny path as `provider-openai`.
 
-**Exit gate:** enable `provider.anthropic` in `config.yaml` and run `make probe` with
-a live `ANTHROPIC_API_KEY` — drives a real completion through the sandboxed guest
-(token-costing). Offline: canned `host-http` reply → correct chunk sequence. (`make
-probe` runs against whichever provider is enabled in config; no `PROVIDER=` flag.)
+**Done:** enable provider in config, run `make probe` with live `ANTHROPIC_API_KEY` → real completion through guest (tokens cost). Offline: canned reply → correct chunks.
 
-**Success condition:** a user can set `ANTHROPIC_API_KEY`, enable `provider.anthropic`
-in `config.yaml`, and run `jan-klod serve` against Claude with no proxy.
+**Success:** user sets `ANTHROPIC_API_KEY`, enables `provider.anthropic`, runs `jan-klod serve` against Claude, no proxy.
 
 ---
 
 ## Phase 10 — Skills + MCP registry
 
-**Goal:** named workflow shortcuts and ecosystem tool access — the two features that
-make a coding agent broadly useful vs narrowly capable.
+**Goal:** named workflow shortcuts + ecosystem tool access → broadly useful agent.
 
-### Skills registry (`registry-skills`)
+### Skills (`registry-skills`)
 
-- A **`registry-skills` extension** implements the `skill-registry` WIT interface
-  (`wit/skill-registry.wit`). It scans `.agents/skills/` in the workspace for Markdown
-  files with a YAML front matter `name:` field and exposes them via `list-skills`,
-  `get-skill`, `invoke`, and `reload` (hot-reload on config change).
-- The `ToolFleet` integrates skills by calling `list-skills` at `select-tools` time
-  (to advertise them to the model) and `invoke` at dispatch time — the same seam used
-  for `tool-callable`, but through the `skill-registry` interface.
-- No new WIT interface: `skill-registry.wit` already exists and is canonical.
+- `registry-skills` implements `skill-registry` WIT. Scans `.agents/skills/` for Markdown with YAML `name:`, exposes `list-skills`/`get-skill`/`invoke`/`reload`. `ToolFleet` calls `list-skills` at `select-tools`, `invoke` at dispatch. No new WIT.
 
 ### MCP gateway (`registry-mcp`)
 
-- A **`registry-mcp` extension** implements the `mcp-registry` WIT interface
-  (`wit/mcp-registry.wit`). It connects to configured MCP servers, exposes
-  `list-tools` and `invoke-tool`, and handles reconnection via `host-event`
-  notifications.
-- **v0.1.0 scope: SSE transport only** (via `host-http`). Stdio transport requires
-  long-lived child process support (`host-process` carry-forward from Phase 7) and
-  is deferred post-v0.1.0.
-- Config: `extensions.registry.mcp: {enabled: true, servers: [{name: "fs", transport:
-  "sse", url: "http://localhost:3000/sse"}]}`. Multiple servers use a prefixed
-  namespace (`fs::read_file`).
-- The `ToolFleet` calls `list-tools` at `select-tools` time and `invoke-tool` at
-  dispatch. Permission gate fires on each outbound MCP call; results are untrusted.
-- **Prerequisite:** verify `host-event` is granted to `mcp-registry-world` guests
-  before implementation starts (the WIT world imports it for crash/reconnect events).
+- `registry-mcp` implements `mcp-registry` WIT. Connects to configured MCP servers, exposes `list-tools`/`invoke-tool`, handles reconnect via `host-event`. **v0.1.0: SSE only** (via `host-http`). Stdio deferred (needs long-lived children). Config: `extensions.registry.mcp: {enabled: true, servers: [{name: "fs", transport: "sse", url: "http://localhost:3000/sse"}]}`. Multiple servers use prefix (`fs::read_file`). Permission gates each call; results untrusted. Prerequisite: verify `host-event` grant.
 
-**Exit gate:** model calls an MCP tool through the registry with a canned SSE stub
-(offline). Model invokes a skill from `.agents/skills/review.md` and the template is
-injected correctly.
+**Done:** model calls MCP tool through registry with canned SSE stub (offline). Model invokes skill from `.agents/skills/review.md`, template injected.
 
 ---
 
 ## Phase 11 — UX polish
 
-**Goal:** the daily-use experience matches what a developer expects from a coding agent.
+**Goal:** daily-use experience matches developer expectations.
 
 ### Per-token streaming in TUI (Phase 6 carry-forward)
 
-The conductor already emits `text-delta` events via the `EventSink` and the REST
-surface streams them as SSE. `jan-klod-ui`'s `ratatui` TUI currently waits for `done`
-before rendering. Fix: consume `text-delta` events in the TUI's event loop and append
-to the active message buffer on each event, triggering a re-render. No architectural
-change — wiring only.
+Conductor emits `text-delta` via `EventSink`, REST streams SSE. TUI currently waits for `done`. Fix: consume `text-delta` in TUI event loop, append to buffer, re-render. Wiring only.
 
-### REST API surface (decided 2026-07-03)
+### REST API surface (2026-07-03)
 
-The v1 REST surface is a proper resource model. `POST /turn` (Phase 3, session id
-in body) is replaced before v0.1.0 ships — the change is contained to `serve.rs`
-and the UI client.
-
+Replace `POST /turn` with resource model: 
 ```
-GET  /health                    liveness (blue/green supervisor probe)
-GET  /sessions                  list sessions {id, created, preview}
-POST /sessions                  create session → {id}
+GET  /health                    liveness probe
+GET  /sessions                  list {id, created, preview}
+POST /sessions                  create → {id}
 GET  /session/:id               transcript + metadata
-POST /session/:id/message       send message, stream SSE response
+POST /session/:id/message       send, stream SSE
 ```
+No `PUT`/`DELETE` v0.1.0 — append-only, pruning post-v0.1.0. Contained to `serve.rs` + client.
 
-No `PUT` or `DELETE` in v0.1.0 — sessions are append-only and pruning is post-v0.1.0.
+### Session resume
 
-### Session list and resume
+- `GET /sessions` returns past sessions from store.
+- `jan-klod-ui --session <id>` fetches list, pick to resume.
+- `POST /session/:id/message` with existing id resumes from transcript; conductor replays history before first turn.
 
-- `GET /sessions` returns past sessions from the SQLite store.
-- `jan-klod-ui --session <id>` (or `/sessions` REPL command) fetches the list and
-  lets the user pick a session to resume.
-- `POST /session/:id/message` with an existing id resumes from that session's
-  transcript. The conductor replays stored history into the context interceptor
-  before the first new turn.
+### Workspace auto-detect
 
-### Workspace auto-detection
+Launch `jan-klod serve` without `workspace:` config → default to `$PWD`. `Runtime::boot` config change.
 
-When `jan-klod serve` is launched without an explicit `workspace:` config key, default
-the workspace root to `$PWD`. The `host-fs` and `host-process` substrates already
-accept a runtime workspace path; this is a config-defaulting change in `Runtime::boot`.
-
-**Exit gate:** start `jan-klod serve` in a repo, send a message, disconnect, relaunch,
-resume the session by id, and receive per-token streaming output — all in the TUI.
+**Done:** `jan-klod serve` in repo → send message → disconnect → relaunch → resume by id → per-token streaming, all in TUI.
 
 ---
 
 ## Phase 12 — Release: GitHub + web
 
-**Goal:** a developer who has never heard of Jan-Klod can find it, install it, and
-have a working session within 15 minutes.
+**Goal:** developer finds jan-klod, installs, working session in 15 minutes.
 
 ### GitHub releases
 
-- `make bundle` already produces `dist/jan-klod-<version>-<os>-<arch>.tar.gz`. Wire
-  this into a GitHub Actions release workflow: on `git tag v*`, build the matrix
-  (linux-amd64, linux-arm64, darwin-arm64, darwin-amd64), attach bundles as release
-  assets, and publish the GitHub release with a generated changelog section.
-- The release asset is the install unit; no separate package registry needed for v0.1.0.
+`make bundle` → `dist/jan-klod-<version>-<os>-<arch>.tar.gz`. GitHub Actions on `git tag v*`: build matrix (linux-{amd64,arm64}, darwin-{arm64,amd64}), attach bundles, publish with changelog. Release asset is install unit; no registry needed.
 
 ### Install script
 
-- `scripts/install.sh`: `curl -sSL https://raw.githubusercontent.com/.../install.sh | sh`
-  detects OS/arch, downloads the matching bundle from the latest GitHub release, verifies
-  the checksum, extracts to `~/.local/bin/jan-klod` (or `/usr/local/bin` with sudo).
-- One page of stdlib sh; no dependencies.
+`scripts/install.sh`: `curl -sSL https://.../install.sh | sh` detects OS/arch, downloads bundle from latest release, verifies checksum, extracts to `~/.local/bin/jan-klod`. Stdlib sh, no deps.
 
-### GitHub Pages site (`pages/`)
+### GitHub Pages
 
-- Static site under `pages/` in the repo, served via GitHub Pages from the `main`
-  branch `pages/` directory.
-- Content: what Jan-Klod is (one paragraph), the differentiator (WASM sandboxing),
-  install command, link to quickstart, link to the GitHub repo. No framework — plain
-  HTML + minimal CSS, or a single-file Hugo/Jekyll layout. Fast to load, easy to update.
+Static site `pages/`, served from main. Content: what it is (1¶), differentiator (WASM sandboxing), install cmd, quickstart link, repo link. Plain HTML + CSS or single-file Hugo/Jekyll. Fast, easy.
 
-### Quickstart doc (`docs/quickstart.md`)
+### Quickstart
 
-- Install → set API key → `jan-klod serve` → first session in the TUI → point at a
-  repo and ask it to fix a bug. Golden path only. Under 500 words.
+Install → set API key → `jan-klod serve` → first session in TUI → fix bug in repo. Golden path, <500 words.
 
-### README rewrite
+### README
 
-- Replace the current stub. Sections: what it is (one sentence), why it's different
-  from Pi (the WASM sandboxing sentence), install, quickstart link, TUI screenshot,
-  link to full docs.
+Replace stub. Sections: what it is (1 sentence), why different from Pi (WASM sandboxing), install, quickstart link, TUI screenshot, docs link.
 
-**Exit gate:** a person unfamiliar with the project follows the README install command,
-completes the quickstart, and has the model read and edit a file in a real repo.
+**Done:** unfamiliar person follows README install, completes quickstart, model reads/edits real repo file.
 
 ---
 

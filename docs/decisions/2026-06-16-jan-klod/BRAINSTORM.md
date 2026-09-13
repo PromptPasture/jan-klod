@@ -11,7 +11,7 @@ updated: 2026-06-16
 
 ## Vision
 
-Jan-Klod is a minimal, stable AI agent core that does the splits between extensions. Inspired by the Linux kernel philosophy: the core is small, versioned, and almost never changes. Everything domain-specific — LLM providers, memory, UI, tools — lives in extensions that can be added, swapped, or disabled independently.
+Jan-Klod: minimal, stable core that splits to extensions (Linux kernel model). Core is small, versioned, rarely changes. Domain-specific parts (LLM providers, memory, UI, tools) live in independent, swappable extensions.
 
 ---
 
@@ -19,29 +19,29 @@ Jan-Klod is a minimal, stable AI agent core that does the splits between extensi
 
 ### Core
 
-The core contains exactly four responsibilities and nothing else:
+Four responsibilities, nothing else:
 
 |Responsibility|Description|
 |---|---|
-|Config loader|Parses `jan-klod.yaml` into a typed config tree|
-|Extension registry|Discovers extensions, resolves dependency graph, orders boot|
-|Lifecycle manager|Drives `init → start → stop` and health checks|
-|Event bus|Extension-to-extension communication|
+|Config loader|Parses `jan-klod.yaml` into typed config|
+|Extension registry|Discovers, wires, orders by dependency|
+|Lifecycle manager|`init → start → stop`, health checks|
+|Event bus|Extension communication|
 
-Zero agent behavior in core. A core-only boot starts up and does nothing. That is intentional.
+Core has zero agent behavior. Core-only boot: starts, does nothing (intentional).
 
 ### Design principles
 
-- **If it has variations, it is an extension.** LLM providers, context strategies, memory backends, UI — all extension territory.
-- **If it will change frequently, it is an extension.** Agent loop logic, tool integrations, MCP protocol handling.
-- **Core API surface must be frozen early.** Every interface core exposes to extensions is a contract. Breaking it breaks the ecosystem.
-- **Extensions declare dependencies explicitly.** Core validates the graph at boot and refuses to start with unsatisfied hard dependencies.
+- **Variations → extensions.** LLM providers, strategies, backends, UI.
+- **Frequent changes → extensions.** Loop logic, tools, MCP.
+- **Freeze core API early.** Every exposed interface is a contract; breaking it breaks ecosystem.
+- **Explicit dependencies.** Core validates graph at boot; rejects unsatisfied hard deps.
 
 ---
 
 ## Extension Taxonomy
 
-Naming convention: `{role}-{name}` where role encodes the type.
+Naming: `{role}-{name}` encodes type.
 
 |Role prefix|Meaning|
 |---|---|
@@ -88,7 +88,7 @@ com.github.janklod:bundle-full
 
 ## Contracts (Stable Interfaces)
 
-Shipped with core. These are the API surface that must not break.
+Ship with core; must not break.
 
 ```java
 interface Extension {
@@ -146,7 +146,7 @@ user-interface-graphical  requires: AgentManager
 
 ## Bundles
 
-Pre-built native binaries for the most common configurations. Bundle contents are fixed; active extensions are still controlled by `jan-klod.yaml`.
+Pre-built native binaries; contents fixed but controlled by `jan-klod.yaml`.
 
 |Bundle|Contents|
 |---|---|
@@ -155,13 +155,13 @@ Pre-built native binaries for the most common configurations. Bundle contents ar
 |`bundle-full`|everything|
 |*(jvm)*|core JAR only; user drops extension JARs into `ext/`|
 
-Note: a combinatorial native build per extension selection is not feasible. Curated bundles are the native story; JVM mode covers custom combinations.
+Note: combinatorial native builds infeasible. Curated bundles for native; JVM mode for custom combos.
 
 ---
 
 ## Configuration
 
-YAML only. No `.properties`, no JSON. Pattern borrowed from markdownlint: `extension-name: false` disables cleanly; a mapping configures it.
+YAML only (markdownlint pattern): `extension-name: false` disables; mapping configures.
 
 ```yaml
 jan-klod:
@@ -213,49 +213,27 @@ extensions:
   user-interface-graphical: false
 ```
 
-Skills follow the `.agents/skills/{skill-name}/SKILL.md` convention.
+Skills: `.agents/skills/{skill-name}/SKILL.md`.
 
 ---
 
 ## Configurator
 
-Web UI at `start.janklod.dev` (aspirational), modelled on Spring Initializr and Quarkus Dev. Generates and downloads a ZIP.
+Web UI (start.janklod.dev, aspirational): Spring Initializr / Quarkus Dev model. Generate & download ZIP.
 
-### UI flow
-
-```
-1. Version        [1.0.0 ▾]
-
-2. Packaging      ( ) jvm   — flexible, any extension combo, user builds
-                  (•) tui   — native binary, terminal UI
-                  ( ) gui   — native binary, graphical UI
-                  ( ) full  — native binary, everything
-
-3. LLM Provider   [x] Anthropic  [ ] OpenAI  [ ] Ollama
-   (jvm only; greyed out for bundles)
-
-4. Extensions     [x] Context    [x] Memory   [x] Skills
-                  [x] MCP        [ ] Web Search
-   (jvm only; greyed out for bundles)
-
-5. UI             (•) Terminal   ( ) Graphical
-   (jvm only)
-
-                  [ Generate & Download ]
-```
+**Flow:** Version → Packaging (jvm/tui/gui/full) → LLM Provider → Extensions → UI → Download
 
 ### ZIP layout — JVM
 
 ```
 jan-klod.zip
-├── jan-klod.yaml          ← pre-filled from selections
+├── jan-klod.yaml
 ├── lib/
 │   ├── core-{version}.jar
 │   ├── provider-anthropic-{version}.jar
-│   └── ...selected extensions...
-├── ext/                   ← drop additional JARs here
-├── jan-klod               ← launcher (Unix)
-├── jan-klod.bat           ← launcher (Windows)
+│   └── ...extensions...
+├── ext/
+├── jan-klod (Unix) / jan-klod.bat (Windows)
 └── README.md
 ```
 
@@ -263,8 +241,8 @@ jan-klod.zip
 
 ```
 jan-klod-tui-{version}-linux-amd64.zip
-├── jan-klod               ← native binary
-├── jan-klod.yaml          ← pre-filled config
+├── jan-klod
+├── jan-klod.yaml
 └── README.md
 ```
 
@@ -272,7 +250,7 @@ jan-klod-tui-{version}-linux-amd64.zip
 
 ## Blue/Green Deployment
 
-A tiny launcher binary (Go or Rust, no dependencies) manages version lifecycle. The launcher itself almost never needs updating.
+Tiny launcher (Go/Rust, no deps) manages version lifecycle; rarely needs updates.
 
 ### Directory layout
 
@@ -303,7 +281,7 @@ A tiny launcher binary (Go or Rust, no dependencies) manages version lifecycle. 
 
 ### State format
 
-SQLite is the default for `store-memory` — portable, embeddable, migration-friendly. State schema must be versioned from day one; retrofitting is painful.
+SQLite default: portable, embeddable, migration-friendly. Version schema from day one (retrofitting painful).
 
 ---
 

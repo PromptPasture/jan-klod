@@ -1,10 +1,8 @@
 //! `registry-skills` — discovers Markdown skill files from `.agents/skills/`,
-//! exposes them as `skill-registry` tools, and renders them on `invoke`.
+//! exposes them as tools, and renders them on `invoke`.
 //!
-//! Each skill file must have a YAML front matter block (`--- ... ---`) at the
-//! top containing at least a `name:` field and optionally a `description:` field.
-//! The rest of the file is the skill template; `invoke` returns it (with
-//! the raw JSON arguments appended as context).
+//! Each skill file needs YAML front matter (`--- ... ---`) with `name:` and optional `description:`.
+//! `invoke` returns the template with raw JSON arguments appended as context.
 
 #[allow(
     unsafe_code,
@@ -48,9 +46,8 @@ fn log(level: LogLevel, message: &str) {
     host_log::log(level, "registry-skills", message, &[]);
 }
 
-/// Parse YAML front matter from `content`. Returns `(front_matter, body)`.
-///
-/// Front matter is the text between the opening `---` and closing `---` lines.
+/// Parse YAML front matter from `content`, returning `(front_matter, body)`.
+/// Front matter is between opening and closing `---` lines.
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     let rest = content.strip_prefix("---")?;
     // Allow `---\n` or `---\r\n`
@@ -79,7 +76,7 @@ fn yaml_str<'a>(front: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
-/// Scan `.agents/skills/` and load all Markdown files with a `name:` front matter.
+/// Scan `.agents/skills/` and load all Markdown files with `name:` in front matter.
 fn load_skills() -> Vec<Skill> {
     let Ok(entries) = host_fs::list_dir(".agents/skills") else {
         return Vec::new();

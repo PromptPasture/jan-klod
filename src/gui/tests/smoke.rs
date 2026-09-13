@@ -1,38 +1,27 @@
-//! The automatable half of slice 17b-2's acceptance: the window process starts,
-//! loads the page it was pointed at, and the token it was given arrives in the
-//! page's `sessionStorage` under the key the web client reads.
+//! Automatable half of slice 17b-2's acceptance: window starts, loads the page,
+//! and the token arrives in `sessionStorage` under the key the web client reads.
 //!
-//! **What this does not prove.** Nobody here looks at a screen. The webview
-//! fetching the page and running its script is strong evidence that a window
-//! rendered, but it is evidence, not a sighting — #142 says to keep the two
-//! apart and report which one was actually done, so this file is named for the
-//! half it covers and the other half stays a manual step in the changelog.
+//! **What this doesn't prove:** Nobody looks at a screen. The webview fetching
+//! and running script is evidence of rendering, not a sighting — #142 separates
+//! them. This file covers the automation; manual rendering is in the changelog.
 //!
-//! No HTTP dependency: the server is forty lines of `std::net`, which is less
-//! than the cost of explaining a new package in a tree this repository already
-//! measured at +256 (#141). It serves exactly one page and records what it was
-//! asked for.
+//! No HTTP dependency: the server is forty lines of `std::net` (less than
+//! explaining a new package in a tree measured at +256 by #141).
 //!
-//! ## Skips, and how to stop them being a lie
+//! ## Skips, and stopping them being a lie
 //!
-//! A webview needs a display server. On Linux without `DISPLAY`/`WAYLAND_DISPLAY`
-//! there is nothing to open a window on, so these skip. Set `JK_REQUIRE_GUI=1`
-//! to turn that skip into a failure — the same lever `JK_REQUIRE_GUESTS` is for
-//! the guest suite, and for the same reason: a check that silently no-ops looks
-//! exactly like one that passes.
+//! A webview needs a display server. On Linux without `DISPLAY`/`WAYLAND_DISPLAY`,
+//! these skip. Set `JK_REQUIRE_GUI=1` to fail instead (same as `JK_REQUIRE_GUESTS`).
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-/// How long to wait for a webview to start and fetch two URLs. Generous: a cold
-/// `WebKit` process on a loaded CI runner is much slower than on a laptop.
+/// Timeout for webview to start and fetch two URLs (generous for cold WebKit on CI).
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The key `src/web/src/api.ts` reads the token from. Restated rather than
-/// shared, deliberately — this test is the thing that would catch the two
-/// drifting, so importing the constant from the code under test would defeat it.
+/// Token key read by `src/web/src/api.ts`, restated to catch drift (not imported).
 const TOKEN_KEY: &str = "jan-klod-token";
 
 /// Whether a window can be opened at all here.
@@ -43,8 +32,7 @@ fn has_a_display() -> bool {
     std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
-/// Skip unless the environment insists otherwise. Returns `false` when the test
-/// body should not run.
+/// Skip unless environment insists otherwise. Returns `false` if body shouldn't run.
 fn runnable() -> bool {
     if has_a_display() {
         return true;
@@ -59,12 +47,10 @@ fn runnable() -> bool {
     false
 }
 
-/// A one-page HTTP server on an ephemeral port.
+/// One-page HTTP server on an ephemeral port.
 ///
-/// `/` serves a page whose script reports back what it found in
-/// `sessionStorage`; every other path is answered with an empty `200`. Each
-/// request line it handles is sent down the channel, which is what the
-/// assertions read.
+/// `/` serves a page whose script reports `sessionStorage`; other paths get `200`.
+/// Request lines are sent down the channel for assertions.
 fn serve() -> (u16, Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("an ephemeral port");
     let port = listener.local_addr().expect("a bound address").port();
@@ -90,8 +76,7 @@ fn handle(mut stream: TcpStream, tx: &mpsc::Sender<String>) -> std::io::Result<(
     if request_line.is_empty() {
         return Ok(());
     }
-    // Drain the headers so the client is not left writing into a full buffer.
-    // Stops at the blank line that ends them, or at EOF.
+    // Drain headers so client doesn't block on a full buffer (until blank line or EOF).
     let mut line = String::new();
     loop {
         line.clear();
@@ -125,7 +110,7 @@ fn handle(mut stream: TcpStream, tx: &mpsc::Sender<String>) -> std::io::Result<(
     stream.flush()
 }
 
-/// Wait for a request line matching `want`, returning it.
+/// Wait for a request line matching `want`; return it.
 fn wait_for(rx: &Receiver<String>, want: impl Fn(&str) -> bool, what: &str) -> String {
     let deadline = Instant::now() + TIMEOUT;
     let mut seen = Vec::new();
@@ -144,7 +129,7 @@ fn wait_for(rx: &Receiver<String>, want: impl Fn(&str) -> bool, what: &str) -> S
     panic!("timed out waiting for {what}; the window asked for: {seen:?}");
 }
 
-/// The child, killed when the test ends however it ends.
+/// Child process, killed when test ends.
 struct Window(std::process::Child);
 
 impl Drop for Window {
@@ -159,14 +144,13 @@ fn open(port: u16, token: Option<&str>) -> Window {
     command.args(["--url", &format!("http://127.0.0.1:{port}/")]);
     match token {
         Some(token) => command.env("JAN_KLOD_TOKEN", token),
-        // Removed rather than left alone: the developer running this may well
-        // have one exported, and the no-token case has to mean no token.
+        // Remove rather than leave alone: developer may have one exported.
         None => command.env_remove("JAN_KLOD_TOKEN"),
     };
-    Window(command.spawn().expect("the gui binary is built by cargo"))
+    Window(command.spawn().expect("gui binary built by cargo"))
 }
 
-/// The token the launcher was given reaches the page without anyone typing it.
+/// Token from launcher reaches the page without typing.
 #[test]
 fn the_window_loads_the_page_and_the_token_is_already_there() {
     if !runnable() {
@@ -183,10 +167,8 @@ fn the_window_loads_the_page_and_the_token_is_already_there() {
     );
 }
 
-/// With no token there is nothing to seed, and the page must see *nothing*
-/// rather than an empty string — which it would send as `Bearer ` and the
-/// gateway would reject, with the user left looking at a window that cannot
-/// explain itself.
+/// With no token, the page must see nothing (not empty string), or it sends
+/// `Bearer ` and the gateway rejects it with no explanation.
 #[test]
 fn with_no_token_the_page_finds_nothing_rather_than_an_empty_string() {
     if !runnable() {

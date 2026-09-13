@@ -1,10 +1,9 @@
 //! Task classification + route resolution — pure Rust, unit-tested natively.
 //!
-//! The built-in task set mirrors the default `routing:` keys in `config.yaml`. A
-//! constrained-decoding grammar forces the classifier to emit exactly one of
-//! them; [`parse_task`] reads the label back, and [`model_from_route`] pulls the
-//! model out of a `provider/model` routing entry. (User-defined task types are a
-//! later refinement.)
+//! The built-in task set mirrors the default `routing:` keys in `config.yaml`.
+//! A constrained-decoding grammar forces the classifier to emit exactly one of them;
+//! [`parse_task`] reads it back, and [`model_from_route`] extracts the model from
+//! a `provider/model` routing entry. (User-defined task types are a later refinement.)
 
 /// Built-in task types — the default `routing:` keys.
 pub const BUILT_IN_TASKS: &[&str] = &[
@@ -35,8 +34,7 @@ pub fn classifier_grammar(tasks: &[&str]) -> String {
     format!("root ::= {alternatives}")
 }
 
-/// Read the classifier's output back into one of `tasks` (exact match first, then
-/// substring for backends that ignore the grammar and ramble).
+/// Read the classifier's output into one of `tasks` (exact match first, else substring).
 #[must_use]
 pub fn parse_task(text: &str, tasks: &[&str]) -> Option<String> {
     let lowered = text.trim().to_lowercase();

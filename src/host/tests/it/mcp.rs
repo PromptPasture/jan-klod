@@ -1,13 +1,8 @@
-//! The MCP port, driven as an editor drives it.
+//! MCP port driven as an editor drives it (full exchange against real agent).
 //!
-//! `core::mcp`'s own tests cover the frame rules without a runtime. What only
-//! this module can show is a **whole exchange against a real agent**:
-//! `initialize`, the notification every client sends next, `tools/list`, and a
-//! `tools/call ask` that runs an actual turn against a canned provider and
-//! comes back with the answer.
-//!
-//! The provider is canned rather than live, so this is offline — which is what
-//! `## Acceptance` asks for, and what lets it run in `make gate`.
+//! `core::mcp` tests frame rules without runtime. This module shows a whole
+//! exchange: `initialize`, `tools/list`, and a `tools/call ask` running an
+//! actual turn against a canned provider. Offline (as Acceptance requires).
 
 use std::path::PathBuf;
 
@@ -15,7 +10,7 @@ use jan_klod_core::Runtime;
 
 use crate::common;
 
-/// Boot an offline agent with a canned provider, as `rpc.rs` does.
+/// Offline agent with canned provider (like `rpc.rs`).
 fn booted(
     tag: &str,
     reply: &'static str,
@@ -49,7 +44,7 @@ extensions:
     Some((dir, agent))
 }
 
-/// Feed `lines` to the server and read every frame it writes back.
+/// Send lines and collect all response frames.
 fn exchange(agent: &mut jan_klod_core::AgentSession, lines: &[&str]) -> Vec<serde_json::Value> {
     let input = lines.join("\n") + "\n";
     let mut output = Vec::new();
@@ -58,16 +53,14 @@ fn exchange(agent: &mut jan_klod_core::AgentSession, lines: &[&str]) -> Vec<serd
     let text = String::from_utf8(output).expect("frames are UTF-8");
     text.lines()
         .map(|line| {
-            // Every line must parse: the stdio transport says frames are
-            // newline-delimited and stdout carries nothing else, so a line that
-            // is not JSON would mean something leaked into the protocol stream.
+            // Every line must parse; transport says frames are newline-delimited.
             serde_json::from_str(line)
                 .unwrap_or_else(|err| panic!("{line:?} is not a frame: {err}"))
         })
         .collect()
 }
 
-/// The exchange an editor actually performs, end to end.
+/// Typical editor exchange: initialize, list tools, call ask.
 #[test]
 fn an_editor_initializes_lists_tools_and_calls_ask() {
     let Some((_dir, mut agent)) = booted("full", "the answer from the model") else {
@@ -84,8 +77,7 @@ fn an_editor_initializes_lists_tools_and_calls_ask() {
         ],
     );
 
-    // Three requests, one notification, three frames — the notification earns
-    // none, and a server that answered it would be talking to nobody.
+    // Three requests + one notification = three frames (notifications don't reply).
     assert_eq!(frames.len(), 3, "{frames:#?}");
     assert_eq!(frames[0]["id"], 1);
     assert_eq!(frames[0]["result"]["protocolVersion"], "2025-11-25");
@@ -95,7 +87,7 @@ fn an_editor_initializes_lists_tools_and_calls_ask() {
         Some(3)
     );
 
-    // The turn ran and its answer came back as tool content.
+    // Turn's answer came back as tool content.
     let call = &frames[2];
     assert_eq!(call["id"], 3);
     assert_eq!(
@@ -114,12 +106,10 @@ fn an_editor_initializes_lists_tools_and_calls_ask() {
     );
 }
 
-/// `ask` without its required argument is refused **in band**.
+/// Missing argument is `isError: true`, not a JSON-RPC error.
 ///
-/// The distinction this pins: a bad argument is the *tool* failing, so it comes
-/// back as `isError: true` with a reason the model can read and correct. A
-/// JSON-RPC error would tell the client its request was malformed, which is a
-/// different claim and one an editor may surface as a broken server.
+/// Bad argument = tool failure (model can correct); JSON-RPC error = malformed
+/// request (editor sees broken server). Different claims.
 #[test]
 fn a_missing_question_is_an_is_error_not_a_protocol_error() {
     let Some((_dir, mut agent)) = booted("noq", "unused") else {
@@ -147,11 +137,9 @@ fn a_missing_question_is_an_is_error_not_a_protocol_error() {
     assert!(frames[0].get("error").is_none(), "{:#?}", frames[0]);
 }
 
-/// Two calls without a session id share one, so a conversation is possible.
+/// Two unsessioned calls share one session (conversation possible).
 ///
-/// Worth asserting because the alternative — a fresh session per call — would
-/// look identical for one call and lose all context on the second, which is the
-/// kind of thing a single-request test never notices.
+/// Single-request tests miss the alternative (fresh per call losing context).
 #[test]
 fn two_calls_without_a_session_continue_the_same_one() {
     let Some((_dir, mut agent)) = booted("session", "ack") else {
@@ -173,8 +161,7 @@ fn two_calls_without_a_session_continue_the_same_one() {
         );
     }
 
-    // The transcript is the evidence: one session holding both turns, rather
-    // than two sessions holding one each.
+    // Transcript proves: one session with both turns, not two separate ones.
     let sessions = jan_klod_core::serve::sessions_payload(&agent);
     let ids: Vec<&str> = sessions["sessions"]
         .as_array()
@@ -197,12 +184,8 @@ fn two_calls_without_a_session_continue_the_same_one() {
 
 // ---- The read tools, and the refusal (#56 box 3) ----
 
-/// Boot an agent whose provider asks for a **real** workspace write on its
-/// first turn, then answers.
-///
-/// `workspace` is the temp dir, so the write the model wants has a path this
-/// test can look for afterwards — which is the only way to assert that it did
-/// not happen.
+/// Agent whose provider asks for workspace write first, then answers.
+/// Temp dir allows test to verify the write didn't happen.
 fn booted_writing(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession, PathBuf)> {
     const GUESTS: [&str; 4] = [
         "provider-openai.wasm",
@@ -244,7 +227,7 @@ extensions:
     )
     .expect("writes the config");
 
-    // First call: the model asks to write. Second: it gives up and answers.
+    // First call: model requests write. Second: model gives up, answers.
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let http = move || -> jan_klod_core::route::HttpFn {
         let calls = std::sync::Arc::clone(&calls);
@@ -273,15 +256,10 @@ extensions:
     Some((dir, agent, target))
 }
 
-/// Acceptance line 2: a write-requiring turn is refused, and **the file is not
-/// written**.
+/// Write-requiring turn is refused; file is not written (Acceptance line 2).
 ///
-/// The assertion is on the effect, not on the wording. A turn that explains it
-/// could not write looks the same whether the gate refused or the tool quietly
-/// failed; only the absent file distinguishes a boundary from a story about
-/// one. This is the surface where that matters most, because an MCP client
-/// **cannot** answer a confirmation prompt — so a fail-open here would never be
-/// noticed by anybody.
+/// Assertion is on effect, not wording (absent file proves boundary, not story).
+/// Critical here: MCP client cannot answer confirmation prompts; fail-open would go unnoticed.
 #[test]
 fn a_write_requiring_turn_is_refused_and_nothing_is_written() {
     let Some((_dir, mut agent, target)) = booted_writing("refuse") else {
@@ -299,14 +277,11 @@ fn a_write_requiring_turn_is_refused_and_nothing_is_written() {
         "the model asked to write {} and the gate refused, with nobody to ask",
         target.display()
     );
-    // The turn itself completed — a refusal is an answer, not a transport
-    // failure — so the client is told what happened rather than that the
-    // server broke.
+    // Turn completed (refusal is answer, not transport failure).
     assert!(frames[0].get("error").is_none(), "{:#?}", frames[0]);
 }
 
-/// `session_list` and `session_get` read the same payloads the REST surface
-/// serves, so an editor and a browser agree about what a session is.
+/// `session_list`/`session_get` match REST payloads (editor and browser align).
 #[test]
 fn the_read_tools_return_the_sessions_a_turn_created() {
     let Some((_dir, mut agent)) = booted("reads", "answered") else {
@@ -322,8 +297,7 @@ fn the_read_tools_return_the_sessions_a_turn_created() {
     );
     assert_eq!(frames.len(), 3, "{frames:#?}");
 
-    // The payload arrives as text, so parse it back — which also checks it is
-    // JSON a client could use rather than prose about sessions.
+    // Payload is text; parse back to verify it's client-usable JSON.
     let listed: serde_json::Value = serde_json::from_str(
         frames[1]["result"]["content"][0]["text"]
             .as_str()
@@ -349,7 +323,7 @@ fn the_read_tools_return_the_sessions_a_turn_created() {
     );
 }
 
-/// `session_get` without its argument fails in band, like `ask` does.
+/// Missing argument is `isError: true`, like `ask`.
 #[test]
 fn session_get_without_an_id_is_an_is_error() {
     let Some((_dir, mut agent)) = booted("noid", "unused") else {

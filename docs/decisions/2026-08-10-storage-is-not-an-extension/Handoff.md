@@ -6,55 +6,32 @@ core, configured by a top-level `storage:` block.
 
 ## What was there
 
-`config.yaml` had an `extensions.store` category with three instances —
-`memory`, `sqlite`, `postgres`. `docs/concepts/architecture.md` listed
-`store-sqlite`, `store-postgres` and `store-supabase` as components implementing
-`memory-store.wit`. `wit/memory-store.wit` defined a seven-function interface and
-a `store-world`. One component existed: `store-memory`, a Rust guest with an
-in-memory map.
+`config.yaml` had `extensions.store` with three instances: `memory`, `sqlite`, `postgres`. Docs listed `store-sqlite`, `store-postgres`, `store-supabase` as components implementing `memory-store.wit`, but only `store-memory` existed (a Rust guest with an in-memory map).
 
-The core called none of it. `store-memory.wasm` was resolved at boot, taken
-through `init` → `start`, and then never invoked again — its `memory-store`
-exports had no caller anywhere in the host. The only thing the `store` category
-did was carry `store.sqlite.path`, which `Runtime::open_store` read to decide
-where to put the core's own `rusqlite` database.
+The core never called it. `store-memory.wasm` initialized at boot but never executed again—its exports had no callers. The category's only effect: `Runtime::open_store` read `store.sqlite.path` to locate the database.
 
-So the category advertised a swappable backend family. Three of the four names
-had no implementation, and the fourth was inert.
+The category advertised swappable backends; three had no implementation, the fourth was unused.
 
 ## Why it stays host-side
 
-The same page that listed the component family also stated the design intent, and
-the intent was right:
+The design intent was correct:
 
 > The persistent store is a **host-side capability** … it is *not* SQLite-in-wasm
 > (which the Go MVP confirmed does not work).
 
-Two reasons, and they are the ones that matter for this project specifically:
+Two critical reasons:
 
-- **The sandbox has no filesystem.** A store guest would need `host-fs` granted
-  back to it. The point of the boundary is that a component gets the capabilities
-  it needs and no others; a component whose entire job requires the broadest
-  capability the host has is a component fighting the design.
-- **The transcript is the most sensitive thing the runtime holds.** Every
-  message, in one place. "Swap your storage backend" means "hand your whole
-  conversation history to a third-party component". That is a plugin point nobody
-  asked for, bought with the guarantee the runtime exists to make.
+- **The sandbox has no filesystem.** A store guest needs `host-fs`, violating the principle that components receive only required capabilities.
+- **The transcript is the most sensitive runtime asset.** "Swap your backend" means handing conversation history to untrusted code—a plugin point nobody needs.
 
 Postgres, if it is ever wanted, is a second host backend behind the same `Store`
 type — an enum, not a WIT world.
 
 ## What "trusts nothing it runs" does and does not mean
 
-It does not mean everything must be a component. It means the core grants
-nothing implicitly, and every capability crosses a typed, mediated boundary.
-Storage satisfies that in the direction that matters: guests reach it through
-`host-storage`, which is **granted** (`persist: true`, default off) and
-**namespaced** to the calling component, so a guest cannot name a peer's keys or
-a session transcript.
+It does not mean everything must be a component. It means the core grants no implicit capabilities; every crossing is typed and mediated. Storage satisfies this: guests reach it through `host-storage` (granted via `persist: true`, namespaced to each component, preventing peer key or transcript access).
 
-Making the store itself a guest would not have added a boundary. It would have
-moved core state behind one.
+Making the store a guest wouldn't add a boundary—it would move core state behind one.
 
 ## Changed
 

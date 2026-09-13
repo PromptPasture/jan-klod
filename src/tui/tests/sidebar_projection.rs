@@ -1,14 +1,9 @@
 #![allow(missing_docs)]
-//! #104's Acceptance line 7: "a grep-style test asserts the sidebar issues no
-//! `Command` — it is a projection only." Modelled on `theme.rs`'s own
-//! `no_colour_literal_survives_outside_this_module`: a plain grep over the
-//! module's source, comments stripped, for the two words that would mean it
-//! had grown a way to drive anything (`Command`, which dispatches the `/`
-//! menu, and `Transport`, which is the only thing that can send one).
-//!
-//! This lives in `tests/` rather than in `src/sidebar.rs` itself so the grep
-//! never has to read its own assertion text back — a check for `"Command"`
-//! sitting in the same file it scans would trip on itself.
+//! #104's Acceptance line 7: "sidebar issues no `Command` — projection only."
+//! Grep-style test: scans sidebar.rs code (comments stripped) for `Command`
+//! (dispatches menu) and `Transport` (sends). Lives in `tests/` so grep never
+//! reads its own assertion text back — a check for `"Command"` in the same
+//! file would trip on itself.
 
 use std::fs;
 use std::path::Path;

@@ -1,16 +1,10 @@
-//! Host-side persistent store.
+//! SQLite-backed key/value + history store. Implements full
+//! [`memory-store`](../../../wit/memory-store.wit) (superset of `host-storage`).
+//! Host-side by design: sandbox gets no filesystem, database in core, served
+//! to extensions. SQLite embedded via `rusqlite`'s bundled feature.
 //!
-//! A SQLite-backed key/value + history store implementing the full
-//! [`memory-store`](../../../wit/memory-store.wit) operation set (a superset of
-//! `host-storage`). Persistence is **host-side** by design: the sandbox grants no
-//! filesystem, so the database lives in core and is served to extensions through
-//! the storage contracts. `SQLite` is embedded via `rusqlite`'s `bundled` feature,
-//! so there is no system-library dependency.
-//!
-//! Two tables. `entries` is the key/value store, keyed by `(namespace, key)`;
-//! values are opaque JSON strings (the core never interprets them). `events` is
-//! the append-only turn log, keyed by `(session, seq)` — see
-//! [`Store::append_event`]. Timestamps are Unix seconds.
+//! Two tables: `entries` (key/value on `namespace, key`; opaque JSON values),
+//! `events` (append-only turn log on `session, seq`). Timestamps in Unix seconds.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -240,9 +234,7 @@ impl Store {
     }
 
     /// List every distinct namespace, most recently written first.
-    ///
-    /// Grouped rather than a bare `DISTINCT` + `ORDER BY MAX(...)`, which `SQLite`
-    /// rejects as a misuse of aggregates.
+    /// Grouped (not bare `DISTINCT` + `ORDER BY MAX(...)`, SQLite rejects that).
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -287,19 +279,11 @@ impl Store {
 
     /// Append one event to `session`'s log, returning the row.
     ///
-    /// `seq` is allocated inside the same statement as the insert
-    /// (`SELECT COALESCE(MAX(seq), 0) + 1 … RETURNING seq`), so it cannot read a
-    /// maximum that another append has already claimed. The core serialises
-    /// callers through `Arc<Mutex<Store>>` anyway, so this is not what stands
-    /// between the log and a duplicate key today — it is that the alternative,
-    /// reading the maximum and then inserting, would need a transaction wrapped
-    /// around it to be equally safe and would still be two round trips.
-    ///
-    /// There is deliberately no update and no single-row delete: the log's value
-    /// is that it records what happened, and an API that could rewrite it would
-    /// make every replay a claim about the present rather than the past.
-    /// [`Self::purge_session_events`] is the one exception, for forgetting a
-    /// whole session.
+    /// `seq` allocated in-statement (`SELECT COALESCE(MAX(seq), 0) + 1 RETURNING seq`)
+    /// so no other append can claim that maximum. Core serialises callers via
+    /// `Arc<Mutex<Store>>` anyway. No update/delete: the log records what happened;
+    /// an API that rewrites it makes every replay a claim about the present.
+    /// [`Self::purge_session_events`] is the sole exception for forgetting sessions.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -312,12 +296,9 @@ impl Store {
         self.append_event_at(session, kind, payload, now_secs())
     }
 
-    /// Append one event with an explicit timestamp.
-    ///
-    /// For records of things that happened earlier than now — a migration of a
-    /// transcript written before the log existed. Stamping those with the
-    /// migration's own time would date every old session to the upgrade, which
-    /// is the one fact about them a log must not invent.
+    /// Append one event with an explicit timestamp (for migrations). Stamping
+    /// old transcripts with migration time would date them to the upgrade, which
+    /// the log must never invent.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -355,12 +336,9 @@ impl Store {
         })
     }
 
-    /// Every event logged for `session`, in the order it happened.
-    ///
-    /// Unbounded on purpose: the callers are a full projection (`GET
-    /// /session/:id`), a fork, and a test — each wants the whole log, not a
-    /// tail of it. [`Self::recent_turns`] is the bounded sibling for the one
-    /// caller (`replay`) that only wants the end of it.
+    /// Every event logged for `session`, in order. Unbounded on purpose: callers
+    /// (projection, fork, tests) want the whole log. [`Self::recent_turns`] is
+    /// the bounded sibling for `replay`, which wants only the end.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -393,33 +371,21 @@ impl Store {
             })
     }
 
-    /// The tail of `session`'s log holding at most the last `turns` turns —
-    /// the bounded sibling of [`Self::session_events`], for the one caller
-    /// (`replay`) that only ever wants the end of a possibly long log.
+    /// Tail of `session`'s log with at most `turns` turns. Bounded sibling of
+    /// [`Self::session_events`] for `replay` to avoid reading long sessions.
     ///
-    /// [`crate::projection::last_turns`] is the rule this SQL has to agree
-    /// with, in memory over the whole log; this is the same rule pushed into
-    /// the query so a long session does not pay to read and decode rows it is
-    /// about to discard. A turn begins at a `user-message` row, and a turn is
-    /// a variable number of rows — a tool call adds two — so a plain `LIMIT`
-    /// cannot express the bound: it would cut a turn in half and hand the
-    /// model a conversation that opens with a tool result answering a call it
-    /// cannot see. Instead this finds the seq of the earliest `user-message`
-    /// row among the last `turns` of them, and reads everything from there
-    /// on.
+    /// A turn begins at `user-message` and spans multiple rows (tool calls add two).
+    /// A plain `LIMIT` would cut turns in half; instead this finds the earliest
+    /// `user-message` seq among the last `turns` messages and reads from there.
+    /// ([`crate::projection::last_turns`] has the in-memory rule this must match.)
     ///
-    /// `COALESCE(MIN(seq), 0)` is what makes a session with fewer than
-    /// `turns` user-message rows — including a log with none at all — read
-    /// from the very start: the inner query then returns fewer than `turns`
-    /// rows (or zero), `MIN` over them is either the earliest one present or
-    /// `NULL`, and `COALESCE` turns the `NULL` case into `0`, a seq no row can
-    /// be below. That matches `last_turns` returning the whole slice rather
-    /// than trimming when there are not that many turns to trim to.
+    /// `COALESCE(MIN(seq), 0)` handles sessions with fewer than `turns` messages:
+    /// the inner query returns fewer rows or zero, `MIN` is the earliest or `NULL`,
+    /// and `COALESCE` turns `NULL` to `0` (seq no row can be below), matching
+    /// `last_turns` returning the whole slice when there are not that many turns.
     ///
-    /// `turns == 0` is handled before the query runs, rather than as
-    /// `LIMIT 0`: an empty inner query would still make `COALESCE` fall back
-    /// to `0` and read the *whole* log, which is the one case above's
-    /// reasoning gets backwards — asking for zero turns means none, not all.
+    /// `turns == 0` exits before the query runs (not `LIMIT 0`): an empty inner
+    /// query would still make `COALESCE` fall back to `0` and read the whole log.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -465,14 +431,11 @@ impl Store {
             })
     }
 
-    /// Every session that has at least one logged event, most recent first.
-    ///
-    /// The event-log counterpart to [`Self::list_namespaces`], and needed
-    /// separately rather than derived from it: a namespace exists in `entries`
-    /// because a transcript was written there, so once the transcript stops
-    /// being written that way, `list_namespaces` reports nothing while the log
-    /// is full of sessions. Ordered `MAX(ts) DESC` then by id, matching how
-    /// namespaces are ordered, so the two agree while both exist.
+    /// Every session with logged events, most recent first. Event-log counterpart
+    /// to [`Self::list_namespaces`], needed separately: namespaces exist in
+    /// `entries` while transcripts are written there; `list_namespaces` reports
+    /// nothing once they stop, while the log persists. Both ordered by `MAX(ts)`
+    /// DESC then id to agree while both exist.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -497,18 +460,13 @@ impl Store {
             })
     }
 
-    /// Copy `session`'s events up to and including `at_seq` into `into`,
-    /// renumbered from 1. Returns how many rows were copied.
+    /// Copy `session`'s events up to `at_seq` into `into`, renumbered from 1.
+    /// Returns how many rows were copied.
     ///
-    /// The copy keeps each event's original `ts`. These are the same facts as
-    /// the parent's, and stamping them with the fork's creation time would
-    /// claim they happened when the fork was made.
-    ///
-    /// `seq` is assigned by `ROW_NUMBER()` rather than carried over, so the
-    /// fork's log is `1..n` by construction. Today that is the identity —
-    /// appends are contiguous, so `[1, at_seq]` already is `1..at_seq` — but a
-    /// fork whose log started at 4 would not be readable as a sequence, and
-    /// this way it cannot happen for a reason that has to stay true.
+    /// Original `ts` is preserved (these are the same facts; stamping them with
+    /// fork's creation time would claim they happened then). `seq` is assigned by
+    /// `ROW_NUMBER()` not carried, so fork's log is `1..n` by construction; today
+    /// that's the identity (appends contiguous), but this keeps it true always.
     ///
     /// # Errors
     /// [`StoreError::Backend`] if `into` already has events (a fork must start

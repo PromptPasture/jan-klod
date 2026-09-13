@@ -1,33 +1,19 @@
-//! `tool-git` — **read-only** repository inspection, routed through `host-process`.
+//! `tool-git` — **read-only** repository inspection through `host-process`.
 //!
-//! Exposes one tool named `git`; the operation is chosen by an `op` argument:
+//! Exposes `git` tool with ops:
+//! - `status` → porcelain status + branch
+//! - `diff` → working or staged diff
+//! - `log` → one-line history
+//! - `show` → one commit
+//! - `branch` → local branches
 //!
-//! - `{ "op": "status" }`                       → porcelain status + branch.
-//! - `{ "op": "diff", "staged"?, "path"? }`     → the working (or staged) diff.
-//! - `{ "op": "log", "count"?, "path"? }`       → one-line history.
-//! - `{ "op": "show", "rev" }`                  → one commit.
-//! - `{ "op": "branch" }`                       → local branches.
+//! Closed op set prevents arbitrary command execution. Only git runs; only the
+//! five read-only ops are reachable. No `commit`, `checkout`, `reset`, `push`.
 //!
-//! ## Why a tool at all, when `tool-shell` could run `git`
-//!
-//! "Let the agent see its diff" should not cost arbitrary command execution.
-//! `tool-shell` takes a command from the model; this tool takes an op from a
-//! closed set and builds the argv itself, so only `git` runs and only the five
-//! read-only subcommands below are reachable. There is no `commit`, `checkout`,
-//! `reset`, or `push` — not disabled by policy, simply not expressible.
-//!
-//! ## Reading a repository is not inherently side-effect-free
-//!
-//! Git treats parts of a repo as configuration: `.git/config` can point
-//! `core.fsmonitor` at a command run on `git status`, `core.hooksPath` at a
-//! script directory, and `.gitattributes` can name diff/textconv drivers run on
-//! `git diff`. A hostile checkout could turn "show me the diff" into code
-//! execution. Every invocation disables those paths explicitly — see
-//! [`HARDENING`] — so inspecting an untrusted repo stays inspection. Aliases
-//! need no guard: git refuses to let one shadow a real subcommand.
-//!
-//! The argv construction is pure Rust (unit-tested natively); the Component-Model
-//! glue below only compiles for `wasm32`.
+//! Reading a repo is not side-effect-free: Git's config can run code (fsmonitor,
+//! hooksPath, diff/textconv drivers). Every invocation disables these paths (HARDENING)
+//! so untrusted repos stay safe. Argv construction is pure Rust (unit-tested);
+//! glue for wasm32 only.
 
 /// Largest `log` page. Past this the answer is not history, it is a data dump.
 const MAX_COUNT: u64 = 200;
@@ -41,14 +27,8 @@ const MAX_ARG_LEN: usize = 200;
 mod git {
     use crate::{DEFAULT_COUNT, MAX_ARG_LEN, MAX_COUNT};
 
-    /// Flags prepended to **every** invocation, disabling the repo-supplied hooks
-    /// that would otherwise let a checkout run code during a read.
-    ///
-    /// `core.fsmonitor` runs a command on `git status`; `core.hooksPath` points at
-    /// scripts; `protocol.ext.allow` enables `ext::` transports that spawn a helper.
-    /// `--no-pager` keeps git from spawning one (the substrate gives it no tty, but
-    /// not spawning is cheaper than failing to). Per-op `--no-ext-diff` /
-    /// `--no-textconv` cover the `.gitattributes` drivers.
+    /// Flags prepended to every invocation, disabling hooks that let a checkout run code.
+    /// Covers: fsmonitor, hooksPath, ext transports, pager, textconv/diff drivers.
     pub const HARDENING: [&str; 8] = [
         "--no-pager",
         "-c",
@@ -74,12 +54,9 @@ mod git {
         pub count: Option<u64>,
     }
 
-    /// Build the full argument vector for `git`, or explain the refusal.
-    ///
+    /// Build the argument vector for `git`, or explain the refusal.
     /// # Errors
-    /// Returns a caller-facing message when the op is not in the allowlist or an
-    /// argument fails validation. The message names what to do instead — a model
-    /// that gets this back can correct itself without a human.
+    /// Caller-facing message when op is not allowlisted or arguments fail validation.
     pub fn argv(req: &Request) -> Result<Vec<String>, String> {
         let mut out: Vec<String> = HARDENING.iter().map(|s| (*s).to_string()).collect();
         match req.op {

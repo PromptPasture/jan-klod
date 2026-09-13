@@ -1,39 +1,34 @@
-//! Newline-delimited JSON-RPC 2.0 over a byte stream — the transport a client
-//! gets by spawning the core rather than connecting to it.
+//! Newline-delimited JSON-RPC 2.0 over a byte stream—transport for spawned
+//! clients (no server, port, or token).
 //!
-//! One frame per line, one line per frame. No port, no token, no server left
-//! running: the client owns the process, and the process dies with it. This is
-//! the shape editors already speak (LSP, Codex's `app-server`), which is why
-//! Phase 18's MCP and ACP ports adapt *this* rather than the REST surface.
+//! One frame per line. The client owns the process; it dies with them.
+//! Editors speak this shape (LSP, Codex's `app-server`), so Phase 18's MCP and
+//! ACP adapt *this* rather than REST.
 //!
-//! # Generic over the streams, on purpose
+//! # Generic over streams, on purpose
 //!
-//! [`serve`] takes any [`BufRead`] and any [`Write`], not `stdin()`/`stdout()`.
-//! The gateway passes the real ones; the tests pass pipes and buffers, so a
-//! full exchange is asserted in-process with no subprocess and no model. Slice
-//! 13c's WebSocket transport is the same dispatch over a different pair.
+//! [`serve`] takes any [`BufRead`] and [`Write`], not `stdin()`/`stdout()`.
+//! Gateway passes real ones; tests pass pipes and buffers for in-process
+//! exchanges without subprocess or model. Slice 13c's WebSocket does the same
+//! dispatch over different streams.
 //!
-//! # How a cancel arrives while a turn is running
+//! # Cancellation mid-turn
 //!
-//! A reader thread owns the input and does nothing but hand lines over a
-//! channel. That division is the whole design: while a turn runs, this thread
-//! is inside the conductor, so a `turn/cancel` could not be *read* at all
-//! without someone else holding the pipe. The main thread picks the queued
-//! frames up between two of the turn's own events — in [`RpcSink::emit`] — and
-//! cancels by returning [`Flow::Stop`], which is the same cancellation an SSE
-//! client gets by disconnecting. No new mechanism, and no change to the
-//! conductor.
+//! A reader thread hands input lines over a channel. While a turn runs, this
+//! thread is in the conductor, so `turn/cancel` needs someone else holding the
+//! pipe to be read. The main thread picks queued frames between turn events
+//! (in [`RpcSink::emit`]) and cancels by returning [`Flow::Stop`]—the same
+//! cancellation as an SSE client disconnecting.
 //!
-//! `AgentSession` is `!Send` and never leaves this thread, so nothing here is
-//! locked: the sink and the driver share the writer through `Rc<RefCell<_>>`.
+//! `AgentSession` is `!Send` and stays on this thread, so nothing is locked:
+//! sink and driver share the writer via `Rc<RefCell<_>>`.
 //!
-//! # The handshake is required, not offered
+//! # Handshake: required, not optional
 //!
-//! `protocol/hello` must be the first frame. A negotiation a client can skip
-//! negotiates nothing: a client built against a version this core cannot talk
-//! to would otherwise drive it happily, which is the failure the version exists
-//! to prevent. An incompatible client is told what this core speaks and the
-//! connection closes — there is nothing further to say to it.
+//! `protocol/hello` must be the first frame. A skippable negotiation negotiates
+//! nothing: a client built against a version this core can't speak would
+//! otherwise work, defeating the version check. Incompatible clients are told
+//! what this core speaks, then the connection closes.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -51,39 +46,33 @@ use crate::intercept::{Driver, UserPrompt};
 use crate::serve::{self, Forked};
 use crate::AgentSession;
 
-/// Serve frames from `input`, answering on `output`, until the input ends.
+/// Serve frames from `input`, answering on `output`, until EOF.
 ///
-/// Returns `Ok(())` when the client goes away (EOF) or when the handshake was
-/// refused. A malformed frame is answered and the loop continues: one client
-/// sending nonsense should not take the session down with it.
+/// Returns `Ok(())` on client departure (EOF) or refused handshake. Malformed
+/// frames are answered and the loop continues—one bad client shouldn't take
+/// the session down.
 ///
 /// # Errors
-/// Propagates a write failure: the pipe is gone, so there is no one left to
-/// answer.
+/// Propagates write failures: the pipe is gone, no one left to answer.
 pub fn serve<R: BufRead + Send + 'static, W: Write>(
     input: R,
     output: W,
     agent: &mut AgentSession,
 ) -> std::io::Result<()> {
     let (handover, incoming) = mpsc::channel();
-    // The reader thread does one thing: hand lines over. It holds no session —
-    // `AgentSession` is `!Send` and stays on this thread — and that division is
-    // what makes a mid-turn `turn/cancel` readable at all. While a turn runs,
-    // this thread is inside the conductor, so something else has to be holding
-    // the pipe or a cancel would not be seen until the turn it cancels had
-    // already finished. Nothing is locked, because nothing else is shared.
+    // Reader thread hands lines over; holds no session (AgentSession is !Send).
+    // This division lets mid-turn `turn/cancel` be readable. While a turn runs,
+    // this thread is in the conductor, so something else must hold the pipe or
+    // cancels are delayed. Nothing is locked—only this thread shares state.
     std::thread::spawn(move || {
         for line in input.lines() {
             let handed = match line {
                 Ok(line) => handover.send(Incoming::Line(line)),
-                // Bytes that are not UTF-8 are that frame's problem, not the
-                // stream's: the line has been consumed, so the loop can answer
-                // and carry on.
+                // Non-UTF-8 is the frame's problem, not the stream's
                 Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
                     handover.send(Incoming::NotUtf8)
                 }
-                // The pipe broke. Nothing to say: the receiver learns from the
-                // channel closing as this thread returns.
+                // Pipe broke; receiver learns from channel closing
                 Err(_) => break,
             };
             if handed.is_err() {
@@ -97,7 +86,7 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
         incoming: &incoming,
     };
     let mut negotiated = false;
-    // `recv` ends when the reader thread drops its end, which is EOF.
+    // recv ends when reader thread drops its end (EOF)
     while let Ok(frame) = wire.incoming.recv() {
         let line = match frame {
             Incoming::Line(line) => line,
@@ -125,25 +114,23 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
             }
         }
     }
-    // The reader thread is left to end on its own. Joining it would block on a
-    // read that has no reason to return — a refused handshake hangs up while
-    // the client may still be mid-write — and the process is exiting anyway.
+    // Reader thread ends itself; joining would block on a read with no reason to
+    // return (refused handshake hangs while client writes). Process exiting anyway.
     Ok(())
 }
 
-/// One line, as the reader thread hands it over.
+/// From the reader thread.
 enum Incoming {
-    /// A line of text, not yet known to be a frame.
+    /// Text line.
     Line(String),
-    /// Bytes that were not UTF-8.
+    /// Non-UTF-8 bytes.
     NotUtf8,
 }
 
-/// The two ends of the connection: where answers go, and where frames arrive.
+/// Connection ends: where answers go and frames arrive.
 struct Wire<'a, W: Write> {
-    /// Shared with a running turn's sink and driver, which both write to it.
-    /// `Rc<RefCell<_>>` rather than a lock, because every writer is this
-    /// thread.
+    /// Shared by turn's sink and driver. `Rc<RefCell<_>>` not a lock—single
+    /// thread writes.
     writer: Rc<RefCell<W>>,
     incoming: &'a Receiver<Incoming>,
 }
@@ -163,11 +150,10 @@ enum Served {
     Close(jsonrpc::Response),
 }
 
-/// One line to a request, or to the refusal it earns.
+/// Parse a line to a request or refusal.
 ///
-/// Separate from serving it so the frame rules — which are most of the rules —
-/// can be tested without an `AgentSession`, and therefore without a booted
-/// runtime, a staged `ext/` or a model.
+/// Separate from serving so frame rules can be tested without an `AgentSession`,
+/// booted runtime, staged `ext/`, or model.
 fn parse(line: &str) -> Result<jsonrpc::Request, jsonrpc::Response> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return Err(refuse(
@@ -176,9 +162,8 @@ fn parse(line: &str) -> Result<jsonrpc::Request, jsonrpc::Response> {
             "a frame must be one JSON object on one line".to_owned(),
         ));
     };
-    // The happy path goes through the contract type, so the envelope this core
-    // accepts is the one `jan-klod-protocol` describes rather than a second
-    // reading of it. Only a failure needs the raw value, and only to say why.
+    // Happy path uses contract type so envelope is per `jan-klod-protocol`, not a
+    // second reading. Failures use the raw value only to explain why.
     match serde_json::from_str::<jsonrpc::Request>(line) {
         // `Id::Null` exists so *this core* can answer a frame it could not read
         // an id from. A client that sends one is asking for an answer it cannot
@@ -207,10 +192,8 @@ fn parse(line: &str) -> Result<jsonrpc::Request, jsonrpc::Response> {
 
 /// Why a frame that is valid JSON is not a request this core can serve.
 ///
-/// Serde reports "no such command" and "wrong arguments for that command" as
-/// one error, and JSON-RPC gives them different codes — a client author
-/// debugging a typo needs to know which one they made. The method name is what
-/// tells them apart, which is what [`COMMAND_METHODS`] is for.
+/// Distinguish "no such command" from "wrong arguments" (serde gives one code,
+/// JSON-RPC two). Method name tells them apart via [`COMMAND_METHODS`].
 fn diagnose(value: &serde_json::Value, err: &serde_json::Error) -> jsonrpc::Response {
     let Some(object) = value.as_object() else {
         return refuse(
@@ -219,10 +202,8 @@ fn diagnose(value: &serde_json::Value, err: &serde_json::Error) -> jsonrpc::Resp
             "a request is a JSON object".to_owned(),
         );
     };
-    // The id is read before the method, and its absence is reported as its
-    // absence. Ordered the other way — as it first was here — a frame with a
-    // known method and no id came back as `invalid params`, sending a client
-    // to look at arguments that were fine.
+    // ID is read before method, its absence is reported as absence. Reversed,
+    // a known method with no ID was `invalid params`, misdirecting clients.
     let id = match object.get("id") {
         None => {
             return refuse(
@@ -268,12 +249,10 @@ fn diagnose(value: &serde_json::Value, err: &serde_json::Error) -> jsonrpc::Resp
 
 /// Serve one command.
 ///
-/// Only the handshake arm and the guard below are unconditional; every other
-/// arm names a command, with **no wildcard**, so a command added to the
-/// protocol stops this from compiling until this transport says what it does
-/// with it. (A guarded arm does not count towards exhaustiveness, which is what
-/// lets the handshake gate sit in the middle of the match instead of being an
-/// early return that has to repeat itself.)
+/// Only handshake and the guard are unconditional; every arm names a command
+/// (no wildcard), so new protocol commands fail to compile until the transport
+/// handles them. Guarded arms don't count as exhaustive, letting the handshake
+/// gate sit mid-match instead of repeating as an early return.
 fn command<W: Write>(
     command: Command,
     id: jsonrpc::Id,
@@ -296,29 +275,24 @@ fn command<W: Write>(
                 ))
             }
         }
-        // Everything past the handshake requires the handshake.
+        // Everything past handshake requires handshake
         _ if !*negotiated => Served::Answer(refuse(
             id,
             jsonrpc::INVALID_REQUEST,
-            "send `protocol/hello` first: this core does not serve a client whose \
-             protocol version it has not agreed"
-                .to_owned(),
+            "send `protocol/hello` first".to_owned(),
         )),
         Command::SessionCreate => answer(id, serde_json::json!({ "id": serve::new_session_id() })),
         Command::SessionList => answer(id, serve::sessions_payload(agent)),
         Command::SessionGet { session } => answer(id, serve::session_payload(agent, &session)),
         Command::SessionFork { session, at_seq } => match serve::fork(agent, &session, at_seq) {
             Forked::Created(payload) => answer(id, payload),
-            // The caller asked to copy events that are not there — their
-            // arguments, not the core's failure.
+            // Requested events don't exist—caller's arguments, not core failure
             Forked::Empty(message) => Served::Answer(refuse(id, jsonrpc::INVALID_PARAMS, message)),
             Forked::Failed(message) => Served::Answer(refuse(id, jsonrpc::INTERNAL_ERROR, message)),
         },
         Command::SessionMessage { session, message } => turn(&session, &message, id, agent, wire),
-        // These three steer a turn that is *running*, and a running turn is
-        // served inside `turn` above — this thread is in the conductor, not
-        // here. Reaching this arm means there is no turn, so there is nothing
-        // to answer, cancel or steer.
+        // These steer running turns (served in `turn` above). This thread
+        // reaching them means no turn exists—nothing to answer, cancel, steer.
         Command::TurnAnswer { .. } => Served::Answer(refuse(
             id,
             jsonrpc::INVALID_REQUEST,
@@ -337,13 +311,11 @@ fn command<W: Write>(
     }
 }
 
-/// Run one turn, streaming its events as notifications.
+/// Run one turn, streaming events as notifications.
 ///
-/// The request is answered when the turn ends, with the same
-/// `{answer, agentic}` the blocking REST route returns. That is deliberate
-/// duplication of the `done` notification: a client that only wants the answer
-/// can await the response and ignore the stream, and a client that renders the
-/// stream can ignore the response. Neither has to implement both.
+/// Request is answered when the turn ends with `{answer, agentic}` (same as
+/// blocking REST). Deliberate duplication of `done`: clients can await the
+/// response or render the stream, not both.
 fn turn<W: Write>(
     session: &str,
     message: &str,

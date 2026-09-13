@@ -1,11 +1,5 @@
-//! An external HTTP client drives the loop.
-//!
-//! Boots a `Runtime`, binds the host-side REST surface on an ephemeral port,
-//! and from a **separate client thread** `POST`s a turn and reads the streamed
-//! response — offline. `AgentSession` is `!Send` (Wasmtime-backed), so it
-//! stays on the main thread while the client runs on the spawned thread.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! HTTP client drives loop. Boots `Runtime`, binds REST on ephemeral port.
+//! Client thread POSTs, reads streamed response. `AgentSession` !Send on main thread.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -51,7 +45,7 @@ extensions:
     let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
     let port = server.server_addr().to_ip().expect("ip addr").port();
 
-    // Client on a separate thread: POST a message, read the raw HTTP response.
+    // Client thread: POST message, read response
     let client = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"hello"}"#;
@@ -67,7 +61,7 @@ extensions:
         response
     });
 
-    // Server: handle exactly one request on the session-owning thread.
+    // Server: handle one request on session thread.
     serve_once(&server, &mut agent).expect("serves one request");
 
     let response = client.join().expect("client thread");
@@ -80,7 +74,7 @@ extensions:
         "answer in body: {response}"
     );
 
-    // A second round-trip: GET /health returns liveness (the supervisor's probe).
+    // Second: GET /health for liveness
     let health_client = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         stream
@@ -98,8 +92,7 @@ extensions:
         "health body: {health}"
     );
 
-    // A third round-trip: an SSE client (Accept: text/event-stream) gets streamed
-    // event frames ending in a `done` frame with the answer.
+    // Third: SSE client (Accept: text/event-stream) gets streamed frames
     let sse_client = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"hello"}"#;

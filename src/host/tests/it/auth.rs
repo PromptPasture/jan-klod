@@ -1,9 +1,8 @@
 //! The REST surface refuses unauthenticated callers when a token is set.
 //!
 //! Until now it refused nobody: `config.yaml` advertised an `api-key` that
-//! nothing read, so a surface bound anywhere was open to anyone who could reach
-//! it. This drives the real server and asserts on **status codes off the wire**,
-//! because "the request was rejected" is only true if the socket says so.
+//! nothing read, so a surface was open to anyone who could reach it. This drives
+//! the real server and asserts on **status codes off the wire**.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
@@ -20,8 +19,7 @@ use crate::common;
 const TOKEN: &str = "s3cret-token";
 
 /// Keep a lost answer loud: the confirmation wait defaults to three minutes,
-/// and a lost answer silently falls back to a denial-timeout instead of
-/// failing fast, so a test with the real timeout can pass either way.
+/// and a lost answer falls back to a denial-timeout, so the test can pass either way.
 fn short_answer_timeout() {
     // Set before any server thread starts, and every test in this binary wants
     // the same value.
@@ -46,8 +44,8 @@ extensions:
     config
 }
 
-/// Send a raw request with an optional `Authorization` header, return the status
-/// line plus body.
+/// Send a raw request with an optional `Authorization` header and return
+/// the status line plus body.
 fn request(port: u16, target: &str, auth: Option<&str>) -> String {
     let header = auth.map_or_else(String::new, |t| format!("Authorization: Bearer {t}\r\n"));
     // The answer route takes a different body — a 400 here reads to the waiting
@@ -143,9 +141,8 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     serve_once_authed(&server, &mut agent, None).expect("serves");
     let response = client.join().expect("client thread");
 
-    // Requiring a secret to talk to your own loopback would be friction without a
-    // threat, so the default stays open — and stays warned about when the bind is
-    // not loopback.
+    // Requiring a secret to talk to your own loopback is friction without a
+    // threat, so the default stays open.
     assert!(
         response.contains("200 OK"),
         "no token configured means no gate: {response}"
@@ -155,8 +152,7 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
 
 /// The one endpoint that must never be open: while a turn is parked on a
 /// confirmation, the waiting driver serves the socket itself, bypassing the
-/// router, so it needs its own token check or an unauthenticated caller could
-/// approve a write or a command.
+/// router, so it needs its own token check.
 #[test]
 fn an_unauthenticated_caller_cannot_answer_a_permission_prompt() {
     short_answer_timeout();
@@ -241,11 +237,10 @@ extensions:
             collected.push_str(&line);
             collected.push('\n');
             if line.starts_with("event: prompt") && refused.is_empty() {
-                // An outsider tries to approve the tool call first…
+                // Outsider tries first…
                 refused = request(port, "/session/p/answer", None);
-                // …then the legitimate client answers. Keep the reply — discarding
-                // it would let a lost answer (which still reaches `event: done`
-                // via the denial-timeout) pass as success.
+                // …then the legitimate client answers. Keep the reply to confirm
+                // it wasn't lost to the timeout.
                 accepted = request(port, "/session/p/answer", Some(TOKEN));
             }
         }

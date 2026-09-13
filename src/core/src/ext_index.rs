@@ -34,9 +34,9 @@ use crate::route::HttpFn;
 
 /// The index format this build understands.
 ///
-/// Refused rather than tolerated when it differs: a reader that guessed at a
-/// shape it does not know would report missing fields instead of "this index is
-/// newer than me", which is the fix the operator needs.
+/// Refused not tolerated when it differs: a reader that guessed at an unknown
+/// shape would report missing fields instead of "this index is newer than me",
+/// which is the fix the operator needs.
 pub const INDEX_VERSION: u64 = 1;
 
 /// One published component, as the index describes it.
@@ -61,23 +61,22 @@ pub struct Entry {
     /// Who published it. Empty when the index says nothing.
     pub author: String,
     /// Where the `.wasm` is served from. The manifest and signature are
-    /// siblings of it, which is the convention [`ext::install_from_url`]
-    /// already derives.
+    /// siblings, the convention [`ext::install_from_url`] already derives.
     pub url: String,
     /// Expected SHA-256 of the component, as hex.
     pub sha256: String,
     /// The detached minisign signature over the component, when the index
     /// carries one. Empty means **nothing vouches for these bytes**, which
-    /// `ext search` says out loud rather than leaving blank.
+    /// `ext search` says out loud, not leaving blank.
     pub signature: String,
-    /// The component's size in bytes, or `0` when the index does not say.
+    /// The component's size in bytes, or `0` when the index doesn't say.
     pub size: u64,
 }
 
 /// Why an index could not be used.
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
-    /// `registry.url` is absent, so there is no index to read.
+    /// `registry.url` is absent, so there's no index to read.
     #[error(
         "no `registry.url` in {path}. `ext search` reads the index of published \
          components from there; name one, or install from a path or URL instead"
@@ -182,18 +181,19 @@ pub enum IndexError {
 
 /// Read `registry.url` from the top-level `registry` block.
 ///
-/// `Ok(None)` means the key is absent, which is a legitimate state — an
-/// operator who has named no registry has one fewer way to install things, not
-/// a broken config. The caller decides whether its command needs one.
+/// `Ok(None)` means the key is absent, a legitimate state — an operator who
+/// hasn't named a registry has one fewer way to install things, not broken
+/// config. The caller decides whether its command needs one.
 ///
 /// The **top-level** `registry`, not the `extensions.registry` category that
 /// holds `skills` and `mcp`, the same distinction [`Checks::from_config`]
 /// draws.
 ///
 /// # Errors
-/// [`IndexError::UrlNotAString`] when `url` is present and is not a string.
-/// Strict for the reason the trusted-keys reader is: a malformed value silently
-/// dropped would leave an operator believing they had pointed at a registry.
+/// [`IndexError::UrlNotAString`] when `url` is present and not a string.
+/// Strict for the reason the trusted-keys reader is: a malformed value
+/// silently dropped would leave an operator believing they'd pointed at a
+/// registry.
 pub fn url_from_config(registry: Option<&serde_json::Value>) -> Result<Option<String>, IndexError> {
     match registry.and_then(|block| block.get("url")) {
         None => Ok(None),
@@ -204,19 +204,18 @@ pub fn url_from_config(registry: Option<&serde_json::Value>) -> Result<Option<St
 
 /// Read the registry URL straight from a `config.yaml`.
 ///
-/// Here rather than in the gateway binary for the reason
-/// [`Checks::from_config_path`] is: this crate already depends on the config
-/// crate and the binary does not, so a CLI that parsed config would be a second
-/// reader of it.
+/// Here, not in the gateway binary, for the reason [`Checks::from_config_path`]
+/// is: this crate already depends on the config crate and the binary doesn't,
+/// a CLI that parsed config would be a second reader of it.
 ///
 /// # Errors
 /// [`IndexError::Config`] if the file cannot be read or parsed,
 /// [`IndexError::NoUrl`] when it names no registry, and whatever
 /// [`url_from_config`] refuses.
 pub fn url_from_config_path(path: &Path) -> Result<String, IndexError> {
-    // `top_level` rather than `from_path`, for the same reason `ext install`
-    // uses it: the latter expands `${VAR}` in every enabled instance, so
-    // searching a registry would demand a provider's API key.
+    // `top_level`, not `from_path`, for the same reason `ext install` uses
+    // it: the latter expands `${VAR}` in every enabled instance, searching a
+    // registry would demand a provider's API key.
     let registry =
         jan_klod_config::Config::top_level(path, "registry").map_err(|err| IndexError::Config {
             path: path.display().to_string(),
@@ -229,14 +228,14 @@ pub fn url_from_config_path(path: &Path) -> Result<String, IndexError> {
 
 /// Read the index named by `source` — a URL, or a path to a local file.
 ///
-/// The same rule [`ext::looks_remote`] applies to an install source, and for
-/// the same reason: `http`/`https` fetches, everything else is a path. That is
-/// what lets an operator point `registry.url` at a file and work entirely
-/// offline, and what lets a test do the same without a socket.
+/// The same rule [`ext::looks_remote`] applies to an install source: `http`/
+/// `https` fetches, everything else is a path. That lets an operator point
+/// `registry.url` at a file and work entirely offline, and a test do the same
+/// without a socket.
 ///
 /// A remote index is checked against the egress policy **before a byte moves**,
-/// exactly as a remote component is. An index is a list of places to download
-/// executable code from; it is not a lesser destination than the code itself.
+/// exactly as a remote component is. An index is a list of executable code
+/// sources; it's not a lesser destination than the code itself.
 ///
 /// # Errors
 /// [`IndexError::Unreadable`] for a local file, [`IndexError::Fetch`] for a
@@ -271,17 +270,15 @@ pub fn load(source: &str, http: &HttpFn) -> Result<Vec<Entry>, IndexError> {
 
 /// Read an index document.
 ///
-/// Fields are read off a `serde_json::Value` rather than deserialized into a
-/// struct, matching how [`crate::manifest`] reads a manifest and how the rest
-/// of the core reads opaque config. It also buys the error messages: a
-/// derive would report "missing field `sha256`" for a document it could not
-/// name the position in.
+/// Fields are read off a `serde_json::Value`, not deserialized into a
+/// struct, matching how [`crate::manifest`] reads a manifest and how the core
+/// reads opaque config. It buys the error messages: a derive would report
+/// "missing field `sha256`" for a document it couldn't name the position in.
 ///
 /// **Required: `name`, `version`, `api-version`, `kind`, `capabilities`,
 /// `url`, `sha256`.** Those are what it takes to decide about a component and
-/// to verify it. `description`, `author` and `signature` default to empty and
-/// `size` to `0` — they inform, and an index that omits one is terse rather
-/// than broken.
+/// verify it. `description`, `author` and `signature` default to empty and
+/// `size` to `0` — they inform, an index that omits one is terse, not broken.
 ///
 /// # Errors
 /// [`IndexError::Malformed`] for anything that is not a JSON document with an
@@ -372,8 +369,8 @@ pub fn parse(source: &str, text: &str) -> Result<Vec<Entry>, IndexError> {
 
 /// Entries whose name, kind or description contains `term`, case-insensitively.
 ///
-/// An empty term matches everything, which is what makes `ext list --remote`
-/// this function with nothing to filter by rather than a second traversal.
+/// An empty term matches everything, making `ext list --remote` call this
+/// with nothing to filter by, not a second traversal.
 ///
 /// Order is the index's own, which the generator sorts by name.
 #[must_use]
@@ -394,7 +391,7 @@ pub fn search<'a>(entries: &'a [Entry], term: &str) -> Vec<&'a Entry> {
 ///
 /// # Errors
 /// [`IndexError::NotListed`], naming how many entries were searched — `0`
-/// means the index was empty, which is a different problem from a typo.
+/// means the index was empty, a different problem from a typo.
 pub fn find<'a>(entries: &'a [Entry], name: &str, source: &str) -> Result<&'a Entry, IndexError> {
     entries
         .iter()
@@ -409,11 +406,11 @@ pub fn find<'a>(entries: &'a [Entry], name: &str, source: &str) -> Result<&'a En
 /// Install the component the index lists under `name`.
 ///
 /// The index contributes **where the bytes are and what their digest should
-/// be**, and nothing else: the fetch, the signature check against
-/// `registry.trusted-keys`, the manifest cross-check and the staged landing are
-/// all [`ext::install_from_url`], unchanged. There is no second, weaker install
-/// path to keep in step with the first — the same reason the URL install was
-/// built as a fetch in front of [`ext::install`] rather than beside it.
+/// be**, nothing else: the fetch, the signature check against
+/// `registry.trusted-keys`, the manifest cross-check and the staged landing
+/// are all [`ext::install_from_url`], unchanged. There's no second, weaker
+/// install path to keep in step — the same reason the URL install was built
+/// as a fetch in front of [`ext::install`], not beside it.
 ///
 /// # Errors
 /// [`IndexError::NotListed`] when no entry has that name,
@@ -431,8 +428,8 @@ pub fn install(
     let entry = find(entries, name, source)?;
 
     // A digest that reached the operator by another route is the strongest
-    // evidence here, so a caller's `--sha256` is not overridden — but it is not
-    // silently preferred either. Disagreement is refused above.
+    // evidence, a caller's `--sha256` isn't overridden — but isn't silently
+    // preferred either. Disagreement is refused above.
     let mut checks = checks.clone();
     match &checks.sha256 {
         Some(given) if !given.eq_ignore_ascii_case(&entry.sha256) => {

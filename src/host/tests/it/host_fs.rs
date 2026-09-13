@@ -1,11 +1,8 @@
-//! `host-fs` across the Component-Model boundary.
+//! `host-fs` across Component-Model boundary. Instantiates `tool-fs` guest,
+//! drives `invoke({op, path, ...})` against path-jailed workspace: normal paths
+//! round-trip, escaping denied, no workspace = all denied (default-deny). Offline.
 //!
-//! Instantiates the `tool-fs` guest and drives its `invoke({op, path, ...})`
-//! (write then read) against a real path-jailed workspace: a normal path
-//! round-trips, an escaping path is denied, and with no workspace configured
-//! every op is denied (default-deny). Offline.
-//!
-//! Skips (passes as a no-op) when the guest is not staged in `ext/`.
+//! Skips when guest not staged in `ext/`.
 
 use jan_klod_core::host_fs::Workspace;
 use jan_klod_core::host_process::ProcessRunner;
@@ -43,21 +40,21 @@ fn host_fs_round_trips_through_a_guest() {
     )
     .expect("tool instantiates");
 
-    // A write then read round-trips through host-fs.
+    // Write-then-read round-trips through host-fs.
     let wrote = tool
         .invoke(r#"{"op":"write","path":"notes/todo.md","contents":"buy milk"}"#)
         .expect("write succeeds");
-    assert!(wrote.contains("wrote"), "write confirmation: {wrote}");
+    assert!(wrote.contains("wrote"), "write confirmed: {wrote}");
     assert!(
         workspace_dir.join("notes/todo.md").exists(),
-        "the file landed in the workspace"
+        "file landed in workspace"
     );
     let out = tool
         .invoke(r#"{"op":"read","path":"notes/todo.md"}"#)
         .expect("read succeeds");
     assert_eq!(out, "buy milk");
 
-    // An escaping path is denied by the path-jail (surfaced as a tool error).
+    // Escaping path denied by path-jail (surfaced as tool error).
     let escape = tool.invoke(r#"{"op":"write","path":"../escape.txt","contents":"x"}"#);
     assert!(
         escape.is_err(),
@@ -75,7 +72,7 @@ fn host_fs_is_default_deny_without_a_workspace() {
         return;
     };
 
-    // No workspace configured -> every host-fs op is denied.
+    // No workspace → every host-fs op denied.
     let mut tool = ToolExtension::instantiate(
         &engine,
         "tool.fs",

@@ -1,20 +1,16 @@
 //! Loader for `config.yaml`.
 //!
-//! Extensions are grouped by category (`provider`, `store`, …); each named
-//! entry under a category is one extension *instance*. The core interprets only
-//! two keys per entry:
+//! Extensions group by category (`provider`, `store`, …); each entry is one *instance*.
+//! The core interprets two keys:
 //!
-//! * `enabled` — whether to load the instance (default `false`).
-//! * `type`    — the wasm discriminator within the category; the component is
-//!   `ext/<category>-<type>.wasm`. Defaults to the entry name, so
-//!   `provider.openai` resolves to `provider-openai.wasm`. Several instances may
-//!   share one `type` to reuse a single component.
+//! * `enabled` — load the instance (default `false`).
+//! * `type` — wasm discriminator; component is `ext/<category>-<type>.wasm`.
+//!   Defaults to entry name (`provider.openai` → `provider-openai.wasm`);
+//!   multiple instances may share one `type`.
 //!
-//! Everything else in an entry is opaque domain config: the core never
-//! interprets it, only env-expands `${VAR}` references and hands it back to the
-//! instance through the `host-config` interface. Likewise the top-level
-//! agent-behaviour keys (`providers`, `routing`, …) are preserved verbatim for
-//! the `manager-agent-loop` extension — the core holds no routing logic.
+//! Everything else is opaque domain config: expanded `${VAR}` and passed to the
+//! instance via `host-config`. Top-level agent keys (`providers`, `routing`, …)
+//! are preserved for `manager-agent-loop`; the core has no routing logic.
 
 use std::path::Path;
 
@@ -53,17 +49,16 @@ impl ExtensionInstance {
 pub struct Config {
     /// Every declared instance, ordered by `(category, name)`.
     pub instances: Vec<ExtensionInstance>,
-    /// Top-level keys other than `extensions` (e.g. `providers`, `routing`),
-    /// preserved verbatim for the agent-loop extension. Always an object.
+    /// Top-level keys excluding `extensions` (e.g. `providers`, `routing`),
+    /// preserved for agent-loop. Always an object.
     pub agent: Value,
 }
 
 impl Config {
-    /// Read and parse a `config.yaml` from disk.
+    /// Parse `config.yaml` from disk.
     ///
     /// # Errors
-    /// Returns [`ConfigError::Read`] if the file cannot be read, or any parse
-    /// error from [`Config::from_yaml`].
+    /// [`ConfigError::Read`] (file not readable) or [`Config::from_yaml`] parse errors.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -73,22 +68,15 @@ impl Config {
         Self::from_yaml(&text)
     }
 
-    /// One top-level block, without resolving any extension instance.
+    /// Fetch a top-level key without expanding instance variables.
     ///
-    /// [`Config::from_path`] expands `${VAR}` in every *enabled* instance and
-    /// fails when one is unset, which is right for booting and wrong for
-    /// reading a key that has nothing to do with extensions. `ext install`
-    /// needs `registry.trusted-keys` and would otherwise refuse to run without
-    /// a provider's API key in the environment — an install command demanding
-    /// model credentials.
-    ///
-    /// Deliberately *not* a second reader of `config.yaml`: it is the same
-    /// crate and the same parse, stopping before the part that does not apply.
+    /// [`Config::from_path`] expands `${VAR}` in enabled instances and fails on
+    /// unset, wrong for reading unrelated keys. `ext install` needs
+    /// `registry.trusted-keys` (no provider API key required). Uses the same
+    /// YAML parse as [`Config::from_path`], stopping before instance expansion.
     ///
     /// # Errors
-    /// [`ConfigError::Read`] if the file cannot be read, [`ConfigError::Yaml`]
-    /// if it is not YAML, [`ConfigError::RootNotMap`] if the document is not a
-    /// mapping.
+    /// [`ConfigError::Read`], [`ConfigError::Yaml`], or [`ConfigError::RootNotMap`].
     pub fn top_level(path: impl AsRef<Path>, key: &str) -> Result<Option<Value>, ConfigError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -102,13 +90,11 @@ impl Config {
         Ok(root.get(key).cloned())
     }
 
-    /// Parse a `config.yaml` from a string.
+    /// Parse `config.yaml` from a string.
     ///
     /// # Errors
-    /// Returns a [`ConfigError`] if the YAML is malformed, the structure is not
-    /// the expected category→instance mapping, an enabled instance contains an
-    /// unterminated `${` or references an unset `${VAR}`, or more than one store
-    /// is enabled.
+    /// [`ConfigError`] if YAML is invalid, structure is not category→instance,
+    /// enabled instance has unterminated `${` / unset `${VAR}`, or multiple stores enabled.
     pub fn from_yaml(yaml: &str) -> Result<Self, ConfigError> {
         let root: Value = serde_yaml_ng::from_str(yaml)?;
         let Value::Object(mut root) = root else {
@@ -158,8 +144,7 @@ fn parse_instances(extensions: Value) -> Result<Vec<ExtensionInstance>, ConfigEr
             };
             let component = format!("{category}-{kind}");
             let mut config = Value::Object(entry);
-            // Only enabled instances are loaded, so only they need their secrets
-            // resolved — a disabled provider may reference an unset ${VAR}.
+            // Only enabled instances need secrets resolved; disabled may reference unset ${VAR}.
             if enabled {
                 expand_env(&mut config, &id)?;
             }
@@ -177,8 +162,7 @@ fn parse_instances(extensions: Value) -> Result<Vec<ExtensionInstance>, ConfigEr
     Ok(out)
 }
 
-/// Core-level invariant checks. Domain rules (e.g. routing references) belong to
-/// the extensions that consume them, not the core.
+/// Core-level invariants only; domain rules (e.g. routing) belong to extensions.
 fn validate(instances: &[ExtensionInstance]) -> Result<(), ConfigError> {
     let stores: Vec<&str> = instances
         .iter()
@@ -216,9 +200,8 @@ fn expand_env(value: &mut Value, id: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Replace every `${NAME}` in `s` with the environment value of `NAME`.
-/// Returns `None` when there is nothing to expand. An unterminated `${` is an
-/// error; an unset variable is an error.
+/// Replace every `${NAME}` in `s` with its environment value.
+/// Returns `None` if no expansions. Errors on unterminated `${` or unset variables.
 fn expand_str(s: &str, id: &str) -> Result<Option<String>, ConfigError> {
     if !s.contains("${") {
         return Ok(None);

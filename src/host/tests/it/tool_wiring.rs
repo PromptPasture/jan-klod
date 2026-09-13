@@ -1,8 +1,5 @@
-//! `build_agent` instantiates enabled `tool.*` extensions into the fleet.
-//!
-//! Boots a `Runtime` from a config enabling `tool.fs`, and asserts the built
-//! `AgentSession` carries that tool — config -> capability -> fleet wiring.
-//! Offline; skips when the guests aren't staged in `ext/`.
+//! Tool wiring: enabled `tool.*` extensions flow into the fleet.
+//! Tests config -> capability -> fleet (offline). Skips when guests not staged.
 
 use jan_klod_core::Runtime;
 
@@ -62,21 +59,12 @@ workspace: {ws}
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// #59, proved end-to-end through `build_agent` rather than at the fleet
-/// mechanism level (`lazy_tool_fleet.rs`): a config with an enabled tool
-/// but no interceptor to advertise it to leaves that tool uninstantiated after
-/// `build_agent` returns, and instantiates it only once the loop actually asks
-/// — here, by calling `tool_names`, which stands in for the `select-tools`
-/// read `instantiate_interceptors` would otherwise have forced during
-/// `build_agent` itself.
-///
-/// No interceptor is enabled on purpose: with `tool-selector` (or any other)
-/// present, `build_agent` computes the combined tool advertisement up front so
-/// every interceptor can be served it uniformly — real, unavoidable eagerness
-/// under the current guest-sourced metadata design, not a bug this change
-/// fixes (see `is_lazy_category`'s doc comment and #59's PR). Dropping
-/// interceptors entirely is what isolates the tool fleet's own laziness from
-/// that separate, larger constraint.
+/// #59 end-to-end: tools lazy without interceptors to advertise them.
+/// `build_agent` leaves tool uninstantiated unless an interceptor asks
+/// (via `instantiate_interceptors`). No interceptor on purpose: with
+/// `tool-selector`, `build_agent` computes tool advertisement up front
+/// (unavoidable eagerness in current design). Dropping interceptors isolates
+/// the tool fleet's own laziness.
 #[test]
 fn a_tool_with_no_interceptor_to_advertise_it_stays_uninstantiated_until_asked() {
     let ext_dir = common::repo_root().join("ext");
@@ -118,8 +106,7 @@ workspace: {ws}
 
     assert!(
         !agent.tools_instantiated(),
-        "no interceptor asked for the tool advertisement, so `build_agent` must \
-         not have instantiated `tool.fs`"
+        "no interceptor asked for advertisement, so no `tool.fs` instantiation"
     );
 
     assert!(
@@ -134,13 +121,9 @@ workspace: {ws}
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// The write tool is confirmed before it writes.
-///
-/// A denylist of dangerous verbs previously gated writes; `tool-edit`'s ops
-/// (`view`/`replace`/`insert`) matched none of them, so edits ran unasked.
-/// This asserts the on-disk bytes across two turns — refused (unchanged) and
-/// approved (changed) — using the real anchor from a `view` result, so a
-/// stale or made-up anchor can't fake the "unchanged" outcome.
+/// Edit is confirmed before writing. Previously a denylist failed to catch
+/// `view`/`replace`/`insert`, letting edits run unasked. Tests on-disk bytes
+/// (refused = unchanged, approved = changed), with real anchor from `view`.
 #[test]
 fn an_edit_is_confirmed_before_it_touches_the_file() {
     if !common::guests_staged(&[
@@ -160,9 +143,9 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
         refused.contents, original,
         "a refused edit leaves the file untouched"
     );
-    // Print the actual prompt shown, so changes to it are reviewed like UI copy.
+    // Print the prompt (UI copy review).
     eprintln!("PROMPT: {:?}", refused.asked);
-    // Naming the file matters: "approve tool `edit`" alone tells the user nothing.
+    // Must name the file; "approve tool `edit`" alone tells nothing.
     assert!(
         refused
             .asked
@@ -185,8 +168,7 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
     let approved = run_edit_turn(&dir, "approve", "yes");
     assert_ne!(
         approved.contents, original,
-        "approved, the same edit goes through — otherwise the refusal above proved \
-         nothing but a stale anchor"
+        "approved, the same edit goes through (proves refusal wasn't stale anchor)"
     );
     assert!(
         approved.contents.contains("// edited"),
@@ -195,7 +177,7 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
     );
 }
 
-/// What one gated-edit turn did.
+/// Result of one gated-edit turn.
 struct EditTurn {
     /// The file's contents afterwards.
     contents: String,
@@ -203,8 +185,7 @@ struct EditTurn {
     asked: Vec<String>,
 }
 
-/// Drive one turn in which the model views `main.rs` and then replaces its first
-/// line, answering every confirmation with `answer`.
+/// One turn: view `main.rs`, replace first line, answer all confirmations.
 fn run_edit_turn(root: &std::path::Path, tag: &str, answer: &'static str) -> EditTurn {
     struct Answering {
         answer: &'static str,
@@ -260,8 +241,7 @@ extensions:
                          "arguments":"{\"op\":\"view\",\"path\":\"main.rs\"}"}}]},
                         "finish_reason":"tool_calls"}]}),
                 1 => {
-                    // Pull the real anchor out of the `view` result — a made-up
-                    // one would be rejected by the tool, proving nothing.
+                    // Pull real anchor from `view` (made-up one proves nothing).
                     let anchor = first_anchor(body.unwrap_or_default())
                         .expect("the view result carries an `anchor|lineno|text` line");
                     let args = format!(
@@ -298,11 +278,10 @@ extensions:
     }
 }
 
-/// The first `anchor` token in an `anchor|lineno|text` line inside a request body.
+/// Extract first `anchor` from `anchor|lineno|text` in request body.
 fn first_anchor(body: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(body);
-    // The view output is JSON-encoded inside the request, so `|` survives but
-    // newlines are escaped. Scan for `<hex>|<digits>|`.
+    // View output JSON-encoded in request; `|` survives, newlines escaped. Scan for `<hex>|<digits>|`.
     let bytes: Vec<char> = text.chars().collect();
     for (i, window) in bytes.windows(12).enumerate() {
         let candidate: String = window.iter().collect();
@@ -313,7 +292,7 @@ fn first_anchor(body: &[u8]) -> Option<String> {
             && anchor.chars().all(|c| c.is_ascii_hexdigit())
             && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
         {
-            // Walk back to make sure we took the whole token.
+            // Verify whole token (not partial).
             let start = text[..].char_indices().nth(i).map(|(b, _)| b)?;
             let before = text[..start].chars().next_back();
             if before.is_some_and(|c| c.is_ascii_hexdigit()) {

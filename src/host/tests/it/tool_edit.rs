@@ -1,11 +1,5 @@
-//! `tool-edit` across the Component-Model boundary.
-//!
-//! Instantiates the `tool-edit` guest against a real path-jailed workspace and
-//! drives the view → replace → reject cycle: anchors from `op=view` apply a
-//! partial edit through `host-fs`, and reusing a *stale* anchor after the file
-//! moved is rejected with the file left byte-identical. Offline.
-//!
-//! Skips (passes as a no-op) when the guest is not staged in `ext/`.
+//! Tool-edit: view → replace → reject cycle. Anchors apply partial edits,
+//! stale anchors rejected, file untouched. Offline. Skips when guest not staged.
 
 use jan_klod_core::host_fs::Workspace;
 use jan_klod_core::host_process::ProcessRunner;
@@ -23,7 +17,7 @@ fn edit_component(engine: &Engine) -> Option<Component> {
     Some(Component::from_file(engine, &path).expect("component compiles"))
 }
 
-/// The anchor `view` rendered for 1-based `lineno` (each line is `anchor|lineno|text`).
+/// Extract anchor from view's line (format: `anchor|lineno|text`).
 fn anchor_at(view: &str, lineno: usize) -> String {
     let line = view.lines().nth(lineno - 1).expect("line is in the view");
     line.split('|')
@@ -57,7 +51,7 @@ fn hash_anchored_edit_applies_and_a_stale_anchor_is_rejected() {
     )
     .expect("tool instantiates");
 
-    // view hands back one anchor per line.
+    // View gives one anchor per line.
     let view = tool
         .invoke(r#"{"op":"view","path":"main.rs"}"#)
         .expect("view succeeds");
@@ -68,7 +62,7 @@ fn hash_anchored_edit_applies_and_a_stale_anchor_is_rejected() {
     );
     let body = anchor_at(&view, 2);
 
-    // replace touches only the anchored line.
+    // Replace touches only anchored line.
     let applied = tool
         .invoke(&format!(
             r#"{{"op":"replace","path":"main.rs","start":"{body}","contents":"    let x = 42;"}}"#
@@ -81,8 +75,7 @@ fn hash_anchored_edit_applies_and_a_stale_anchor_is_rejected() {
         "only the anchored line changed"
     );
 
-    // The same anchor is now stale: the edit must be refused, not applied to a
-    // shifted line, and the file must be untouched.
+    // Stale anchor refused (file untouched).
     let before = std::fs::read_to_string(workspace_dir.join("main.rs")).unwrap();
     let stale = tool
         .invoke(&format!(
@@ -103,7 +96,7 @@ fn hash_anchored_edit_applies_and_a_stale_anchor_is_rejected() {
         "a rejected edit writes nothing"
     );
 
-    // insert re-anchored against the current file lands next to its anchor.
+    // Insert re-anchored against current file.
     let view = tool
         .invoke(r#"{"op":"view","path":"main.rs"}"#)
         .expect("view succeeds");
@@ -136,8 +129,5 @@ fn tool_edit_is_default_deny_without_a_workspace() {
     )
     .expect("tool instantiates");
     let out = tool.invoke(r#"{"op":"view","path":"any.rs"}"#);
-    assert!(
-        out.is_err(),
-        "with no workspace, host-fs must deny: {out:?}"
-    );
+    assert!(out.is_err(), "no workspace denies operations: {out:?}");
 }

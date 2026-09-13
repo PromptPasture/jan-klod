@@ -5,17 +5,16 @@
 //!
 //! # Why there is no SDK here
 //!
-//! MCP's stdio transport is the framing this repository already speaks. The
-//! spec: messages "delimited by newlines and must not contain embedded
-//! newlines", stdout for frames, stderr for logging — which is
-//! [`crate::rpc`] exactly. So this is a method-name-and-payload adapter, not a
-//! transport.
+//! MCP's stdio transport is the framing this repository already speaks. The spec:
+//! messages "delimited by newlines and must not contain embedded newlines",
+//! stdout for frames, stderr for logging — which is [`crate::rpc`] exactly.
+//! So this is a method-name-and-payload adapter, not a transport.
 //!
 //! `rmcp`, the official Rust SDK, is async on tokio. The core is deliberately
-//! synchronous: the agent session is `!Send` and lives on one thread, and
-//! `tiny_http` was chosen over `axum` for the same reason. Adopting an async
-//! SDK would be an architectural change dressed as a convenience, so the
-//! envelope is reused instead and this module costs no new dependency.
+//! synchronous: the agent session is `!Send` and lives on one thread, `tiny_http`
+//! was chosen over `axum` for the same reason. Adopting an async SDK would be an
+//! architectural change dressed as convenience, so the envelope is reused and
+//! this module costs no new dependency.
 //!
 //! # What is reused, and what could not be
 //!
@@ -114,8 +113,8 @@ fn tools() -> serde_json::Value {
 ///
 /// # Errors
 /// Any I/O failure on `output`. A malformed *frame* is answered, not returned:
-/// the loop keeps serving, because one bad line from a client is not a reason
-/// to hang up on it.
+/// the loop serves on because one bad line from a client isn't a reason to
+/// hang up on it.
 pub fn serve<R: BufRead, W: Write>(
     input: R,
     output: &mut W,
@@ -137,16 +136,15 @@ pub fn serve<R: BufRead, W: Write>(
 ///
 /// # `isError` is a field on a *successful* result
 ///
-/// This is the shape MCP chose and it is the opposite of this repository's
-/// [`jsonrpc::Outcome`], which makes result and error mutually exclusive so
-/// that "both" and "neither" are unrepresentable. Here a tool that fails
-/// reports it **in band**: the JSON-RPC response is a success carrying
-/// `isError: true`.
+/// This is the shape MCP chose, opposite this repository's [`jsonrpc::Outcome`],
+/// which makes result and error mutually exclusive so "both" and "neither" are
+/// unrepresentable. Here a failing tool reports it **in band**: the JSON-RPC
+/// response is a success carrying `isError: true`.
 ///
-/// Mapping a refused turn onto a JSON-RPC error instead would make every
-/// permission refusal read to an editor as a broken server — which is the
-/// failure that looks fine in a passing test and wrong in use. A refusal is an
-/// answer, not a transport fault.
+/// Mapping a refused turn onto a JSON-RPC error would make every permission
+/// refusal read to an editor as a broken server — the failure that looks fine
+/// in passing tests and wrong in use. A refusal is an answer, not a transport
+/// fault.
 fn call_ask(agent: &mut AgentSession, params: &serde_json::Value) -> serde_json::Value {
     let arguments = params.get("arguments").unwrap_or(&serde_json::Value::Null);
     let Some(question) = arguments
@@ -163,11 +161,11 @@ fn call_ask(agent: &mut AgentSession, params: &serde_json::Value) -> serde_json:
         .unwrap_or(DEFAULT_SESSION);
 
     // `HeadlessDriver`, always: see its docs. Prompting would read a protocol
-    // frame as an answer, and an editor could not have answered anyway.
+    // frame as an answer, editors couldn't answer anyway.
     let mut driver = HeadlessDriver;
     match agent.run_with_driver(&mut driver, session, question) {
         crate::conductor::RunResult::Answered { text, .. } => content(&text, false),
-        // The message is written for a person; the Debug of an enum is not a
+        // The message is written for a person; an enum's Debug is not a
         // diagnosis, and this one reaches a model.
         crate::conductor::RunResult::Failed(message) => content(&message, true),
     }

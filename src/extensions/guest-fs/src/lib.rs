@@ -1,28 +1,23 @@
-//! Shared pure-Rust helpers for the `host-fs`-routed guests (`tool-fs`,
-//! `tool-find`, `tool-edit`).
+//! Shared helpers for `host-fs`-routed guests (`tool-fs`, `tool-find`, `tool-edit`).
 //!
-//! A library, not a component: no WIT bindings, no capability import. Guests
-//! stay separate sandboxed components but share this tested logic instead of
-//! each keeping its own copy.
+//! A library, not a component: no WIT bindings. Guests share this tested logic
+//! instead of copying it locally.
 //!
-//! What lives here is policy about cost and shape rather than about a
-//! particular tool: how much output a call may return, how a glob matches, and
-//! how far a walk may go before it stops and says so.
+//! Enforces policy about cost and shape: output limits, glob matching, walk bounds.
 
-/// Result byte cap — one tool call must not consume the whole context budget.
+/// Max output bytes per call.
 pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
-/// Most paths reported from a single walk.
+/// Max paths from a single walk.
 pub const MAX_RESULTS: usize = 500;
-/// Most directory entries examined during one walk.
+/// Max directory entries examined per walk.
 pub const MAX_VISITS: usize = 20_000;
-/// Deepest directory nesting descended into (relative to the search root).
+/// Max directory depth relative to search root.
 pub const MAX_DEPTH: usize = 24;
 
-/// Directories skipped unless the pattern names them literally.
+/// Directories pruned unless the pattern names them explicitly.
 ///
-/// These are the build/vendor trees that dominate a walk's cost while almost never
-/// being what the caller meant; naming one in the pattern (`target/**/*.rs`) opts
-/// back in.
+/// Build/vendor trees are pruned (expensive, rarely intended); name them in the
+/// pattern to opt back in.
 pub const PRUNED_DIRS: [&str; 6] = [
     ".git",
     "node_modules",
@@ -32,32 +27,29 @@ pub const PRUNED_DIRS: [&str; 6] = [
     ".jj",
 ];
 
-/// One directory entry, as `host-fs.entry` hands it over.
+/// One directory entry.
 pub struct Entry {
-    /// Bare file or directory name (not a path).
+    /// File or directory name (not a path).
     pub name: String,
-    /// Whether the entry is a directory.
+    /// True if directory.
     pub is_dir: bool,
 }
 
-/// What a walk found, and which bound (if any) cut it short.
+/// Walk results and termination reason.
 pub struct Outcome {
     /// Matching paths, workspace-relative and sorted.
     pub paths: Vec<String>,
-    /// Set when a bound stopped the walk before the tree was exhausted, so a
-    /// caller never reads a partial answer as an exhaustive one.
+    /// Reason the walk stopped, if bounded before exhausting the tree.
     pub bounded_by: Option<&'static str>,
 }
 
-/// Cap `output` at [`MAX_OUTPUT_BYTES`], backing off to a valid UTF-8 boundary
-/// and appending a truncation marker when it overflows.
+/// Truncate `output` at [`MAX_OUTPUT_BYTES`] on a UTF-8 boundary, appending a marker.
 #[must_use]
 pub fn truncate(output: String) -> String {
     if output.len() <= MAX_OUTPUT_BYTES {
         return output;
     }
-    // Back off to a valid UTF-8 boundary at or below the cap; slicing at a
-    // non-boundary would panic.
+    // Backoff to valid UTF-8 boundary to avoid panic on slice.
     let mut safe_len = MAX_OUTPUT_BYTES;
     while safe_len > 0 && !output.is_char_boundary(safe_len) {
         safe_len -= 1;
@@ -69,11 +61,10 @@ pub fn truncate(output: String) -> String {
     )
 }
 
-/// Expand a slash-less pattern to search recursively.
+/// Expand slash-less patterns to search recursively.
 ///
-/// Strict glob semantics make `*.rs` mean "top level only", which is almost
-/// never what a caller (or a small model) means when it asks to *find* a file.
-/// A pattern that spells out any structure is left exactly as written.
+/// `*.rs` in strict glob means "top level only"; most callers mean recursive.
+/// Patterns with any `/` are left unchanged.
 #[must_use]
 pub fn normalize(pattern: &str) -> String {
     if pattern.contains('/') {
@@ -83,10 +74,9 @@ pub fn normalize(pattern: &str) -> String {
     }
 }
 
-/// Whether `path` matches glob `pattern`.
+/// Test if `path` matches glob `pattern`.
 ///
-/// `*` and `?` match within one path segment; `**` matches any run of segments,
-/// including none.
+/// `*` and `?` match one segment; `**` matches any segments including none.
 #[must_use]
 pub fn matches(pattern: &str, path: &str) -> bool {
     let pat: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
@@ -105,12 +95,12 @@ fn match_segments(pat: &[&str], seg: &[&str]) -> bool {
     }
 }
 
-/// Match one path segment against a `*`/`?` pattern (neither crosses `/`).
+/// Match one path segment against `*`/`?` pattern.
 fn match_name(pattern: &str, name: &str) -> bool {
     let pat: Vec<char> = pattern.chars().collect();
     let text: Vec<char> = name.chars().collect();
     let (mut pi, mut ti) = (0, 0);
-    // Backtrack point: the last `*` seen, and how much of `text` it had eaten.
+    // Last `*` seen and chars it consumed (for backtracking).
     let mut star: Option<usize> = None;
     let mut eaten = 0;
     while ti < text.len() {
@@ -122,7 +112,7 @@ fn match_name(pattern: &str, name: &str) -> bool {
             eaten = ti;
             pi += 1;
         } else if let Some(s) = star {
-            // Let the `*` swallow one more char and retry from just after it.
+            // Give `*` one more char and retry.
             eaten += 1;
             ti = eaten;
             pi = s + 1;
@@ -133,39 +123,30 @@ fn match_name(pattern: &str, name: &str) -> bool {
     pat[pi..].iter().all(|c| *c == '*')
 }
 
-/// Whether the walk should descend into a directory named `name`.
+/// Check if walk should descend into directory `name`.
 ///
-/// Heavy build/vendor trees are pruned unless the pattern mentions them, so
-/// opting back in is a matter of asking for them by name.
+/// Pruned unless the pattern names them explicitly.
 fn should_descend(name: &str, pattern: &str) -> bool {
     !PRUNED_DIRS.contains(&name) || pattern.split('/').any(|segment| segment == name)
 }
 
-/// Whether this file should be withheld from a walk's results.
+/// Check if credential file should be withheld from walk results.
 ///
-/// Credential files are withheld unless the pattern names one explicitly — the
-/// same opt-back-in rule as [`should_descend`] for pruned directories. `**/*`
-/// or `src/**/*.rs` does not name `.env`, so a broad glob still skips it;
-/// `**/.env` does not.
-///
-/// Hiding it unconditionally would teach the model the file does not exist, and
-/// it would tell the user the same. Listing the name discloses nothing; the
-/// contents are what need protecting, and reading them is still gated.
+/// Withheld unless named explicitly in the pattern (same as pruned dirs).
+/// Broad globs like `**/*` skip them; explicit `**/.env` does not.
+/// Names don't disclose secrets; contents are still read-gated.
 fn hidden_credential(name: &str, pattern: &str) -> bool {
     is_credential_file(name) && !pattern.split('/').any(|segment| segment == name)
 }
 
-/// Whether a file's name marks it as holding credentials.
+/// Test if filename marks it as holding credentials.
 ///
-/// Reads and greps run without asking (they're on the permission gate's
-/// read-only allowlist) — right for source, wrong for `.env`: a grep for
-/// `password` would return its contents, which becomes a transcript message
-/// sent to the model provider next turn. The shared walk skips these so `find`
-/// and `grep` are both covered — the gate only sees the pattern, not the files
-/// it will match. An explicit read by path still works and is still gated.
+/// Reads and greps run without asking (read-only allowlist).
+/// A grep for "password" in `.env` exposes secrets to transcript.
+/// The shared walk skips these; explicit reads by path are still gated.
 ///
-/// Matched on file name only: a heuristic covering the conventional names, not
-/// e.g. `config/production.yaml` holding a database URL.
+/// Heuristic based on name only; doesn't catch semantic patterns like
+/// `config/production.yaml`.
 #[must_use]
 pub fn is_credential_file(name: &str) -> bool {
     /// Exact names.
@@ -190,21 +171,19 @@ pub fn is_credential_file(name: &str) -> bool {
         || lower.starts_with("id_ecdsa")
 }
 
-/// Walk `root` through `list`, collecting files matching `pattern`.
+/// Walk `root` collecting files matching `pattern`.
 ///
-/// `list` is the `host-fs` `list-dir` seam (returning `None` when a directory
-/// cannot be read — an unreadable subtree is skipped, never fatal). Paths are
-/// matched *relative to `root`* and reported joined back onto it.
+/// `list` returns None for unreadable dirs (skipped, not fatal).
+/// Paths matched relative to `root` and reported with it.
 ///
-/// Every dimension is bounded ([`MAX_VISITS`], [`MAX_DEPTH`], [`MAX_RESULTS`]),
-/// because a glob is the one file operation whose cost is set by the *tree*, not
-/// by the argument: `**/*` in a monorepo must not be able to hang the turn.
+/// All dimensions bounded ([`MAX_VISITS`], [`MAX_DEPTH`], [`MAX_RESULTS`]):
+/// glob cost is tree-driven, not arg-driven.
 pub fn walk(root: &str, pattern: &str, list: &dyn Fn(&str) -> Option<Vec<Entry>>) -> Outcome {
     let pattern = normalize(pattern);
     let mut paths = Vec::new();
     let mut bounded_by = None;
     let mut visits = 0usize;
-    // (path relative to root, depth); "" is the root itself.
+    // (path relative to root, depth); "" at root.
     let mut queue = vec![(String::new(), 0usize)];
 
     while let Some((dir, depth)) = queue.pop() {
@@ -238,7 +217,7 @@ pub fn walk(root: &str, pattern: &str, list: &dyn Fn(&str) -> Option<Vec<Entry>>
     Outcome { paths, bounded_by }
 }
 
-/// Join two workspace-relative fragments, treating `""` and `"."` as "here".
+/// Join workspace-relative fragments, treating `""` and `"."` as here.
 #[must_use]
 pub fn join(base: &str, rest: &str) -> String {
     let base = if base == "." { "" } else { base };
@@ -251,8 +230,7 @@ pub fn join(base: &str, rest: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    /// Naming a credential file opts back into it, exactly as for a pruned
-    /// directory — and a broad pattern still does not.
+    /// Naming a credential file opts back in; broad patterns don't.
     #[test]
     fn a_pattern_that_names_a_credential_file_gets_it() {
         assert!(super::hidden_credential(".env", "**/*"));
@@ -263,7 +241,7 @@ mod tests {
         assert!(super::hidden_credential("server.pem", "**/*.pem"));
     }
 
-    /// The credential-file rule, which `find` and `grep` both ride on.
+    /// Credential-file rule (shared by `find` and `grep`).
     #[test]
     fn credential_files_are_recognised() {
         for name in [
@@ -283,8 +261,7 @@ mod tests {
         ] {
             assert!(super::is_credential_file(name), "{name} holds credentials");
         }
-        // Ordinary files a coding agent works on every turn must not be swept up:
-        // a rule that catches source code would make the tools useless.
+        // Ordinary files must not be caught; would break tools.
         for name in [
             "main.rs",
             "environment.rs",
@@ -301,7 +278,7 @@ mod tests {
     use super::{join, matches, normalize, truncate, walk, Entry, MAX_OUTPUT_BYTES, MAX_RESULTS};
     use crate::PRUNED_DIRS;
 
-    /// A fake tree: directory path → entries. Root is `""`.
+    /// Mock tree: path → entries. Root is `""`.
     fn tree<'a>(
         dirs: &'a [(&'a str, &'a [(&'a str, bool)])],
     ) -> impl Fn(&str) -> Option<Vec<Entry>> + 'a {

@@ -1,19 +1,10 @@
-//! `jan-klod-ui` — a thin client that drives a core it spawned, or one that is
-//! already running.
+//! `jan-klod-ui` — thin client driving a spawned or running core (separate process, not extension).
 //!
-//! A UI is a **separate process**, not an extension (the LSP/server model). Two
-//! ways to reach one, both behind [`transport::Transport`]:
+//! Two transport modes ([`transport::Transport`]):
+//! * **stdio** (default): spawn `jan-klod-gateway rpc`, speak JSON-RPC over pipes.
+//! * **REST + SSE**: `POST /session/:id/message`, stream back `event:/data:` frames.
 //!
-//! * **stdio**, the default: spawn `jan-klod-gateway rpc` and speak
-//!   newline-delimited JSON-RPC over its pipes. No port, no token, nothing left
-//!   running.
-//! * **REST + SSE**, when the user names an address: `POST
-//!   /session/:id/message` with `{"message":"..."}`, streamed back as
-//!   `event:`/`data:` frames ([`stream_turn`], [`answer_prompt`]).
-//!
-//! It depends on neither the core runtime nor Wasmtime — only on the wire
-//! contract in `jan-klod-protocol`, which carries nothing beyond serde for
-//! exactly this reason.
+//! Depends only on `jan-klod-protocol` wire contract (not core runtime or Wasmtime).
 
 pub mod app;
 pub mod blocks;
@@ -36,16 +27,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// Resolve one of this repository's binaries: sibling of the current exe first,
-/// then `PATH`.
-///
-/// Here rather than in the binary because [`transport::Stdio`] spawns the
-/// gateway, and a second copy of this rule would eventually find a different
-/// gateway than the one the REST path starts. `--gui` needs the same rule for
-/// `jan-klod-gui`, which is why this is by name rather than one function per
-/// binary — a bundle puts all three side by side, and a developer tree puts
-/// them in different `target/` directories, so "sibling, else PATH" is the
-/// answer for each of them.
+/// Resolve one repository binary: sibling exe first, then `PATH`.
+/// Shared rule for gateway (stdio spawns it) and GUI (`--gui`); "sibling, else PATH"
+/// works for bundles (all together) and dev trees (different `target/` dirs).
 #[must_use]
 pub fn sibling_bin(name: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
@@ -63,23 +47,14 @@ pub fn gateway_bin() -> PathBuf {
     sibling_bin("jan-klod-gateway")
 }
 
-/// Resolve the `jan-klod-gui` binary — the Tauri shell in `src/gui`, a separate
-/// workspace and therefore a separate build (see [`sibling_bin`]).
-///
-/// Unlike the gateway, this one is genuinely **optional**: `src/gui` is not part
-/// of the host workspace, so a plain `cargo build` never produces it and most
-/// bundles do not ship it. `--gui` checks for it and says so rather than
-/// spawning a name that is not there and reporting the OS's error.
+/// Resolve `jan-klod-gui` (Tauri shell in separate `src/gui` workspace—see [`sibling_bin`]).
+/// Optional: `cargo build` doesn't produce it; `--gui` checks and reports if missing.
 #[must_use]
 pub fn gui_bin() -> PathBuf {
     sibling_bin("jan-klod-gui")
 }
 
-/// The `Authorization` header line to send, or empty when no token is set.
-///
-/// Read from the environment on every request rather than cached: a client is a
-/// short-lived process, and a token that changed under a long-running TUI should
-/// take effect on the next turn rather than at the next restart.
+/// `Authorization` header line (read per-request, not cached, so token changes take effect).
 fn auth_header() -> String {
     std::env::var("JAN_KLOD_TOKEN")
         .ok()
@@ -95,16 +70,10 @@ fn auth_header() -> String {
 pub enum StreamEvent {
     /// A chunk of assistant text (preview).
     Delta(String),
-    /// A tool is about to run.
-    ///
-    /// `arguments` is `Option` rather than `String`: before #161 the SSE `tool`
-    /// frame carried no `arguments` at all, so `None` said "this transport did
-    /// not send them" rather than "the call took none" — pretending it was
-    /// always present would have made a client that silently showed less over
-    /// REST than over stdio. Both `parse_frame` and `transport::event_for` now
-    /// populate it from the wire, so in practice it is always `Some`; kept as
-    /// `Option` rather than narrowed to `String` so a caller still cannot
-    /// mistake "no arguments" for the data not having arrived.
+    /// Tool about to run (id, name, arguments).
+    /// `arguments` is `Option`: before #161 it wasn't sent; `None` ≠ "call took none".
+    /// Now populated from wire, so mostly `Some`; kept `Option` to forbid conflating
+    /// "no arguments" with "data didn't arrive".
     Tool {
         /// Call id, matched by the [`StreamEvent::ToolResult`] that answers it.
         id: String,
@@ -120,14 +89,8 @@ pub enum StreamEvent {
         id: String,
         /// What the tool returned.
         content: String,
-        /// Whether the call failed — a denial, a trap, an error the tool
-        /// reported, or no tool by that name.
-        ///
-        /// A fact the core establishes and both surfaces now carry (#162).
-        /// Before that this client recognised a failure by matching the
-        /// sentences the core happens to write into `content`, which is a
-        /// coupling to wording nobody owned: renaming "trapped" to "panicked"
-        /// would have turned a failure green with no test failing anywhere.
+        /// Call failed? (denial, trap, error, or unknown tool).
+        /// Explicit flag (#162); before: matched core's prose (fragile coupling).
         failed: bool,
     },
     /// A non-fatal notice (provider fallback, retry).
@@ -155,21 +118,10 @@ pub enum StreamEvent {
     Error(String),
 }
 
-/// Parse one SSE frame (its `event` kind + `data` JSON) into a [`StreamEvent`],
-/// or `None` when this client has nowhere to put it.
-///
-/// Mirrors [`transport::event_for`] on the stdio path, deliberately: both
-/// answer "what does this client do with an event it was sent", and `None` is
-/// how each says *nothing*. That one could not say it is what made an unknown
-/// kind a user-visible error.
-///
-/// Two failures are told apart here, having previously shared one arm:
-///
-/// * **data that is not JSON** is a protocol violation whatever the kind is, so
-///   it is reported;
-/// * **a kind this client does not know** is not a failure at all — it means
-///   the core is newer, or a frame was added without updating this — so it is
-///   dropped. Catching *that* is a test's job, not a running client's.
+/// Parse SSE frame (event kind + data JSON) → [`StreamEvent`] or `None`.
+/// Mirrors [`transport::event_for`] (stdio path). Distinguishes:
+/// * Unparseable JSON → report as error (protocol violation).
+/// * Unknown kind → drop (core is newer, test catches missing update).
 #[must_use]
 pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
     let value: serde_json::Value = match serde_json::from_str(data) {
@@ -247,13 +199,8 @@ pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
     })
 }
 
-/// Clears a `Rest`'s live-turn socket when a turn ends, however it ends.
-///
-/// A plain assignment after the read loop would not run if the loop returned
-/// early on an error, and would not run at all on a panic — either of which
-/// would leave `cancel` shutting down a socket whose turn is already over. A
-/// guard runs on every path out of the function that created it, `?` and
-/// panic included.
+/// Clears `Rest`'s live-turn socket on exit (error, panic, or normal).
+/// Guard ensures cleanup on all paths (assignment after loop wouldn't run on `?` or panic).
 struct ClearLiveOnDrop<'a> {
     live_socket: &'a Mutex<Option<TcpStream>>,
 }

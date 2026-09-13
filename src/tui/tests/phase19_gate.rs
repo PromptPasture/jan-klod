@@ -1,29 +1,18 @@
-//! Phase 19's exit gate (#97), as a test rather than as a claim.
-//!
-//! > On a 120×32 terminal and on a 60×20 one, a full turn — user message,
-//! > streamed answer, two tool calls one of which edits a file, an `ask`
-//! > answered, a follow-up sent mid-turn, and a cancel — renders correctly, and
-//! > the same run with `NO_COLOR=1` in a 16-colour terminal loses no
-//! > information.
+//! Gate test (#97): a full turn on 120×32 and 60×20 terminals with
+//! `NO_COLOR=1` on 16 colours renders correctly and loses no information.
 //!
 //! # Why this file exists
 //!
-//! An umbrella closes when its exit criteria are met, and this repository has
-//! twice paid for the other way round: #130's supervisor scan and #133's child
-//! exit status were both green because nothing ran them. A gate recorded as a
-//! sentence in an issue is a gate nobody runs.
+//! Exit criteria must be tested, not written as assertions. Unrun gates are
+//! discovered failures (#130, #133).
 //!
-//! # What "loses no information" is taken to mean
+//! # What "loses no information" means
 //!
-//! Not "looks the same" — under `Mode::Mono` every role resolves to
-//! `Color::Reset`, so it demonstrably does not. The testable reading is that
-//! **the text is byte-identical between the coloured and colourless renders**,
-//! so everything colour was carrying is also carried by glyph, label or
-//! position. If a state were distinguished only by tint, the two renders would
-//! still match and the distinction would be gone — which is why
-//! `theme::monochrome_still_tells_every_state_apart` exists beside this, and
-//! why the second assertion below counts distinct glyphs rather than trusting
-//! the first.
+//! **Text is byte-identical between coloured and colourless renders:**
+//! everything colour carries is also in glyph, label, or position. Under
+//! `Mode::Mono`, every role is `Color::Reset`, so colour-only distinctions
+//! vanish. The second assertion counts distinct glyphs, not just comparing
+//! renders (which would pass even if only tint told states apart).
 
 use jan_klod::app::{App, Prompt};
 use jan_klod::blocks;
@@ -44,10 +33,9 @@ fn a_full_turn() -> App {
     app.take_submission().expect("the user said something");
     app.begin_turn();
 
-    // Long enough that wrapping is load-bearing at both widths — the first
-    // version of this fixture was short enough that nothing ever approached the
-    // pane, so the overflow assertion below could not fail. Probed by rendering
-    // at `pane + 20`, which it failed to notice.
+    // Long enough to test wrapping at both widths; short fixture would not
+    // approach the pane, hiding the overflow bug that probing at `pane + 20`
+    // first exposed.
     app.apply_delta(
         "Reading the file first, and then a considerably longer sentence whose \
          only job is to be wider than sixty columns so that the wrap is doing \
@@ -77,7 +65,7 @@ fn a_full_turn() -> App {
         false,
     );
 
-    // A third that failed, so the failure path is on screen too.
+    // A failing tool, so the failure path is visible.
     app.record_tool_invoked("c3".to_string(), "git".to_string(), None);
     app.record_tool_result("c3", "tool `git` error: not a repository".to_string(), true);
 
@@ -102,8 +90,7 @@ fn a_full_turn() -> App {
     app
 }
 
-/// Every theme the gate names: the coloured one, and `NO_COLOR` on a
-/// sixteen-colour terminal.
+/// The gate's themes: coloured TrueColor and monochrome on 16 colours.
 const fn themes() -> [(&'static str, Theme); 2] {
     [
         (
@@ -117,7 +104,7 @@ const fn themes() -> [(&'static str, Theme); 2] {
     ]
 }
 
-/// The gate's first half: it renders, at both sizes, without overflowing.
+/// First assertion: renders without overflow at both sizes.
 #[test]
 fn a_full_turn_renders_at_both_sizes_the_gate_names() {
     let app = a_full_turn();
@@ -129,7 +116,7 @@ fn a_full_turn_renders_at_both_sizes_the_gate_names() {
             "{w}×{h} is one of the two sizes the gate names and it reports too small"
         );
 
-        // The transcript's usable width, minus the block border.
+        // Transcript width minus border.
         let pane = usize::from(frame.content.width).saturating_sub(2);
 
         for (name, theme) in themes() {
@@ -151,12 +138,10 @@ fn a_full_turn_renders_at_both_sizes_the_gate_names() {
     }
 }
 
-/// The gate's second half: `NO_COLOR` on sixteen colours loses no information.
+/// Second assertion: `NO_COLOR` on 16 colours loses no information.
 ///
-/// Asserted as text equality, for the reason in this file's header: colour is
-/// the *second* signal throughout, so removing it must change styling and
-/// nothing else. A difference here means something was being said in colour
-/// alone.
+/// Text must be byte-identical; colour is the *second* signal, so removing it
+/// must change styling only. A difference means something was colour-only.
 #[test]
 fn no_color_on_sixteen_colours_loses_nothing_but_colour() {
     let app = a_full_turn();
@@ -171,9 +156,9 @@ fn no_color_on_sixteen_colours_loses_nothing_but_colour() {
                 .collect()
         };
 
-        // Unicode and ASCII vocabularies differ by design, so compare the
-        // *information*: every state's mark must still be present and distinct.
-        // Equal line counts is the structural half of "loses nothing".
+        // Unicode and ASCII differ by design; compare *information*: every
+        // state's mark must be present and distinct. Equal line counts proves
+        // structure survives.
         assert_eq!(
             plain(coloured).len(),
             plain(mono).len(),
@@ -183,15 +168,12 @@ fn no_color_on_sixteen_colours_loses_nothing_but_colour() {
     }
 }
 
-/// The tool states the turn puts on screen stay distinguishable with no colour.
+/// Tool states stay distinguishable with no colour.
 ///
-/// **Every block below carries identical arguments and identical result text**,
-/// so the collapsed line can differ only by the status mark. That is the whole
-/// point, and the first version of this test got it wrong: it compared the
-/// rendered line for states whose *content* already differed, so the lines
-/// differed for reasons that had nothing to do with the glyph. Making
-/// `ToolFailed` render as `ToolDone` did not fail it — probed, which is how the
-/// hole was found.
+/// **Every block has identical arguments and result text**, so lines differ
+/// only by status mark. (First version failed: compared lines whose content
+/// differed, missing the glyph. Probe that made `ToolFailed` render as
+/// `ToolDone` without failing exposed the hole.)
 #[test]
 fn the_tool_states_are_told_apart_without_colour() {
     const SAME_ARGS: &str = r#"{"path":"src/main.rs"}"#;

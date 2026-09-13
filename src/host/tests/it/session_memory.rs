@@ -1,10 +1,6 @@
-//! A session remembers what was said in it — a request must actually replay
-//! prior turns to the model, not just persist them for the transcript endpoint.
-//! These assert on what the provider wire actually received, since the store and
-//! transcript endpoint can look correct while the model is still asked in
-//! isolation.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Sessions must replay prior turns to the model, not just persist them.
+//! Asserts on what the provider wire received (store/transcript can look
+//! correct while model still sees isolation). Skips when guests not staged.
 
 use std::sync::{Arc, Mutex};
 
@@ -17,8 +13,7 @@ use crate::common;
 
 const GUESTS: [&str; 1] = ["provider-openai.wasm"];
 
-/// Records every request body the provider was sent, so a test can read the
-/// message list the model actually got.
+/// Record every request to read the message list the model saw.
 fn recording_http(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> HttpFn {
     let seen = Arc::clone(seen);
     Box::new(move |_m, _u, _h, body: Option<&[u8]>, _t| {
@@ -41,7 +36,7 @@ fn recording_http(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> HttpFn {
     })
 }
 
-/// A config with a durable store, so a session survives a `Runtime` restart.
+/// Config with durable store (sessions survive Runtime restart).
 fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -65,7 +60,7 @@ extensions:
     config
 }
 
-/// The `content` of every message in the last recorded request.
+/// Extract message `content` from the last recorded request.
 fn last_messages(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> Vec<String> {
     let recorded = seen.lock().unwrap();
     let last = recorded.last().expect("the provider was called").clone();
@@ -96,7 +91,7 @@ fn a_later_turn_carries_what_was_said_earlier() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Turn 1: nothing to remember yet.
+    // Turn 1: stands alone.
     assert!(matches!(
         agent.run("s-1", "read src/main.rs"),
         RunResult::Answered { .. }
@@ -107,7 +102,7 @@ fn a_later_turn_carries_what_was_said_earlier() {
         "a first turn stands alone"
     );
 
-    // Turn 2: the request must carry turn 1's question *and* its answer.
+    // Turn 2: carries prior exchange (oldest first).
     assert!(matches!(
         agent.run("s-1", "now add a test for that"),
         RunResult::Answered { .. }
@@ -118,7 +113,7 @@ fn a_later_turn_carries_what_was_said_earlier() {
         "the earlier exchange precedes the new message, oldest first"
     );
 
-    // A different session is a different conversation.
+    // Different session = different conversation.
     assert!(matches!(
         agent.run("s-2", "unrelated question"),
         RunResult::Answered { .. }
@@ -151,7 +146,7 @@ fn resuming_a_session_after_a_restart_carries_its_history() {
         agent.run("resumed", "remember the widget refactor");
     }
 
-    // A fresh Runtime over the same SQLite file, as a restart of `jan-klod serve` would be.
+    // Restart: fresh Runtime over same SQLite file.
     let recorded = Arc::clone(&seen);
     let factory = move || recording_http(&recorded);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime reboots");
@@ -193,8 +188,7 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
     }
 
     let messages = last_messages(&seen);
-    // 20 replayed turns × (question + answer) + the new message: replay is
-    // capped so a long session doesn't reload its whole history every turn.
+    // ≤41 messages: 20 replayed turns × (Q+A) + new message (capped, not full history).
     assert!(
         messages.len() <= 41,
         "replay is capped: {} messages",
@@ -210,8 +204,7 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
     );
 }
 
-/// A config that also enables the system-prompt interceptor, so the assembled
-/// request is the one a shipped install produces.
+/// Config with system-prompt interceptor (like shipped install).
 fn write_config_with_system(dir: &std::path::Path, prompt: &str) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -241,7 +234,7 @@ extensions:
     config
 }
 
-/// The `role` of every message in the last recorded request.
+/// Extract message `role` from the last recorded request.
 fn last_roles(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> Vec<String> {
     let recorded = seen.lock().unwrap();
     let last = recorded.last().expect("the provider was called").clone();
@@ -271,8 +264,7 @@ fn the_model_is_told_what_it_is_before_anything_else() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // A prompt the intent router sends down the agentic path, where request
-    // shaping (and therefore this interceptor) runs.
+    // Intent router sends prompt down agentic path (where this interceptor runs).
     agent.run("sys-1", "read src/main.rs and then add a test for it");
     assert_eq!(
         last_roles(&seen).first().map(String::as_str),
@@ -285,7 +277,7 @@ fn the_model_is_told_what_it_is_before_anything_else() {
         Some("you are a test agent")
     );
 
-    // A second turn must not accumulate a second copy.
+    // Second turn must not duplicate the system message.
     agent.run("sys-1", "now also update the docs for it");
     let roles = last_roles(&seen);
     assert_eq!(
@@ -300,8 +292,7 @@ fn the_model_is_told_what_it_is_before_anything_else() {
     );
 }
 
-/// Config with the tool fleet and the interceptors that advertise it, so the
-/// assembled request is the one a shipped install sends.
+/// Config with tool fleet and interceptors advertising it (like shipped).
 fn write_config_with_tools(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -337,11 +328,8 @@ workspace: {ws}
     config
 }
 
-/// The whole chain from the fleet to the wire, checked by reading tool schemas
-/// back off the request body. Other tool-use tests use a canned provider that
-/// returns `tool_calls` regardless of what it was sent, so they wouldn't catch a
-/// request that carried no tool schemas at all — a real model would just never
-/// call the tool.
+/// Tool schemas on the wire (caught by reading request body). Canned providers
+/// return `tool_calls` blindly, missing requests with no schemas.
 #[test]
 fn the_model_is_actually_told_which_tools_exist() {
     if !common::guests_staged(&[
@@ -387,7 +375,7 @@ fn the_model_is_actually_told_which_tools_exist() {
         "the find tool is advertised: {names:?}"
     );
 
-    // A name alone isn't enough — the model needs the argument schema to build a call.
+    // Name alone isn't enough; model needs the argument schema.
     let find = tools
         .iter()
         .find(|t| t["function"]["name"] == "find")
@@ -403,7 +391,7 @@ fn the_model_is_actually_told_which_tools_exist() {
     );
 }
 
-/// Collects the warnings a turn streams, the way the REST surface and TUI do.
+/// Collect warnings like REST surface and TUI do.
 #[derive(Default)]
 struct WarningSink(Vec<String>);
 
@@ -416,8 +404,7 @@ impl jan_klod_core::conductor::EventSink for WarningSink {
     }
 }
 
-/// A truncated completion (`finish_reason: "length"`) reaches the user as a
-/// warning, not silently indistinguishable from a completed answer.
+/// Truncated completion (`finish_reason: "length"`) is flagged as warning, not silent.
 #[test]
 fn a_truncated_answer_is_flagged_to_the_client() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -429,7 +416,7 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     let _guard = common::TempDir(dir.clone());
     let config = write_config(&dir);
 
-    // A reply the model ran out of room on, as an endpoint would report it.
+    // Model ran out of room (like an endpoint reports).
     let http = || -> HttpFn {
         Box::new(move |_m, _u, _h, _b, _t| {
             let body = serde_json::json!({
@@ -449,7 +436,7 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&http).expect("agent boots");
 
-    // Collect the streamed events the way the REST surface and TUI do.
+    // Collect streamed events like REST surface and TUI do.
     let mut sink = WarningSink::default();
     let out = agent.run_streaming_headless(&mut sink, "trunc-1", "explain everything");
 
@@ -458,19 +445,16 @@ fn a_truncated_answer_is_flagged_to_the_client() {
         "the client is told the answer is incomplete: {:?}",
         sink.0
     );
-    // The partial text is still the answer — a cut-off reply beats no reply.
+    // Partial text is still the answer (cut-off reply better than no reply).
     assert!(
         matches!(&out, RunResult::Answered { text, .. } if text.contains("first half")),
         "the partial answer still comes back: {out:?}"
     );
 }
 
-/// `AGENTS.md` in the workspace reaches the model, labelled as the project's
-/// (docs claim jan-klod reads it; this proves the claim, since it once didn't).
-///
-/// Read host-side and passed to `interceptor-system` as config, rather than
-/// granting interceptors `host-fs` just to read one file — that would widen
-/// file access to every decision component for no reason.
+/// AGENTS.md reaches the model labelled as the project's instructions.
+/// Read host-side, passed to `interceptor-system` as config (not granting
+/// `host-fs` to every interceptor just to read one file).
 #[test]
 fn project_instructions_from_agents_md_reach_the_model() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-system.wasm"]) {
@@ -540,9 +524,7 @@ extensions:
         requests.contains("cargo nextest run"),
         "the project's own instructions reach the model: {requests}"
     );
-    // Labelled: the standing prompt describes what the runtime enforces, while
-    // AGENTS.md is just a request from the repo — conflating them would let
-    // AGENTS.md claim authority over the sandbox it doesn't have.
+    // Labelled: standing prompt vs project request; AGENTS.md can't claim sandbox authority.
     assert!(
         requests.contains("from AGENTS.md"),
         "and are marked as the project's rather than the runtime's: {requests}"

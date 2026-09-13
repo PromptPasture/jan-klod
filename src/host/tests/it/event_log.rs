@@ -2,9 +2,8 @@
 //!
 //! Boots the real `Runtime`, runs a turn through `AgentSession`, then reads the
 //! `events` table back **through a second `Store` handle on the same file** —
-//! not through the session. That is deliberate: the assertion is about what is
-//! durable, and reading it through the object that wrote it would prove only
-//! that the object remembers.
+//! not through the session. That is deliberate: the assertion is about durability,
+//! and reading through the writer only proves the writer remembers.
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
@@ -65,7 +64,7 @@ fn a_turn_appends_its_events_in_order() {
 
     assert!(
         !log.is_empty(),
-        "a turn that answered wrote nothing — the sink is not wired into the turn path"
+        "a turn that answered wrote nothing — the sink is not wired in"
     );
     assert_eq!(
         log.iter().map(|row| row.seq).collect::<Vec<_>>(),
@@ -78,10 +77,10 @@ fn a_turn_appends_its_events_in_order() {
         "every row belongs to the session that produced it"
     );
 
-    // The whole shape of a simple turn, pinned rather than described: its own
-    // input, the assistant text, the outcome. `text-delta` being here is
-    // Acceptance line 2 holding against a real turn and not only against a
-    // unit test — a delta reaches the log exactly as it was emitted, uncoalesced.
+    // The whole shape of a simple turn, pinned rather than described: its input,
+    // the assistant text, the outcome. `text-delta` being here proves acceptance
+    // line 2 holds against a real turn, not only unit tests — a delta reaches the
+    // log exactly as it was emitted, uncoalesced.
     assert_eq!(
         log.iter().map(|row| row.kind.as_str()).collect::<Vec<_>>(),
         vec![event_log::KIND_USER_MESSAGE, "text-delta", "done"],
@@ -96,7 +95,7 @@ fn a_turn_appends_its_events_in_order() {
         log[0].payload
     );
 
-    // And the turn's answer closes it. `Done` is the authoritative answer, so a
+    // The turn's answer closes it. `Done` is the authoritative answer, so a
     // log without it is a log of an unfinished turn.
     let last = log.last().expect("non-empty");
     assert_eq!(last.kind, "done", "the log ends with the turn's outcome");
@@ -143,10 +142,10 @@ fn each_session_logs_only_its_own_turn() {
     );
 }
 
-/// The read surfaces are projections now, so `transcript` and `list_sessions`
-/// must answer from the log rather than from the `entries` transcript. Asserted
-/// through the public API after a real turn, since that is what `GET
-/// /session/:id` and `GET /sessions` serve.
+/// The read surfaces are projections, so `transcript` and `list_sessions` must
+/// answer from the log, not the `entries` transcript. Asserted through the
+/// public API after a real turn (what `GET /session/:id` and `GET /sessions`
+/// serve).
 #[test]
 fn the_read_surfaces_answer_from_the_log() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {

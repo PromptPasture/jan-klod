@@ -1,12 +1,9 @@
 //! `@` path completion (#153).
 //!
-//! # It offers a path and reads nothing
+//! # Offers path, reads nothing
 //!
-//! The accepted text is inserted into the message as a plain path. The client
-//! does **not** open the file. Attachments, file contents and any notion of
-//! "context" are core-side concerns — a client that starts reading files has
-//! grown policy, and policy lives in `interceptor-*` guests in this design, not
-//! in the things around them.
+//! Accepted text = plain path inserted in message (client never opens files).
+//! File reading, context = core concerns (policy in `interceptor-*` guests, not clients).
 //!
 //! # The fragment can be anywhere in the message
 //!
@@ -26,18 +23,9 @@
 //!
 //! # Why `..` cannot be walked into
 //!
-//! Structurally, rather than by a check that could be forgotten: the walk only
-//! ever descends **from** the working directory, and the fragment is matched
-//! against the relative paths it yields. `@../secret` matches nothing because
-//! nothing under the root is spelled that way. A check on the typed string would
-//! have to catch `a/../../..` and every other spelling; this has nothing to
-//! catch.
-//!
-//! Worth being exact about what that is: a client-side path rule is
-//! **convenience, not security**. The security model's own line is that a check
-//! inside the sandbox is advice rather than a boundary, and the same reasoning
-//! applies here. It is still the difference between offering somebody their own
-//! files and offering them the filesystem.
+//! Structural: walk descends from working directory only; `@../secret` matches nothing.
+//! Check on typed string can't catch all spellings. Client-side rule = **convenience,
+//! not security** (sandbox checks are advice, not boundaries).
 
 use std::path::Path;
 
@@ -76,16 +64,9 @@ pub fn complete(root: &Path, fragment: &str) -> Completion {
     let mut entries = Vec::new();
     let mut truncated = false;
 
-    // `ignore`'s walk is lazy, so the cap stops the traversal rather than
-    // trimming its result — on a large repository that is the difference
-    // between a completion list and a pause.
-    // `require_git(false)` is load-bearing and was found by a failing test.
-    // `WalkBuilder` honours `.gitignore` **only inside a git repository** by
-    // default — so in any working directory that is not one, `target/` and
-    // everything else would have been offered while the code read as though it
-    // filtered. The issue asks to skip what `.gitignore` names "where one is
-    // present", which is the repo-independent reading, and it is also the safer
-    // default: a user who wrote a `.gitignore` meant it.
+    // Lazy walk: cap stops traversal (not trimming)—faster on large repos.
+    // `require_git(false)` essential: respects `.gitignore` outside git repos too.
+    // By default, `WalkBuilder` only honors `.gitignore` in git repos.
     for found in ignore::WalkBuilder::new(root)
         .hidden(true)
         .require_git(false)

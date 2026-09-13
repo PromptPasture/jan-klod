@@ -2,37 +2,34 @@
 //!
 //! Gates tool calls on two checks (see [`rules`]):
 //!
-//! - **Scope check**: any string argument contains an absolute path or a `..`
+//! - **Scope check**: any string argument contains an absolute path or `..`
 //!   traversal that would escape the workspace root.
 //! - **Allowlist check**: the call is one of the read-only operations the
 //!   operator named. Anything else is confirmed.
 //!
-//! Either condition returns [`Decision::Ask`] so the loop's driver confirms with
-//! the user; on the answer it [`Decision::Proceed`]s or [`Decision::Block`]s.
+//! Either condition returns [`Decision::Ask`] to the driver for confirmation;
+//! on their answer it [`Decision::Proceed`]s or [`Decision::Block`]s.
 //! Known read-only, in-scope calls proceed untouched.
 //!
-//! The allowlist replaced a denylist of high-risk verbs, which can only name the
-//! verbs someone thought of — `tool-edit`'s `view`/`replace`/`insert` ops matched
-//! none of them and went ungated.
+//! The allowlist replaced a denylist of high-risk verbs, which can only name known
+//! verbs — `tool-edit`'s `view`/`replace`/`insert` ops matched none and went ungated.
 //!
 //! ## Standing decisions ("always" / "never")
 //!
-//! The confirmation can be answered `always`/`never`, recorded per *kind of
-//! action* (`fs:write`, `shell:cargo`) and consulted before asking again —
-//! otherwise a gate that asks the same question forty times gets switched off.
+//! The confirmation can be answered `always`/`never`, recorded per *kind of action*
+//! (`fs:write`, `shell:cargo`) and consulted before asking again — otherwise
+//! a gate that asks the same question forty times gets switched off.
 //! Three properties keep that from eroding the boundary:
 //!
 //! - **Run-scoped, never persisted.** Decisions live in `host-storage`, owned by
-//!   this instance unless the operator grants `persist: true`. Restart and it
-//!   asks again; `storage_scope.rs` fails if that flips.
+//!   this instance unless the operator grants `persist: true`. Restart and it asks again.
 //! - **A scope escape is never remembered** ([`rules::Concern::is_rememberable`]).
 //!   "Always allow writes" covers writing files, not writing `/etc/passwd`.
-//! - **Unreadable state means ask.** A storage error or an unrecognised stored
-//!   value falls back to the question, never to approval.
+//! - **Unreadable state means ask.** A storage error or unrecognised value falls back
+//!   to the question, never to approval.
 //!
 //! The rules are pure Rust with no WIT dependency, so they are unit-tested
-//! natively (`cargo test`); the Component-Model glue below only compiles for
-//! `wasm32`.
+//! natively; the glue compiles for `wasm32` only.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod rules;

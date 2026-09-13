@@ -1,12 +1,7 @@
-//! Load the TinyGo-built `spike` component, call its exported `complete` across
-//! the Component Model boundary, print the echo. Kept runnable by hand with a
-//! prompt of your choosing; the automated check is `tests/it/polyglot.rs`, run
-//! by `make gate`.
-//!
-//! Synchronous Wasmtime on purpose (see `docs/decisions/2026-06-29-extension-technologies/`).
+//! Load TinyGo `spike` component, call `complete`, echo result.
+//! Runnable by hand; automated check via `tests/it/polyglot.rs`.
 
-// This example is dominated by `bindgen!`-generated code; exempt it from the
-// doc/style lints the workspace applies to real source.
+// bindgen!-generated code; exempt from workspace lints
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 use wasmtime::component::{Component, Linker};
@@ -18,9 +13,7 @@ wasmtime::component::bindgen!({
     world: "spike",
 });
 
-/// Store state. Even though the `spike` world declares no imports, a TinyGo
-/// `wasip2` component pulls in `wasi:cli`/`wasi:io`/etc. for its runtime, so the
-/// host must satisfy those via `wasmtime-wasi`.
+/// Host state. TinyGo wasip2 pulls in WASI modules; host must satisfy them
 struct Host {
     ctx: WasiCtx,
     table: ResourceTable,

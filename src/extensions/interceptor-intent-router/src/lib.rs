@@ -1,23 +1,19 @@
 //! `interceptor-intent-router` — the default `before-loop` interceptor.
 //!
 //! Every prompt is classified `simple` vs `agentic` before the agentic loop
-//! runs. It exports the one generic `interceptor` interface
-//! ([`wit/interceptor.wit`]) and subscribes to a single phase, `before-loop`:
+//! runs. It exports the `interceptor` interface and subscribes to `before-loop`:
 //!
 //! - `simple` (greeting, ack, single-fact question) → [`Decision::Block`],
-//!   short-circuiting the agentic loop; the core answers inline.
-//! - `agentic` (tools, planning, multi-step) → [`Decision::Proceed`], letting the
-//!   loop run.
+//!   short-circuiting the loop; the core answers inline.
+//! - `agentic` (tools, planning, multi-step) → [`Decision::Proceed`], entering it.
 //!
-//! The classification is the layered router ([`router`]): a pure-Rust language
-//! gate + English heuristics settle the obvious cases with no model call;
-//! anything else goes to a single constrained-decoding call on the routed
-//! `llm-provider` import. `agentic` is the safe default — a prompt we cannot
-//! classify never wrongly skips the loop.
+//! The classification uses the layered router ([`router`]): a pure-Rust language
+//! gate + English heuristics settle obvious cases with no model call;
+//! anything else goes to a constrained-decoding call on the routed `llm-provider`.
+//! `agentic` is the safe default — a prompt we cannot classify never wrongly skips.
 //!
-//! The router is pure Rust with no WIT dependency, so it is unit-tested natively
-//! (`cargo test`); the Component-Model glue below only compiles for `wasm32`,
-//! where the real provider-backed classifier is supplied.
+//! The router is pure Rust with no WIT dependency, so it is unit-tested natively;
+//! the Component-Model glue below only compiles for `wasm32`.
 
 // The router's only non-test consumer is the wasm32 `component` below, so a
 // host `cargo test` sees its items as dead — a target-conditional false
@@ -59,8 +55,8 @@ mod component {
         self, CompletionChunk, CompletionRequest, Message, Role,
     };
 
-    /// System prompt for the tier-3 intent classifier. Kept terse — the grammar
-    /// ([`router::CLASSIFIER_GRAMMAR`]) is what actually constrains the output.
+    /// System prompt for the tier-3 classifier. The grammar ([`router::CLASSIFIER_GRAMMAR`])
+    /// constrains the output.
     const CLASSIFIER_SYSTEM: &str = "You are an intent classifier. Reply with exactly one word. \
         Answer 'simple' when the message is a greeting, acknowledgement, or a single-fact question \
         answerable directly. Answer 'agentic' when it needs tools, planning, or multiple steps.";

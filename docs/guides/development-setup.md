@@ -9,13 +9,11 @@ updated: 2026-09-11
 
 # Development Environment Setup
 
-What you need installed to build Jan-Klod from source: the **Rust core** (Wasmtime
-component host), **TinyGo guest extensions**, and the **WIT** tooling that ties them
-together. This is the toolchain the [Phase 1 plan](../decisions/2026-06-29-extension-technologies/PLAN.md)
-assumes — see the [Roadmap](../concepts/roadmap.md) for why each piece exists.
+Install the toolchain to build Jan-Klod from source: **Rust core** (Wasmtime host),
+**TinyGo guest extensions**, and **WIT** tooling. This is what the
+[Phase 1 plan](../decisions/2026-06-29-extension-technologies/PLAN.md) assumes.
 
-> Commands below target **macOS**. Linux notes are inline where they
-> differ. This guide grows as later phases add tools (SQLite, HTTP, etc.).
+> Commands target **macOS** with inline Linux notes. This guide expands as later phases add tools.
 
 ## At a glance
 
@@ -29,15 +27,13 @@ assumes — see the [Roadmap](../concepts/roadmap.md) for why each piece exists.
 | `wasmtime` CLI ≥ 46 | run a component standalone | optional (debug only) | `brew` / installer |
 | `cargo-component` | build **Rust** guests as components | optional (Rust extensions) | `cargo install` |
 
-The core embeds Wasmtime as a **library crate**, so the `wasmtime` CLI is *not*
-required to run Jan-Klod — only handy for poking at a `.wasm` by hand.
+The core embeds Wasmtime as a library, so the CLI is optional — it's only useful for inspecting `.wasm` files.
 
 ## Install
 
 ### 1. Rust (core)
 
-Use `rustup` to manage your Rust toolchain — it keeps `rustc`, `cargo`, and
-components (`clippy`, `rustfmt`) updatable together.
+Use `rustup` to manage Rust — it keeps `rustc`, `cargo`, and components updatable.
 
 ```shell
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -46,9 +42,8 @@ rustup component add clippy rustfmt
 
 ### 2. Go + TinyGo (guest extensions)
 
-TinyGo (not standard Go) is our guest compiler — standard Go's GC/tagged-union
-support for the Component Model isn't there yet. TinyGo **0.34+** emits a real
-component when targeting `wasip2`.
+TinyGo (not standard Go) is the guest compiler — standard Go lacks Component Model
+support. TinyGo **0.34+** emits components for `wasip2`.
 
 ```shell
 brew install go
@@ -61,22 +56,16 @@ On Linux, download the release archive from
 
 ### 3. wkg (WIT dependency resolution)
 
-Guests build against the contracts in `wit/`. Any cross-package imports (e.g.
-`wasi:*`) are fetched/locked by `wkg`.
+Guests build against `wit/` contracts. Cross-package imports (e.g. `wasi:*`)
+are fetched by `wkg`:
 
 ```shell
 cargo install wkg
 ```
 
-Prebuilt binaries are also on
-<https://github.com/bytecodealliance/wasm-pkg-tools/releases>.
-
-`make setup` (below) installs `wkg` for you, pinned to the version this repo is
-verified against, and uses it to fetch `wit/spike/deps` — a gitignored,
-committed-nowhere directory that `make gate`, `make harness`, and `make clippy`
-all need to resolve `wit/spike` through `bindgen!`. Skipping `setup` and running
-one of those by hand fails fast with a `wit/spike/deps is missing` message
-naming the fix, rather than `bindgen!`'s opaque WIT-resolution error.
+`make setup` installs `wkg` and fetches `wit/spike/deps` (needed by `make gate`,
+`make harness`, `make clippy`). Skip it and you get a clear message about the
+missing directory, not a cryptic `bindgen!` error.
 
 ### 4. wasm-tools (inspect / validate)
 
@@ -84,8 +73,7 @@ naming the fix, rather than `bindgen!`'s opaque WIT-resolution error.
 cargo install wasm-tools
 ```
 
-Used to print a component's WIT (`wasm-tools component wit foo.wasm`) and to
-validate output — the `wit:` Makefile target already calls it.
+Inspects components and validates output; the `wit:` Makefile target uses it.
 
 ### 5. Optional
 
@@ -96,7 +84,7 @@ cargo install cargo-component  # only if authoring a guest in Rust
 
 ## Verify
 
-After installing, confirm versions (these are the minimums Phase 1 expects):
+Confirm versions after install (Phase 1 minimums):
 
 ```shell
 rustc --version        # ≥ 1.83  (verified: 1.96.0)
@@ -112,46 +100,33 @@ A green run of all six means the Slice 1a toolchain is ready. Then build per the
 project [Makefile](../../Makefile) (`cargo build` for core; `tinygo build` per
 guest — targets land in Slice 1b).
 
-## One-time setup, then the gate
+## One-time setup
 
 Once per clone, from the repo root:
 
 ```shell
-make setup   # cargo supply-chain plugins + wkg, fetches wit/spike/deps, configures git hooks
-make gate    # full offline integration exit gate — the check that this all worked
+make setup   # wkg, wit/spike/deps, git hooks, supply-chain plugins
+make gate    # full integration exit gate
 ```
 
-`make setup` is what makes `make gate` (and `make harness`, `make clippy`)
-buildable on a fresh clone: without it, `wit/spike/deps` (`wasi:cli` and
-friends) does not exist, and those targets fail up front with a message naming
-`make setup` as the fix rather than a raw `bindgen!` WIT-resolution error.
-`make test`/`make test-core` do not need this step — they build unit tests
-only, never `tests/it/`'s `bindgen!` macro.
+`make setup` is required for `make gate`, `make harness`, `make clippy` (they
+need `wit/spike/deps`). Unit tests (`make test`/`make test-core`) do not need it.
 
 ## Building a guest component (shape)
 
-First-party guests **default to Rust** (see the
-[extension-technology decision](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md));
-TinyGo is the case-by-case exception and the polyglot canary: `make gate` loads
-the committed Go-built `spike.wasm` and calls across the boundary, and — if you
-have `tinygo` and `wkg` installed — rebuilds it from source **into a temp dir**
-and calls that too, leaving the committed copy alone (announced as a skip if you
-do not). So a WIT change that a non-Rust toolchain cannot express fails on the
-machine of anyone carrying that toolchain, rather than nowhere.
+First-party guests default to Rust. TinyGo serves as a polyglot canary: `make gate`
+tests both the committed `spike.wasm` and rebuilds it from source (if `tinygo`
+and `wkg` are installed), verifying WIT changes across toolchains.
 
-That `spike.wasm` is the one guest component the repository tracks, built with
-`-no-debug -opt=z` (~75 KB) so committing it is reasonable. `make -C
-src/extensions clean` does not delete it; if you regenerate it with `make -C
-src/extensions spike-guest`, commit the result.
+`spike.wasm` is the only guest component tracked in the repo, built with
+`-no-debug -opt=z` (~75 KB). Regenerate it with `make -C src/extensions spike-guest`
+and commit the result; `make -C src/extensions clean` preserves it.
 
 ### Rust (default)
 
-No `cargo-component` needed: since Rust 1.82 the `wasm32-wasip2` target emits a
-**component** directly, and the `wit-bindgen` crate generates the guest bindings
-from our `wit/`. A guest is a `cdylib` that implements the exported world's
-`Guest` traits — see `src/extensions/tool-find/` (a leaf tool, no host capability
-beyond `host-fs`) and `src/extensions/provider-openai/` (network: an
-OpenAI-compatible `llm-provider` over `host-http`):
+Since Rust 1.82, `wasm32-wasip2` emits components directly. A guest is a `cdylib`
+implementing the world's `Guest` traits. Examples: `src/extensions/tool-find/`
+(uses `host-fs`) and `src/extensions/provider-openai/` (uses `host-http`):
 
 ```shell
 rustup target add wasm32-wasip2          # one-time
@@ -159,13 +134,12 @@ cargo build --release --target wasm32-wasip2
 # -> target/wasm32-wasip2/release/<name>.wasm  (a component)
 ```
 
-`make tool-find` / `make provider-openai` wrap this and stage the result in
-`ext/`. To drive a provider's full `complete` path against a live endpoint,
-`make probe` (needs the provider's api-key env + network).
+`make tool-find` or `make provider-openai` stage the component in `ext/`.
+Use `make probe` to test a provider against a live endpoint (needs API key + network).
 
-### TinyGo (gate canary / case-by-case)
+### TinyGo
 
-The native Component-Model path TinyGo uses against our contracts:
+Component-Model build path:
 
 ```shell
 tinygo build -target=wasip2 \
@@ -174,21 +148,18 @@ tinygo build -target=wasip2 \
   -o <name>.wasm main.go
 ```
 
-> **Known quirk (tracked in [PLAN.md](../decisions/2026-06-29-extension-technologies/PLAN.md)):**
-> TinyGo's `wasip2` target assumes a `wasi:cli` world — a custom `--wit-world`
-> must `include wasi:cli/imports`. Rust's `wasm32-wasip2` has no such quirk.
+> **Known quirk:** TinyGo's `wasip2` assumes `wasi:cli` — custom worlds must
+> `include wasi:cli/imports`. Rust's `wasm32-wasip2` does not have this constraint.
 
-## Supply-chain / CI tooling (Slice 1b)
+## Supply-chain / CI tooling
 
-Per the [extension-technology policy](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md),
-the build pipeline is not protected by the runtime sandbox, so the CI gates use:
+The build pipeline is unprotected, so CI gates use:
 
 ```shell
 cargo install cargo-deny        # Rust deps/licenses/advisories
 cargo install cargo-cyclonedx  # SBOM generation (Rust workspace, CycloneDX JSON)
 ```
 
-`govulncheck` for Go modules is invoked via `go run golang.org/x/vuln/cmd/govulncheck@latest` — no install needed.
+`govulncheck` for Go is invoked via `go run golang.org/x/vuln/cmd/govulncheck@latest`.
 
-These run in CI, not as a local prerequisite — listed here so the full picture is
-in one place.
+These run in CI, not locally — listed here for completeness.

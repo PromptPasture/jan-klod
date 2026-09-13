@@ -42,8 +42,8 @@ use crate::store::{Store, StoreError};
 /// The envelope format this build writes, and the highest it can read.
 ///
 /// Bump when a payload's shape changes in a way an older reader would
-/// misinterpret. Adding a new `kind` is not such a change: an old reader
-/// already has to cope with a kind it does not know.
+/// misinterpret. Adding a new `kind` is not such a change: old readers
+/// already cope with unknown kinds.
 pub const EVENT_LOG_VERSION: u32 = 1;
 
 /// Why a stored row could not be turned back into a [`Record`] or an [`Event`].
@@ -172,9 +172,9 @@ fn text(kind: &str, data: &Value, field: &str) -> Result<String, DecodeError> {
         .ok_or_else(|| DecodeError::Malformed(format!("`{kind}` has no string `{field}`")))
 }
 
-/// A required list-of-strings field. An entry that is not a string is an error
-/// rather than a skipped element: a prompt that silently lost one of its
-/// options would be answered against a list the user never saw.
+/// A required list-of-strings field. An entry that is not a string is an error,
+/// not skipped: a prompt that silently lost an option would be answered against
+/// a list the user never saw.
 fn strings(kind: &str, data: &Value, field: &str) -> Result<Vec<String>, DecodeError> {
     data.get(field)
         .and_then(Value::as_array)
@@ -213,9 +213,9 @@ pub fn decode_record(kind: &str, payload: &str) -> Result<Record, DecodeError> {
         "tool-result" => Ok(Record::Event(Event::ToolResult(ToolOutcome {
             tool_call_id: text(kind, &data, "id")?,
             content: text(kind, &data, "content")?,
-            // Absent on a row written before #162 added the field; `false` is
-            // the right read for those, since every one of them predates the
-            // flag existing at all, not just predates it being set.
+            // Absent on rows written before #162 added the field; `false` is
+            // the right read since every one predates the flag existing, not
+            // just being set.
             failed: data.get("failed").and_then(Value::as_bool).unwrap_or(false),
         }))),
         "warning" => Ok(Record::Event(Event::Warning(text(kind, &data, "message")?))),
@@ -233,11 +233,10 @@ pub fn decode_record(kind: &str, payload: &str) -> Result<Record, DecodeError> {
 /// Rebuild the event a row was written from, for a caller that only handles
 /// events — re-emitting a session to a client, say.
 ///
-/// Kept beside [`decode_record`] rather than replaced by it: "give me the
-/// events" and "give me everything that happened" are both real questions, and
-/// a caller that answers only the first should not have to match on records it
-/// has nothing to do with. Both share one parser, so the two cannot disagree
-/// about an envelope.
+/// Kept beside [`decode_record`] rather than replaced: "give me the events"
+/// and "give me everything that happened" are both real questions, a caller
+/// that answers only the first shouldn't match records it has nothing to do
+/// with. Both share one parser, so they cannot disagree about an envelope.
 ///
 /// # Errors
 /// [`DecodeError::NotAnEvent`] for a record that is not an event, plus
@@ -250,22 +249,21 @@ pub fn decode(kind: &str, payload: &str) -> Result<Event, DecodeError> {
 }
 
 /// An [`EventSink`] that appends every event to a session's log, then forwards
-/// it to the sink that was already there.
+/// it to the existing sink.
 ///
-/// A fan-out rather than a replacement: the SSE stream and the TUI transcript
-/// still get every event, and the log is a third reader rather than a new owner
-/// of the stream.
+/// A fan-out, not a replacement: the SSE stream and TUI transcript still get
+/// every event, the log is a third reader, not a new owner of the stream.
 ///
-/// Two rules it follows, both taken from how the transcript append already
-/// behaves in `run_and_persist`:
+/// Two rules it follows, from how transcript append already behaves in
+/// `run_and_persist`:
 ///
-/// * **A store failure never affects the turn.** [`Self::emit`] returns whatever
-///   the inner sink returned, always. Cancelling a turn because its *log* could
-///   not be written would let a full disk stop a conversation.
+/// * **A store failure never affects the turn.** [`Self::emit`] returns what
+///   the inner sink returned, always. Cancelling a turn because its *log*
+///   failed would let a full disk stop a conversation.
 /// * **The lock is taken per append and released before forwarding.** The core
-///   shares one `Mutex<Store>` with every interceptor's `host-storage`, so
-///   holding it across the inner sink's work — which can run arbitrary guest
-///   code — would deadlock the first guest that remembered anything.
+///   shares one `Mutex<Store>` with every interceptor's `host-storage`, holding
+///   it across the inner sink's work — which can run arbitrary guest code —
+///   would deadlock the first guest that remembered anything.
 pub struct PersistingSink<'a> {
     inner: &'a mut dyn EventSink,
     store: &'a Mutex<Store>,
@@ -300,20 +298,19 @@ impl EventSink for PersistingSink<'_> {
     }
 }
 
-/// An [`intercept::Driver`] that logs each prompt and the answer it got, then
-/// behaves exactly as the driver it wraps.
+/// An [`intercept::Driver`] that logs each prompt and the answer it got,
+/// then behaves exactly as the driver it wraps.
 ///
-/// A wrapper rather than a change to the trait: `ask` already returns the
-/// answer, so both halves of the exchange are visible from outside without
-/// `Driver` gaining anything. That matters because seven types implement
-/// `Driver` — the SSE prompt driver, the Telegram chat driver, the headless
-/// default and four test doubles — and none of them should have to know that
-/// something is recording.
+/// A wrapper, not a change to the trait: `ask` already returns the answer,
+/// so both halves are visible from outside without `Driver` gaining anything.
+/// That matters because seven types implement `Driver` — SSE prompt driver,
+/// Telegram chat driver, headless default, four test doubles — none should
+/// have to know something is recording.
 ///
 /// The answer is logged whatever its provenance, including the default taken
-/// when nobody replied in time. A replay cannot otherwise tell "the user
-/// approved" from "the prompt timed out and the default denied it", and those
-/// are opposite facts about the same turn.
+/// when nobody replied in time. A replay can't otherwise tell "the user
+/// approved" from "the prompt timed out and default denied it" — opposite
+/// facts about the same turn.
 pub struct PersistingDriver<'a> {
     inner: &'a mut dyn Driver,
     store: &'a Mutex<Store>,
@@ -372,7 +369,7 @@ impl Driver for PersistingDriver<'_> {
     }
 }
 
-/// Append one record, wrapping `data` in the shared envelope first.
+/// Append one record, wrapping `data` in the shared envelope.
 fn append(store: &Mutex<Store>, session: &str, warned: &mut bool, kind: &str, data: &Value) {
     append_encoded(store, session, warned, kind, &envelope(data));
 }
@@ -380,10 +377,9 @@ fn append(store: &Mutex<Store>, session: &str, warned: &mut bool, kind: &str, da
 /// Append an already-enveloped record, reporting the first failure per the
 /// `warned` flag and swallowing the rest.
 ///
-/// The one place a store failure is interpreted, so the sink and the driver
-/// cannot drift on what it means. The lock is taken and released here, never
-/// held across a caller's own work — see [`PersistingSink`] for why that
-/// matters.
+/// The one place a store failure is interpreted, so sink and driver cannot
+/// drift on meaning. The lock is taken and released here, never held across
+/// a caller's own work — see [`PersistingSink`] for why that matters.
 fn append_encoded(
     store: &Mutex<Store>,
     session: &str,
@@ -412,23 +408,23 @@ fn append_encoded(
 
 /// Turn transcripts written before the log existed into events.
 ///
-/// Returns how many sessions were converted. Idempotent by construction: a
-/// session that already has any events is left alone, so this is safe to call
-/// on every open and does nothing on all but the first.
+/// Returns how many sessions were converted. Idempotent: a session with
+/// any events is left alone, safe to call on every open and does nothing
+/// on all but the first.
 ///
 /// # Why this is a migration and not a fallback
 ///
-/// Reading `entries` when the log is empty would have been less code and would
-/// have left two formats to read forever — which is the thing Phase 14 exists
-/// to remove. Converting once means every reader after this has one source.
+/// Reading `entries` when the log is empty would be less code but would leave
+/// two formats to read forever — which Phase 14 exists to remove. Converting
+/// once means every reader after this has one source.
 ///
 /// # What is lost, precisely
 ///
-/// A transcript row is `{user, answer}`, so a migrated turn becomes exactly two
-/// events. Everything a live turn also logs — the tool calls, the warnings, the
-/// `ask` and its answer — was never recorded in the old format and cannot be
-/// recovered. The migrated `done` carries `agentic: false` because the old
-/// transcript did not record it, and `false` is the reading that claims less.
+/// A transcript row is `{user, answer}`, a migrated turn becomes exactly two
+/// events. Everything a live turn also logs — tool calls, warnings, `ask`
+/// and its answer — was never recorded in the old format and can't be
+/// recovered. The migrated `done` carries `agentic: false` since the old
+/// transcript didn't record it, and `false` claims less.
 ///
 /// # Errors
 /// [`StoreError`] if the store cannot be read or written.
@@ -459,8 +455,8 @@ pub fn migrate_transcripts(store: &Store) -> Result<u64, StoreError> {
             let Ok(turn) = serde_json::from_str::<Value>(&entry.value) else {
                 continue;
             };
-            // The entry's own timestamp, so the converted events are dated when
-            // the turn happened rather than when the upgrade ran.
+            // The entry's timestamp, so converted events are dated when the
+            // turn happened, not when the upgrade ran.
             let ts = entry.created_at;
             if let Some(user) = turn.get("user").and_then(Value::as_str) {
                 store.append_event_at(
@@ -485,15 +481,15 @@ pub fn migrate_transcripts(store: &Store) -> Result<u64, StoreError> {
 
 /// Log the message that starts a turn, before any of its events.
 ///
-/// Called by the turn runner rather than by a wrapper: the message never passes
-/// through a `Driver` or an `EventSink`, it is simply the turn's input.
+/// Called by the turn runner, not by a wrapper: the message never passes
+/// through a `Driver` or an `EventSink`, it's simply the turn's input.
 ///
-/// `message` must be what the model actually received, not necessarily what a
-/// caller asked to send — a `before-loop` interceptor may `replace` it first.
+/// `message` must be what the model actually received, not necessarily what
+/// a caller asked to send — a `before-loop` interceptor may `replace` it.
 /// `run_and_persist` calls this from `conductor::run_turn`'s
-/// `on_effective_message` hook for exactly that reason (#84): the log is a
-/// record of what happened, and a rewrite that reached the model but not the
-/// log would make a resumed session replay a history the model never had.
+/// `on_effective_message` hook for that reason (#84): the log is a record
+/// of what happened, and a rewrite that reached the model but not the log
+/// would make a resumed session replay a history the model never had.
 pub fn log_user_message(store: &Mutex<Store>, session: &str, message: &str) {
     let mut warned = false;
     append(

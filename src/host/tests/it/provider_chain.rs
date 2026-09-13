@@ -1,12 +1,10 @@
-//! The `providers:` fallback chain actually orders the fallback.
+//! The `providers:` chain orders fallback correctly.
 //!
-//! `build_agent` used to ignore the configured list and assemble providers in
-//! alphabetical boot order, so editing `providers:` changed nothing. Two
-//! providers answer with distinguishable text so the test can name which one
-//! was tried first — e.g. listing `beta` first makes it answer even though
-//! `alpha` sorts earlier.
+//! Previously `build_agent` ignored the list and sorted providers alphabetically,
+//! so `providers:` edits had no effect. Two providers respond with distinguishable
+//! text to identify which was tried first; e.g., `beta` first defeats alphabetical order.
 //!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Skips if guests are not staged in `ext/`.
 
 use jan_klod_core::conductor::RunResult;
 use jan_klod_core::http::WireResponse;
@@ -15,8 +13,7 @@ use jan_klod_core::Runtime;
 
 use crate::common;
 
-/// Each provider instance has its own `base-url`, so one canned client can answer
-/// as whichever provider is calling.
+/// Mock responds as the provider calling (identified by `base-url`).
 fn per_provider_http() -> HttpFn {
     Box::new(move |_m, url: &str, _h, _b, _t| {
         let who = if url.contains("alpha") {
@@ -38,7 +35,7 @@ fn per_provider_http() -> HttpFn {
     })
 }
 
-/// Two enabled providers; `chain` is the top-level `providers:` block.
+/// Config with two enabled providers and a `providers:` chain.
 fn config_with_chain(dir: &std::path::Path, chain: &str) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -88,7 +85,7 @@ fn the_configured_chain_decides_which_provider_is_tried_first() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // `beta` first, against alphabetical order — the case the old behaviour failed.
+    // `beta` first defeats alphabetical order (the regression case).
     let beta_first = config_with_chain(
         &dir,
         "providers:\n  - provider: beta\n  - provider: alpha\n",
@@ -99,8 +96,7 @@ fn the_configured_chain_decides_which_provider_is_tried_first() {
         "the chain's first entry answers"
     );
 
-    // Reversing the list reverses the result: the order is genuinely read, not
-    // coincidentally matching some other ordering.
+    // Reversing the chain reverses the result.
     let alpha_first = config_with_chain(
         &dir,
         "providers:\n  - provider: alpha\n  - provider: beta\n",
@@ -123,8 +119,7 @@ fn an_unknown_name_in_the_chain_does_not_break_the_agent() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // `ollama` is listed but never enabled — a warning, not a boot failure;
-    // enabled providers still run in the order given.
+    // Unknown providers in chain are warnings; enabled ones still run in order.
     let config = config_with_chain(
         &dir,
         "providers:\n  - provider: ollama\n  - provider: beta\n  - provider: alpha\n",
@@ -143,13 +138,11 @@ fn a_provider_the_chain_omits_is_still_reachable() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // `alpha` is enabled but unlisted — it must still be reachable (not
-    // silently dropped), just after the listed entries, so `beta` answers first.
+    // Unlisted enabled providers stay reachable, after chain entries.
     let config = config_with_chain(&dir, "providers:\n  - provider: beta\n");
     assert_eq!(answer(&config, &ext_dir), "from-beta");
 
-    // With no chain at all, boot order stands and `alpha` (alphabetically first)
-    // answers — the documented default when the key is absent.
+    // No chain: boot order applies, `alpha` (alphabetically first) answers.
     let config = config_with_chain(&dir, "");
     assert_eq!(answer(&config, &ext_dir), "from-alpha");
 }

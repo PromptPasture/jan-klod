@@ -1,23 +1,11 @@
 //! The one keybinding table (#97, #104).
 //!
-//! Modelled on [`crate::commands`]: a `const` array that renders both the
-//! status bar's hint and — from 19h
-//! ([#105](https://github.com/PromptPasture/jan-klod/issues/105)) — a help
-//! overlay, so the two cannot disagree with each other or with what a keypress
-//! actually does.
-//!
-//! [`hint`] is a function of a table and a [`Context`], not of [`BINDINGS`]
-//! alone, precisely so a test can hand it a different table and watch the
-//! string change — the shape #104's Acceptance line 3 asks for: "the hint for a
-//! binding changes when the table entry changes, so a hand-written duplicate
-//! would fail". `crate::tui::status_hint` calls [`status_hint`], which is the
-//! one place that closes over [`BINDINGS`].
+//! One `const` table → status bar hint + help overlay (#105) → no disagreement.
+//! [`hint`] takes table argument (not just [`BINDINGS`]) so tests can substitute
+//! a different table and verify the hint derives from the table (not hand-written).
 
-/// Which state a binding applies in.
-///
-/// Four of the five mirror [`crate::app::Turn`]; [`Self::DialogClosed`] is the
-/// fifth — a prompt is pending but its modal was dismissed with `Esc`, which
-/// reads keys differently than either an open dialog or a plain idle turn.
+/// Which state a binding applies in (four mirror [`crate::app::Turn`];
+/// [`Self::DialogClosed`] is fifth—prompt pending after Esc—reads keys differently).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Context {
     /// Nothing running. The composer's text is a new message.
@@ -132,14 +120,9 @@ pub const BINDINGS: &[Binding] = &[
     },
 ];
 
-/// Render the hint string `table` offers for `context` — every entry whose
-/// [`Binding::context`] matches, in table order, joined the way the status bar
-/// has always shown them.
-///
-/// Takes `table` as an argument rather than reading [`BINDINGS`] directly, so
-/// a test can substitute a different table and observe the difference: that is
-/// what proves the status bar's hint is *produced from* the table rather than
-/// a string that merely resembles it.
+/// Render hint string for `context` from matching `table` entries, joined with " · ".
+/// Takes `table` as argument (not [`BINDINGS`] directly) so tests can verify
+/// the hint derives from the table, not a hand-written duplicate.
 #[must_use]
 pub fn hint(table: &[Binding], context: Context) -> String {
     table
@@ -156,9 +139,7 @@ pub fn hint(table: &[Binding], context: Context) -> String {
         .join(" · ")
 }
 
-/// The narrow form of [`hint`] — the first binding only, for #104's 60–79
-/// width band ("fewer status hints"). Still produced from `table`, for the
-/// same reason [`hint`] is.
+/// Narrow form of [`hint`]: first binding only (#104's 60–79 band, "fewer status hints").
 #[must_use]
 pub fn hint_narrow(table: &[Binding], context: Context) -> String {
     table

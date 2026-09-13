@@ -8,9 +8,9 @@
 //! something a shape cannot say. A screen with nothing happening on it is
 //! entirely grey.
 //!
-//! There is one ramp, read from either end. On a dark terminal `ink-0` is the
-//! background and `snow` is emphasis; on a light terminal those swap. There is
-//! no second palette to keep in step.
+//! One ramp, read from either end. On a dark terminal `ink-0` is the
+//! background and `snow` is emphasis; on a light terminal those swap. No second
+//! palette to maintain.
 //!
 //! # Roles, not steps
 //!
@@ -78,9 +78,8 @@ struct Swatch {
 
 /// One row of the tables below.
 ///
-/// A constructor rather than a struct literal purely so each row stays on one
-/// line: rustfmt expands `Swatch { .. }` to five, and a ten-step ramp written
-/// out that way stops reading as the table it is.
+/// Constructor (not struct literal) to keep each row on one line: rustfmt
+/// expands `Swatch { .. }` to five, breaking the table appearance.
 const fn sw(rgb: (u8, u8, u8), xterm: u8, basic: Color) -> Swatch {
     Swatch { rgb, xterm, basic }
 }
@@ -122,7 +121,7 @@ const RAMP: [Swatch; 10] = [
     sw((0x0B, 0x0B, 0x0C), 232, Color::Black),    // ink-0
 ];
 
-/// Names for the ten [`RAMP`] steps. Private, and that is the design.
+/// Names for the ten [`RAMP`] steps—private by design.
 #[derive(Debug, Clone, Copy)]
 enum Tone {
     Snow = 0,
@@ -199,8 +198,7 @@ pub enum GlyphSet {
 /// A state the interface has to show without relying on colour.
 ///
 /// Callers ask for `Glyph::ToolDone`, never for a literal `✓`: the theme owns
-/// which vocabulary is in use, and a literal in a drawing routine is a literal
-/// that never degrades.
+/// which vocabulary is in use, and literals in drawing routines never degrade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glyph {
     /// The rule down the left of a message block.
@@ -237,7 +235,7 @@ pub enum Glyph {
 impl Glyph {
     /// Every variant, so a caller sweeping the vocabulary cannot miss one.
     ///
-    /// A `match` in [`Glyph::forms`] keeps this honest in the other direction:
+    /// A `match` in [`Glyph::forms`] ensures correctness the other way:
     /// adding a variant without a form is a compile error.
     pub const ALL: [Self; 12] = [
         Self::MessageGutter,
@@ -256,10 +254,9 @@ impl Glyph {
 
     /// The Unicode form and the ASCII one, in that order.
     ///
-    /// `tool completed` is `*` in ASCII rather than #97's original `+`: the
-    /// table gave `+` to both it and `diff added`, and under monochrome the
-    /// glyph is the whole signal, so two states cannot share one. `✓` and `+`
-    /// were already distinct in Unicode; only the fallback needed moving.
+    /// `tool completed` is `*` (vs #97's `+`) because both roles had `+`, and
+    /// monochrome needs distinct glyphs per state. They were distinct in
+    /// Unicode; only the fallback moved.
     #[must_use]
     pub const fn forms(self) -> (&'static str, &'static str) {
         match self {
@@ -335,8 +332,8 @@ pub struct Theme {
 impl Theme {
     /// A theme for a terminal whose capabilities are already known.
     ///
-    /// All three are arguments rather than something this constructor sniffs,
-    /// so a test can name the terminal it means.
+    /// All three are arguments, not auto-detected, so a test can name the
+    /// terminal it means.
     #[must_use]
     pub const fn new(mode: Mode, depth: Depth, glyphs: GlyphSet) -> Self {
         Self {
@@ -348,12 +345,10 @@ impl Theme {
 
     /// Resolve a theme from the environment.
     ///
-    /// `lookup` is the environment, injected rather than read: a detector that
-    /// calls `std::env::var` itself can only be tested by mutating a
-    /// process-global, and tests that do that race each other. Running under
-    /// `cargo-nextest`, one process per test, would hide the race rather than
-    /// remove it, so it is not a substitute for taking the environment as an
-    /// argument.
+    /// `lookup` is the environment, injected not read. Auto-detecting
+    /// `std::env::var` requires global mutation for tests, creating races.
+    /// `cargo-nextest` masks these without fixing them, so it can't substitute
+    /// for proper injection.
     ///
     /// `force_ascii` is the `--ascii` flag: a command-line override beats the
     /// locale, and only the locale.
@@ -364,11 +359,10 @@ impl Theme {
     /// dark. Depth: `COLORTERM` → `TERM` → sixteen colours. Glyphs:
     /// `force_ascii` → `LC_ALL` / `LC_CTYPE` / `LANG` → ASCII.
     ///
-    /// #97 also lists a terminal background *query* between `COLORFGBG` and the
-    /// default, "where the backend supports it". This one does not: crossterm
-    /// 0.29, which ratatui 0.30 bundles, has no such API — its only OSC
-    /// sequences are for the clipboard. Rather than leave a stub, the chain
-    /// falls through to dark, which is the documented default anyway.
+    /// #97 includes a terminal background query between `COLORFGBG` and the
+    /// default. This tool doesn't: crossterm (in ratatui 0.30) lacks it—its only
+    /// OSC sequences are clipboard-only. So the chain falls through to dark, the
+    /// documented default.
     pub fn detect(lookup: impl Fn(&str) -> Option<String>, force_ascii: bool) -> Self {
         Self {
             mode: Self::detect_mode(&lookup),
@@ -379,8 +373,7 @@ impl Theme {
 
     /// [`Theme::detect`] against this process's own environment.
     ///
-    /// The one place in this module that touches `std::env`, so that everything
-    /// above it stays a pure function of its arguments.
+    /// This module's sole `std::env` access, keeping higher-level code pure.
     #[must_use]
     pub fn from_process_env(force_ascii: bool) -> Self {
         Self::detect(|key| std::env::var(key).ok(), force_ascii)
@@ -501,9 +494,9 @@ impl Theme {
     /// The surface a code or tool block sits on, inside the transcript.
     ///
     /// #97's table gives this to `ink-2` on a dark terminal and leaves the
-    /// light column empty, so a light terminal reuses [`Theme::raised`]: there
-    /// is no step between `snow` and `chalk` to spend on it, and inventing one
-    /// would be the second palette this design does not have.
+    /// light column empty, so a light terminal reuses [`Theme::raised`]: no step
+    /// between `snow` and `chalk` to spend on it, and inventing one would be the
+    /// second palette this design does not have.
     ///
     /// The role exists now rather than when the transcript slice needs it,
     /// because a ramp step no role can reach is a shade a caller would have to
@@ -528,8 +521,8 @@ impl Theme {
 
     /// Muted text: the status line, timestamps.
     ///
-    /// The one role that is the same step in both directions — `smoke` sits at
-    /// the middle of the ramp, so it is equally far from either background.
+    /// The one role using the same step — `smoke` sits mid-ramp, equally far
+    /// from either background.
     ///
     /// # This role carries no contrast floor, and that is a decision (#135)
     ///
@@ -627,9 +620,9 @@ mod tests {
 
     /// WCAG 2.1 relative luminance, on the truecolor form of a role.
     ///
-    /// Only [`Depth::TrueColor`] is checked, and deliberately: the downsampled
+    /// Only [`Depth::TrueColor`] is checked—intentionally: the downsampled
     /// forms are a fixed map onto palettes this crate does not define, so a
-    /// ratio computed against xterm-256's idea of index 240 would be measuring
+    /// ratio computed against xterm-256's idea of index 240 would measure
     /// that palette rather than this ramp.
     // The coefficients are quoted from WCAG 2.1 as a weighted sum, which is how
     // the specification writes them. `suboptimal_flops` would have this as
@@ -679,15 +672,14 @@ mod tests {
 
     /// The roles #128's Acceptance puts a floor under, with that floor.
     ///
-    /// `border_idle` and `border_active` are **not** here, and that is the
-    /// mascot rule rather than an omission: the target is "any border or glyph
-    /// **that carries meaning** ≥ 3:1", and in this design a grey carries
-    /// structure while colour carries meaning. The border that means something
-    /// — the focused pane's — is `focus()`, which is on this list. The grey
-    /// borders are separators, and holding them to 3:1 against their own
-    /// surface would light up every idle rule on the screen, which is the
-    /// opposite of "a screen with nothing happening on it is entirely grey".
-    /// They get their own weaker invariant below.
+    /// `border_idle` and `border_active` are **not** here—the mascot rule, not
+    /// an omission: the target is "any border or glyph **that carries meaning**
+    /// ≥ 3:1", and in this design a grey carries structure while colour carries
+    /// meaning. The border that means something — the focused pane's — is
+    /// `focus()`, which is on this list. The grey borders are separators, and
+    /// holding them to 3:1 against their own surface would light up every idle
+    /// rule on the screen, contrary to "a screen with nothing happening on it is
+    /// entirely grey". They get their own weaker invariant below.
     ///
     /// `muted` is absent for a different reason, and since #135 it is a settled
     /// one rather than a deferral: no ramp step can give it an AA floor from
@@ -815,7 +807,7 @@ mod tests {
 
     /// Detect against exactly these variables and nothing else.
     ///
-    /// The closure is the injection: no test here can see, or disturb, the
+    /// The closure is the injection: tests can't see or disturb the
     /// environment the test runner happens to be in.
     fn detect(vars: &[(&str, &str)], force_ascii: bool) -> Theme {
         let env: HashMap<&str, &str> = vars.iter().copied().collect();
@@ -1020,7 +1012,7 @@ mod tests {
                 for (n, line) in text.lines().enumerate() {
                     // Everything from the first `//` is a comment. A `//` inside
                     // a string literal would truncate the line early, which can
-                    // only make this check *miss* something, never invent one.
+                    // only make this miss something, never invent one.
                     let code = line.split("//").next().unwrap_or_default();
                     assert!(
                         !code.contains("Color::"),
@@ -1070,11 +1062,10 @@ mod tests {
 
     #[test]
     fn monochrome_still_tells_every_state_apart() {
-        // The carets are the composer's cursor rather than states, and they are
-        // the marks whose *position* already says what they are; `Caret` shares
-        // `>` with `Collapsed` in ASCII, which is #97's table as drawn. Every
-        // actual state has to stand alone, in both vocabularies, because under
-        // `Mode::Mono` the glyph is the entire signal.
+        // Carets are the composer's cursor, not states; their *position* already
+        // signals what they are. `Caret` shares `>` with `Collapsed` in ASCII,
+        // per #97's table. Every actual state must stand alone, in both
+        // vocabularies, because under `Mode::Mono` the glyph is the entire signal.
         //
         // Excluding them here is why
         // `the_two_carets_are_told_apart_in_both_vocabularies` exists: the pair

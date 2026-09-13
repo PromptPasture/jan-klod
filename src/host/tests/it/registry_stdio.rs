@@ -1,10 +1,10 @@
 //! `registry-mcp` over a stdio child, end to end (#110).
 //!
 //! Most MCP servers in the wild are stdio processes, so this is the transport
-//! that decides whether the inbound half of the ecosystem port reaches the
-//! ecosystem. The test drives the whole path a real one takes: the host starts a
-//! granted child, the guest completes the MCP handshake over its pipe, lists its
-//! tools, and calls one.
+//! that decides whether the inbound ecosystem port reaches the ecosystem. The
+//! test drives the whole path a real one takes: the host starts a granted
+//! child, the guest completes the MCP handshake over its pipe, lists its tools,
+//! and calls one.
 //!
 //! **The server is a shell script, not a real MCP server**, and offline by
 //! construction — there is no network anywhere in this file. What it proves is
@@ -23,13 +23,11 @@ use crate::common;
 /// The guests a turn through the MCP registry needs.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "registry-mcp.wasm"];
 
-/// A string that appears in one test's child argv and nowhere else, so the
-/// process can be found without knowing its pid.
+/// A string in one test's child argv (not elsewhere) to find the process.
 ///
-/// **Per test, not per file.** nextest runs each test in its own process and
-/// several in parallel, so a marker shared across tests makes `pgrep` find
-/// somebody else's child — the lifetime test failed exactly that way, blaming
-/// the guarantee for another test's still-running server.
+/// **Per test, not per file.** nextest runs tests in parallel, so a shared
+/// marker makes `pgrep` find another test's child (the lifetime test failed
+/// exactly that way).
 fn marker(tag: &str) -> String {
     format!("jk-stdio-fixture-110-{tag}-{}", std::process::id())
 }
@@ -37,28 +35,24 @@ fn marker(tag: &str) -> String {
 /// A minimal MCP server: read a JSON-RPC line, answer it, repeat.
 ///
 /// Answers only the three methods this test drives. Written as one `sh -c`
-/// string rather than a file on disk so the fixture cannot drift from the test
-/// that uses it, and so there is nothing to clean up.
+/// string rather than a file on disk so the fixture cannot drift from the test,
+/// and so there is nothing to clean up.
 ///
-/// **One line, and that is not cosmetic.** It is spliced into a double-quoted
-/// YAML scalar, where newlines fold to spaces — a multi-line script became
-/// `# marker while IFS= read …`, the leading comment swallowed the whole
-/// program, and the child exited before reading a byte. Which surfaced as
-/// `initialize failed: server exited`, i.e. exactly what a broken *server*
-/// looks like.
+/// **One line, not cosmetic.** Spliced into a YAML string where newlines fold
+/// to spaces — a comment swallowed the whole program, the child exited before
+/// reading, surfacing as `initialize failed: server exited`.
 ///
 /// `MARKER` is a variable assignment rather than a comment for the same reason:
 /// it has to be in the child's argv without disabling anything after it.
 ///
-/// **The trailing `sleep 30` is what makes the lifetime test mean anything.**
-/// A stdio server reads stdin, so when the host drops the pipe the loop hits
-/// EOF and the shell exits *on its own* — and a test asking "is the child gone"
-/// would pass whether or not anything killed it. It is the same trap #109 hit
-/// with `cat`, arrived at from the other side. With the sleep the process is
-/// still there in thirty seconds unless the host kills it, and the probe below
-/// confirms that: with `LiveChild::drop` emptied, the lifetime test fails.
-/// Not `exec sleep`, because that replaces the shell and takes `MARKER` out of
-/// argv with it, leaving nothing for `pgrep` to find.
+/// **The trailing `sleep 30` makes the lifetime test meaningful.** A stdio
+/// server reads stdin, so when the host drops the pipe the loop hits EOF and
+/// the shell exits *on its own* — and a test asking "is the child gone" would
+/// pass whether or not anything killed it. It is the same trap #109 hit with
+/// `cat`, arrived at from the other side. With `sleep` the process persists
+/// unless killed; the probe confirms this (with `LiveChild::drop` emptied, the
+/// test fails). Not `exec sleep` because that replaces the shell and hides
+/// `MARKER`.
 fn fixture_script(tag: &str) -> String {
     let reply =
         |result: &str| format!(r#"printf '{{"jsonrpc":"2.0","id":1,"result":{result}}}\n'"#);
@@ -80,11 +74,9 @@ fn fixture_script(tag: &str) -> String {
 /// Config with `registry.mcp` enabled over stdio, and the child granted.
 ///
 /// Two halves that must agree: `execution.long-lived` is the operator granting
-/// a process, and the server entry is the guest naming it. That is the whole
-/// shape of the capability — the guest supplies a name, never a command.
-///
-/// `script` is written out by the caller so a test can grant a server that
-/// misbehaves as easily as one that works.
+/// a process, and the server entry is the guest naming it. The guest supplies a
+/// name, never a command. `script` is written out by the caller so a test can
+/// grant a server that misbehaves as easily as one that works.
 fn config_yaml_with(workspace: &str, script: &str) -> String {
     let script = script.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
@@ -155,16 +147,7 @@ fn booted_against(
     // `confine` subcommand, but under nextest *this test binary*, which answers
     // `error: Unrecognized option: 'writable'` and exits. The fixture server
     // then dies before reading a byte, which surfaces as `initialize failed:
-    // server exited` and is indistinguishable from a broken server.
-    //
-    // That is not hypothetical: it is [#132](https://github.com/PromptPasture/jan-klod/issues/132),
-    // which held `main` red for eight runs, and it is the second time this
-    // repository has paid for it — [#124](https://github.com/PromptPasture/jan-klod/issues/124)
-    // was the first, in `execution_config.rs`. These tests were written and
-    // verified on macOS, where Seatbelt shells out to `/usr/bin/sandbox-exec`
-    // and re-executes nothing, so the defect is invisible on the platform that
-    // wrote them.
-    //
+    // server exited` (see #132, #124).
     // Named unconditionally rather than behind a `cfg`: one code path for both
     // platforms, and on macOS it is simply unused.
     let runtime = Runtime::boot(&config, common::repo_root().join("ext"))
@@ -205,10 +188,8 @@ fn a_stdio_server_named_in_config_lists_its_tools() {
 
 /// The other half of acceptance line 1: `tools/call` through the same child.
 ///
-/// Driven through a turn rather than by calling the fleet directly, because the
-/// model naming a tool is the only path a real call takes — and the tool's
-/// output is visible from outside only in the request body of the completion
-/// that follows it.
+/// Driven through a turn (the only real path) — the tool's output is visible
+/// only in the next completion's request body.
 #[test]
 fn a_tool_on_a_stdio_server_can_be_called() {
     if !common::guests_staged(&GUESTS) {
@@ -347,8 +328,7 @@ fn a_malformed_reply_leaves_the_server_down_rather_than_breaking_the_turn() {
     // to be asked about.
     assert!(
         fixture_running("malformed"),
-        "the fixture must be running and merely unparseable — if it is gone, \
-         this test is asserting the absence of a server that never started"
+        "the fixture must be running and merely unparseable"
     );
     assert!(
         !metas.to_string().contains("echo-fixture"),
@@ -388,8 +368,7 @@ fn a_silent_child_gives_up_instead_of_pinning_the_core() {
     // this test describes is never reached. See the note in the malformed test.
     assert!(
         fixture_running("silent"),
-        "the fixture must be alive and merely silent — a child that exited \
-         never exercises the budget this test is about"
+        "the fixture must be alive and merely silent"
     );
     assert!(
         !metas.to_string().contains("echo-fixture"),

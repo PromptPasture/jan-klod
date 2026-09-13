@@ -79,8 +79,7 @@ fn adoptable_workspace(cwd: &Path, home: Option<&Path>) -> bool {
 }
 
 /// Deterministic boot tier for a category. Dependencies boot before dependents:
-/// registries first, then providers, then the managers that consume them, then
-/// leaf surfaces (tools, agents, api, chat).
+/// registries, providers, managers that consume them, leaf surfaces (tools, agents, api, chat).
 fn boot_rank(category: &str) -> u8 {
     match category {
         "registry" => 1,
@@ -98,11 +97,10 @@ fn boot_rank(category: &str) -> u8 {
 ///
 /// `tool-*` and `registry-*` are the categories `build_agent` can genuinely
 /// defer: a tool that a turn never calls, or a skills/MCP registry nobody
-/// queries, costs nothing until something asks for it. `agent` is listed for
-/// the same reason even though it is currently inert — `build_agent` never
+/// queries, costs nothing until something asks for it. `agent` is listed
+/// the same way even though it is currently inert — `build_agent` never
 /// instantiates that category today and no `agent-*` component exists to
-/// stage, so this is future-proofing for when it does, not a claim that it is
-/// exercised now.
+/// stage, so this is future-proofing, not a claim that it is exercised now.
 ///
 /// **Providers and interceptors are never lazy — not negotiable.** The loop
 /// needs a provider on turn one, and a provider that cannot instantiate must
@@ -141,8 +139,8 @@ pub struct LoadedExtension {
 
 /// The `host-*` interfaces `component` imports, sorted and deduplicated.
 ///
-/// Read from the component's own type, so it describes the artifact rather than
-/// any claim about it. Two things are deliberately not in the result, and both
+/// Read from the component's own type, so it describes the artifact not any
+/// claim about it. Two things are deliberately not in the result, and both
 /// would otherwise be here:
 ///
 /// * **Exports.** `tool-callable` and `extension-lifecycle` are what a guest
@@ -176,7 +174,7 @@ fn host_capabilities(component: &Component, engine: &Engine) -> Vec<String> {
 ///
 /// Neutral about what to *do*: boot refuses on all but `Consistent` (unless
 /// `allow-unmanifested` covers the absent case) and `ext install` refuses on
-/// all of them, and each maps this to its own error with its own wording.
+/// all, mapping this to its own error with its own wording.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Verdict {
     /// A manifest is present, built against a compatible interface package,
@@ -260,9 +258,8 @@ pub struct Runtime {
     /// against the deployment rather than the working directory.
     config_dir: PathBuf,
     /// Wasmtime's own compile cache, wired into `engine` at boot (#60). Kept
-    /// here — rather than read back out of `engine`'s `Config`, which does not
-    /// expose it — so [`Self::compile_cache_stats`] can report whether the
-    /// components just compiled were cache hits or misses.
+    /// here (not read back from `engine`'s `Config`, which doesn't expose it)
+    /// so [`Self::compile_cache_stats`] can report cache hits or misses.
     compile_cache: wasmtime::Cache,
     /// The binary [`sandbox_landlock::LandlockBackend`] re-executes to confine a
     /// command, when it must not be discovered. See
@@ -399,26 +396,23 @@ impl Runtime {
         })
     }
 
-    /// Name the binary the Landlock backend re-executes, instead of letting it
-    /// discover one.
+    /// Name the binary the Landlock backend re-executes (instead of discovery).
     ///
     /// # This exists for tests, and only tests should call it
     ///
-    /// [`sandbox_landlock::LandlockBackend::here`] resolves the wrapper with
-    /// `std::env::current_exe()`, which is right in production — the process
-    /// booting a [`Runtime`] *is* `jan-klod-gateway`, the binary that handles
+    /// [`sandbox_landlock::LandlockBackend::here`] resolves the wrapper via
+    /// `std::env::current_exe()`, which is correct in production — the process
+    /// booting a [`Runtime`] *is* `jan-klod-gateway`, the binary handling
     /// the `confine` subcommand. Under `cargo test` it is the test binary,
-    /// which does not, so every confined command dies with `error:
-    /// Unrecognized option: 'writable'` — a failure that reads exactly like
-    /// Landlock refusing the command
+    /// which doesn't, so confined commands die with `error: Unrecognized option: 'writable'`
+    /// — a failure reading like Landlock refusing
     /// ([#124](https://github.com/PromptPasture/jan-klod/issues/124)).
     ///
     /// `sandbox_landlock.rs` avoids this by constructing its backend directly
-    /// with `LandlockBackend::new`. A test that boots a real `Runtime` cannot:
+    /// via `LandlockBackend::new`. A test booting a real `Runtime` cannot:
     /// the backend is resolved inside [`Self::open_process_runner`]. This is
-    /// that seam, and it is deliberately **not** a `config.yaml` key — an
-    /// operator who could name the confinement wrapper could name one that
-    /// confines nothing.
+    /// that seam, deliberately **not** a `config.yaml` key — an operator who
+    /// could name the wrapper could name one that confines nothing.
     #[must_use]
     pub fn with_sandbox_wrapper(mut self, wrapper: impl Into<PathBuf>) -> Self {
         self.sandbox_wrapper = Some(wrapper.into());
@@ -428,10 +422,9 @@ impl Runtime {
     /// Wasmtime's own compile-cache hit/miss counters for this boot's
     /// `Engine`, as `(hits, misses)`.
     ///
-    /// A cache hit is Cranelift skipped for that component: the boot-plan
-    /// report line built from this is the acceptance criterion's proof that a
-    /// second boot skips it, read from Wasmtime's own counters rather than
-    /// inferred from how long boot took.
+    /// A cache hit is Cranelift skipped for that component. The boot-plan
+    /// report built from this proves a second boot skips it via Wasmtime's
+    /// own counters, not inferred from boot duration.
     #[must_use]
     pub fn compile_cache_stats(&self) -> (usize, usize) {
         (
@@ -453,18 +446,16 @@ impl Runtime {
     }
 
     /// Instantiate every compiled component whose category is not lazy (#59:
-    /// `tool-*`/`registry-*`/`agent` are skipped — compiled already, by
-    /// `Runtime::boot`, and left that way) and run its lifecycle
-    /// (`init` → `start`). Missing components are skipped too. Returns the ids
-    /// that were started.
+    /// `tool-*`/`registry-*`/`agent` are skipped — compiled already by
+    /// `Runtime::boot`, left that way) and run its lifecycle (`init` → `start`).
+    /// Missing components skipped too. Returns the ids that were started.
     ///
     /// This is the boot-plan path (the default, no-subcommand `jan-klod`
-    /// invocation): a quick read on whether the things that must work on turn
-    /// one — providers, interceptors — actually do, without paying to
-    /// instantiate a dozen tool guests a plan-only run will never call.
-    /// [`Self::start_all_eager`] is the thorough sibling that does not skip
-    /// anything; `verify` uses that one, because proving a lazy category
-    /// *would* instantiate is the entire point of `verify`.
+    /// invocation): a quick read on whether things that must work on turn one
+    /// — providers, interceptors — actually do, without paying to instantiate
+    /// tool guests a plan-only run never calls. [`Self::start_all_eager`] is
+    /// the thorough sibling that skips nothing; `verify` uses that because
+    /// proving a lazy category *would* instantiate is the entire point.
     ///
     /// # Errors
     /// Returns [`CoreError::Instantiate`] if a component cannot be instantiated,
@@ -476,11 +467,10 @@ impl Runtime {
 
     /// Like [`Self::start_all`], but instantiates every category regardless of
     /// laziness — including `tool-*`/`registry-*`/`agent`. What `verify` (both
-    /// offline and `--live`) needs: its whole reason to exist is proving a
-    /// component instantiates and starts *before* a real turn finds out the
-    /// hard way, and a lazy category that verify didn't force would be exactly
-    /// the "gate that reports green while proving nothing" shape this
-    /// repository has been burned by before.
+    /// offline and `--live`) needs: its reason to exist is proving a component
+    /// instantiates and starts *before* a real turn finds out the hard way.
+    /// A lazy category that verify didn't force would be the "gate that reports
+    /// green while proving nothing" shape this repository has been burned by.
     ///
     /// # Errors
     /// Returns [`CoreError::Instantiate`] if a component cannot be instantiated,
@@ -514,10 +504,10 @@ impl Runtime {
     }
 
     /// Instantiate and start one compiled extension. A `tool-*`, `registry-*` or
-    /// `interceptor-*` category is instantiated through its own seam (the same
-    /// one [`Self::build_agent`] uses), because its world imports more than the
-    /// neutral `extension-world` grants; everything else goes through the shared
-    /// linker. Returns the id once its lifecycle has started.
+    /// `interceptor-*` category goes through its own seam (same as
+    /// [`Self::build_agent`]), because its world imports more than the neutral
+    /// `extension-world` grants; everything else goes through the shared linker.
+    /// Returns the id once lifecycle starts.
     fn start_one(
         &self,
         ext: &LoadedExtension,
@@ -576,8 +566,8 @@ impl Runtime {
     }
 
     /// Instantiate through the shared, capability-neutral linker and run its
-    /// lifecycle (`init` → `start`). The path every category not listed in
-    /// [`Self::start_one`] takes.
+    /// lifecycle (`init` → `start`). Used by every category not listed in
+    /// [`Self::start_one`].
     fn start_via_shared_linker(
         &self,
         ext: &LoadedExtension,
@@ -638,12 +628,12 @@ impl Runtime {
 
     /// Boot the thin-loop agent from config: instantiate every enabled+compiled
     /// `interceptor.*` as a dispatcher (in boot/load order) and every
-    /// `provider.*` as a completer fallback chain, ready to run turns through the
+    /// `provider.*` as a completer fallback chain, ready for turns via
     /// [`conductor`].
     ///
-    /// `http_factory` mints a fresh `host-http` backend per provider (each provider
-    /// instance owns its own store). An interceptor's `llm-provider` import is
-    /// backed by a dedicated provider instance (see [`Self::open_classifier`]).
+    /// `http_factory` mints a fresh `host-http` backend per provider (each owns
+    /// its own store). An interceptor's `llm-provider` import is backed by a
+    /// dedicated provider instance (see [`Self::open_classifier`]).
     ///
     /// # Errors
     /// Returns a [`CoreError`] if any interceptor or provider fails to instantiate
@@ -657,10 +647,9 @@ impl Runtime {
         let project_instructions = Self::project_instructions(workspace.as_ref());
         let process = self.open_process_runner(workspace.as_ref());
 
-        // Pass 1: providers (instantiated now — eager, not negotiable, see
-        // `is_lazy_category`) + tools + registries (compiled, held pending;
-        // before interceptors so tool-selector can be handed the combined
-        // advertised metadata once something actually asks for it).
+        // Pass 1: providers (instantiated now — eager, not negotiable) +
+        // tools + registries (compiled, held pending; before interceptors so
+        // tool-selector gets combined advertised metadata when asked).
         let ProvidersAndTools {
             providers,
             provider_ids,
@@ -671,15 +660,14 @@ impl Runtime {
             tools: tool_fleet,
             registry: registry_fleet,
         };
-        // Computed only if there is an interceptor to serve it to — with none
-        // enabled, nothing in `instantiate_interceptors` below reads it, so
-        // resolving it would instantiate every pending tool/registry for an
-        // audience of nobody. Enabled interceptors are counted from the same
-        // resolved-instance list `instantiate_interceptors` itself iterates,
-        // not by asking whether any *particular* interceptor wants "tools" —
-        // that would be core deciding which guest's opinion matters, and the
-        // core holds mechanism, not policy (see #59's PR for why the shipped
-        // config's `tool-selector` still forces this every time regardless).
+        // Computed only if an interceptor will use it — with none enabled,
+        // nothing in `instantiate_interceptors` below reads it, so resolving it
+        // instantiates every pending tool/registry for nobody. Enabled
+        // interceptors are counted from the same resolved-instance list
+        // `instantiate_interceptors` iterates, not by asking which interceptor
+        // wants "tools" — that would be core deciding which guest's opinion
+        // matters, core holds mechanism not policy (see #59's PR for why
+        // shipped config's `tool-selector` still forces this).
         let any_interceptor_enabled = self.extensions.iter().any(|ext| {
             ext.instance.category == "interceptor" && matches!(ext.state, LoadState::Compiled(_))
         });
@@ -689,10 +677,10 @@ impl Runtime {
             serde_json::Value::Array(Vec::new())
         };
 
-        // An interceptor that consults a model (intent routing) gets its own
-        // provider instance rather than a handle into the chain above: the
-        // conductor holds the chain mutably for the whole turn, so reaching into
-        // it mid-dispatch would alias it.
+        // An interceptor consulting a model (intent routing) gets its own
+        // provider instance, not a handle into the chain: the conductor holds
+        // the chain mutably for the whole turn, reaching into it mid-dispatch
+        // would alias it.
         let classifier = self.open_classifier(http_factory)?;
 
         // Opened before the interceptors, because they share it: an interceptor's
@@ -723,9 +711,9 @@ impl Runtime {
     }
 
     /// Pass 1 of [`Self::build_agent`]: instantiate every enabled provider
-    /// (eager — see [`is_lazy_category`]), and register every enabled tool and
-    /// registry instance as pending — compiled already, instantiated the first
-    /// time the fleet is actually asked for something (#59).
+    /// (eager — see [`is_lazy_category`]), register every enabled tool and
+    /// registry instance as pending — compiled already, instantiated on first
+    /// use (#59).
     fn instantiate_providers_and_tools(
         &self,
         http_factory: &dyn Fn() -> route::HttpFn,
@@ -804,7 +792,7 @@ impl Runtime {
     }
 
     /// Pass 2 of [`Self::build_agent`]: instantiate every enabled interceptor,
-    /// each served the tool set advertised by pass 1 at `select-tools`.
+    /// each served the tool set from pass 1 at `select-tools`.
     fn instantiate_interceptors(
         &self,
         tools_advert: &serde_json::Value,
@@ -858,11 +846,11 @@ impl Runtime {
 
     /// The project's own instructions, if the workspace has an `AGENTS.md`.
     ///
-    /// Read **host-side** and handed to `interceptor-system` as config, rather
-    /// than granting interceptors `host-fs` just to read one file. Only the
-    /// workspace root — climbing to an ancestor directory would let a nested
-    /// checkout inherit another project's instructions. Truncated at a cap with a
-    /// note, since a system prompt is paid for on every turn.
+    /// Read **host-side** and handed to `interceptor-system` as config,
+    /// avoiding granting interceptors `host-fs` just to read one file. Only
+    /// the workspace root — climbing to ancestors would let a nested checkout
+    /// inherit another project's instructions. Truncated at a cap with a note,
+    /// since a system prompt is paid for on every turn.
     fn project_instructions(workspace: Option<&host_fs::Workspace>) -> Option<String> {
         /// Generous for conventions, small next to a context window.
         const MAX_BYTES: usize = 16 * 1024;
@@ -883,9 +871,9 @@ impl Runtime {
 
     /// Bounds a turn runs under, from the top-level `limits:` block.
     ///
-    /// The cycle cap exists so a model that keeps emitting tool calls cannot spin —
-    /// or, on a metered endpoint, spend — forever. Eight is a real constraint for
-    /// coding work, so it has to be raisable by whoever is paying.
+    /// The cycle cap prevents a model that keeps emitting tool calls from spinning
+    /// (or spending, on metered endpoints) forever. Eight is a real constraint
+    /// for coding work, so it has to be raisable by whoever is paying.
     fn limits(&self) -> conductor::Limits {
         let configured = self
             .agent
@@ -899,12 +887,11 @@ impl Runtime {
         }
     }
 
-    /// The destinations guests may reach, derived from what the operator already
-    /// wrote down.
+    /// The destinations guests may reach, derived from what the operator wrote.
     ///
-    /// Every enabled instance's `base-url`/`endpoint`/`url` is allowed even when
-    /// local (a self-hosted model lives on `127.0.0.1`); everything else is
-    /// public-only. A guest cannot widen this — it's built here and closed over
+    /// Every enabled instance's `base-url`/`endpoint`/`url` is allowed even
+    /// locally (a self-hosted model on `127.0.0.1`); everything else is
+    /// public-only. Guests cannot widen this — it's built here and closed over
     /// by the host's HTTP backend.
     #[must_use]
     pub fn egress_policy(&self) -> egress::EgressPolicy {
@@ -921,8 +908,8 @@ impl Runtime {
                 }
             }
         }
-        // An explicit escape hatch for anything config does not already name — a
-        // sidecar, a proxy — spelled out one origin at a time rather than as a
+        // An explicit escape hatch for anything config doesn't already name —
+        // a sidecar, a proxy — spelled out one origin at a time, not as a
         // switch that opens the machine.
         if let Some(list) = self.agent.get("network").and_then(|n| n.get("allow")) {
             for url in list.as_array().into_iter().flatten() {
@@ -935,8 +922,8 @@ impl Runtime {
     }
 
     /// Open the host-side workspace for `host-fs`. Uses the top-level `workspace:`
-    /// config key, falling back to `$PWD` when the key is absent. Un-openable →
-    /// `None` (default-deny).
+    /// config key, falling back to `$PWD` when absent. Un-openable → `None`
+    /// (default-deny).
     fn open_workspace(&self) -> Option<host_fs::Workspace> {
         let root_owned;
         let root: &str = if let Some(r) = self
@@ -976,8 +963,8 @@ impl Runtime {
 
     /// Build the `host-process` runner from the top-level `execution:` config
     /// (`{ enabled, timeout-secs?, output-cap?, sandbox? }`). Disabled unless
-    /// enabled *and* a workspace is configured (the exec cwd is jailed to it),
-    /// and also when `sandbox:` cannot be read.
+    /// enabled *and* a workspace is configured (exec cwd is jailed to it),
+    /// or when `sandbox:` cannot be read.
     fn open_process_runner(
         &self,
         workspace: Option<&host_fs::Workspace>,
@@ -997,8 +984,8 @@ impl Runtime {
                     .and_then(|e| e.get("output-cap"))
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(64 * 1024);
-                // Named environment variables are a grant, one at a time, the
-                // same shape as `network.allow`. A child otherwise gets only
+                // Named environment variables are a grant, one at a time, same
+                // shape as `network.allow`. Children otherwise get only
                 // `host_process::BASE_ENV`.
                 let passthrough: Vec<String> = exec
                     .and_then(|e| e.get("env-passthrough"))
@@ -1012,11 +999,10 @@ impl Runtime {
                     .unwrap_or_default();
                 // The long-lived children the operator named. A separate,
                 // narrower grant than `enabled`: it lists processes a guest may
-                // start rather than permitting it to start processes, so a
-                // guest's own string never becomes a program (#109). An entry
-                // missing `name` or `command` is skipped rather than guessed —
-                // a half-written grant is a grant nobody can read, and the
-                // conservative reading of one is none.
+                // start, not permits arbitrary starts, so a guest's string never
+                // becomes a program (#109). An entry missing `name` or `command`
+                // is skipped, not guessed — a half-written grant is unreadable,
+                // and the conservative reading is none.
                 let long_lived: Vec<host_process::LongLived> = exec
                     .and_then(|e| e.get("long-lived"))
                     .and_then(serde_json::Value::as_array)
@@ -1045,12 +1031,11 @@ impl Runtime {
                             .collect()
                     })
                     .unwrap_or_default();
-                // What a command may do once running, as distinct from what the
+                // What a command may do once running, distinct from what the
                 // runner above bounds. A policy that cannot be read denies
-                // execution outright rather than running unconfined: the
-                // operator asked for something specific about a command's
-                // effects, and guessing at it is the one response that could
-                // silently grant more than they wrote.
+                // execution, not running unconfined: the operator asked for
+                // something specific, and guessing could silently grant more
+                // than they wrote.
                 let policy = match sandbox::SandboxPolicy::from_config(exec, ws) {
                     Ok(policy) => policy,
                     Err(err) => {
@@ -1061,14 +1046,13 @@ impl Runtime {
                         return host_process::ProcessRunner::disabled();
                     }
                 };
-                // One `host_backend()` for both the report and the wiring: two
-                // calls could disagree (the mechanism could vanish between
-                // them), and then the boot line would describe a confinement
-                // the runner does not have.
+                // One `host_backend()` for both report and wiring: two calls
+                // could disagree (mechanism could vanish between them), then
+                // the boot line would describe confinement the runner doesn't have.
                 //
                 // `with_sandbox_wrapper` overrides only *which binary* Landlock
                 // re-executes, never whether confinement happens: an override
-                // that does not resolve leaves `backend` `None`, so the mode
+                // that doesn't resolve leaves `backend` `None`, so the mode
                 // downgrades and the boot line says so, exactly as an absent
                 // mechanism would.
                 let backend = self
@@ -1078,9 +1062,8 @@ impl Runtime {
                         sandbox::host_backend_at(wrapper)
                     });
                 let effective = policy.resolve(backend.as_deref());
-                // `require: true` asked for no command rather than an unconfined
-                // one, so a refusal here is the configuration working, not
-                // failing.
+                // `require: true` asked for no command, not an unconfined one,
+                // so a refusal here is the configuration working, not failing.
                 if let Some(refusal) = policy.refusal(&effective) {
                     eprintln!("WARN [core] {refusal}");
                     return host_process::ProcessRunner::disabled();
@@ -1100,9 +1083,8 @@ impl Runtime {
                 )
                 .with_env_passthrough(passthrough)
                 .with_long_lived(long_lived);
-                // The mode just printed and the confinement just wired come from
-                // the same pair, so the runtime cannot report `Os` while running
-                // commands unconfined.
+                // The mode and confinement come from the same pair, so the
+                // runtime cannot report `Os` while running commands unconfined.
                 match (effective.mode, backend) {
                     (sandbox::SandboxMode::Os, Some(backend)) => {
                         runner.with_sandbox(std::sync::Arc::from(backend), policy)
@@ -1116,12 +1098,12 @@ impl Runtime {
 
     /// Instantiate the provider that answers interceptors' `llm-provider` calls.
     ///
-    /// Uses the instance named by top-level `classifier:`, else the head of the
-    /// fallback chain — lets classification (a two-token question) run on a
-    /// small local model instead of the turn's expensive one.
+    /// Uses the instance named by top-level `classifier:`, else the head of
+    /// the fallback chain — lets classification (a two-token question) run on
+    /// a small local model, not the turn's expensive one.
     ///
     /// Returns `None` when no provider is enabled; callers fall back to the
-    /// conservative default rather than failing the boot.
+    /// conservative default, not failing the boot.
     ///
     /// # Errors
     /// Returns a [`CoreError`] if the chosen provider cannot be instantiated.
@@ -1161,16 +1143,16 @@ impl Runtime {
     }
 
     /// Open the host-side persistent store: top-level `storage.path` gives a
-    /// durable `SQLite` file, and its absence an ephemeral in-memory one.
+    /// durable `SQLite` file, its absence gives ephemeral in-memory.
     ///
     /// Storage is **not** an extension: a store guest would need `host-fs`
     /// granted back to it, and the transcript is the most sensitive thing the
-    /// runtime holds. Guests reach it only through `host-storage`, namespaced to
+    /// runtime holds. Guests reach it only via `host-storage`, namespaced to
     /// themselves.
     ///
     /// A relative `path` resolves against the directory holding `config.yaml`,
-    /// not the working directory — otherwise each directory jan-klod is started
-    /// from would get its own `jan-klod.db` and conversation history.
+    /// not the working directory — otherwise each startup directory gets its
+    /// own `jan-klod.db` and conversation history.
     fn open_store(&self) -> Result<Arc<Mutex<store::Store>>, CoreError> {
         let sqlite_path = self
             .agent
@@ -1207,9 +1189,9 @@ impl Runtime {
         Ok(Arc::new(Mutex::new(store)))
     }
 
-    /// An interceptor's `host-config` section: its own config plus the top-level
-    /// agent keys (`routing`, `providers`) served verbatim, so e.g. task-router can
-    /// resolve `routing.<task>`. An instance's own key wins if it defines one.
+    /// An interceptor's `host-config` section: its own config plus top-level
+    /// agent keys (`routing`, `providers`) served verbatim, so task-router can
+    /// resolve `routing.<task>`. An instance's own key wins if defined.
     fn interceptor_config(&self, instance: &ExtensionInstance) -> serde_json::Value {
         let mut section = instance.config.clone();
         if let (serde_json::Value::Object(map), serde_json::Value::Object(agent)) =
@@ -1228,9 +1210,8 @@ impl Runtime {
 /// Combined tool + registry fleet implementing [`conductor::ToolInvoker`].
 ///
 /// Dispatches first to the `tool-*` fleet, then to the registry fleet (skills + MCP).
-/// Both are lazy (#59): a fleet with nothing pending and nothing live yet costs
-/// nothing until [`Self::tool_names`]/[`Self::all_metas_json`]/`invoke` asks it
-/// for something.
+/// Both are lazy (#59): a fleet with nothing pending or live costs nothing until
+/// [`Self::tool_names`]/[`Self::all_metas_json`]/`invoke` asks for something.
 struct CombinedFleet {
     tools: tool_host::LazyToolFleet,
     registry: registry_host::LazyRegistryFleet,
@@ -1246,17 +1227,16 @@ impl conductor::ToolInvoker for CombinedFleet {
 
 impl CombinedFleet {
     /// Whether the tool fleet has instantiated its pending guests yet — `false`
-    /// until the first thing (metadata, or an `invoke`) asks for one. A test's
-    /// hook onto #59's laziness at the `build_agent` level, not a read anything
-    /// else in the runtime depends on.
+    /// until the first thing (metadata, or `invoke`) asks. A test's hook onto
+    /// #59's laziness at the `build_agent` level, not something else depends on.
     const fn tools_instantiated(&self) -> bool {
         self.tools.is_instantiated()
     }
 
     /// The advertised tool names. A lazy instantiation failure is reported
-    /// (stderr) and degrades to "no tools" rather than propagating — the same
-    /// shape `ToolFleet::new` already used for a single guest's `meta` trap,
-    /// now covering the whole fleet's first-use instantiation too.
+    /// (stderr) and degrades to "no tools", not propagating — the same shape
+    /// `ToolFleet::new` already used for a single guest's `meta` trap,
+    /// now covering the fleet's first-use instantiation.
     fn tool_names(&mut self) -> Vec<String> {
         self.tools.tool_names().unwrap_or_else(|err| {
             eprintln!("WARN [core] tool fleet failed to instantiate: {err}");
@@ -1266,8 +1246,8 @@ impl CombinedFleet {
 
     /// # Errors
     /// Returns a [`CoreError`] if a pending tool or registry fails to
-    /// instantiate or start — the same failure `build_agent`'s eager path
-    /// already surfaced this way, just raised on first use instead.
+    /// instantiate or start — same failure `build_agent`'s eager path
+    /// already surfaces, raised on first use instead.
     fn all_metas_json(&mut self) -> Result<serde_json::Value, CoreError> {
         let mut metas: Vec<serde_json::Value> = self
             .tools
@@ -1292,8 +1272,8 @@ impl CombinedFleet {
     }
 }
 
-/// A booted thin-loop agent: the interceptor dispatcher and the provider fallback
-/// chain, ready to run turns through the [`conductor`].
+/// A booted thin-loop agent: the interceptor dispatcher and provider fallback
+/// chain, ready to run turns via [`conductor`].
 pub struct AgentSession {
     dispatcher: intercept::Dispatcher,
     providers: Vec<Box<dyn conductor::Completer>>,
@@ -1305,8 +1285,8 @@ pub struct AgentSession {
 }
 
 impl AgentSession {
-    /// Run one turn headless, using the session's tool fleet. An interceptor `ask`
-    /// resolves to its `default-answer`.
+    /// Run one turn headless, using the session's tool fleet. An interceptor
+    /// `ask` resolves to its `default-answer`.
     pub fn run(&mut self, session: &str, message: &str) -> conductor::RunResult {
         run_and_persist(
             &mut self.dispatcher,
@@ -1322,7 +1302,7 @@ impl AgentSession {
     }
 
     /// Run one turn with an explicit `driver` and `tools` (overriding the fleet).
-    /// On a completed turn the user message + answer are appended to the session's
+    /// On completion, user message + answer are appended to the session's
     /// durable transcript. The seam a test injects stub tools through.
     pub fn run_with(
         &mut self,
@@ -1344,8 +1324,8 @@ impl AgentSession {
         )
     }
 
-    /// Run one turn with the session's tool fleet but an explicit `driver` (so a
-    /// client can answer an interceptor `ask` — e.g. a permission confirmation).
+    /// Run one turn with the session's tool fleet but an explicit `driver` (for
+    /// a client to answer an interceptor `ask` — e.g. permission confirmation).
     pub fn run_driven(
         &mut self,
         driver: &mut dyn intercept::Driver,
@@ -1366,7 +1346,7 @@ impl AgentSession {
     }
 
     /// Like [`Self::run_with`], but streams incremental [`conductor::Event`]s to
-    /// `sink` as the turn runs (for a live TUI transcript or SSE).
+    /// `sink` as the turn runs (live TUI transcript or SSE).
     pub fn run_streaming(
         &mut self,
         driver: &mut dyn intercept::Driver,
@@ -1389,8 +1369,8 @@ impl AgentSession {
     }
 
     /// A non-streaming turn using the session's own tool fleet, with `driver`
-    /// answering any interceptor `ask` — the entry a chat surface uses, where
-    /// there is no event stream but there *is* someone to ask.
+    /// answering any interceptor `ask` — the entry a chat surface uses,
+    /// no event stream but someone to ask.
     pub fn run_with_driver(
         &mut self,
         driver: &mut dyn intercept::Driver,
@@ -1413,8 +1393,8 @@ impl AgentSession {
     /// Streaming turn using the session's own tool fleet, with `driver` answering
     /// any interceptor `ask` — the entry the REST surface's SSE handler uses.
     ///
-    /// [`Self::run_streaming`] exists for callers that bring their own fleet;
-    /// this one borrows `self.tools`, which a caller cannot do while also holding
+    /// [`Self::run_streaming`] exists for callers with their own fleet;
+    /// this one borrows `self.tools`, which a caller cannot do while holding
     /// `&mut self`.
     pub fn run_streaming_with_driver(
         &mut self,
@@ -1436,9 +1416,9 @@ impl AgentSession {
         )
     }
 
-    /// Headless streaming turn using the session's tool fleet: an `ask` takes the
-    /// prompt's default answer, which for the permission gate is a denial. Used by
-    /// the non-interactive surfaces (Telegram, the blocking JSON turn).
+    /// Headless streaming turn using the session's tool fleet: an `ask` takes
+    /// the prompt's default answer (denial for the permission gate). Used by
+    /// non-interactive surfaces (Telegram, the blocking JSON turn).
     pub fn run_streaming_headless(
         &mut self,
         sink: &mut dyn conductor::EventSink,
@@ -1460,7 +1440,7 @@ impl AgentSession {
 
     /// The names of the tools the loop can call (advertised names from the
     /// fleet). `&mut self` since #59: a fleet nothing has asked for yet
-    /// instantiates here, on this call, rather than having done so already.
+    /// instantiates here on this call, not before.
     #[must_use]
     pub fn tool_names(&mut self) -> Vec<String> {
         self.tools.tool_names()
@@ -1469,7 +1449,7 @@ impl AgentSession {
     /// Whether the tool fleet has instantiated its pending `tool-*` guests yet
     /// (#59). `false` right after `build_agent` returns for a config with no
     /// interceptor to advertise them to; `true` from the first turn's `invoke`
-    /// or metadata request onward — never goes back to `false`.
+    /// or metadata request — never goes back to `false`.
     #[must_use]
     pub const fn tools_instantiated(&self) -> bool {
         self.tools.tools_instantiated()
@@ -1580,8 +1560,8 @@ impl AgentSession {
 }
 
 /// Drive one turn through the conductor and persist a completed turn's transcript.
-/// A free function (not a method) so `run`/streaming can pass disjoint `&mut` borrows
-/// of the session's fields (dispatcher, providers, tools) in one call.
+/// A free function (not a method) so `run`/streaming can pass disjoint `&mut`
+/// borrows of session fields (dispatcher, providers, tools) in one call.
 #[allow(clippy::too_many_arguments)]
 fn run_and_persist(
     dispatcher: &mut intercept::Dispatcher,
@@ -1595,26 +1575,25 @@ fn run_and_persist(
     message: &str,
 ) -> conductor::RunResult {
     // Locked around each use, never across the turn: an interceptor writing its
-    // own `host-storage` mid-dispatch takes the same lock, and holding it here
+    // own `host-storage` mid-dispatch takes the same lock, holding it here
     // would deadlock the first guest that remembered anything.
     let history = store
         .lock()
         .map(|store| replay(&store, session))
         .unwrap_or_default();
     // The event log, wrapped around whatever sink and driver the caller passed.
-    // Every entry point into a turn funnels through here, so one wrap covers
-    // them all — `run`, `run_with`, `run_streaming` and the rest cannot acquire
-    // a turn that goes unlogged by forgetting to opt in.
+    // Every entry point into a turn funnels through here, one wrap covers
+    // them all — `run`, `run_with`, `run_streaming` etc. cannot acquire
+    // an unlogged turn by forgetting to opt in.
     let mut logged_sink = event_log::PersistingSink::new(sink, store, session);
     let mut logged_driver = event_log::PersistingDriver::new(driver, store, session);
     // Logs the message the model is actually about to receive, not `message`
     // itself: a `before-loop` interceptor may `replace` it before the
     // conductor resolves `effective_message` (see `conductor::run_turn`'s
-    // `on_effective_message` hook), and the log exists to record what
-    // happened, not what was asked for — #84. The conductor calls this
-    // exactly once, at the point `effective_message` is resolved and before
-    // it emits a single event, so this row still opens the session's log
-    // ahead of everything the turn goes on to record.
+    // `on_effective_message` hook), the log records what happened, not what
+    // was asked — #84. The conductor calls this exactly once, when
+    // `effective_message` is resolved and before it emits a single event,
+    // so this row opens the session's log ahead of everything the turn records.
     let mut log_effective_message =
         |effective: &str| event_log::log_user_message(store, session, effective);
     let result = conductor::run_turn(
@@ -1629,28 +1608,24 @@ fn run_and_persist(
         limits,
         &mut log_effective_message,
     );
-    // No transcript append. The turn recorded itself as it ran — the user
-    // message before `run_turn`, every event through the sink — so writing a
-    // `{user, answer}` row here as well would be a second copy of the same
-    // session in a second format, which is the thing this phase removes. A
-    // migration converts the rows written before that was true.
+    // No transcript append. The turn recorded itself as it ran — user message
+    // before `run_turn`, every event through the sink — writing a `{user, answer}`
+    // row here too would duplicate the session in two formats, which this phase
+    // removes. A migration converts rows written before that was true.
     result
 }
 
-/// How many past turns are replayed into a new one, bounded here as well as in
-/// `select-context`; token-aware trimming on top is the context interceptor's
-/// job.
+/// How many past turns are replayed into a new one, bounded here and in
+/// `select-context`; token-aware trimming is the context interceptor's job.
 ///
-/// This used to bound the store read itself (`recent(session, 20)` over the
-/// transcript), then stopped doing that when #45's box 4 moved the log whole
-/// into memory and trimmed it there with `projection::last_turns`, because
-/// bounding an event log by *turns* is not something a plain `LIMIT` can
-/// express — a turn is a variable number of rows. That made every turn read
-/// and decode a session's entire log to keep the last 20 turns of it, a cost
-/// that grew without bound in session length (#85). `Store::recent_turns` puts
-/// the same rule back in SQL — the seq of the bound is itself a query rather
-/// than a `LIMIT` — so the read is bounded again, in the store rather than
-/// after it.
+/// This used to bound the store read (`recent(session, 20)` over transcript),
+/// then stopped when #45's box 4 moved the log into memory and trimmed it via
+/// `projection::last_turns`, because bounding an event log by *turns* is not
+/// a plain `LIMIT` operation — a turn is variable rows. That made every turn
+/// read and decode a session's entire log to keep the last 20, a cost growing
+/// unbounded in session length (#85). `Store::recent_turns` puts the rule back
+/// in SQL — the bound's seq is itself a query, not a `LIMIT` — so the read is
+/// bounded in the store, not after.
 const REPLAYED_TURNS: u32 = 20;
 
 /// The conversation so far, oldest-first, as loop messages.

@@ -1,27 +1,13 @@
-//! `tool-edit` — hash-anchored line edits of a workspace file, routed through `host-fs`.
+//! `tool-edit` — hash-anchored line edits routed through `host-fs`.
 //!
-//! Exposes one tool named `edit`; the operation is chosen by an `op` argument:
+//! Exposes `edit` tool with operations:
+//! - `view` → file as `anchor|lineno|text` lines
+//! - `replace` → replace lines `start..=end` with contents (empty deletes)
+//! - `insert` → insert contents before/after anchored line
 //!
-//! - `{ "op": "view",    "path" }`                              → the file, one
-//!   `anchor|lineno|text` line per source line.
-//! - `{ "op": "replace", "path", "start", "end"?, "contents" }` → replace the line
-//!   span `start..=end` (`end` defaults to `start`) with `contents`; empty
-//!   `contents` deletes the span.
-//! - `{ "op": "insert",  "path", "after"|"before", "contents" }` → insert
-//!   `contents` next to the anchored line.
-//!
-//! An **anchor** is a short hash of a line's *number and content*
-//! (`fnv1a32(lineno \0 text)`): if the file changed since the model viewed it, no
-//! anchor resolves and the edit is **rejected without a write** — stale edits
-//! fail loudly instead of corrupting code (see
-//! [`docs/concepts/small-model-harness.md`]).
-//!
-//! Rejections come back as an `ok` result with recovery text (re-view, retry),
-//! since `tool-error` carries no message. `err` is reserved for malformed
-//! arguments and `host-fs` failures.
-//!
-//! The patch logic is pure Rust (unit-tested natively); the Component-Model glue
-//! below only compiles for `wasm32`.
+//! An **anchor** is `fnv1a32(lineno \0 text)`. If file changed, no anchor resolves;
+//! stale edits are rejected without write. Rejections return recovery text (re-view, retry).
+//! The patch logic is pure Rust (unit-tested natively); Component-Model glue only for wasm32.
 
 // Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -41,10 +27,8 @@ mod edit {
         })
     }
 
-    /// The anchor for the 1-based line `lineno` holding `text`.
-    ///
-    /// Hashing the number *and* the text is what makes an anchor fail closed: a
-    /// line that moved or changed no longer produces the same anchor.
+    /// Anchor for the 1-based line `lineno` holding `text`.
+    /// Hashing both makes the anchor fail closed: moved or changed lines differ.
     pub fn anchor(lineno: usize, text: &str) -> String {
         let mut buf = lineno.to_string().into_bytes();
         buf.push(0);
@@ -52,8 +36,7 @@ mod edit {
         format!("{:08x}", fnv1a32(&buf))
     }
 
-    /// Split `content` into lines plus whether it ended with a newline, so a
-    /// rewrite round-trips the file's final byte exactly.
+    /// Split `content` into lines and whether it ended with a newline.
     fn lines_of(content: &str) -> (Vec<String>, bool) {
         content.strip_suffix('\n').map_or_else(
             || (content.split('\n').map(str::to_string).collect(), false),
@@ -70,9 +53,8 @@ mod edit {
         out
     }
 
-    /// Split replacement `contents` into lines. A trailing newline is dropped: the
-    /// separator between the spliced block and the following line is supplied by
-    /// the re-join, so keeping it would insert a blank line.
+    /// Split replacement `contents` into lines, dropping trailing newline.
+    /// The re-join supplies the separator between blocks.
     fn contents_lines(contents: &str) -> Vec<String> {
         if contents.is_empty() {
             return Vec::new();
@@ -86,10 +68,8 @@ mod edit {
     }
 
     /// Resolve `target` to its 0-based line index.
-    ///
     /// # Errors
-    /// A message for the model when the anchor matches no line (the file changed)
-    /// or more than one (hash collision). Both are recoverable by re-viewing.
+    /// Anchor misses (file changed) or is ambiguous (collision). Both recoverable by re-viewing.
     fn find_anchor(lines: &[String], target: &str) -> Result<usize, String> {
         let hits: Vec<usize> = lines
             .iter()
@@ -121,13 +101,10 @@ mod edit {
             .join("\n")
     }
 
-    /// Replace the span `start..=end` (`end` defaults to `start`) with `contents`.
-    /// Empty `contents` deletes the span. Returns the new file text and the number
-    /// of lines replaced.
-    ///
+    /// Replace lines `start..=end` (`end` defaults to `start`) with `contents`.
+    /// Empty `contents` deletes the span. Returns new text and line count.
     /// # Errors
-    /// A message for the model when an anchor does not resolve or `end` precedes
-    /// `start`. Nothing is written in either case.
+    /// Anchor does not resolve or `end` precedes `start`. Nothing is written.
     pub fn replace(
         content: &str,
         start: &str,
@@ -151,12 +128,10 @@ mod edit {
         Ok((join_lines(&lines, trailing_newline), replaced))
     }
 
-    /// Insert `contents` before or after the anchored line. Returns the new file
-    /// text and the number of lines inserted.
-    ///
+    /// Insert `contents` before or after the anchored line. Returns new file text and line count.
     /// # Errors
-    /// A message for the model when the anchor does not resolve or `contents` is
-    /// empty (an insert that changes nothing is a mistake, not a no-op).
+    /// Anchor does not resolve or `contents` is empty
+    /// (an insert that changes nothing is a mistake, not a no-op).
     pub fn insert(
         content: &str,
         target: &str,
@@ -180,7 +155,7 @@ mod edit {
         use super::{anchor, insert, render_view, replace};
         use guest_fs::{truncate, MAX_OUTPUT_BYTES};
 
-        /// The anchor of line `lineno` in `content`, as `view` would render it.
+        /// Anchor of line `lineno` as `view` renders it.
         fn anchor_of(content: &str, lineno: usize) -> String {
             anchor(lineno, content.split('\n').nth(lineno - 1).unwrap())
         }
@@ -196,8 +171,7 @@ mod edit {
 
         #[test]
         fn identical_lines_get_distinct_anchors() {
-            // Position is hashed with the text, so duplicate content still
-            // resolves to exactly one line.
+            // Position + text are hashed, so duplicates resolve uniquely.
             let view = render_view("}\n}\n");
             let lines: Vec<&str> = view.lines().collect();
             assert_ne!(
@@ -392,8 +366,7 @@ mod component {
                 return Ok(guest_fs::truncate(edit::render_view(&content)));
             }
 
-            // `contents` must be *present* even when empty: an absent key on a
-            // replace would otherwise silently delete the span.
+            // `contents` must be present (even empty); absent key would silently delete.
             let contents = field("contents").ok_or(ToolError::InvalidArguments)?;
             let applied = match op.as_str() {
                 "replace" => {

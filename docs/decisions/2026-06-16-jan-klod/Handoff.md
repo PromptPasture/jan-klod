@@ -11,14 +11,13 @@ updated: 2026-06-16
 
 ## What this is
 
-A brainstorm session for **Jan-Klod** — a minimal, stable AI agent core built on Java/Quarkus, extensible via a typed plugin system, with curated native bundles and a Spring-Initializr-style configurator.
+**Jan-Klod** brainstorm: minimal, stable Java/Quarkus core + typed extensions + curated bundles + Initializr-style configurator.
 
-The session artifacts in this folder:
+Artifacts:
+- [`BRAINSTORM.md`](BRAINSTORM.md) — distilled architecture, contracts, config, bundles, deployment, questions
+- [`CONVERSATION.md`](CONVERSATION.md) — verbatim transcript (primary source)
 
-- [`BRAINSTORM.md`](BRAINSTORM.md) — distilled architecture decisions, artifact map, config schema, bundle strategy, blue/green deployment design, and open questions.
-- [`CONVERSATION.md`](CONVERSATION.md) — the full verbatim brainstorm transcript this folder distills (the primary source).
-
-Do not re-derive decisions already captured there. Reference them as the source of truth for the original (Java/Quarkus) design.
+Reference these; do not re-derive.
 
 ---
 
@@ -30,14 +29,14 @@ Do not re-derive decisions already captured there. Reference them as the source 
 - **Stack:** Java, Quarkus, GraalVM native, YAML config
 - **Philosophy:** Linux kernel — core is a container only, all domain logic in extensions
 
-### Core contains (only)
+### Core (only)
 
 - YAML config loader
-- Extension registry (dependency graph, ordered boot)
+- Extension registry (dependency graph, boot order)
 - Lifecycle manager (`init → start → stop → health`)
 - Event bus
 
-Zero agent behavior in core. Core-only boot does nothing.
+Zero agent behavior. Core-only boot: no-op.
 
 ### Extension naming convention
 
@@ -90,12 +89,12 @@ tool-web-search     requires:  AgentManager
 
 ### Bundling
 
-- `jvm` — core JAR only, user drops extension JARs into `ext/`
-- `bundle-tui` — native: all providers + managers + store + registries + tools + terminal UI
-- `bundle-gui` — same, graphical UI
+- `jvm` — JAR only, drop extensions into `ext/`
+- `bundle-tui` — native: all components + terminal UI
+- `bundle-gui` — all + graphical UI
 - `bundle-full` — everything
 
-Combinatorial native builds are not feasible. Curated bundles only for native.
+Combinatorial native builds infeasible; curated bundles only.
 
 ### Config format
 
@@ -105,59 +104,52 @@ Skills path convention: `.agents/skills/{skill-name}/SKILL.md`
 
 ### Blue/green deployment
 
-Tiny launcher binary (Go or Rust) manages:
+Tiny launcher (Go/Rust):
+- Symlink: `current → versions/{n}/`, `previous → versions/{n-1}/`
+- Health check + auto-rollback on failure
+- Manual: `jan-klod rollback`
 
-- `~/.jan-klod/current → versions/{n}/` symlink
-- `~/.jan-klod/previous → versions/{n-1}/` rollback
-- Health check after update; auto-rollback on failure
-- `jan-klod rollback` for manual rollback
-
-State backend: SQLite (portable, migration-friendly). Schema must be versioned from day one.
+State: SQLite (portable, migration-friendly). Version schema from day one.
 
 ### Configurator
 
-Spring-Initializr / Quarkus-style web UI. Generates a ZIP:
-
-- JVM: `jan-klod.yaml` + `lib/*.jar` + launcher scripts + `ext/` drop folder
-- Bundle: `jan-klod` native binary + `jan-klod.yaml`
-
----
-
-## Open questions (unresolved — tackle next)
-
-These are in priority order for design impact:
-
-1. **Multi-provider coexistence** — is only one `LlmProvider` active at a time, or can `manager-agent-loop` select per-request? Affects the `LlmProvider` contract.
-2. **Extension versioning** — does each extension version independently, or does a Jan-Klod release version all artifacts together (BOM)?
-3. **Streaming** — does `manager-agent-loop` handle streaming, or is that a separate contract / capability flag on `LlmProvider`?
-4. **MCP fault tolerance** — how does `registry-mcp` handle server crashes/restarts?
-5. **Config hot-reload** — can extensions react to YAML changes without restart?
-6. **JVM classloader isolation** — one classloader per extension or flat classpath?
-7. **Launcher language** — Go vs Rust vs shell?
-8. **Configurator hosting** — self-hosted only, or a public `start.janklod.dev`?
+Initializr-style web UI. Generates ZIP:
+- JVM: config + libs + launchers + ext folder
+- Bundle: native binary + config
 
 ---
 
-## Suggested next steps
+## Open questions (priority order)
 
-The natural next session is **contracts API design** — define the Java interfaces (`LlmProvider`, `ContextManager`, `AgentManager`, `MemoryStore`, `SkillRegistry`, `McpRegistry`) precisely enough to start scaffolding the Maven multi-module project.
+1. **Multi-provider** — one active or per-request selection? (affects `LlmProvider` contract)
+2. **Extension versioning** — independent or BOM release?
+3. **Streaming** — loop responsibility or separate contract?
+4. **MCP fault tolerance** — crash/restart handling?
+5. **Config hot-reload** — without restart?
+6. **Classloader isolation** — per-extension or flat?
+7. **Launcher language** — Go/Rust/shell?
+8. **Configurator** — self-hosted or public?
 
-Resolve open questions 1–3 first, as they directly shape the interface signatures.
+---
+
+## Next: Contracts API Design
+
+Define interfaces (`LlmProvider`, `ContextManager`, `AgentManager`, `MemoryStore`, `SkillRegistry`, `McpRegistry`) for Maven scaffolding. Resolve open questions 1–3 first (shape signatures).
 
 ---
 
 ## Suggested skills
 
-- **`brainstorm`** — if more design space needs exploring before coding
-- **`plan`** — once contracts are settled, to sequence the build phases
-- **`write-ticket`** — to break the build into tracked work items
-- **`review`** — to evaluate any contracts draft before committing to it
+- **`brainstorm`** — if more design needed
+- **`plan`** — sequence build phases (contracts settled)
+- **`write-ticket`** — break into work items
+- **`review`** — evaluate contracts draft
 
 ---
 
-## Notes for next agent
+## Notes
 
-- Do not rename artifacts or change the group ID without explicit user instruction. Both were deliberate decisions made in this session.
-- The user prefers YAML over `.properties` or JSON — enforce this in any config scaffolding.
-- `AGENTS.md` in the repo root defines memory and behavior conventions; read `.agents/memory/MEMORY.md` and today's daily note at session start.
-- No sensitive information was shared in this session.
+- Artifact names & group ID are deliberate; don't change without explicit user instruction.
+- YAML only (no .properties/JSON).
+- Read `.agents/memory/MEMORY.md` at session start.
+- No secrets shared.

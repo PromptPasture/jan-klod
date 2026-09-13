@@ -1,16 +1,11 @@
-//! `interceptor-context` — the default `select-context` interceptor.
+//! Default `select-context` interceptor.
 //!
-//! Trims the assembled conversation to the model's token budget before the
-//! completion is issued: a char/4 estimate + a sliding window that keeps system
-//! messages and the most recent turns ([`context`]). If nothing needs dropping it
-//! proceeds; otherwise it replaces the request with the trimmed message list.
+//! Trims conversation to model budget (char/4 estimate + sliding window).
+//! Keeps system messages and recent turns. Reads budget from `host-config`
+//! `context-tokens`, defaults to [`component::DEFAULT_BUDGET`].
 //!
-//! The budget is read from `host-config` (`context-tokens`), defaulting to
-//! [`component::DEFAULT_BUDGET`]. Summarising dropped history is a later
-//! refinement behind this same seam.
-//!
-//! The trim logic is pure Rust with no WIT dependency, so it is unit-tested
-//! natively (`cargo test`); the Component-Model glue only compiles for `wasm32`.
+//! Trim logic is pure Rust, unit-tested natively; Component-Model glue
+//! compiles for `wasm32` only.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod context;
@@ -43,14 +38,14 @@ mod component {
     use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
     use bindings::jan_klod::interfaces::llm_types::Role;
 
-    /// Token budget used when `host-config` supplies no `context-tokens` key.
+    /// Default token budget when `context-tokens` not configured.
     pub const DEFAULT_BUDGET: usize = 8192;
 
     fn log(level: LogLevel, message: &str) {
         host_log::log(level, "interceptor-context", message, &[]);
     }
 
-    /// The token budget for trimming: `host-config` `context-tokens`, else default.
+    /// Token budget for trimming: from `host-config` or default.
     fn budget() -> usize {
         host_config::get("context-tokens")
             .ok()

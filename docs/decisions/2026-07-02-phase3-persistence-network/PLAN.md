@@ -1,53 +1,32 @@
 # Phase 3 Plan — Persistence + Inbound Network
 
-Living execution checklist for Phase 3 of the [Roadmap](../../concepts/roadmap.md).
-Update the flags here and in the roadmap [Status tracker](../../concepts/roadmap.md#status-tracker)
-as work proceeds.
+Execution checklist for Phase 3. Update flags here and in [Status tracker](../../concepts/roadmap.md#status-tracker).
 
-**Prerequisite:** Phase 2 exit gate passed (2026-07-02) — the thin loop runs
-end-to-end, but all state is in-memory and nothing outside the process can reach
-core.
+**Prerequisite:** Phase 2 exit gate (2026-07-02) — thin loop end-to-end, all in-memory, closed process.
 
-Relevant background: [architecture.md → Storage](../../concepts/architecture.md#storage) ·
-[Transport](../../concepts/architecture.md#transport) ·
-[contracts.md](../../concepts/contracts.md) ·
-[`wit/host-storage.wit`](../../../wit/host-storage.wit) ·
-[`wit/memory-store.wit`](../../../wit/memory-store.wit).
+References: [architecture.md → Storage](../../concepts/architecture.md#storage) · [Transport](../../concepts/architecture.md#transport) · [`host-storage.wit`](../../../wit/host-storage.wit).
 
 ## Goal
 
-Durable state that survives a restart, and a way for the outside world to drive
-core. Two independent capabilities land: a **host-side persistent store** behind
-the existing `host-storage`/`memory-store` contracts, and a **`host-serve`**
-inbound-listener capability with a first `api-rest` (REST + SSE) surface that
-drives the Phase 2 loop entry.
+Durable state surviving restarts + way for outside to drive core. Two capabilities: 
+**host-side persistent store** behind `host-storage`/`memory-store` contracts, and 
+**`host-serve`** inbound listener with **`api-rest`** (REST + SSE) surface driving Phase 2 loop.
 
-## Architecture invariants carried in
+## Architecture invariants
 
-- **Persistence is host-side.** The sandbox grants no filesystem, so the SQLite
-  database lives in **core** (a host capability), *not* SQLite-in-wasm. A
-  `store-*` extension either stays a thin guest that routes to the host store, or
-  is subsumed by the host proxying `host-storage` directly — resolved in Slice 3a.
-  See [architecture.md:289](../../concepts/architecture.md#storage).
-- **UIs are separate client processes**, not extensions; they reach core over an
-  `api-*` HTTP+SSE surface (the LSP/server model). Current lean: a UI deployment
-  always includes `api-rest`.
-- **The loop entry already exists** (`Runtime::build_agent` → `AgentSession::run_with`,
-  Phase 2). `api-rest` is a *driver* of that entry; the driver capability WIT shape
-  is promoted from the Phase 2 core-Rust entry when inbound network lands here.
+- **Persistence host-side.** Sandbox has no filesystem; SQLite lives in **core** (host capability), not wasm. `store-*` extension routes to host store or subsumed. [architecture.md:289](../../concepts/architecture.md#storage).
+- **UIs are separate clients**, not extensions; reach core via `api-*` HTTP+SSE (LSP/server model). UI deployments always include `api-rest`.
+- **Loop entry exists** (`AgentSession::run_with`, Phase 2). `api-rest` drives it; driver WIT shape promoted from core-Rust entry.
 
-## TBD resolutions (recommended leans — confirmed at the slice that needs each)
-
-Per YAGNI, each is closed at its slice and recorded as a dated decision under
-`decisions/`. Leans below, from [architecture.md](../../concepts/architecture.md):
+## TBD resolutions
 
 | TBD | First needed | Recommended lean | Why |
 |---|---|---|---|
-| Host-side SQLite library | Slice 3a | `rusqlite` with the **bundled** feature | Host-side (no sandbox/wasm constraint), mature, embeds SQLite so there is no system-lib dependency; synchronous fits the current sync Wasmtime host. |
-| SQL layer | Slice 3a | **`rusqlite` directly** (no `sqlx`) | The store is a small KV+history schema (namespace/key/value/timestamps); `sqlx`'s async + compile-time checking is weight this schema does not need. Revisit if `store-postgres` (Phase 3+) wants one driver abstraction. |
-| `host-serve` capability shape | Slice 3b | A host-owned listener: `serve(bind) -> listener`; the extension registers request handlers the host calls back (mirrors how `host-http` inverts for outbound). | Keeps the socket in the host (sandbox has no network-listen); the `api-*` guest stays pure request→response. |
-| HTTP framework (host side) | Slice 3b | `axum` (on `tokio`, already the async runtime chosen for `host-http`) | Mature, `tower` ecosystem, first-class SSE; reuses the Phase 1 `tokio` decision. |
-| UI ↔ core transport | Slice 3c | UI client always connects via `api-rest` (HTTP + SSE) | Matches the LSP/server model already in architecture.md; no bespoke transport. |
+| Host-side SQLite | Slice 3a | `rusqlite` bundled | Host-side (no sandbox), mature, embeds SQLite, sync fits. |
+| SQL layer | Slice 3a | `rusqlite` directly (no `sqlx`) | Small KV+history schema; `sqlx` async/compile-time checking unneeded. |
+| `host-serve` shape | Slice 3b | Host-owned listener; extension registers handlers (inverted from `host-http`). | Socket stays in host (sandbox no network-listen); `api-*` guest pure request→response. |
+| HTTP framework | Slice 3b | `tiny_http` (sync) not `axum` | Loop sync, `AgentSession` !Send; blocking server on session thread. |
+| UI ↔ core | Slice 3c | HTTP + SSE via `api-rest` | LSP/server model; no bespoke transport. |
 
 ## Status
 
@@ -64,102 +43,49 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 ## Slice 3a — Host-side persistent store
 
-Make state durable behind the existing storage contracts, so the loop's history
-(and any interceptor storage) survives a restart.
+Make state durable behind existing storage contracts; loop history survives restart.
 
-- [x] **Store boundary decided: host proxies directly.** The core owns the
-  `Store` and serves it host-side; there is no `store-sqlite` *guest* (the sandbox
-  can't hold the DB). `Runtime::open_store` selects the backend from the enabled
-  `store.*` instance (`store.sqlite` + `path` → durable file; else in-memory).
-- [x] **Add the SQLite backend in core** — `jan_klod_core::store::Store` (`rusqlite`
-  bundled): the full `memory-store` op set (`set`/`get`/`delete`/`list-keys`/`recent`/
-  `search`/`purge-namespace`) over a `namespace/key/value/created-at/updated-at`
-  table, upsert preserving `created-at`, `recent`/`list-keys` newest-first (rowid
-  tiebreak for same-second writes). `open(path)`/`open_in_memory()`. 7 tests incl.
-  **state survives a reopen**. Bundled SQLite builds natively (no rustup needed).
-- [x] **Give the store a real consumer** — `AgentSession` persists each completed
-  turn's `{user, answer}` to the session's durable transcript (`Store::set` under
-  `namespace = session`); `AgentSession::transcript(session)` reads it back. *(Backing
-  the interceptor `host-storage` import with the shared `Store` — replacing the
-  in-memory map in `interceptor_host` — is deferred until a guest actually writes
-  through it; the transcript path already exercises the wired host-side store.)*
-- [x] **Supply-chain** — the new deps (`rusqlite`/`libsqlite3-sys`/`hashlink`/
-  `fallible-iterator`/`fallible-streaming-iterator`) are all MIT / MIT-OR-Apache-2.0,
-  covered by the `deny.toml` allow-list; bundled SQLite C is public-domain. Passes
-  `cargo-deny` (run in CI).
+- [x] **Store boundary:** core owns `Store`, serves host-side. No `store-sqlite` guest. `Runtime::open_store` selects backend from `store.*` (`store.sqlite` + `path` → durable file; else in-memory).
+- [x] **SQLite backend in core** — `jan_klod_core::store::Store` (rusqlite bundled): full `memory-store` ops (`set`/`get`/`delete`/`list-keys`/`recent`/`search`/`purge-namespace`) over `namespace/key/value/created-at/updated-at`, upsert preserves `created-at`, newest-first. 7 tests incl. **state survives reopen**.
+- [x] **Real consumer** — `AgentSession` persists each turn's `{user, answer}` to durable transcript (`Store::set` under `namespace = session`); reads back via `AgentSession::transcript()`. *(Backing interceptor `host-storage` import deferred until guest uses it.)*
+- [x] **Supply-chain** — `rusqlite` deps MIT/Apache-2.0, in `deny.toml` allow-list; bundled SQLite C public-domain. `cargo-deny` CI.
 
-**Exit gate:** ✓ `host/tests/persistence.rs` — a turn's transcript is written, the
-whole `Runtime` (and its SQLite connection) is dropped, a fresh `Runtime` boots
-against the same DB file, and the transcript reads back intact. Wired into
-`make harness`.
+**Done:** `persistence.rs` — turn written, `Runtime` dropped, fresh `Runtime` boots same DB file, transcript reads back intact.
 
 ---
 
 ## Slice 3b — `host-serve` + `api-rest`
 
-Give the outside world a way in.
+Give outside world a way in.
 
-- [x] **Boundary decided: the REST surface is host-side, not a wasm guest.** The
-  loop it drives is host mechanism, and the wasip2 sandbox grants no inbound
-  sockets, so `host-serve`-as-guest-callback would add a WIT/plumbing layer with no
-  isolation benefit for trusted infrastructure code. A `wit/host-serve.wit` +
-  `api-rest` *guest* stays available for domain-specific surfaces later; v1 is
-  `jan_klod_core::serve`. *(Supersedes the guest/`host-serve` framing in this
-  slice's original checklist.)*
-- [x] **HTTP framework decided: `tiny_http` (synchronous), not `axum`/`tokio`.** The
-  loop is sync and `AgentSession` is `!Send` (Wasmtime + `rusqlite`), so a blocking
-  server that serves one turn at a time on the session's own thread is the right fit
-  — no async runtime, no cross-thread session sharing. (`axum` returns if/when an
-  async, multi-session surface is warranted.)
-- [x] **Build `api-rest` (request→response)** — `serve::handle_turn` (`{session?,
-  message}` → `{answer, agentic}`), `serve::serve_once` / `serve::serve` over
-  `tiny_http`. Pure `handle_turn` is unit-testable; `serve_once` drives one HTTP
-  round-trip.
-- [x] **Launchable surface** — `jan-klod serve [config] [ext] [bind]` boots the agent
-  with live `host-http` and serves turns (`make serve`, default `127.0.0.1:8787`).
-  Smoke-tested: a `POST` drives the loop and returns JSON.
-- [ ] **SSE streaming** — stream `next-event` over Server-Sent Events. Deferred with
-  the streaming run-handle (Phase 2 carry-forward); v1 returns the whole answer.
+- [x] **Boundary: REST host-side, not wasm guest.** Loop drives host mechanism; wasip2 sandbox has no inbound sockets. `host-serve`-as-guest-callback adds WIT/plumbing with no isolation benefit. `api-rest` guest available later for domain-specific surfaces; v1 is `jan_klod_core::serve`.
+- [x] **Framework: `tiny_http` (sync), not `axum`.** Loop sync, `AgentSession` !Send (Wasmtime + `rusqlite`); blocking server on session thread fits. No async runtime, no cross-thread sharing.
+- [x] **Build `api-rest`** — `serve::handle_turn` (`{session?, message}` → `{answer, agentic}`), `serve_once`/`serve` over `tiny_http`. `handle_turn` unit-testable; `serve_once` drives one HTTP round-trip.
+- [x] **Launchable** — `jan-klod serve [config] [ext] [bind]` boots agent, serves turns (`make serve`, default `127.0.0.1:8787`). `POST` drives loop, returns JSON.
+- [ ] **SSE streaming** — `next-event` over Server-Sent Events. Deferred (Phase 2 carry-forward); v1 returns whole answer.
 
-**Exit gate:** ✓ `host/tests/api_rest.rs` — an external HTTP client (on a separate
-thread) `POST`s a query to the bound port and reads back `200 OK` with the answer,
-driving the real loop through the sandboxed guests, offline. Wired into `make harness`.
+**Done:** `api_rest.rs` — external HTTP client `POST`s query, reads `200 OK` with answer, drives real loop through guests, offline.
 
 ---
 
 ## Slice 3c — UI ↔ core transport
 
-- [x] **Transport confirmed: UI clients connect via the host-side REST surface
-  (HTTP; SSE once streaming lands).** A UI deployment **always includes** the REST
-  surface — the LSP/server model: core is the server, the UI a thin client. In v1
-  this is `jan_klod_core::serve` (host-side), not a separate `api-rest` guest (see
-  Slice 3b). Client contract for Phase 4's `jan-klod-ui`: `POST` a JSON turn
-  (`{session?, message}`) → `{answer, agentic}`; streaming (SSE) arrives with the
-  run-handle. No new core code beyond 3b.
+- [x] **Transport: UI clients via host-side REST** (HTTP; SSE later). UI deployment always includes REST — LSP/server model. Client contract (Phase 4 `jan-klod-ui`): `POST` JSON turn → `{answer, agentic}`; SSE with run-handle. No new code beyond 3b.
 
-**Exit gate:** ✓ the transport decision is recorded and consistent with the 3b REST
-surface.
+**Done:** transport decision recorded + consistent with 3b REST surface.
 
 ---
 
 ## Slice 3d — Exit gate
 
-- [x] Integration tests: **state persists across a `Runtime` restart** (`persistence.rs`,
-  3a) **and an external HTTP client drives the loop over the REST surface**
-  (`api_rest.rs`, 3b), both offline/local.
-- [x] CI — `make phase3-gate` runs both, wired into the harness job in
-  `.github/workflows/ci.yml`.
-- [x] **Mark Phase 3 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
-  Carried-forward, non-blocking refinements: SSE streaming (with the run-handle),
-  and backing the interceptor `host-storage` import with the shared `Store`.
+- [x] Integration tests: **state persists across `Runtime` restart** (`persistence.rs`) **and external HTTP client drives loop** (`api_rest.rs`), both offline.
+- [x] CI — `make phase3-gate` runs both, wired into harness job.
+- [x] Mark Phase 3 `done` here and in [roadmap.md](../../concepts/roadmap.md). Carried-forward: SSE streaming, backing interceptor `host-storage`.
 
-**Definition of done:** `make phase3-gate` passes in CI (green); `roadmap.md` status
-tracker updated to `done`. ✓
+**Done:** `make phase3-gate` CI green; `roadmap.md` updated. ✓
 
-## Cross-cutting (continuous)
+## Cross-cutting
 
-- Strict clippy (`[workspace.lints]`) on every new crate/module — same policy as
-  Phases 1–2.
-- `cargo test` stays green on every PR; supply-chain gates extended to any new
-  dependency (notably `rusqlite`, `axum`, `tokio`).
-- Structured logging tags every new component/host capability with its name.
+- Strict clippy (`[workspace.lints]`) on every new crate — same as Phases 1–2.
+- `cargo test` green on every PR; supply-chain gates extended to new dependencies.
+- Structured logging tags every new component.

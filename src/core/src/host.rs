@@ -1,9 +1,8 @@
 //! Host-side state and capability implementations.
 //!
-//! Every instantiated extension gets its own [`HostState`] in its own Wasmtime
-//! store, so `host-config` naturally scopes to that instance's section and
-//! `host-log` is tagged with its id. The capabilities here are the host half of
-//! the `provider-world` imports bound in [`crate::bindings`].
+//! Each extension instance gets its own [`HostState`] and Wasmtime store, so
+//! `host-config` scopes to its section and `host-log` is tagged with its id.
+//! These are the host half of `provider-world` imports (see [`crate::bindings`]).
 
 use std::fmt::Write as _;
 
@@ -12,22 +11,21 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::bindings::jan_klod::interfaces::{host_config, host_http, host_log};
 
-/// One extension instance's own slice of `config.yaml`, served back through
-/// `host-config`. Keys are dot-separated paths into the (already env-expanded)
-/// config object.
+/// Extension instance's slice of `config.yaml`, served via `host-config`.
+/// Keys are dot-separated paths into the (env-expanded) config.
 #[derive(Debug, Clone)]
 pub struct ConfigSection {
     root: Value,
 }
 
 impl ConfigSection {
-    /// Wrap an instance's resolved config object.
+    /// Wrap a resolved config object.
     #[must_use]
     pub const fn new(root: Value) -> Self {
         Self { root }
     }
 
-    /// Resolve a dot-separated key path to its JSON value, if present.
+    /// Dot-separated key path to JSON value.
     #[must_use]
     pub fn lookup(&self, key: &str) -> Option<&Value> {
         let mut cur = &self.root;
@@ -37,45 +35,39 @@ impl ConfigSection {
         Some(cur)
     }
 
-    /// JSON-encoded value at `key`, or `None` when the path is absent.
+    /// JSON value at `key`, or `None` if absent.
     pub fn get(&self, key: &str) -> Option<String> {
         self.lookup(key).map(Value::to_string)
     }
 
-    /// Whether `key` resolves to a value.
+    /// Whether `key` exists.
     #[must_use]
     pub fn has(&self, key: &str) -> bool {
         self.lookup(key).is_some()
     }
 
-    /// The whole section as a JSON string.
+    /// Entire section as JSON.
     #[must_use]
     pub fn all(&self) -> String {
         self.root.to_string()
     }
 }
 
-/// Per-instance store data: the WASI context the guest runtime needs plus the
-/// host capabilities the core grants it.
+/// Per-instance store data: WASI context and host capabilities.
 pub struct HostState {
     wasi: WasiCtx,
     table: ResourceTable,
-    /// Extension id this state belongs to, e.g. `provider.openai` — used to tag
-    /// log lines.
+    /// Extension id (e.g., `provider.openai`) — tags log lines.
     component_id: String,
-    /// This instance's config section.
+    /// Instance config section.
     section: ConfigSection,
-    /// Destinations this instance may reach through `host-http`.
-    ///
-    /// Carried per state rather than read from a global so the boundary is
-    /// visible at the point the capability is served: a guest's outbound call
-    /// consults the policy the host built for it, and there is no path that
-    /// skips it.
+    /// Outbound destinations via `host-http`. Per-state so the boundary
+    /// is visible: guest calls consult the policy built for them.
     egress: crate::egress::EgressPolicy,
 }
 
 impl HostState {
-    /// Build the host state for one instance, reaching only public destinations.
+    /// Build host state for one instance (public destinations only).
     pub fn new(component_id: impl Into<String>, section: ConfigSection) -> Self {
         Self {
             wasi: WasiCtxBuilder::new().inherit_stderr().build(),
@@ -86,7 +78,7 @@ impl HostState {
         }
     }
 
-    /// Grant this instance the operator's configured destinations too.
+    /// Grant this instance operator-configured destinations.
     #[must_use]
     pub fn with_egress(mut self, egress: crate::egress::EgressPolicy) -> Self {
         self.egress = egress;
@@ -119,7 +111,7 @@ impl host_log::Host for HostState {
         };
         let mut line = format!("{level} [{}] {component}: {message}", self.component_id);
         for field in fields {
-            // Infallible: writing into a String never errors.
+            // Write to String is infallible.
             let _ = write!(line, " {}={}", field.key, field.value);
         }
         eprintln!("{line}");
@@ -143,9 +135,8 @@ impl host_config::Host for HostState {
 }
 
 impl host_http::Host for HostState {
-    /// Outbound HTTP: adapt the generated request/response types to the neutral
-    /// blocking client in [`crate::http`] (ureq, synchronous, rustls TLS). This
-    /// is the only network access an extension gets.
+    /// Outbound HTTP: adapt types to the neutral blocking client (ureq, rustls).
+    /// Only network access an extension gets.
     fn fetch(
         &mut self,
         request: host_http::HttpRequest,
@@ -178,8 +169,7 @@ impl host_http::Host for HostState {
     }
 }
 
-/// Translate a neutral [`crate::http::WireError`] into the generated
-/// `host-http` error.
+/// Translate [`crate::http::WireError`] to generated `host-http` error.
 const fn to_http_error(err: &crate::http::WireError) -> host_http::HttpError {
     use crate::http::WireError;
     match err {

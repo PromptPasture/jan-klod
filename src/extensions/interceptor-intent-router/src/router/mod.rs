@@ -1,17 +1,16 @@
 //! Layered intent router — the first gate every prompt passes before the agent
-//! loop, classifying it as [`Intent::Simple`] (answer inline, no loop) or
+//! loop, classifying it as [`Intent::Simple`] (answer inline) or
 //! [`Intent::Agentic`] (enter the step controller).
 //!
 //! Three tiers, cheapest first (see `docs/concepts/small-model-harness.md`):
 //!
-//! 1. **Language detection** ([`language`]) — pure Rust, microseconds. A reliable
-//!    non-English detection bypasses the English heuristics.
+//! 1. **Language detection** ([`language`]) — pure Rust, microseconds. Reliable
+//!    non-English detection bypasses English heuristics.
 //! 2. **Heuristics** ([`heuristics`]) — English exact-phrase matches, microseconds,
 //!    zero model cost. Settles obvious greetings/acks as [`Intent::Simple`].
-//! 3. **LLM classifier** — a single constrained-decoding call to the active
-//!    `llm-provider`, invoked only when the cheap tiers do not settle it. Handles
-//!    all languages. Injected as a closure so this module stays pure and unit-
-//!    testable; the wasm component supplies the real provider-backed call.
+//! 3. **LLM classifier** — constrained-decoding call to `llm-provider`, invoked
+//!    only when cheap tiers don't settle. Handles all languages. Injected as a
+//!    closure so this module stays pure and unit-testable.
 
 mod heuristics;
 mod language;

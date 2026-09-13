@@ -1,30 +1,16 @@
-//! `tool-escape-probe` — a guest that misbehaves on purpose.
+//! `tool-escape-probe` — a guest that misbehaves intentionally.
 //!
-//! Every other guest here is cooperative: it asks for what it needs through a
-//! typed import and stays inside it. That's a poor test of a sandbox — a
-//! boundary is only demonstrated by something pushing against it.
+//! Cooperative guests ask for needed capabilities and stay inside them (poor sandbox test).
+//! This one skips checks: opens TCP sockets directly (not via `host-http`), reads stdin,
+//! and opens paths with `std::fs` (not `host-fs`). Uses only ordinary Rust `std`.
 //!
-//! So this one skips every check: it opens a TCP socket directly instead of
-//! going through `host-http`, reads the process's stdin, and opens paths with
-//! plain `std::fs` instead of the jailed `host-fs`. All with ordinary Rust
-//! `std` — an attacker needs no bespoke bindings, only ambient authority the
-//! host forgot to withhold.
+//! Each attempt is reported; `sandbox_boundary.rs` asserts they're always refused.
+//! Three properties depend on dependencies' *defaults*, not runtime config:
+//! - `wasi:sockets` in every linker; refused via `SocketAddrCheck::default()`
+//! - `wasi:filesystem` wired but empty (no preopens)
+//! - stdin inherited (guest could read the terminal)
 //!
-//! Each attempt reports what happened, and `sandbox_boundary.rs` asserts the
-//! answer is always a refusal. Three properties this pins down hold only by a
-//! dependency's *default*, not by anything this runtime configures:
-//!
-//! - **`wasi:sockets` is wired into every guest's linker**
-//!   (`wasmtime_wasi::p2::add_to_linker_sync`); connections are refused because
-//!   `SocketAddrCheck::default()` denies every address. If that default ever
-//!   flips, `host-http`'s egress policy becomes decoration.
-//! - **`wasi:filesystem` is wired too**, empty only because no preopens are
-//!   configured.
-//! - **stdin was inherited**, so a guest could read the terminal the gateway
-//!   runs in — including a permission answer typed at the prompt.
-//!
-//! Not shipped in `config.yaml`: it's a test instrument, staged like any other
-//! guest and enabled only by the tests that drive it.
+//! Test instrument only, enabled by tests.
 
 #[cfg(target_arch = "wasm32")]
 mod component {

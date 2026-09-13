@@ -1,27 +1,19 @@
 //! Which of the transcript's lines are on screen (#148).
 //!
-//! The current client always draws from the first line, so a transcript longer
-//! than the pane is a transcript whose end you cannot see. This is the model
-//! that fixes that — and the reason it is a model rather than a widget is the
-//! requirement underneath the whole slice: **a `text-delta` arriving while the
-//! user has scrolled up must not move the view.** That is a statement about
-//! state over time, so it is tested as one, without a terminal.
+//! Transcript longer than the pane hides the end; this model fixes it. Core
+//! requirement: **a `text-delta` arriving while the user has scrolled up must
+//! not move the view.** This is tested without a terminal.
 //!
 //! # Attached, and what detaches it
 //!
-//! A viewport is *attached* while it follows the bottom, which is what a
-//! streaming turn needs. Scrolling up detaches it; scrolling back down to the
-//! bottom re-attaches. Detachment is therefore never a mode the user has to
-//! leave deliberately — reading back up and then returning is the whole
-//! interaction, and a one-way door would be a worse bug than the one this fixes.
+//! *Attached* means following the bottom; scrolling up detaches it. Scrolling
+//! back down re-attaches. Detachment is reversible — not a one-way door users
+//! must deliberately exit.
 //!
 //! # Two halves of one promise
 //!
-//! "Anchored to the bottom while a turn streams" is two claims, and #148's
-//! Acceptance only names one of them. Appending while **detached** must not move
-//! the offset — and appending while **attached** must follow the new bottom. A
-//! viewport that never followed would satisfy the first and be useless, so both
-//! are asserted here.
+//! Appending while **detached** must not move the offset; appending while
+//! **attached** must follow the new bottom. Both conditions are asserted here.
 
 /// A window over rendered lines: where it starts, and whether it is following
 /// the end.
@@ -35,7 +27,7 @@ pub struct Viewport {
 
 impl Default for Viewport {
     /// Attached, at the top — which is also the bottom until there are more
-    /// lines than rows.
+    /// lines than the pane can hold.
     fn default() -> Self {
         Self {
             offset: 0,
@@ -45,10 +37,7 @@ impl Default for Viewport {
 }
 
 impl Viewport {
-    /// The largest offset that still fills the pane.
-    ///
-    /// Scrolling past this would show blank rows below the last line, which
-    /// reads as "the transcript ended" rather than "you scrolled too far".
+    /// Largest offset that fills the pane without showing blank rows below the end.
     const fn max_offset(total: usize, height: usize) -> usize {
         total.saturating_sub(height)
     }
@@ -65,22 +54,16 @@ impl Viewport {
         self.attached
     }
 
-    /// How many lines sit below the window — what the detach marker counts.
-    ///
-    /// Zero while attached, by construction rather than by a separate branch:
-    /// an attached viewport is at `max_offset`.
+    /// How many lines sit below the window (what the detach marker counts).
+    /// Zero while attached, by construction: an attached viewport is at `max_offset`.
     #[must_use]
     pub const fn below(self, total: usize, height: usize) -> usize {
         Self::max_offset(total, height).saturating_sub(self.offset)
     }
 
-    /// Re-clamp after the line count or the pane size changed.
-    ///
-    /// Call this whenever lines are appended or the terminal is resized. While
-    /// attached it follows the new bottom; while detached it holds position,
-    /// except that it cannot hold an offset the shorter transcript no longer
-    /// has — a resize that makes the pane taller must not leave blank rows
-    /// below the end.
+    /// Recalculate after line count or pane height changes.
+    /// While attached, it follows the new bottom. While detached, it holds
+    /// position (clamped to prevent blank rows below the end).
     #[must_use]
     pub const fn reflow(mut self, total: usize, height: usize) -> Self {
         let max = Self::max_offset(total, height);
@@ -99,14 +82,9 @@ impl Viewport {
 
     /// Scroll the least that brings lines `[start, start + rows)` on screen.
     ///
-    /// What a moving cursor needs (#155): selecting a block the pane is not
-    /// showing selects something the user cannot see, which is worse than
-    /// having no cursor at all. **The least** matters — jumping the block to
-    /// the top or the middle would throw away the context around it that the
-    /// user is reading it in.
-    ///
-    /// A block taller than the pane is shown from its **top**, since the two
-    /// bounds cannot both be met and the top is where a block says what it is.
+    /// Moving cursor needs this (#155): blocks must be shown with minimal
+    /// scrolling to preserve the reading context around them. Blocks taller
+    /// than the pane show from their top (where they identify themselves).
     #[must_use]
     pub const fn reveal(mut self, start: usize, rows: usize, total: usize, height: usize) -> Self {
         let max = Self::max_offset(total, height);
@@ -114,10 +92,9 @@ impl Viewport {
         if start < self.offset {
             self.offset = start;
         } else if end > self.offset + height {
-            // Saturating rather than clamped to `max`: `total` counts the whole
-            // transcript, so a block inside it can never need an offset past
-            // the bottom, and clamping here would hide an arithmetic mistake
-            // rather than show it.
+            // Saturating rather than clamped: a block inside the transcript can
+            // never need an offset past the bottom, and clamping would hide an
+            // arithmetic mistake rather than show it.
             let wanted = end.saturating_sub(height);
             self.offset = if wanted > max { max } else { wanted };
         }
@@ -169,8 +146,7 @@ impl Viewport {
         self.down(height, total, height)
     }
 
-    /// Half a page up. `Ctrl+U`, which reaches here only when the composer is
-    /// empty — #150 does not consume it then, deliberately.
+    /// Half a page up. `Ctrl+U` (only when composer is empty; see #150).
     #[must_use]
     pub const fn half_up(self, height: usize) -> Self {
         self.up(height / 2)
@@ -216,7 +192,8 @@ mod tests {
         assert_eq!(v.below(100, H), 90, "the marker has a count to show");
     }
 
-    /// The requirement the whole slice exists for.
+    /// The requirement the whole slice exists for: scroll up, append lines,
+    /// and the offset must not move.
     #[test]
     fn a_delta_arriving_while_detached_does_not_move_the_view() {
         let detached = Viewport::default().reflow(100, H).page_up(H);
@@ -236,8 +213,9 @@ mod tests {
         assert_eq!(v.below(125, H), 125 - H - before);
     }
 
-    /// The half #148's Acceptance does not name. Without it a viewport that
-    /// never follows would pass every other test here and be useless.
+    /// The half #148's Acceptance does not name: appending while attached must
+    /// follow the new bottom. Without it, a viewport that never follows would
+    /// still pass the other tests and be useless.
     #[test]
     fn a_delta_arriving_while_attached_follows_the_bottom() {
         let mut v = Viewport::default().reflow(100, H);
@@ -256,8 +234,8 @@ mod tests {
         // Explicitly.
         assert!(detached.to_bottom(100, H).attached());
 
-        // And by scrolling: arriving at the bottom is the same thing as asking
-        // for it, or detachment becomes a door that only closes one way.
+        // Scrolling back to the bottom re-attaches: detachment is a door that
+        // closes, not one that only opens.
         let mut v = detached;
         for _ in 0..10 {
             v = v.page_down(100, H);
@@ -274,8 +252,7 @@ mod tests {
         assert_eq!(v.offset(), 0);
         assert!(
             v.attached(),
-            "clamped to the bottom is the bottom; two states that look \
-             identical would diverge on the next append"
+            "clamped to bottom re-attaches; avoids state divergence on next append"
         );
     }
 
@@ -288,7 +265,8 @@ mod tests {
         assert_eq!(up.half_down(100, H).offset(), 75);
     }
 
-    /// The scroll a moving cursor needs (#155): the least that shows the block.
+    /// The scroll a moving cursor needs (#155): reveal lines with the least
+    /// scroll that shows the block.
     #[test]
     fn reveal_scrolls_the_least_that_brings_a_block_on_screen() {
         // A 100-line transcript in a 10-row pane, sitting at the bottom.
@@ -298,20 +276,19 @@ mod tests {
         // Already on screen: nothing moves, and it stays attached.
         assert_eq!(bottom.reveal(92, 3, 100, 10), bottom);
 
-        // Above the window: the top of the block becomes the top of the pane,
-        // and no further — scrolling past it would throw away the context the
-        // user is reading it in.
+        // Block above the window: the top of the block becomes the top of the pane,
+        // no further. The least scroll that shows it.
         let up = bottom.reveal(20, 3, 100, 10);
         assert_eq!(up.offset(), 20);
         assert!(!up.attached(), "scrolling back detaches");
 
-        // Below the window: it comes to the *bottom* row, not the top.
+        // Block below the window: it comes to the bottom row, not the top,
+        // to show its conclusion.
         let down = up.reveal(40, 2, 100, 10);
         assert_eq!(down.offset(), 32, "the block's last line is the last row");
         assert!(!down.attached());
 
-        // The newest block pulls the view back to the bottom, and re-attaches
-        // there, because an offset at `max` is the bottom by definition.
+        // Newest block (at max_offset) re-attaches.
         let back = up.reveal(97, 3, 100, 10);
         assert_eq!(back.offset(), 90);
         assert!(back.attached(), "arriving at the bottom re-attaches");

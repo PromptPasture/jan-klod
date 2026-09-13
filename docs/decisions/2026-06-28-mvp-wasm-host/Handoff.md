@@ -11,65 +11,33 @@ updated: 2026-06-28
 
 ## What this is
 
-The first implementation slice of the MVP: a Go core that loads a sandboxed
-WASM extension and calls it across the contract boundary. Building it surfaced
-three findings that revise — but do not overturn — the
-[Go + Wazero + WASM stack decision](../2026-06-28-go-wasm-stack/Handoff.md).
+First MVP slice: Go core loads sandboxed WASM, calls across boundary. Three findings revise (not overturn) [Go + Wazero stack](../2026-06-28-go-wasm-stack/Handoff.md).
 
-The architectural concepts (extension model, taxonomy, agent loop, deployment)
-all carry forward. What changed is the concrete runtime mechanism and where
-SQLite runs.
+Architecture (model, taxonomy, loop, deployment) unchanged. Only: runtime mechanism and SQLite placement.
 
 ---
 
 ## Findings
 
-### 1. Wazero does not support the WASM Component Model
+### 1. Wazero: no Component Model
 
-The stack doc says extensions are *"WASM component model + WIT"*. In practice
-**wazero runs only core WASM modules** — it has no component-model / Canonical
-ABI support. The only mature Go host that runs components is `wasmtime-go`,
-which requires **CGo** and so violates the locked pure-Go / no-CGo decision.
+**wazero runs core WASM only** — no component/Canonical ABI. Mature Go host is `wasmtime-go` (CGo; violates no-CGo).
 
-**Resolution.** For the MVP, extensions are **core WASM modules with a
-hand-rolled JSON-over-linear-memory ABI**. The WIT files remain the canonical
-contract spec; the ABI is their concrete encoding. If/when wazero gains
-component support (or the component toolchain matures for Go guests), the ABI
-layer can be swapped without changing the WIT contracts or extension logic.
+**Resolution:** MVP uses **JSON-over-linear-memory ABI**. WIT stays canonical; ABI is encoding. Swappable when wazero supports components.
 
-### 2. No CGo anywhere in the MVP
+### 2. No CGo
 
-Confirmed end to end:
+- Core/guests: no CGo
+- SQLite: `modernc/sqlite` or `ncruces/go-sqlite3` (no CGo)
+- UI-GUI (Wails): optional, not MVP
 
-| Component | CGo |
-|---|---|
-| Core host (wazero) | No |
-| Guest extensions (`GOOS=wasip1 GOARCH=wasm`) | No |
-| Host-side SQLite (when added) | No (`modernc/sqlite` or `ncruces/go-sqlite3`) |
-| `ui-gui` (Wails WebView) | Yes — **optional, not in MVP** |
+Build: `CGO_ENABLED=0` → static binaries, easy cross-compile.
 
-Build with `CGO_ENABLED=0`. This is a feature: static binaries, trivial
-cross-compilation, no C toolchain.
+### 3. SQLite on host, not guest
 
-### 3. SQLite runs on the host, not inside the wasm guest
+Stack planned `store-sqlite.wasm` inside guest; `modernc/sqlite` doesn't target wasip1.
 
-The stack doc plans `store-sqlite.wasm` using `modernc/sqlite` *inside* the
-guest. That does not work: `modernc/sqlite` does not target the `wasip1` guest.
-
-We are **not locked to a specific SQLite library — only to using SQLite** as the
-engine. Two CGo-free options both run on the **host** side:
-
-| Library | Mechanism |
-|---|---|
-| `modernc/sqlite` | SQLite C transpiled to native Go |
-| `ncruces/go-sqlite3` | SQLite compiled to wasm, run on wazero; `database/sql` driver |
-
-**Resolution.** A persistent SQLite store is a **host-side capability** the core
-exposes to extensions through the `memory-store` / `host-storage` contract — not
-a `.wasm` guest. The MVP validates the contract first with an in-memory
-`store-memory.wasm`, which proves the host<->guest roundtrip without depending on
-SQLite-in-wasm. Library choice between the two options is deferred to when the
-persistent store is actually built.
+**Resolution:** SQLite is **host-side capability** exposed via `host-storage` contract (not `.wasm` guest). MVP validates with `store-memory.wasm` (proves roundtrip). Library choice deferred.
 
 ---
 
@@ -93,24 +61,11 @@ Host module `jan-klod` (imported by the guest):
 | `config_get` | `(keyPtr u32, keyLen u32) -> u64` | `wit/host-config.wit` |
 | `http_fetch` | `(reqPtr u32, reqLen u32) -> u64` | `wit/host-http.wit` |
 
-Host functions that return data write the result into the **caller's** linear
-memory via the guest's own `alloc` export and return `Pack(ptr, len)`; the guest
-reads the bytes and `free`s the buffer. `config_get` and `http_fetch` exchange
-JSON envelopes; HTTP request/response bodies are base64-encoded. `config_get`
-identifies the calling extension by `m.Name()` and serves only that extension's
-config section.
+Results written to caller's linear memory via guest's `alloc`, return `Pack(ptr, len)`, guest reads & `free`s. `config_get` & `http_fetch` use JSON; HTTP bodies base64. `config_get` serves per-extension config.
 
-**ABI deviation from WIT (http-error).** `wit/host-http.wit` models 4xx/5xx as
-error variants. The ABI instead returns `ok=true` with `status`+`body` for any
-completed exchange (so callers can read API error payloads) and `ok=false` only
-for transport failures (`invalid-url`, `connection-failed`, `timeout`).
+**Deviation:** `http_fetch` returns `ok=true` + status/body for completed exchanges (includes API errors), `ok=false` only for transport failures.
 
-Remaining host interfaces (`host-event`, `host-storage`) follow the same pattern
-as extensions are built.
-
-Key implementation note: Go's `wasip1` `-buildmode=c-shared` output is a
-**reactor** (`_initialize`, not `_start`), so wazero must be configured with
-`WithStartFunctions("_initialize")`.
+Note: Go `wasip1` is reactor (`_initialize`); wazero needs `WithStartFunctions("_initialize")`.
 
 ---
 

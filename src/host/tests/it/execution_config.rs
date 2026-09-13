@@ -1,17 +1,7 @@
-//! The top-level `execution:` block, from config to a running command.
-//!
-//! Every other test that exercises command execution builds a `ProcessRunner`
-//! by hand — `host_process.rs`, `tool_git.rs`, `sandbox_seatbelt.rs`,
-//! `sandbox_landlock.rs` — so `Runtime::open_process_runner`, the only thing
-//! that turns `execution:` into a runner in production, was reached by nothing
-//! (#82). The assertions were real; they were not attached to the code that
-//! runs.
-//!
-//! So this boots a real `Runtime` from a config fixture and drives a command
-//! through `tool-proc-probe`, across the Component-Model boundary rather than
-//! at the Rust seam. Offline: the provider is canned.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Config `execution:` block end-to-end. Other tests build `ProcessRunner` by
+//! hand, leaving `Runtime::open_process_runner` untested (#82). Boots real
+//! `Runtime`, drives command through `tool-proc-probe` (Component-Model
+//! boundary). Provider canned. Skips when guests not staged in `ext/`.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -25,45 +15,34 @@ use crate::common;
 /// The guests a turn through `proc-probe` needs.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "tool-proc-probe.wasm"];
 
-/// What one turn's command did, as the *model* saw it.
-///
-/// `tool_result` is pulled out of the request body of the completion that
-/// follows the tool call, which is the only place a tool's output is visible
-/// from outside: `AgentSession` exposes `run`, not the fleet. That it comes
-/// from the wire is a feature — it is the same path a real answer takes.
+/// What a turn's command did as the *model* saw it. `tool_result` pulled from
+/// completion body following tool call — the only external visibility point.
+/// `AgentSession` exposes `run`, not fleet. Wire sourcing = real path.
 struct ProbeTurn {
-    /// The follow-up request body, carrying whatever the tool returned.
+    /// Follow-up request body carrying tool's output.
     tool_result: String,
-    /// How many completions the turn asked for. One means the tool call never
-    /// happened — the turn gave up first.
+    /// Completions the turn asked for. One = no tool call, turn gave up.
     completions: u32,
 }
 
 impl ProbeTurn {
-    /// Whether the command ran and its output reached the model.
+    /// Command ran and output reached model.
     fn produced(&self, needle: &str) -> bool {
         self.tool_result.contains(needle)
     }
 }
 
-/// Boot a `Runtime` whose config carries `execution`, then drive one
-/// `proc-probe` command through a turn.
-///
-/// `execution` is spliced in verbatim so a test can write the real YAML an
-/// operator would — including leaving it out entirely, which is the default
-/// this block exists to override.
+/// Boot `Runtime` with `execution` config, drive one `proc-probe` command.
+/// `execution` spliced verbatim; tests write real operator YAML, including
+/// omitting it (the default this overrides).
 fn run_command(execution: &str, command: &str, args: &[&str]) -> ProbeTurn {
     run_command_in(None, execution, command, args)
 }
 
-/// [`run_command`] with the `workspace:` line under the test's control.
-///
-/// `None` is the real temporary workspace every test above wants. `Some(root)`
-/// splices that path in instead, which is the only way to reach the "enabled,
-/// but no workspace" denial from config: [`Runtime::open_workspace`] falls back
-/// to `$PWD` when the key is *absent*, and the suite's `$PWD` is a perfectly
-/// adoptable directory, so leaving the key out would hand the runner a
-/// workspace rather than withhold one.
+/// [`run_command`] with `workspace:` under test control. `None` = real temp
+/// workspace. `Some(root)` = forced path, only way to reach "enabled but no
+/// workspace" denial: [`Runtime::open_workspace`] falls back to `$PWD` absent,
+/// so omitting key adopts `$PWD` rather than withholding.
 fn run_command_in(root: Option<&str>, execution: &str, command: &str, args: &[&str]) -> ProbeTurn {
     run_arguments_in(
         root,
@@ -77,8 +56,8 @@ fn run_spawn(execution: &str, name: &str) -> ProbeTurn {
     run_arguments_in(None, execution, &serde_json::json!({ "spawn": name }))
 }
 
-/// As [`run_spawn`], but the guest deliberately does **not** kill the child —
-/// the "guest that forgets" case the host's lifetime guarantee exists for.
+/// [`run_spawn`] but guest doesn't kill child — the "guest forgets" case the
+/// host's lifetime guarantee covers.
 fn run_spawn_and_leak(execution: &str, name: &str) -> ProbeTurn {
     run_arguments_in(
         None,
@@ -87,7 +66,7 @@ fn run_spawn_and_leak(execution: &str, name: &str) -> ProbeTurn {
     )
 }
 
-/// As [`run_spawn`], then write `send` to the child and read what comes back.
+/// [`run_spawn`] then write `send` to child and read response.
 fn run_spawn_echo(execution: &str, name: &str, send: &str) -> ProbeTurn {
     run_arguments_in(
         None,
@@ -96,11 +75,8 @@ fn run_spawn_echo(execution: &str, name: &str, send: &str) -> ProbeTurn {
     )
 }
 
-/// [`run_command_in`], with the tool's arguments written out in full.
-///
-/// The probe takes more than one shape of request now — a command to run, or a
-/// long-lived child to start — so the harness passes the arguments through
-/// rather than assembling one shape and locking the others out.
+/// [`run_command_in`] with full tool arguments. Probe takes multi-shaped
+/// requests (command or child), harness passes through not assembling one.
 fn run_arguments_in(
     root: Option<&str>,
     execution: &str,
@@ -139,8 +115,7 @@ workspace: {ws}
     )
     .unwrap();
 
-    // Completion 0 asks for the command; completion 1 carries its result in the
-    // request body and ends the turn.
+    // Completion 0 requests command; 1 delivers result and ends turn.
     let completions = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(Mutex::new(String::new()));
     let (counter, recorded) = (Arc::clone(&completions), Arc::clone(&seen));
@@ -171,18 +146,11 @@ workspace: {ws}
         })
     };
 
-    // The wrapper is named, not discovered — the same seam `sandbox_landlock.rs`
-    // uses, and for the same reason. `LandlockBackend` confines by re-executing
-    // `current_exe()`, which in production is `jan-klod-gateway` (the binary that
-    // handles the `confine` subcommand) and under nextest is *this test binary*,
-    // which answers `error: Unrecognized option: 'writable'`. Every command then
-    // fails in a way that reads exactly like Landlock refusing it, and the four
-    // tests below that assert a command *runs* failed on Linux for that reason
-    // alone ([#124](https://github.com/PromptPasture/jan-klod/issues/124)).
-    //
-    // Ignored on macOS, where Seatbelt shells out to `/usr/bin/sandbox-exec` and
-    // no binary is re-executed. Naming it unconditionally keeps one code path
-    // for both platforms.
+    // Wrapper named not discovered (like sandbox_landlock.rs). `LandlockBackend`
+    // re-executes `current_exe()`: prod=`jan-klod-gateway`, nextest=test binary
+    // answering 'Unrecognized option writable'. Commands fail like Landlock
+    // refusing (#124). Ignored on macOS (Seatbelt `/usr/bin/sandbox-exec`).
+    // One code path both platforms.
     let runtime = Runtime::boot(&config, common::repo_root().join("ext"))
         .expect("runtime boots")
         .with_sandbox_wrapper(env!("CARGO_BIN_EXE_jan-klod-gateway"));
@@ -238,17 +206,11 @@ fn no_execution_block_denies_the_same_command() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The values, not just the switch.
-//
-// `tool-proc-probe` maps **every** `proc-error` to `ToolError::ExecutionFailed`
-// with an empty message, so a timeout, a denial and a spawn failure are one
-// thing by the time they reach the model. A lone "it failed" assertion would
-// therefore pass for any of those reasons — including the config never being
-// read at all. So each of these runs the **same command** twice, changing only
-// the one config value under test: the run that succeeds is the control, and it
-// is what makes the run that fails mean what it says.
-// ---------------------------------------------------------------------------
+// The values, not just the switch. All `proc-error` map to
+// `ToolError::ExecutionFailed`, so timeout, denial, and spawn failure are
+// indistinguishable. Each test runs the same command twice, changing only the
+// config value under test: success is control, failure proves the value
+// causes denial.
 
 /// Two seconds, then a word to look for. Slow enough to outlast a one-second
 /// budget, short enough to sit under a generous one.
@@ -353,20 +315,10 @@ fn env_passthrough_grants_one_name_and_not_the_rest() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The denials, which are the branch's real job.
-//
-// Each of these runs the **same command** as
-// `the_execution_block_builds_a_runner_that_runs_a_command` above, which is
-// therefore their shared control: that test is what says `echo from-config`
-// reaches the model when nothing refuses it, so a run here that does not
-// produce it was refused rather than merely broken. They differ from it by one
-// config key each.
-//
-// Every assertion is on the **effect** — the command did not run — and not on
-// the warning text, because a branch can print a warning and then carry on,
-// which is the shape of bug this issue exists to catch.
-// ---------------------------------------------------------------------------
+// Denials verify the branch's job. Each runs the same `echo from-config`
+// command (the control test above) with one config value changed. Assertions
+// test the effect (command didn't run), not the warning text, because bugs can
+// print a warning and carry on, which is what this issue exists to catch.
 
 /// `enabled: true` with no usable workspace still denies: a command's cwd is
 /// jailed to the workspace, so without one there is nowhere to run.
@@ -442,20 +394,12 @@ fn an_unsatisfiable_require_denies_the_command() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The confinement, which is the half an operator most needs to be true.
-//
-// `open_process_runner` ends in `match (effective.mode, backend)`, and the
-// comment above it claims "the runtime cannot report `Os` while running commands
-// unconfined". Nothing checked that: `sandbox_seatbelt.rs`, `sandbox_landlock.rs`
-// and `sandbox_boundary.rs` all build their runner by hand, so they prove a
-// `ProcessRunner` can be confined and say nothing about whether the boot path
-// confines the one it builds.
-//
-// The pair below is the same shape `sandbox_seatbelt.rs` uses, moved onto the
-// config path: an unconfined control first, because "the command failed" is
-// otherwise indistinguishable from a missing binary or a typo in the test.
-// ---------------------------------------------------------------------------
+// Confinement tests verify operator's core need: boot path confines.
+// `sandbox_seatbelt.rs`, `sandbox_landlock.rs`, and `sandbox_boundary.rs`
+// build `ProcessRunner` by hand, so they prove a `ProcessRunner` can be
+// confined and say nothing about whether the config boot path confines it.
+// Control test unconfined first (to distinguish failure from typo), then
+// confined.
 
 /// A directory outside any workspace, with the escape target inside it.
 ///
@@ -528,24 +472,11 @@ fn a_config_built_runner_is_confined_by_the_backend_it_resolved() {
     );
 }
 
-/// The other half of that claim: confinement still **permits** what the policy
-/// grants. A confined runner that denies everything passes the test above.
-///
-/// This is the distinction [#124](https://github.com/PromptPasture/jan-klod/issues/124)
-/// was filed over. For seven CI runs the Landlock wrapper was the test binary
-/// rather than the gateway, so every confined command failed before it started
-/// — and the escape test above passed throughout, because "denied" and "never
-/// ran" are the same observation from outside. Only a command that is confined
-/// *and* succeeds separates them.
-///
-/// The write is relative, so it lands in the workspace the runner jails the
-/// command's cwd to — the one directory `writable: ["."]` grants. Reading it
-/// back is what reaches the model: a write alone produces no output, and this
-/// test exists to see a visible effect rather than an exit code.
-///
-/// Gated on a backend for the same reason as its sibling: without one the mode
-/// downgrades and this would assert that an *unconfined* command can write,
-/// which is a weaker claim wearing this one's name.
+/// Confinement still **permits** what policy grants. A confined runner that
+/// denies everything would pass the escape test ([#124](https://github.com/PromptPasture/jan-klod/issues/124)): "denied" and "never ran" are
+/// identical from outside. Only confined *and* succeeding separates them. The
+/// write is relative, landing in the workspace the runner jails to. Gated on
+/// backend to avoid asserting an *unconfined* command can write.
 #[test]
 fn a_confined_config_built_runner_can_still_write_inside_the_workspace() {
     if !common::guests_staged(&GUESTS) || sandbox::host_backend().is_none() {
@@ -565,15 +496,11 @@ fn a_confined_config_built_runner_can_still_write_inside_the_workspace() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Long-lived children (#109). The grant is `execution.long-lived`, which names
-// *processes* rather than permitting spawning — so the thing to prove is that a
-// guest's own string never becomes a program.
-//
-// Asserted across the Component-Model boundary, through `tool-proc-probe`'s
-// `{"spawn": name}` argument, because the guest is the party being distrusted
-// and a Rust-seam test would be asking the host about itself.
-// ---------------------------------------------------------------------------
+// Long-lived children (#109). The grant is `execution.long-lived`, which
+// names *processes* rather than permitting spawning — so the thing to prove is
+// that a guest's own string never becomes a program. Asserted across the
+// Component-Model boundary through `tool-proc-probe`'s `{"spawn": name}`
+// argument, because the guest is the party being distrusted.
 
 /// A config with one granted long-lived child.
 const GRANTED: &str =
@@ -583,8 +510,7 @@ const GRANTED: &str =
 ///
 /// Its control is `a_granted_long_lived_child_starts_and_answers` below, and it
 /// is not optional: without a granted name that *works*, this passes against a
-/// host that refuses everything — which is exactly what it did while box 3 was
-/// unwritten.
+/// host that refuses everything.
 #[test]
 fn an_unnamed_long_lived_child_is_refused() {
     if !common::guests_staged(&GUESTS) {
@@ -598,14 +524,9 @@ fn an_unnamed_long_lived_child_is_refused() {
     );
 }
 
-/// And the grant is read at all — the control without which the test above
-/// passes against a host that refuses everything, which is exactly what it did
-/// before the config was parsed.
-///
-/// Asserts on the **refusal's absence**, not on a handle: box 3 starts the
-/// child, and until then a granted name is refused too. What distinguishes the
-/// two today is the host log, which this cannot see — so this test is the
-/// weaker half of the pair on purpose, and box 3 is where it gets its teeth.
+/// Grant is read from config. Control without which the test above passes
+/// against a host that refuses everything. Asserts refusal's absence, not a
+/// handle. Box 3 starts the child; what distinguishes them is the host log.
 #[test]
 fn the_long_lived_grant_is_read_from_config() {
     if !common::guests_staged(&GUESTS) {
@@ -632,10 +553,10 @@ fn the_long_lived_grant_is_read_from_config() {
 /// process, is written to, and answers.
 ///
 /// Without this, `an_unnamed_long_lived_child_is_refused` passes against a host
-/// that refuses everything — which is what it did for the whole of box 2. A
-/// handle alone would not be enough either: it proves a number was issued, not
-/// that anything is on the other end of it. So the child is `cat`, the test
-/// writes a line, and the assertion is that the line comes back.
+/// that refuses everything. A handle alone would not be enough either: it proves
+/// a number was issued, not that anything is on the other end of it. So the
+/// child is `cat`, the test writes a line, and the assertion is that the line
+/// comes back.
 #[test]
 fn a_granted_long_lived_child_starts_and_answers() {
     if !common::guests_staged(&GUESTS) {

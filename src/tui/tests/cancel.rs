@@ -1,15 +1,11 @@
-//! Acceptance line 3 of #157: a cancelled turn actually **stops**, not merely
-//! "a message was sent" — #133 is the local precedent for a gate that looks
-//! like it runs and does not.
+//! Acceptance #157, line 3: a cancelled turn **stops**, not just "message sent".
+//! (#133 precedent: a gate that looks like it runs but does not.)
 //!
-//! A fake server that streams SSE `delta` frames forever stands in for a core
-//! that is still mid-turn. `Transport::cancel` on the `Rest` transport does not
-//! send anything to that server at all — it shuts down the client's own
-//! socket, the same way dropping the connection would. If that shutdown did
-//! nothing, `stream_turn` would still be blocked reading frames when the
-//! timeout below elapses and the test would fail exactly the way a gate that
-//! does not run looks like one that passes: green because nothing challenged
-//! it. Here something does — the server never stops on its own.
+//! Fake server streams SSE `delta` frames forever (mid-turn stand-in). `cancel`
+//! on the `Rest` transport shuts down the client's socket. Without it,
+//! `stream_turn` stays blocked when the timeout elapses. A gate that doesn't
+//! run would pass silently (green despite nothing); the fake server here proves
+//! it must actually stop.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -24,9 +20,9 @@ fn cancel_stops_a_turn_streaming_forever_over_rest() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds ephemeral port");
     let addr = listener.local_addr().expect("local addr");
 
-    // The fake core: accept one connection, read past the request headers,
-    // then emit `delta` frames on a short interval until the socket is shut
-    // down out from under it. It never decides to stop — only `cancel` does.
+    // The fake core: accept one connection, read past request headers,
+    // then emit `delta` frames until socket shuts down. Never stops on its own.
+    // Only `cancel` does.
     thread::spawn(move || {
         let Ok((mut stream, _)) = listener.accept() else {
             return;
@@ -69,9 +65,8 @@ fn cancel_stops_a_turn_streaming_forever_over_rest() {
         let _ = tx.send(result);
     });
 
-    // Give the turn a moment to connect and start streaming before cancelling
-    // it — cancelling a connection that has not been made yet is a different
-    // test.
+    // Give the turn a moment to connect and start streaming before cancelling it.
+    // Cancelling a connection that has not been made yet is a different test.
     thread::sleep(Duration::from_millis(200));
     transport.cancel("s1").expect("a turn is running to cancel");
 
@@ -80,6 +75,6 @@ fn cancel_stops_a_turn_streaming_forever_over_rest() {
         .expect("stream_turn did not return after cancel — the stream is still open");
     assert!(
         result.is_ok(),
-        "a cancelled turn ending in an error is fine; not ending at all is the bug: {result:?}"
+        "cancelled turn must end (error ok); hanging is the bug: {result:?}"
     );
 }

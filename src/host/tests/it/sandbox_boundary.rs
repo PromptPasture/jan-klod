@@ -1,8 +1,7 @@
 //! What a component gets when nobody grants it anything. `wasmtime_wasi`'s
-//! linker wires filesystem and socket support in full; what actually keeps a
-//! guest out is the `WasiCtx` defaults (no preopens, deny-all `SocketAddrCheck`)
-//! — defaults in a dependency we upgrade, not something these tests can see
-//! directly by exercising cooperative guests that ask through typed imports.
+//! linker wires filesystem and socket support fully; what keeps a guest out is
+//! the `WasiCtx` defaults (no preopens, deny-all `SocketAddrCheck`) — not something
+//! these tests see directly when exercising cooperative guests.
 //!
 //! So `tool-escape-probe` doesn't ask: it calls raw `std::net::TcpStream`,
 //! `std::io::stdin`, `std::fs::read_to_string` directly, and these tests assert
@@ -26,8 +25,8 @@ use crate::common;
 
 const PROBE: &str = "tool-escape-probe.wasm";
 
-/// A loopback server that counts connections, so "did the packet leave?" is
-/// answered by the listener and not by the sandbox's error message.
+/// A loopback server that counts connections to answer "did the packet leave?"
+/// via the listener, not the sandbox's error message.
 struct Sentinel {
     port: u16,
     hits: Arc<AtomicU32>,
@@ -105,12 +104,12 @@ fn a_guest_cannot_open_its_own_socket() {
     assert_eq!(
         sentinel.hits.load(Ordering::Relaxed),
         0,
-        "a guest reached a socket directly: {report}. `host-http`'s egress policy \
-         only bounds the guests that use `host-http`; this one did not."
+        "a guest reached no socket directly: {report}. `host-http`'s egress \
+         policy bounds only guests using `host-http`; this one did not."
     );
     assert!(
         report.starts_with("refused"),
-        "and the attempt is refused rather than silently hanging: {report}"
+        "and the attempt is refused, not silently hanging: {report}"
     );
 }
 
@@ -146,15 +145,13 @@ fn a_guest_cannot_read_the_hosts_filesystem() {
     }
 }
 
-/// The guest must get no environment at all — closed only because
-/// `WasiCtxBuilder::inherit_env` is not called, a dependency default like the
-/// socket check above. Secrets are set in *this* process before the guest runs,
-/// so the check demonstrably isn't just measuring an empty environment.
+/// The guest gets no environment because `WasiCtxBuilder::inherit_env` isn't
+/// called, a dependency default like the socket check. Secrets are set before
+/// the guest runs to confirm this isn't just an empty environment.
 #[test]
 fn a_guest_cannot_read_the_hosts_environment() {
-    // Set *before* the guest is instantiated: `inherit_env` snapshots the
-    // environment when the `WasiCtx` is built, so setting these after would leave
-    // the assertion passing even with inheritance switched on.
+    // Set before guest instantiation: `inherit_env` snapshots when the
+    // `WasiCtx` is built, so setting after wouldn't catch inheritance being on.
     std::env::set_var("OPENAI_API_KEY", "sk-guest-env-must-not-leak");
     std::env::set_var("JAN_KLOD_TOKEN", "bearer-guest-env-must-not-leak");
     let engine = Engine::default();
@@ -172,8 +169,7 @@ fn a_guest_cannot_read_the_hosts_environment() {
         "and gets no environment at all: {report}"
     );
 
-    // The host's command line names its config and its bind address. A guest sees
-    // its own argv[0] and nothing of ours.
+    // A guest sees only its own argv[0], not the host's config or bind address.
     let args = tool.invoke(r#"{"op":"args"}"#).unwrap_or_else(|err| err);
     for ours in ["--bind", "config.yaml", "serve", "--live"] {
         assert!(
@@ -183,14 +179,13 @@ fn a_guest_cannot_read_the_hosts_environment() {
     }
 }
 
-/// stdin is the one the host was actually giving away: a guest could read the
-/// terminal `jan-klod-gateway ask` runs in, including a permission answer typed
-/// at the prompt.
+/// stdin is the one the host was giving away: a guest could read the terminal
+/// `jan-klod-gateway ask` runs in, including a permission answer.
 ///
 /// This test feeds itself real input rather than asking the probe to read an
-/// empty test-harness stdin — "0 bytes" from an empty stdin is indistinguishable
-/// from "0 bytes" from a real boundary, so the parent re-executes this binary
-/// with a secret piped in and checks the child actually saw (and rejected) it.
+/// empty test-harness stdin — "0 bytes" from empty is indistinguishable from a
+/// real boundary, so the parent re-executes with a secret piped in and checks
+/// the child rejects it.
 const SECRET: &str = "TOPSECRET-USER-KEYSTROKES";
 /// Set on the re-executed child so it runs the probe instead of the parent half.
 const CHILD: &str = "JK_STDIN_PROBE_CHILD";
@@ -213,10 +208,8 @@ fn a_guest_gets_no_standard_input() {
         return;
     }
 
-    // libtest's `--exact` matches the module-qualified path, not the bare
-    // function name. Derived via `module_path!()` (which is `it::sandbox_boundary`,
-    // dropping the crate root to match libtest) so a future module move can't
-    // silently desync this literal.
+    // libtest's `--exact` matches the module-qualified path (not the bare name),
+    // derived via `module_path!()` to avoid desync on module moves.
     let test_path = module_path!().split_once("::").map_or_else(
         || TEST_NAME.to_owned(),
         |(_, module)| format!("{module}::{TEST_NAME}"),
@@ -246,9 +239,7 @@ fn a_guest_gets_no_standard_input() {
 
     assert!(
         !report.contains(SECRET),
-        "a guest read the host's standard input: {report}. `jan-klod-gateway ask` \
-         runs in the user's terminal, so this is the keystrokes — including the \
-         answer to a permission prompt."
+        "a guest cannot read the host's stdin: {report}"
     );
     assert!(
         report.starts_with("refused") || report.starts_with("READ 0 bytes"),

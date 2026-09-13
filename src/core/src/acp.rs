@@ -1,32 +1,6 @@
-//! Agent Client Protocol, agent side — the editor-facing ecosystem port.
-//!
-//! ACP is Zed's editor↔agent standard: implement the agent half once and any
-//! ACP editor connects without a bespoke plugin.
-//!
-//! # How this differs from [`crate::mcp`], which is not obvious
-//!
-//! Both are newline-delimited JSON-RPC 2.0 on stdio, so the framing is shared
-//! and neither needs an SDK. Two things are not shared:
-//!
-//! **The version is an integer, not a date.** ACP's `protocolVersion` is `1`;
-//! MCP's is `"2025-11-25"`. Three version schemes now coexist —
-//! `PROTOCOL_VERSION` for `jan-klod`'s own clients, a date for MCP, an integer
-//! here — and copying one into another is the mistake this comment exists to
-//! prevent.
-//!
-//! **ACP is bidirectional.** The agent originates requests *to the client*:
-//! `session/request_permission` blocks on the editor's answer. Everything else
-//! this core serves is client→server requests plus server→client
-//! notifications. That is the hard half of the port and it arrives in a later
-//! box; this one is the handshake, which needs no session at all.
-//!
-//! # The ordering rule is the spec's, not ours
-//!
-//! "Before a Session can be created, Clients MUST initialize the connection by
-//! calling the `initialize` method." So `session/new` before `initialize` is
-//! refused rather than tolerated — the same shape as [`crate::rpc`]'s
-//! negotiation guard, and for the same reason: a surface that works without its
-//! handshake teaches clients to skip it.
+//! ACP: Agent Client Protocol for editor↔agent (Zed's standard).
+//! Version is integer (not date); bidirectional (agent requests client).
+//! Sessions require `initialize` first.
 
 use std::cell::RefCell;
 use std::io::{BufRead, Write};
@@ -40,20 +14,14 @@ use crate::conductor::{Event, EventSink, Flow, RunResult};
 use crate::intercept::{Driver, UserPrompt};
 use crate::AgentSession;
 
-/// The ACP revision this agent implements.
-///
-/// An **integer**. See the module docs: MCP's equivalent is a date string, and
-/// the two must not be confused.
+/// ACP protocol version (integer, not date like MCP).
 pub const ACP_VERSION: i64 = 1;
 
 /// What this agent calls itself in `initialize`.
 const AGENT_NAME: &str = "jan-klod";
 
-/// One ACP request or notification.
-///
-/// Its own type rather than [`jsonrpc::Request`], which flattens into this
-/// repository's own `Command` enum and would reject every ACP method name. The
-/// same reason `mcp` has its own.
+/// One ACP request or notification (own type to avoid name conflicts with
+/// repository's `Command` enum, like `mcp` does).
 #[derive(Debug, serde::Deserialize)]
 struct Frame {
     jsonrpc: String,
@@ -64,12 +32,9 @@ struct Frame {
     params: serde_json::Value,
 }
 
-/// The connection's state across frames.
-///
-/// ACP needs state to answer correctly — whether `initialize` has happened, and
-/// which session ids have been handed out — so unlike `mcp`'s stateless
-/// `classify` there is a value here. It still needs no runtime, which is what
-/// keeps this box's rules testable without booting one.
+/// Connection state (handshake, session ids). Unlike `mcp`'s stateless
+/// `classify`, this tracks initialization and minted sessions. No runtime
+/// needed; rules testable without booting one.
 #[derive(Debug, Default)]
 pub struct Connection {
     /// Whether `initialize` has been answered.
@@ -78,40 +43,26 @@ pub struct Connection {
     sessions: Vec<String>,
 }
 
-/// How the agent puts a question to the editor.
+/// Agent→editor question interface (seam for testability).
 ///
-/// A seam, because the thing that makes `session/request_permission` hard is
-/// not its shape but its *direction*: the agent originates a request and then
-/// **blocks reading the answer off the same pipe it is writing to**. Only
-/// [`serve`] needs that; a test needs a scripted answer. Splitting them means
-/// the protocol shape is checkable without threads, and the blocking read has
-/// one implementation in one place.
+/// Hard part of `session/request_permission` is bidirectional blocking: agent
+/// writes and reads on the same pipe. [`serve`] needs it; tests need scripted
+/// answers. Splitting them keeps protocol shape testable without threads.
 pub trait Asker {
-    /// Put `prompt` to the editor for `session` and return the answer.
+    /// Put `prompt` to the editor and return the answer.
+    /// Default answer is always safe (headless refusal).
     ///
-    /// Returning `prompt.default_answer` is always safe — it is what a headless
-    /// driver does, and it is a refusal.
-    ///
-    /// `&self` with interior mutability, because the streaming sink and the
-    /// permission driver both need this object *during one turn* and Rust will
-    /// not lend it mutably twice. The same reason `rpc`'s sink and driver share
-    /// an immutable `&Receiver`.
+    /// Uses `&self` with interior mutability: streaming sink and permission
+    /// driver both need this during one turn (can't lend mutably twice).
     fn ask(&self, session: &str, prompt: &UserPrompt) -> String;
 
-    /// Whether the client has cancelled the turn.
-    ///
-    /// Asked between streamed events and after the turn, so a
-    /// `session/cancel` both stops the loop and decides the stop reason.
-    /// Sticky once true: a cancel cannot be un-seen.
+    /// Whether the client cancelled (sticky once true).
     fn cancelled(&self) -> bool {
         false
     }
 }
 
-/// An [`Asker`] that never asks: every prompt takes its default.
-///
-/// The right behaviour when there is no editor to ask, and a refusal by
-/// construction — the same posture [`crate::HeadlessDriver`] takes.
+/// [`Asker`] that never asks (headless refusal, like [`crate::HeadlessDriver`]).
 pub struct NoAsker;
 impl Asker for NoAsker {
     fn ask(&self, _session: &str, prompt: &UserPrompt) -> String {
@@ -172,12 +123,9 @@ fn permission_options(prompt: &UserPrompt) -> serde_json::Value {
     )
 }
 
-/// The [`Asker`] [`serve`] uses: write the request, then block on the answer.
-///
-/// This is the agent→client direction, and the only place in this repository
-/// where the core originates a JSON-RPC request and waits. It works because the
-/// reader thread holds the pipe while the turn runs — without that, the answer
-/// could not arrive until the turn it is blocking had already finished.
+/// [`Asker`] for [`serve`]: write request, block on answer (agent→client).
+/// Only place core originates JSON-RPC and waits. Works because reader thread
+/// holds the pipe while the turn runs.
 struct PipeAsker<'a, W: Write> {
     writer: Rc<RefCell<W>>,
     incoming: &'a Receiver<String>,
@@ -187,11 +135,7 @@ struct PipeAsker<'a, W: Write> {
 }
 
 impl<W: Write> PipeAsker<'_, W> {
-    /// Drain whatever the editor has sent without waiting, noting a cancel.
-    ///
-    /// Called between streamed events, which is the only place a cancel can be
-    /// noticed while a turn is running — the serving loop is inside the
-    /// conductor until the turn ends.
+    /// Drain editor input, noting cancels (checked between streamed events).
     fn drain(&self) {
         while let Ok(line) = self.incoming.try_recv() {
             if is_cancel(&line) {
@@ -227,24 +171,17 @@ impl<W: Write> Asker for PipeAsker<'_, W> {
                 || writer.write_all(b"\n").is_err()
                 || writer.flush().is_err()
             {
-                // Nobody is reading, so nobody will answer. The default is a
-                // refusal, which is the safe end of a broken pipe.
+                // Broken pipe: default is safe refusal.
                 return prompt.default_answer.clone();
             }
         }
 
-        // Read until our answer arrives. Anything else on the pipe is not this
-        // request's business — except a cancel, which the spec says MUST be
-        // answered with a `cancelled` outcome, so it ends the wait.
+        // Read until answer arrives; cancel ends wait and sets flag for stopReason.
         while let Ok(line) = self.incoming.recv() {
             let Ok(frame) = serde_json::from_str::<serde_json::Value>(&line) else {
                 continue;
             };
             if is_cancel(&line) {
-                // The spec requires a `cancelled` outcome for every pending
-                // permission request, and the default expresses exactly that
-                // refusal. The flag is what turns the parked `session/prompt`
-                // into `stopReason: cancelled` rather than `end_turn`.
                 self.cancelled.set(true);
                 return prompt.default_answer.clone();
             }
@@ -257,62 +194,57 @@ impl<W: Write> Asker for PipeAsker<'_, W> {
                     .get("optionId")
                     .and_then(serde_json::Value::as_str)
                     .map_or_else(|| prompt.default_answer.clone(), str::to_owned),
-                // `cancelled`, or a shape this cannot read: the default, which
-                // refuses. An unreadable answer must never widen a permission.
+                // Cancelled or unreadable: default (never widen permissions).
                 _ => prompt.default_answer.clone(),
             };
         }
-        // EOF while parked: the editor is gone.
+        // EOF: editor gone.
         prompt.default_answer.clone()
     }
 }
 
-/// What a frame means, decided without a session.
+/// Frame routing (session-independent classification).
 enum Routed {
-    /// A notification: nothing to answer.
+    /// Notification (no answer).
     Silent,
-    /// Answerable without running anything.
+    /// Answer without running (handshake, routing).
     Answer(jsonrpc::Response),
-    /// `session/prompt`, which needs a turn.
+    /// `session/prompt` (needs a turn).
     Prompt {
-        /// The request to answer.
+        /// Request id.
         id: jsonrpc::Id,
-        /// Its params.
+        /// Request params.
         params: serde_json::Value,
     },
 }
 
-/// Serve ACP on `input`/`output` until the client hangs up.
+/// Serve ACP on `input`/`output` until client hangs up.
 ///
 /// # Errors
-/// Any I/O failure on `output`. A malformed frame is answered, not returned:
-/// one bad line is not a reason to hang up on an editor.
+/// I/O failure on `output`. Malformed frames answered, not returned (one bad
+/// line doesn't hang up an editor).
 pub fn serve<R: BufRead + Send + 'static, W: Write>(
     input: R,
     output: W,
     agent: &mut AgentSession,
 ) -> std::io::Result<()> {
-    // Shared because a turn streams `session/update` notifications *while* it
-    // runs, so the sink and the answer both write here.
+    // Writer shared: turn streams `session/update` while running.
     let writer = Rc::new(RefCell::new(output));
 
-    // The reader thread does one thing: hand lines over. It holds no session —
-    // `AgentSession` is `!Send` and stays here — and that division is what
-    // makes an editor's answer readable at all: while a turn runs, this thread
-    // is inside the conductor, so something else has to be holding the pipe.
-    // The same shape `rpc` uses, for the same reason.
+    // Reader thread: hands lines over. Holds no session (`AgentSession` is `!Send`).
+    // Division makes editor's answer readable: while turn runs, this thread
+    // holds the pipe (same pattern as `rpc`).
     let (handover, incoming) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         for line in input.lines() {
             let handed = match line {
                 Ok(line) => handover.send(line),
-                // Not UTF-8: that frame's problem, not the stream's. The line
-                // is consumed, so the loop carries on.
+                // UTF-8 error: skip frame, continue.
                 Err(err) if err.kind() == std::io::ErrorKind::InvalidData => continue,
                 Err(_) => break,
             };
             if handed.is_err() {
-                break; // the loop below is gone
+                break;
             }
         }
     });
@@ -321,13 +253,11 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
     let asker = PipeAsker {
         writer: Rc::clone(&writer),
         incoming: &incoming,
-        // Agent-chosen ids, well clear of anything an editor is likely to
-        // pick. The two directions have independent id spaces, so this is
-        // legibility rather than correctness.
+        // Agent-chosen IDs, well clear of editor IDs (separate id spaces).
         next_id: std::cell::Cell::new(1_000_000),
         cancelled: std::cell::Cell::new(false),
     };
-    // `recv` ends when the reader thread drops its end, which is EOF.
+    // recv ends when reader thread drops its end (EOF).
     while let Ok(line) = incoming.recv() {
         if line.trim().is_empty() {
             continue;
@@ -348,10 +278,8 @@ struct AcpSink<'a, W: Write, A: Asker> {
 
 impl<W: Write, A: Asker> EventSink for AcpSink<'_, W, A> {
     fn emit(&mut self, event: &Event) -> Flow {
-        // Only assistant text maps to an ACP update today. A tool call has its
-        // own `sessionUpdate` kinds in the spec, and inventing a shape for them
-        // here — rather than reading what ACP defines — is how a client ends up
-        // rendering something nobody agreed on. Left for the box that needs it.
+        // Only assistant text → ACP update today. Tool calls have `sessionUpdate`
+        // kinds in the spec; inventing shapes here breaks clients.
         let Event::TextDelta(text) = event else {
             return Flow::Continue;
         };
@@ -369,8 +297,7 @@ impl<W: Write, A: Asker> EventSink for AcpSink<'_, W, A> {
         });
         {
             let mut writer = self.writer.borrow_mut();
-            // Nobody reading means nothing left to stream, which the conductor
-            // treats as a cancellation at its next loop boundary.
+            // Write failure = no reader = cancellation at conductor boundary.
             if serde_json::to_writer(&mut *writer, &notification).is_err()
                 || writer.write_all(b"\n").is_err()
                 || writer.flush().is_err()
@@ -378,10 +305,7 @@ impl<W: Write, A: Asker> EventSink for AcpSink<'_, W, A> {
                 return Flow::Stop;
             }
         }
-        // Between two events is where a cancel gets read — the serving loop is
-        // inside the conductor until the turn ends, so this is the only place
-        // it can be noticed. The conductor checks `Flow` at its own
-        // boundaries, so `Stop` here needs no conductor change.
+        // Cancel read between events (only place it's noticed, conductor boundary).
         if self.asker.cancelled() {
             return Flow::Stop;
         }
@@ -396,13 +320,9 @@ impl Connection {
         Self::default()
     }
 
-    /// One line to the response it earns, or `None` for a notification.
-    ///
-    /// Public so a caller can drive ACP without owning the read loop — which
-    /// is what [`serve`] does, and what a test has to do: a session id is
-    /// **minted by the agent**, so a client cannot script `session/prompt` in
-    /// advance. It must read the id out of `session/new` first, exactly as an
-    /// editor does.
+    /// Line to response or `None` for notifications.
+    /// Public so callers can drive ACP without owning the read loop.
+    /// Tests must read session ids from `session/new` (agent-minted).
     pub fn answer<W: Write, A: Asker>(
         &mut self,
         line: &str,
@@ -422,11 +342,8 @@ impl Connection {
         }
     }
 
-    /// Everything a frame can mean **without** a session.
-    ///
-    /// The handshake, the ordering MUST, and every refusal are settled here, so
-    /// they stay checkable with no booted runtime — the same division
-    /// [`crate::mcp`]'s `classify` and [`crate::rpc`]'s `parse` have.
+    /// Frame routing (session-independent). Handshake, ordering MUST, refusals
+    /// (testable without runtime, like `mcp::classify` and `rpc::parse`).
     fn route(&mut self, line: &str) -> Routed {
         let frame: Frame = match serde_json::from_str(line) {
             Ok(frame) => frame,
@@ -439,7 +356,7 @@ impl Connection {
             }
         };
 
-        // A notification earns no answer; there is nothing to correlate one to.
+        // Notification: no answer.
         let Some(id) = frame.id else {
             return Routed::Silent;
         };
@@ -456,9 +373,7 @@ impl Connection {
             ));
         }
 
-        // The spec's MUST, enforced: nothing but `initialize` is served before
-        // the handshake. A surface that works without it teaches clients to
-        // skip it, and then the version negotiation is decoration.
+        // Handshake MUST: only `initialize` before negotiation.
         if !self.negotiated && frame.method != "initialize" {
             return Routed::Answer(refuse(
                 id,
@@ -490,13 +405,8 @@ impl Connection {
         })
     }
 
-    /// The `initialize` result.
-    ///
-    /// Every capability is declared **false or empty**, which is the honest
-    /// answer today: no session loading, no image or audio prompts, no
-    /// embedded context, and no authentication methods. An agent that claimed
-    /// them would be found out by the first editor that used one, and a
-    /// capability list is exactly the thing a client is entitled to trust.
+    /// `initialize` result (all capabilities false/empty: honest today, and
+    /// capability lists are what clients trust).
     fn initialized(params: &serde_json::Value) -> serde_json::Value {
         let asked = params
             .get("protocolVersion")
@@ -516,8 +426,7 @@ impl Connection {
                 "name": AGENT_NAME,
                 "version": env!("CARGO_PKG_VERSION"),
             },
-            // No authentication: this is a subprocess the editor spawned and
-            // owns, exactly as `rpc` is. There is nobody else on the pipe.
+            // No auth: subprocess the editor owns (like `rpc`); nobody else on pipe.
             "authMethods": [],
             "_meta": {
                 "clientProtocolVersion": asked,

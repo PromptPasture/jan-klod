@@ -1,16 +1,8 @@
-//! `provider_probe` — drive a provider extension's full `llm-provider.complete`
-//! path end-to-end against a live OpenAI-compatible endpoint.
-//!
-//! Instantiates `provider-world` directly, wires the same three host
-//! capabilities the core grants — with a real `host-http` reusing
-//! [`jan_klod_core::http`] — then issues one completion and prints the streamed
-//! chunks.
-//!
-//! Usage: `provider_probe [config] [ext-dir] [prompt]`. Requires the provider's
-//! api-key env (e.g. `OPENAI_API_KEY`) and network access — it makes a real,
-//! token-costing call.
+//! Drive provider `llm-provider.complete` vs live OpenAI endpoint.
+//! Instantiate `provider-world` with real `host-http`, issue completion, print chunks.
+//! Needs API-key env + network (real call).
 
-// Dominated by `bindgen!`-generated code; exempt from the workspace lints.
+// bindgen!-generated code; exempt from workspace lints
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 use jan_klod_config::Config;
@@ -30,12 +22,12 @@ use exports::jan_klod::interfaces::llm_provider::{
 };
 use jan_klod::interfaces::{host_config, host_http, host_log};
 
-/// Minimal host backing `provider-world`'s imports for the probe.
+/// Minimal host backing `provider-world`
 struct ProbeHost {
     wasi: WasiCtx,
     table: ResourceTable,
     component_id: String,
-    /// The provider instance's resolved config section (env already expanded).
+    /// Provider instance config section (env expanded).
     section: Value,
 }
 
@@ -135,7 +127,7 @@ fn main() -> Result<()> {
         .next()
         .unwrap_or_else(|| "Reply with exactly one word: pong".to_string());
 
-    // First enabled provider instance from the real config.
+    // First enabled provider from config
     let config = Config::from_path(&config_path)?;
     let instance = config
         .enabled()

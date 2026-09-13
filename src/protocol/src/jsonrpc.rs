@@ -3,19 +3,17 @@
 //!
 //! # Why this is in the contract crate and not in the transport
 //!
-//! The crate documentation used to say framing belongs to the transport, and for
-//! one transport that was right. It stops being right with two parties: the core
-//! writes frames (`jan_klod_core::rpc`, Slice 13b) and *every client* reads
-//! them, and `jan-klod` — the TUI client — depends on neither `jan-klod-core`
-//! nor Wasmtime on purpose. A frame type reachable only from the core would be
-//! hand-rolled a second time in the client, which is the divergence the contract
-//! exists to prevent. So the framing lives here, beside the commands it carries,
-//! and the transport keeps what is genuinely its own: the sockets, the pipes,
-//! the read loop.
+//! The crate docs used to say framing belongs to transport—right for one, wrong
+//! for two parties. The core writes frames (`jan_klod_core::rpc`, Slice 13b)
+//! and *every client* reads them; `jan-klod` (the TUI client) depends on neither
+//! `jan-klod-core` nor Wasmtime by design. A frame type reachable only from the
+//! core would be hand-rolled twice, the divergence this contract prevents. So
+//! framing lives here, beside the commands it carries; the transport keeps
+//! what is genuinely its own: the sockets, pipes, and read loop.
 //!
-//! JSON is not a choice being made here either. This is the *JSON*-RPC envelope;
-//! a payload whose type varies per command needs a value type to be described at
-//! all, and every transport in the roadmap — stdio, WebSocket, MCP, ACP — is
+//! JSON is not a choice being made here. This is the *JSON*-RPC envelope; a
+//! payload whose type varies per command needs a value type for any description
+//! at all, and every transport in the roadmap — stdio, WebSocket, MCP, ACP — is
 //! JSON. The contract types in the crate root stay format-free.
 //!
 //! # Shapes
@@ -50,10 +48,9 @@ pub const INCOMPATIBLE_VERSION: i64 = -32000;
 
 /// A request id, echoed back on the response that answers it.
 ///
-/// Both spellings the spec allows, because a client that sends string ids is
-/// conforming and a core that rejected them would not be — and this crate's
-/// schema is what non-Rust clients generate from, so what it accepts is what
-/// they will send.
+/// Both spellings the spec allows: a client sending string ids is conforming,
+/// and a core rejecting them would not be. This crate's schema is what non-Rust
+/// clients generate from, so what it accepts is what they will send.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Id {
@@ -61,10 +58,10 @@ pub enum Id {
     Number(i64),
     /// A string id.
     Text(String),
-    /// No id could be read from the frame — the JSON did not parse, or it
-    /// parsed to something that is not a request. The spec requires the answer
-    /// to carry `null` in that case, which is the one thing a client can tell
-    /// apart from an answer to something it sent. A client must not *send* this.
+    /// No id could be read from the frame — JSON did not parse, or it parsed
+    /// to something other than a request. The spec requires `null` in the
+    /// answer, the one thing distinguishing it from an answer the client sent.
+    /// A client must not *send* this.
     Null,
 }
 

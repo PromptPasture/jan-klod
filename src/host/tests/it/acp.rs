@@ -5,9 +5,9 @@
 //! prompt that runs a **real turn**, streams `session/update` notifications,
 //! and then answers with a stop reason.
 //!
-//! The frames are fed one at a time rather than as a script, because that is
-//! what a client must do: the **agent** mints the session id, so `session/new`
-//! has to be read before `session/prompt` can name it.
+//! The frames are fed one at a time (not as a script) because the **agent**
+//! mints the session id: `session/new` must be read before `session/prompt`
+//! can name it.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -66,8 +66,8 @@ impl Editor {
 
     /// Send one frame and return the response it earned, if any.
     ///
-    /// `NoAsker` — this editor never answers a permission request, so every
-    /// prompt takes its default. The tests that *do* answer supply their own.
+    /// `NoAsker` — never answers a permission request, so every prompt takes
+    /// its default. Tests that *do* answer supply their own.
     fn send(
         &mut self,
         agent: &mut jan_klod_core::AgentSession,
@@ -88,7 +88,7 @@ impl Editor {
             .map(|response| serde_json::to_value(response).expect("it serializes"))
     }
 
-    /// Every notification the agent wrote to the pipe, in order.
+    /// All notifications the agent wrote to the pipe, in order.
     fn notifications(&self) -> Vec<serde_json::Value> {
         let bytes = self.writer.borrow().clone();
         String::from_utf8(bytes)
@@ -256,8 +256,7 @@ impl Answering {
 impl jan_klod_core::acp::Asker for Answering {
     fn ask(&self, _session: &str, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
         self.asked.borrow_mut().push(prompt.question.clone());
-        // A real editor picks an `optionId`, and those are the prompt's own
-        // options — so answering with one is answering as ACP would.
+        // A real editor picks an `optionId` from the prompt's own options.
         assert!(
             prompt.options.is_empty() || prompt.options.contains(&self.answer),
             "the answer must be one of the options offered: {:?}",
@@ -347,11 +346,11 @@ extensions:
     Some((dir, agent, target))
 }
 
-/// An editor that grants the permission gets the write.
+/// An editor that grants permission gets the write.
 ///
-/// The assertion is the **file**, not that the turn continued — a turn
-/// continues either way, and "the editor was asked" proves only that a question
-/// was posed. Only the file says the answer was honoured.
+/// The assertion is the **file**, not turn continuation — "the editor was
+/// asked" only proves a question was posed. Only the file proves the answer
+/// was honoured.
 #[test]
 fn an_editor_that_grants_permission_gets_the_write() {
     let Some((_dir, mut agent, target)) = booted_writing("grant") else {
@@ -391,11 +390,11 @@ fn an_editor_that_grants_permission_gets_the_write() {
     );
 }
 
-/// The same turn, refused: the editor is asked, says no, and nothing is written.
+/// The same turn, refused: the editor is asked, says no, nothing written.
 ///
-/// The pair is the point. One test showing the file present and another showing
-/// it absent, from the same provider script, is what proves the *answer* decides
-/// — rather than the tool never having been reached.
+/// The pair proves the *answer* decides — not that the tool never ran. One
+/// test showing the file present and another absent (from the same script)
+/// proves this.
 #[test]
 fn an_editor_that_refuses_permission_prevents_the_write() {
     let Some((_dir, mut agent, target)) = booted_writing("refuse") else {
@@ -432,12 +431,9 @@ fn an_editor_that_refuses_permission_prevents_the_write() {
 
 /// A cancelled turn is **answered** `cancelled`, not left hanging.
 ///
-/// The spec is emphatic that `cancelled` "MUST be returned when the client
-/// sends a `session/cancel` notification, even if the cancellation causes
-/// exceptions in underlying operations". An editor waiting on a reply that
-/// never comes is a hung editor, so the obligation is to answer — and to
-/// answer with the reason, not with `end_turn`, which would tell the editor
-/// the turn finished normally.
+/// The spec requires `cancelled` "even if the cancellation causes exceptions
+/// in underlying operations". An editor waiting on a reply that never comes
+/// is hung. The obligation is to answer with the reason, not `end_turn`.
 #[test]
 fn a_cancelled_turn_is_answered_cancelled() {
     let Some((_dir, mut agent, target)) = booted_writing("cancel") else {
@@ -446,8 +442,7 @@ fn a_cancelled_turn_is_answered_cancelled() {
     let mut editor = Editor::new();
     let session = editor.opened(&mut agent);
 
-    // An editor that has cancelled: it refuses the permission *and* reports the
-    // turn cancelled, which is what a real `session/cancel` produces.
+    // An editor that cancels: refuses permission *and* reports cancellation.
     let cancelling = Answering {
         answer: "no".to_owned(),
         asked: RefCell::new(Vec::new()),
@@ -466,25 +461,23 @@ fn a_cancelled_turn_is_answered_cancelled() {
 
     assert_eq!(
         answer["result"]["stopReason"], "cancelled",
-        "cancellation wins over how the turn happened to finish: {answer}"
+        "cancellation overrides the turn's outcome: {answer}"
     );
     assert!(
         answer.get("error").is_none(),
-        "and it is an answer, not an error — a cancel is not a failure: {answer}"
+        "and it is an answer, not an error: {answer}"
     );
     assert!(
         !target.exists(),
-        "nothing was written on the way out: {}",
+        "nothing was written: {}",
         target.display()
     );
 }
 
-/// The same turn, uncancelled, answers `end_turn` — so the assertion above is
-/// about the cancel and not about the refusal that accompanies it.
+/// Uncancelled, it answers `end_turn` — so cancellation drives the result, not
+/// the refusal that accompanies it.
 ///
-/// Without this pair, `stopReason: cancelled` could equally have come from the
-/// permission being refused, which is the confusion the mapping exists to
-/// avoid: a refused tool is not a cancelled turn.
+/// Without this, `stopReason: cancelled` could come from the refusal.
 #[test]
 fn a_refusal_without_a_cancel_still_ends_the_turn() {
     let Some((_dir, mut agent, _target)) = booted_writing("nocancel") else {

@@ -1,27 +1,17 @@
-//! Seatbelt: confine a command by running it under `sandbox-exec`.
+//! Seatbelt: confine a command via `sandbox-exec`.
 //!
-//! The mechanism macOS actually gives an unprivileged process. It needs no
-//! entitlement, no helper and no root, which is why Codex and Claude Code both
-//! use it — and it is **deprecated**: `man sandbox-exec` opens with "execute
-//! within a sandbox (DEPRECATED)". Present on every supported macOS all the
-//! same, and there is no unprivileged replacement, so the choice is this or
-//! nothing. [`crate::sandbox`] already reports "nothing" honestly, which is the
-//! fallback when it is missing.
+//! macOS's unprivileged sandbox (no entitlement, helper, or root). **Deprecated**
+//! but present on all macOS; no unprivileged replacement. [`crate::sandbox`]
+//! reports "nothing" honestly when missing.
 //!
-//! # What the profile allows, and why so little
+//! # Profile: deny-by-default with minimal grants
 //!
-//! `(deny default)` and then the smallest set a shell needs to start:
-//! `process-exec`, `process-fork`, `sysctl-read`, and `file-read*`. Reads are
-//! allowed wholesale because the confinement this slice is for is over
-//! **effects** — the gap the security model records is that a command "can read
-//! or write anywhere the user can", and writes are the half that changes the
-//! machine. Narrowing reads is a separate argument with a separate cost (a
-//! command that cannot read its own toolchain does not run at all).
+//! `(deny default)`, then shell essentials: `process-exec`, `process-fork`,
+//! `sysctl-read`, `file-read*`. Reads allowed wholesale (confinement targets
+//! **effects**—writes change the machine, reads don't per the security model).
 //!
-//! A command needing a Mach service — some of what `git` or `cargo` reach for —
-//! will **fail** under this profile rather than run unconfined. That is the
-//! right direction to fail in, and it is visible: the command's own error says
-//! what was denied.
+//! Commands needing Mach services (git, cargo) fail under this profile with
+//! visible errors about what was denied—the right direction to fail.
 
 use std::path::Path;
 use std::process::Command;

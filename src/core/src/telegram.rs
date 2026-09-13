@@ -1,23 +1,16 @@
-//! Telegram chat integration — headless, UI-less access via a Telegram bot.
+//! Telegram bot integration (headless). Bot API is outbound HTTP only
+//! (`getUpdates` long-poll, `sendMessage` POST); no `host-socket` needed.
+//! HTTP injected as [`Fetch`] closure for offline testing.
 //!
-//! The Bot API is outbound HTTP only (`getUpdates` long-poll, `sendMessage`
-//! POST), so no new `host-socket` capability is needed. HTTP is injected as a
-//! [`Fetch`] closure so the whole path is testable offline.
+//! Message → turn → answer (chat id = session id).
 //!
-//! One inbound message -> one turn (chat id is the session id) -> the answer
-//! sent back.
+//! ## Confirmations in chat
 //!
-//! ## Confirmations in a chat
+//! Headless path still gates on permissions. [`ChatDriver`] asks as a message,
+//! treats next user message as answer, long-polls `getUpdates` while blocked.
 //!
-//! This is the headless path, so the permission gate must still work here
-//! rather than silently taking every prompt's default. [`ChatDriver`] asks the
-//! question as a message and treats the user's next message in that chat as the
-//! answer, long-polling `getUpdates` itself while the turn is blocked.
-//!
-//! Updates from *other* chats seen during that wait are deferred, not dropped
-//! (advancing the poll offset past a message would lose it), and run after the
-//! current turn. The wait is bounded by [`MAX_ANSWER_POLLS`]; on expiry the
-//! prompt's default applies (a denial, for the permission gate).
+//! Other chats' updates deferred, not dropped (preserve poll offset), run after
+//! current turn. Wait bounded by [`MAX_ANSWER_POLLS`]; expiry takes prompt default.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;

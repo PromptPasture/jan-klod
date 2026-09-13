@@ -1,9 +1,5 @@
-//! The loop's tool dispatch (`ToolFleet` as a `ToolInvoker`).
-//!
-//! Builds a fleet from the `tool-fs` guest and dispatches a `ToolCall` by the
-//! tool's advertised name through the `conductor::ToolInvoker` seam: the
-//! matching extension runs; an unknown tool returns `None`. Skips when the
-//! guest isn't staged in `ext/`.
+//! Tool dispatch via `ToolFleet`: dispatch `ToolCall` by name, unknown tools
+//! return `None`. Skips when guests not staged.
 
 use jan_klod_core::conductor::ToolInvoker;
 use jan_klod_core::host_fs::Workspace;
@@ -45,24 +41,23 @@ fn fleet_dispatches_a_tool_call_by_name() {
         ProcessRunner::disabled(),
     )
     .expect("tool instantiates");
-    // The tool advertises itself as `fs`.
+    // Tool advertises as `fs`.
     assert_eq!(fs.meta().unwrap().name, "fs");
 
     let mut fleet = ToolFleet::new(vec![fs]);
     assert_eq!(fleet.tool_names(), vec!["fs".to_string()]);
 
-    // A tool call named `fs` reaches the extension and returns its result.
+    // Call named `fs` reaches the extension.
     let result = fleet.invoke(&call(
         "fs",
         r#"{"op":"write","path":"a.txt","contents":"hi"}"#,
     ));
     let result = result.expect("fs dispatched");
     assert!(result.content.contains("wrote a.txt"));
-    // #162: a clearly-successful call must say so through the flag, not just
-    // through prose a human would read.
+    // #162: success must flag the result, not just prose.
     assert!(!result.failed, "a successful write is not `failed`");
 
-    // An unknown tool is skipped (None) — the loop tells the model "no tool".
+    // Unknown tool returns None (loop tells model "no tool").
     assert_eq!(fleet.invoke(&call("nonexistent", "{}")), None);
 }
 
@@ -98,7 +93,7 @@ fn fs_tool_writes_reads_and_greps_through_the_fleet() {
     let mut fleet = ToolFleet::new(vec![fs]);
     assert_eq!(fleet.tool_names(), vec!["fs".to_string()]);
 
-    // The model emits one `fs` tool call per operation, dispatched by `op`.
+    // One `fs` call per operation (dispatched by `op`).
     let written = fleet.invoke(&call(
         "fs",
         r#"{"op":"write","path":"src/main.rs","contents":"fn main(){}\nlet x=1;"}"#,
@@ -118,8 +113,7 @@ fn fs_tool_writes_reads_and_greps_through_the_fleet() {
         Some("1:fn main(){}")
     );
 
-    // A directory path (or none at all) greps the whole tree: hits carry their
-    // path, so "where is this symbol?" is one call rather than find-then-read.
+    // Directory (or no path) greps whole tree; hits carry paths (one call not find-then-read).
     fleet
         .invoke(&call(
             "fs",
@@ -139,7 +133,7 @@ fn fs_tool_writes_reads_and_greps_through_the_fleet() {
         Some("notes.md:1:fn in prose\nsrc/main.rs:1:fn main(){}\nsrc/util/helper.rs:1:fn help(){}")
     );
 
-    // `glob` narrows the tree search to the files worth reading.
+    // Glob narrows search to files.
     let scoped = fleet.invoke(&call(
         "fs",
         r#"{"op":"grep","pattern":"fn ","glob":"**/*.rs"}"#,
@@ -149,14 +143,14 @@ fn fs_tool_writes_reads_and_greps_through_the_fleet() {
         Some("src/main.rs:1:fn main(){}\nsrc/util/helper.rs:1:fn help(){}")
     );
 
-    // `path` scopes it to a subtree — the .md file above is out of range.
+    // Path scopes to subtree (.md file out of range).
     let subtree = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"fn ","path":"src"}"#));
     assert_eq!(
         subtree.map(|i| i.content).as_deref(),
         Some("src/main.rs:1:fn main(){}\nsrc/util/helper.rs:1:fn help(){}")
     );
 
-    // No match is an explicit statement, not an empty string.
+    // No match is explicit, not empty string.
     let empty = fleet.invoke(&call("fs", r#"{"op":"grep","pattern":"zzz"}"#));
     assert_eq!(
         empty.map(|i| i.content).as_deref(),
@@ -205,13 +199,9 @@ fn shell_tool_runs_a_command_through_the_fleet() {
     );
 }
 
-/// A tree-wide grep does not sweep credentials into the transcript.
-///
-/// `fs:grep` is allowlisted to run without asking (a gate on every search gets
-/// switched off) — but tool results become transcript sent to the provider, so
-/// a grep for `password` in a repo with a `.env` would leak it, unasked and
-/// unlogged. The gate sees only the *pattern*, not which files it will match,
-/// so `guest-fs`'s walk skips credential files itself.
+/// Tree grep skips credentials (sent to provider via transcript).
+/// `fs:grep` is allowlisted (gate off), so it must skip `.env`/`.pem` itself.
+/// Gate sees only the pattern, not which files will match.
 #[test]
 fn a_tree_grep_skips_credential_files() {
     let engine = Engine::default();
@@ -220,8 +210,7 @@ fn a_tree_grep_skips_credential_files() {
     std::fs::create_dir_all(workspace_dir.join("src")).unwrap();
     let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
 
-    // A secret in the two conventional shapes, plus a source file that mentions
-    // the same word so the search is not trivially empty.
+    // Secrets in conventional shapes + source file mentioning the same word (not empty).
     std::fs::write(
         workspace_dir.join(".env"),
         "API_TOKEN=hunter2-must-not-leak\n",
@@ -251,8 +240,7 @@ fn a_tree_grep_skips_credential_files() {
         !hits.contains("must-not-leak"),
         "a credential reached the model through a search:\n{hits}"
     );
-    // Not vacuous: the same grep still finds the ordinary file, so the walk is
-    // working rather than returning nothing.
+    // Verify walk works (finds source file), not vacuous.
     assert!(
         hits.contains("src/config.rs"),
         "and the search still works on source: {hits}"

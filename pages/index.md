@@ -12,16 +12,15 @@ A sandboxed coding agent powered by the WebAssembly Component Model.
 
 ## What it is
 
-jan-klod is a coding agent that runs each extension (provider, tool, interceptor) as a sandboxed WebAssembly component. Extensions cannot access the filesystem, network, or environment unless explicitly granted — without requiring a container.
+Runs each extension as a sandboxed WebAssembly component. No filesystem, network, or environment access unless granted—no container needed.
 
 ## Why it's different
 
-Most agents run extensions in the same process with full system access. jan-klod uses the **WebAssembly Component Model**: typed WIT contracts define exactly what each extension can import, and the host enforces fail-closed permission gates. You get Anthropic Claude, file tools, skill shortcuts, and MCP server integration — all sandboxed.
+Most agents run extensions in-process with full access. jan-klod isolates via **WebAssembly Component Model**: WIT contracts limit imports, hosts enforce fail-closed gates. Claude, file tools, skills, MCP—all sandboxed.
 
 ## Install
 
-**Nothing has shipped yet — there is no release to download.** Build from a
-checkout until the first tag:
+**No release yet.** Build from checkout until first tag:
 
 ```sh
 git clone https://github.com/PromptPasture/jan-klod
@@ -30,19 +29,15 @@ make setup                  # once: pinned cargo plugins, git hooks, WIT deps
 make bundle DIST=coding
 ```
 
-That writes the same archive a release would publish, to `dist/`. Unpack it and
-put `jan-klod` and `jan-klod-gateway` on your PATH.
+Creates release-like archive in `dist/`. Unpack; add `jan-klod` and `jan-klod-gateway` to PATH.
 
-The installer below is the path once there is a release; run today it reports
-`could not determine latest release tag` and exits non-zero.
+Below is the release-time installer (now has nothing to fetch):
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh
 ```
 
-That installs **coding**, the default. A distribution says what the install is
-*for* — not which client it carries, since terminal, window or browser is
-chosen at launch.
+Installs **coding** by default. Distribution is purpose, not client (terminal/window/browser chosen at launch).
 
 | Distribution | What it carries | For |
 |---|---|---|
@@ -62,21 +57,15 @@ export OPENAI_API_KEY=sk-...
 jan-klod my-session
 ```
 
-`jan-klod` starts the gateway automatically if it isn't already running.
+`jan-klod` starts gateway auto if needed.
 
 See the [quickstart guide](https://github.com/PromptPasture/jan-klod/blob/main/docs/quickstart.md) for a full walkthrough.
 
 ## Verifying a download
 
-The installer checks a SHA-256 from the same release as the bundle, which proves
-the download was not corrupted and **not** that it is ours. A minisign signature
-is what proves that, and this page is where its public key belongs — a key
-nobody can find is a signature nobody can check.
+Installer checks SHA-256 (proves no corruption, **not** authenticity). Minisign signature proves ownership; its public key goes here—key nobody finds is signature nobody checks.
 
-**Nothing is signed yet**: there is no release, so there is no key here and
-`registry.trusted-keys` ships empty, which means `ext install` refuses
-first-party components as untrusted rather than pretending. When the first
-signed release is cut, the key appears here and verifying is:
+**Not signed yet** (no release). `registry.trusted-keys` ships empty; `ext install` refuses untrusted first-party components. At first signed release, key appears here; verify via:
 
 ```sh
 minisign -Vm <bundle> -P <the key above>
