@@ -43,7 +43,9 @@ walking skeleton behind a go/no-go gate), then build out on it.
   a core swap. See [Blue/Green Deployment](blue-green-deployment.md).
 - **The WIT contracts already exist** (`wit/*.wit`, 15 interfaces) and are canonical.
   They survived the Go-source reset and are the fixed point everything builds against.
-- **All implementation code lives under `src/`** (`src/core/` for the Rust host,
+- **All implementation code lives under `src/`** (the Rust host workspace —
+  rooted at `src/core/`, whose members are `src/core/` (`jan-klod-core`),
+  `src/host/`, `src/config/`, `src/protocol/` and `src/tui/` — and
   `src/extensions/<name>/` for guests); `wit/` stays at the repo root as
   language-agnostic contracts. Detailed Phase 1 checklist:
   [PLAN.md](../decisions/2026-06-29-extension-technologies/PLAN.md).
