@@ -15,7 +15,7 @@ EXT := src/extensions
 SUPERVISOR := src/supervisor
 WEB := src/web
 # The Tauri shell (#141, #142). Its own cargo workspace, deliberately: Tauri
-# resolves 256 packages nothing else here needs, and as a member of $(HOST_WS) they
+# resolves 329 packages nothing else here needs, and as a member of $(HOST_WS) they
 # would be on every `cargo test` and every CI run. Nothing on the default build
 # path reaches it — `all` does not, `gate` does not — which is the point. Its
 # supply-chain gates are *not* optional in the same way: `lockfile`, `deny` and
@@ -274,7 +274,7 @@ DIST ?=
 # keep in step. So `DIST` still says what the install is for and `GUI` says
 # whether a window ships — `make bundle DIST=coding GUI=1` is both.
 #
-# Opt-in rather than always-on because it is not free: +256 packages to build,
+# Opt-in rather than always-on because it is not free: +329 packages to build,
 # ~10 MB in the archive, and on Linux a webkit2gtk build dependency the other
 # archives do not need (#141).
 GUI ?=
@@ -320,7 +320,7 @@ audit deny:
 # CycloneDX SBOM for all Rust crates. Install once: cargo install cargo-cyclonedx
 #
 # `src/gui` is generated too, and it is not a formality: `jan-klod-gui` is a
-# binary a `-gui` archive ships, and it carries 256 packages none of the others
+# binary a `-gui` archive ships, and it carries 329 packages none of the others
 # do (#141). An SBOM that describes the gateway and the client but not the third
 # binary in the same tarball answers the question it exists to answer — "what is
 # in this release?" — with two thirds of it.

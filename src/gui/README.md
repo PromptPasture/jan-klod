@@ -20,7 +20,9 @@ Tauri cost, measured in [#141] **before** this was written, against host baselin
 | Release binary | **9.6 MB** |
 | `deny.toml` entries required | **11** |
 
-As a host member, those 256 would build on every test/clippy/CI run—by everyone, even those never opening a window. Separate, they hide behind `make gui`. Cost is a second `target/` (like `src/extensions` already trades).
+That table is the original measurement and is deliberately not recounted. Both locks have grown since: as of 2026-09-13 the shell adds **+329**, and `src/Cargo.lock` as a member would be 406 → **735**. The build and binary rows have not been remeasured.
+
+As a host member, those packages would build on every test/clippy/CI run—by everyone, even those never opening a window. Separate, they hide behind `make gui`. Cost is a second `target/` (like `src/extensions` already trades).
 
 Separation **does not** buy supply-chain gate pass. Root `Makefile` targets name all three workspaces; `.github/workflows/ci.yml` has a `gui` job (builds, lints, tests under `xvfb`). The policy-widened tree doesn't escape the policy.
 

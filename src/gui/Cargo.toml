@@ -1,15 +1,21 @@
 # The GUI shell's own workspace — deliberately not a member of the host workspace.
 #
-# Tauri resolves 256 packages that nothing else in this repository needs (#141).
-# As a member of the host workspace those would land in `src/Cargo.lock`
-# (406 -> 663) and every `cargo test`, `cargo clippy --workspace` and CI run
-# would resolve and build them, whether or not anyone touched the window. A
+# Tauri resolves 329 packages that nothing else in this repository needs. As a
+# member of the host workspace those would land in `src/Cargo.lock` (406 ->
+# 735) and every `cargo test`, `cargo clippy --workspace` and CI run would
+# resolve and build them, whether or not anyone touched the window. A
 # separate workspace keeps that tree behind `make gui`, at the cost of a second
 # `target/` — the trade `src/extensions` already makes for the guests.
 #
 # What it does *not* buy is an exemption from the supply-chain gates: the root
 # `Makefile` names this workspace in `lockfile`, `deny` and `audit` alongside the
 # other two, and `deny.toml` carries the eleven named entries #141 measured.
+#
+# The two counts above are the committed locks, recounted 2026-09-13; they drift
+# upward as either tree gains dependencies. #141 measured +256 and 406 -> 663
+# before the shell existed, and `src/gui/README.md` keeps that original table as
+# the dated record. Recount with `cargo metadata --locked` over both manifests
+# rather than trusting either number.
 [workspace]
 resolver = "2"
 members = ["."]
@@ -31,7 +37,7 @@ tauri-build = "2"
 
 [dependencies]
 # The whole dependency. Default features on, deliberately: #141's measurement —
-# the licences, the advisories, the 256 packages — was taken on the default
+# the licences, the advisories, the package count — was taken on the default
 # feature set, and a narrowed one would be a tree nobody has measured.
 tauri = "2"
 # For `serde_json::to_string` on the two values interpolated into the

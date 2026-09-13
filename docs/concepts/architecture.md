@@ -149,13 +149,13 @@ UIs are **not extensions, not part of core.** They are optional separate **clien
 
 `jan-klod --gui` opens the **same** front-end the browser gets — the one core serves at `/` — in a system webview. No third codebase (Vision decision 5).
 
-The Tauri shell is `src/gui`, **its own cargo workspace**, not a host member. Not tidiness: Tauri adds **256 packages** not needed otherwise; as a member they'd land in `src/Cargo.lock` (406 → 663) and be resolved/built by every `cargo test`, `cargo clippy --workspace`, and CI run regardless of window changes. Kept separate, they're behind `make gui` only.
+The Tauri shell is `src/gui`, **its own cargo workspace**, not a host member. Not tidiness: Tauri adds **329 packages** not needed otherwise; as a member they'd land in `src/Cargo.lock` (406 → 735) and be resolved/built by every `cargo test`, `cargo clippy --workspace`, and CI run regardless of window changes. Kept separate, they're behind `make gui` only.
 
 Cost measured before implementation ([#141]):
 
 | | |
 |---|---|
-| Packages added | **+256** (dedup vs. host) |
+| Packages added, as measured then | **+256** (dedup vs. host; +329 today) |
 | Clean release build | 332 CPU-seconds, 838 MB `target/` |
 | Release binary | 9.6 MB (no bundled browser) |
 | `deny.toml` entries | **11** (5 MPL-2.0, 6 unmaintained-advisory) |

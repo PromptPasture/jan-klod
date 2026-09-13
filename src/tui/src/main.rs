@@ -32,7 +32,7 @@
 //! ## Why `--gui` launches a second binary
 //!
 //! The Tauri shell lives in `src/gui`, which is a **separate cargo workspace**
-//! on purpose: Tauri resolves 256 packages nothing else here needs (#141), and
+//! on purpose: Tauri resolves 329 packages nothing else here needs (#141), and
 //! as a member of the host workspace those would be on every `cargo test` and
 //! every CI run. So this crate cannot depend on it, and `--gui` instead does the
 //! half it already owns — resolve an address and spawn-or-attach a gateway —
