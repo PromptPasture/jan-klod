@@ -14,7 +14,7 @@ use wasmtime::{Engine, Result, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
-    path: "../../../wit/spike",
+    path: "../../wit/spike",
     world: "spike",
 });
 

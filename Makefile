@@ -402,7 +402,7 @@ supply-chain: deny audit sbom web-supply-chain supervisor-supply-chain
 #   host_process       — guest command through host-process; denied when disabled
 #   tool_fleet         — ToolFleet dispatches a call to the matching tool-* guest
 #   tool_wiring        — build_agent wires an enabled tool.* into the fleet
-# These are modules of one test binary (src/core/host/tests/it/main.rs), run by
+# These are modules of one test binary (src/host/tests/it/main.rs), run by
 # --test name filter. A typo'd filter can still match other modules and exit 0,
 # so each name is checked against the filesystem before the run.
 HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegram \

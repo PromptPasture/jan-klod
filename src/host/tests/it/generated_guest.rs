@@ -3,7 +3,7 @@
 //! `make ext-new NAME=tool-yours KIND=tool` writes a crate that compiles. This
 //! is the other half: a guest is not finished when it compiles, it is finished
 //! when the host loads it and calls it. Discovering that pattern by reading the
-//! rest of `src/core/host/tests/` is the afternoon the PDK exists to remove
+//! rest of `src/host/tests/` is the afternoon the PDK exists to remove
 //! ([#112](https://github.com/PromptPasture/jan-klod/issues/112)).
 //!
 //! # Copying this

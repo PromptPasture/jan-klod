@@ -250,7 +250,7 @@ jobs:
       # steering, the file-workspace substrate, and the tool fleet.
       #
       # `make harness` used to run first. It names nine test targets, every one a
-      # file in src/core/host/tests/ that this job's `cargo test --workspace`
+      # file in src/host/tests/ that this job's `cargo test --workspace`
       # already runs — so it was a second build and run of nine wasmtime-linked
       # binaries, and it ran *without* JK_REQUIRE_GUESTS, meaning its own tests
       # could skip and still report success. `gate` stages the guests itself

@@ -424,7 +424,7 @@ fn every_config_key_is_one_the_runtime_reads() {
 /// instead of by eye.
 #[test]
 fn every_test_that_skips_does_so_through_the_shared_policy() {
-    let tests = common::repo_root().join("src/core/host/tests");
+    let tests = common::repo_root().join("src/host/tests");
     let mut offenders = Vec::new();
 
     for entry in std::fs::read_dir(&tests)
@@ -641,7 +641,7 @@ fn every_declared_instance_resolves_to_a_component() {
 #[test]
 fn every_documented_command_exists() {
     let root = common::repo_root();
-    let main_rs = std::fs::read_to_string(root.join("src/core/host/src/main.rs"))
+    let main_rs = std::fs::read_to_string(root.join("src/host/src/main.rs"))
         .expect("the gateway's main is readable");
     let makefile = std::fs::read_to_string(root.join("Makefile")).expect("Makefile is readable");
 

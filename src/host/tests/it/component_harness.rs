@@ -27,7 +27,7 @@ use crate::common;
 /// `provider-world`: lifecycle + `llm-provider`, also imports `host-http`.
 mod provider_bind {
     wasmtime::component::bindgen!({
-        path: "../../../wit",
+        path: "../../wit",
         world: "provider-world",
     });
 }
@@ -140,7 +140,7 @@ impl provider_bind::jan_klod::interfaces::host_http::Host for TestHost {
 /// `None` (with a skip note) when the component is absent, so an unbuilt tree
 /// still passes.
 fn staged_component(engine: &Engine, file: &str) -> Option<Component> {
-    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "..", "ext", file]
+    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "ext", file]
         .iter()
         .collect();
     if !common::guests_staged(&[file]) {

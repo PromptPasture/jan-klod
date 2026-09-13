@@ -25,23 +25,23 @@ on:
     branches: [main]
     paths:
       - 'src/core/core/src/sandbox*.rs'
-      - 'src/core/host/tests/it/sandbox_*.rs'
+      - 'src/host/tests/it/sandbox_*.rs'
       # The boot-path confinement pair lives here, not in a sandbox_* file
       # (#125). It is the only evidence that the runner
       # `Runtime::open_process_runner` actually builds is confined, and
       # security-model.md's command-effects row cites it as exactly that.
-      - 'src/core/host/tests/it/execution_config.rs'
+      - 'src/host/tests/it/execution_config.rs'
       - 'wit/host-process.wit'
       - '.github/workflows/ci-macos.yml'
   pull_request:
     paths:
       - 'src/core/core/src/sandbox*.rs'
-      - 'src/core/host/tests/it/sandbox_*.rs'
+      - 'src/host/tests/it/sandbox_*.rs'
       # The boot-path confinement pair lives here, not in a sandbox_* file
       # (#125). It is the only evidence that the runner
       # `Runtime::open_process_runner` actually builds is confined, and
       # security-model.md's command-effects row cites it as exactly that.
-      - 'src/core/host/tests/it/execution_config.rs'
+      - 'src/host/tests/it/execution_config.rs'
       - 'wit/host-process.wit'
       - '.github/workflows/ci-macos.yml'
   workflow_dispatch:

@@ -619,6 +619,7 @@ sbom.cdx.json
 src/core/**/*.cdx.json
 src/tui/*.cdx.json
 src/config/*.cdx.json
+src/host/*.cdx.json
 src/gui/*.cdx.json
 
 # Every workspace's Cargo.lock IS committed — these binaries are applications,

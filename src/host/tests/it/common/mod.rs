@@ -23,9 +23,7 @@ impl Drop for TempDir {
 
 /// Resolves the repo root from the crate manifest directory.
 pub fn repo_root() -> PathBuf {
-    [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."]
-        .iter()
-        .collect()
+    [env!("CARGO_MANIFEST_DIR"), "..", ".."].iter().collect()
 }
 
 /// Set this to turn "guest not staged, skip the test" into a hard failure.

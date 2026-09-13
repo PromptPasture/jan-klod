@@ -4,13 +4,17 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# This crate lives outside src/core's own directory tree (deliberately, to sit
+# alongside it rather than nested inside it), so cargo's usual upward search for
+# the workspace root won't find it; this points at it explicitly.
+workspace = "../core"
 
 [[bin]]
 name = "jan-klod-gateway"
 path = "src/main.rs"
 
 [dependencies]
-jan-klod-core = { path = "../core" }
+jan-klod-core = { path = "../core/core" }
 # The `serve` subcommand binds the host-side REST surface. Also used by the
 # api_rest integration test (a normal dep is visible to tests too).
 tiny_http = "0.12"
@@ -24,18 +28,18 @@ tiny_http = "0.12"
 [dev-dependencies]
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
-jan-klod-config = { path = "../../config" }
+jan-klod-config = { path = "../config" }
 serde_json.workspace = true
 # The rpc harness reads the frames back as the contract types rather than as
 # hand-matched JSON, so a shape change fails the test instead of passing it.
-jan-klod-protocol = { path = "../protocol" }
+jan-klod-protocol = { path = "../core/protocol" }
 # The shipped-defaults gate drives core through the *real* UI client library
 # rather than a hand-rolled HTTP client, so the test exercises the same code a
 # user's TUI runs. Test-only: the `jan-klod` binary does not depend on the UI.
 # Renamed: `provider_probe`'s generated WIT bindings already occupy the
 # `jan_klod` namespace in this crate, so the client is imported as
 # `jan_klod_client` to keep the two unambiguous.
-jan-klod-client = { package = "jan-klod", path = "../../tui" }
+jan-klod-client = { package = "jan-klod", path = "../tui" }
 # Minisign fixtures for the `ext install` signature tests — see
 # `tests/it/common/minisig.rs`. A test has to prove a *valid* signature is
 # accepted, since a suite of refusals alone passes with a verifier that rejects

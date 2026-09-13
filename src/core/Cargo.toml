@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["host", "core", "protocol", "../tui", "../config"]
+members = ["core", "protocol", "../tui", "../config", "../host"]
 
 [workspace.package]
 edition = "2021"
