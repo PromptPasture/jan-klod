@@ -151,17 +151,22 @@ fn event_loop(
                 // running — that turn is precisely what is blocked waiting for
                 // it, which is why `Blocked` comes first in `enter_means`.
                 Enter::Answer => {
-                    if let Some(answer) = app.take_answer() {
+                    if let Some((prompt_session, answer)) = app.take_answer() {
                         let transport = Arc::clone(transport);
-                        let session = session.to_string();
-                        // Off-thread: sending the answer can block on the core
-                        // — over REST it is a whole HTTP round trip — and the
-                        // UI must keep drawing the stream meanwhile.
+                        // The **notification's own session**, not this loop's
+                        // `session` — a client may be driving more than one,
+                        // and that is precisely why the notification carries
+                        // it (#103). Answering with the wrong one is the bug
+                        // this slice exists to fix.
                         thread::spawn(move || {
-                            let _ = transport.answer(&session, &answer);
+                            let _ = transport.answer(&prompt_session, &answer);
                         });
                     }
                 }
+                // A prompt is pending but its dialog was closed (`Esc`): show
+                // it again rather than answer blind. The user must see the
+                // options before `Enter` can mean anything.
+                Enter::ReopenPrompt => app.open_dialog(),
                 Enter::Steer => steer(transport.as_ref(), session, &mut app),
                 Enter::Send if rx.is_none() => {
                     if let Some(message) = app.take_submission() {
@@ -200,6 +205,11 @@ enum Enter {
     /// Answer the pending confirmation. **Does not steer**: a question about a
     /// turn is not a message to it.
     Answer,
+    /// A prompt is pending but its dialog is closed: show it again rather than
+    /// answer (#103). The user must see the options before `Enter` can send
+    /// anything — a closed dialog answering blind would be exactly the "press
+    /// Enter twice" path to an unseen choice the design rules out.
+    ReopenPrompt,
     /// Steer the turn already running — `turn/follow-up`.
     Steer,
     /// Start a turn — `session/message`.
@@ -212,9 +222,14 @@ enum Enter {
 /// Which meaning the state gives `Enter`.
 ///
 /// Order matters and is the table from #159. `Blocked` is checked first because
-/// `App::turn()` derives it from `pending_prompt`, and a turn that is blocked is
+/// `App::turn()` derives it from the prompt queue, and a turn that is blocked is
 /// also streaming underneath — so testing for `Streaming` first would steer
 /// instead of answering.
+///
+/// A `Blocked` turn splits in two, added by #103: with the dialog open, `Enter`
+/// answers; with it closed (the user pressed `Esc`), `Enter` only reopens it —
+/// answering blind, with no options on screen, is the one thing a modal must
+/// never let a keystroke do.
 ///
 /// Read from `App::turn()` rather than from the event loop's `rx`. Both answer
 /// "is a turn running" and they are reconciled at `Step::Ended`, but they are
@@ -226,9 +241,10 @@ enum Enter {
 /// reached (19d), and both fall through on an empty list so a list showing
 /// nothing cannot make the composer unsendable. This layers after that order
 /// rather than joining it.
-const fn enter_means(app: &App) -> Enter {
+fn enter_means(app: &App) -> Enter {
     match app.turn() {
-        Turn::Blocked => Enter::Answer,
+        Turn::Blocked if app.dialog_open() => Enter::Answer,
+        Turn::Blocked => Enter::ReopenPrompt,
         Turn::Streaming => Enter::Steer,
         Turn::Idle => Enter::Send,
         Turn::Cancelling => Enter::Nothing,
@@ -319,6 +335,13 @@ fn edit_or_scroll(
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    // The ask dialog, first and ahead of everything else (#103): while it is
+    // open it owns every key that would otherwise land in the composer or the
+    // menus below, because a digit meant to pick an option must not be typed
+    // into a message instead.
+    if dialog_keys(key, app) {
+        return true;
+    }
     // `@` completion first: the two lists are mutually exclusive — one needs a
     // slash at column 0, the other an `@` anywhere — but ordering them makes
     // that a property of the code rather than of the data.
@@ -429,6 +452,59 @@ fn edit_or_scroll(
     true
 }
 
+/// Keys the ask dialog owns while it is open (#103).
+///
+/// Returns whether the key was consumed, the same contract as
+/// [`edit_or_scroll`], which checks this first. `Esc` closes the dialog
+/// **without answering** — the prompt stays queued, so it can be reopened —
+/// and never confirms anything on its own. A digit key jumps to that option's
+/// index, 1-based as displayed; `↑`/`↓` move the selection; nothing here
+/// answers, because "nothing is pre-approved" means no key may confirm a
+/// choice the user has not seen highlighted.
+///
+/// **A list prompt (`options` non-empty) accepts no free typing.** Any key that
+/// is not one of the above is consumed as a no-op, so a character meant to pick
+/// an option cannot land in the composer instead. A free-text prompt (`options`
+/// empty) is the opposite: only `Esc` is handled here, and every other key
+/// falls through to the composer, because a free-text answer *is* whatever was
+/// typed into it.
+///
+/// `Enter` is never consumed here even in list mode — it falls through to the
+/// event loop's `enter_means`/`Enter::Answer`, which is what actually calls
+/// `App::take_answer` and sends the answer.
+fn dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
+    if !app.dialog_open() {
+        return false;
+    }
+    let Some(prompt) = app.pending_prompt() else {
+        return false;
+    };
+    let list_mode = !prompt.options.is_empty();
+    match key.code {
+        KeyCode::Esc => {
+            app.close_dialog();
+            return true;
+        }
+        KeyCode::Up if list_mode => {
+            app.prompt_move(-1);
+            return true;
+        }
+        KeyCode::Down if list_mode => {
+            app.prompt_move(1);
+            return true;
+        }
+        KeyCode::Char(c) if list_mode && c.is_ascii_digit() && c != '0' => {
+            if let Some(digit) = c.to_digit(10) {
+                app.prompt_jump(usize::try_from(digit).unwrap_or(0));
+            }
+            return true;
+        }
+        KeyCode::Enter => return false,
+        _ => {}
+    }
+    list_mode
+}
+
 /// Scroll so the selected block is on screen, if there is one.
 ///
 /// Called after every key that can move the cursor *or* change the height of
@@ -482,10 +558,12 @@ fn apply_event(app: &mut App, receiver: &mpsc::Receiver<Result<StreamEvent, Stri
         })) => app.record_tool_result(&id, content, failed),
         Ok(Ok(StreamEvent::Warning(msg))) => app.record_status(format!("⚠ {msg}")),
         Ok(Ok(StreamEvent::Prompt {
+            session,
             question,
             options,
             default,
         })) => app.ask(Prompt {
+            session,
             question,
             options,
             default,
@@ -525,18 +603,24 @@ const fn caret_glyph(turn: Turn) -> Glyph {
 /// field is, that says which keys act, and #160 asks for both because one
 /// signal is one thing to miss.
 fn composer_label(app: &App) -> String {
-    app.pending_prompt.as_ref().map_or_else(
+    app.pending_prompt().map_or_else(
         || {
             match app.turn() {
                 Turn::Streaming => "steer this turn",
                 Turn::Cancelling => "cancelling",
-                // `Blocked` is unreachable here — `pending_prompt` is what
+                // `Blocked` is unreachable here — `pending_prompt()` is what
                 // makes a turn `Blocked`, and this arm is the `None` branch.
                 Turn::Idle | Turn::Blocked => "message",
             }
             .to_string()
         },
-        |prompt| format!("answer [{}]", prompt.options.join("/")),
+        |prompt| {
+            if prompt.options.is_empty() {
+                "answer".to_string()
+            } else {
+                format!("answer [{}]", prompt.options.join("/"))
+            }
+        },
     )
 }
 
@@ -547,8 +631,20 @@ fn composer_label(app: &App) -> String {
 /// hint that said "Enter to send" during a turn would be the lie the signals
 /// exist to prevent.
 fn status_hint(app: &App) -> String {
-    if let Some(prompt) = app.pending_prompt.as_ref() {
-        return format!("Enter for `{}` · Esc to quit", prompt.default);
+    if let Some(prompt) = app.pending_prompt() {
+        // The dialog says what silence means; the hint's job while it is open
+        // is the keys, not the default a second time. Closed, the one thing a
+        // user needs to know is that `Enter` does not answer here — it shows
+        // the question again, because answering with nothing on screen is
+        // exactly what this dialog exists to rule out.
+        return if app.dialog_open() {
+            format!(
+                "↑/↓ or 1-9 to choose · Enter to confirm · Esc to close (default: `{}`)",
+                prompt.default
+            )
+        } else {
+            "Enter to reopen the prompt · Esc to quit".to_string()
+        };
     }
     match app.turn() {
         Turn::Streaming => "Enter to steer · Ctrl+C to cancel".to_string(),
@@ -694,6 +790,63 @@ fn render(
     ));
     render_menu(frame, app, theme, input_area);
     render_completion(frame, app, theme, input_area);
+    // Last, so it draws over everything above — the transcript keeps streaming
+    // behind it and the header keeps timing, exactly as #103 asks.
+    render_prompt_dialog(frame, app, theme);
+}
+
+/// The ask dialog (#103): a centred modal over the transcript, on `raised()`
+/// with a `focus()` border — the one place in this client where a rendering
+/// mistake has a security consequence, so it gets its own surface rather than
+/// sharing the transcript's or the composer's.
+///
+/// Placement and colour live here; the content is
+/// [`blocks::prompt_dialog`], a pure function of the model — the same split
+/// `transcript`/`render` already draws, and the reason the acceptance line
+/// "asserted on the rendered cells, not by inspection" has something to test
+/// without a terminal.
+fn render_prompt_dialog(frame: &mut Frame, app: &App, theme: Theme) {
+    if !app.dialog_open() {
+        return;
+    }
+    let Some(prompt) = app.pending_prompt() else {
+        return;
+    };
+    let area = frame.area();
+    // Roughly two thirds of the frame, capped so a huge terminal does not
+    // stretch the modal edge to edge, and floored so a tiny one still gets
+    // something usable rather than a sliver.
+    let modal_width = ((area.width * 2) / 3).clamp(24, area.width.saturating_sub(4).max(24));
+    let inner_width = usize::from(modal_width).saturating_sub(4);
+
+    let lines = blocks::prompt_dialog(
+        prompt,
+        app.prompt_selected(),
+        app.prompt_queue_len(),
+        app.input(),
+        inner_width,
+        theme,
+    );
+    let modal_height = u16::try_from(lines.len() + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height.saturating_sub(2));
+    let modal_area = Rect {
+        x: area.x + (area.width.saturating_sub(modal_width)) / 2,
+        y: area.y + (area.height.saturating_sub(modal_height)) / 2,
+        width: modal_width,
+        height: modal_height,
+    };
+
+    frame.render_widget(Clear, modal_area);
+    let surface = Style::default().bg(theme.raised()).fg(theme.body());
+    let block = Block::bordered()
+        .title(" confirm ")
+        .border_style(Style::default().fg(theme.focus()).bg(theme.raised()))
+        .style(surface);
+    frame.render_widget(
+        Paragraph::new(lines).block(block).style(surface),
+        modal_area,
+    );
 }
 
 /// Draw the `/` menu over the transcript, just above the composer.
@@ -1379,7 +1532,8 @@ mod signals {
     #[test]
     fn a_pending_prompt_names_the_answer_enter_will_send() {
         let mut app = streaming();
-        app.pending_prompt = Some(Prompt {
+        app.ask(Prompt {
+            session: "s1".to_string(),
             question: "write src/main.rs?".to_string(),
             options: vec!["yes".to_string(), "no".to_string(), "always".to_string()],
             default: "no".to_string(),
@@ -1400,10 +1554,12 @@ mod signals {
 
 #[cfg(test)]
 mod enter {
-    use super::{enter_means, steer, Enter};
+    use super::{edit_or_scroll, enter_means, steer, Enter, Pane};
     use jan_klod::app::{App, Prompt, Turn};
     use jan_klod::transport::{Rest, Transport};
+    use jan_klod::viewport::Viewport;
     use jan_klod::StreamEvent;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Mutex;
 
     /// Records what the client asked of a transport, and nothing else.
@@ -1469,6 +1625,7 @@ mod enter {
 
     fn prompt() -> Prompt {
         Prompt {
+            session: "s1".to_string(),
             question: "write src/main.rs?".to_string(),
             options: vec!["yes".to_string(), "no".to_string()],
             default: "no".to_string(),
@@ -1476,7 +1633,8 @@ mod enter {
     }
 
     /// #159's table, as a table. `Enter` has four meanings and the state is
-    /// what picks one.
+    /// what picks one — five since #103 split `Blocked` on whether the dialog
+    /// is open.
     #[test]
     fn the_state_decides_what_enter_means() {
         let idle = App::default();
@@ -1493,12 +1651,22 @@ mod enter {
         // answering — and the answer is what the turn is waiting for.
         let mut blocked = App::default();
         blocked.begin_turn();
-        blocked.pending_prompt = Some(prompt());
+        blocked.ask(prompt());
         assert_eq!(blocked.turn(), Turn::Blocked);
+        assert!(blocked.dialog_open(), "`ask` opens the dialog");
         assert_eq!(
             enter_means(&blocked),
             Enter::Answer,
             "a pending confirmation must take Enter ahead of steering"
+        );
+
+        // #103: with the dialog closed, `Enter` must not answer blind.
+        blocked.close_dialog();
+        assert_eq!(blocked.turn(), Turn::Blocked, "still waiting");
+        assert_eq!(
+            enter_means(&blocked),
+            Enter::ReopenPrompt,
+            "a closed dialog must show the options again rather than answer"
         );
 
         let mut stopping = App::default();
@@ -1542,23 +1710,84 @@ mod enter {
     fn a_blocked_turn_answers_and_does_not_steer() {
         let mut app = App::default();
         app.begin_turn();
-        app.pending_prompt = Some(prompt());
-        typed(&mut app, "yes");
+        app.ask(prompt());
+        app.prompt_jump(1); // "yes" is the first option, as displayed
 
         assert_eq!(enter_means(&app), Enter::Answer);
 
         let recorder = Recorder::default();
-        let answer = app.take_answer().expect("the composer holds the answer");
-        recorder.answer("s1", &answer).expect("recorded");
+        let (session, answer) = app.take_answer().expect("a selection was made");
+        recorder.answer(&session, &answer).expect("recorded");
 
         assert_eq!(
             recorder.sent.lock().expect("lock").clone(),
             vec!["turn/answer s1 yes".to_string()]
         );
         assert!(
-            app.pending_prompt.is_none(),
+            app.pending_prompt().is_none(),
             "answering left the prompt pending, so the next Enter answers it again"
         );
+    }
+
+    /// #103 Acceptance: the session sent is the notification's own, not the
+    /// client's current session — the bug #103 opens on.
+    #[test]
+    fn the_answer_is_sent_with_the_prompts_own_session_not_the_clients() {
+        let mut app = App::default();
+        app.begin_turn();
+        app.ask(Prompt {
+            session: "the-turns-session".to_string(),
+            ..prompt()
+        });
+        app.prompt_jump(2); // "no", the default
+
+        let recorder = Recorder::default();
+        let (session, answer) = app.take_answer().expect("the default was selected");
+        recorder.answer(&session, &answer).expect("recorded");
+
+        assert_eq!(
+            recorder.sent.lock().expect("lock").clone(),
+            vec!["turn/answer the-turns-session no".to_string()],
+            "the client's own session, `s1` in this loop, must not appear here"
+        );
+    }
+
+    /// #103 Acceptance: `Esc` closes the dialog without sending anything, and
+    /// the prompt survives so it can be reopened.
+    #[test]
+    fn esc_closes_the_dialog_without_sending_turn_answer() {
+        let mut app = App::default();
+        app.begin_turn();
+        app.ask(prompt());
+        assert!(app.dialog_open());
+
+        assert!(edit_or_scroll(
+            &KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut app,
+            &mut Viewport::default(),
+            Pane::default(),
+            jan_klod::theme::Theme::new(
+                jan_klod::theme::Mode::Dark,
+                jan_klod::theme::Depth::TrueColor,
+                jan_klod::theme::GlyphSet::Unicode,
+            ),
+        ));
+        assert!(!app.dialog_open(), "Esc must close the dialog");
+        assert_eq!(
+            app.turn(),
+            Turn::Blocked,
+            "the prompt survives — it can still be reopened"
+        );
+        assert_eq!(
+            enter_means(&app),
+            Enter::ReopenPrompt,
+            "Enter must reopen rather than answer while the dialog is closed"
+        );
+
+        let recorder = Recorder::default();
+        // Confirm nothing was ever sent — the dialog closing must not be
+        // reachable from any transport call in this test.
+        assert!(recorder.sent.lock().expect("lock").is_empty());
     }
 
     /// `/cancel` and `Ctrl+C` raise the **same** ask, and it is sent once.

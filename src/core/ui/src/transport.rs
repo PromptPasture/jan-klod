@@ -483,11 +483,12 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
         Notification::Warning { message } => Some(StreamEvent::Warning(message.clone())),
         Notification::Done { answer, .. } => Some(StreamEvent::Done(answer.clone())),
         Notification::Ask {
+            session,
             question,
             options,
             default,
-            ..
         } => Some(StreamEvent::Prompt {
+            session: session.clone(),
             question: question.clone(),
             options: options.clone(),
             default: default.clone(),
@@ -605,11 +606,29 @@ mod tests {
         assert_eq!(
             event,
             StreamEvent::Prompt {
+                session: "s".to_owned(),
                 question: "Run it?".to_owned(),
                 options: vec!["yes".to_owned(), "no".to_owned()],
                 default: "no".to_owned(),
             }
         );
+    }
+
+    /// #103's first design point: the session the client answers with is the
+    /// notification's own, not whichever one the client happens to be on.
+    #[test]
+    fn an_ask_carries_the_session_it_was_asked_on() {
+        let event = event_for(&Notification::Ask {
+            session: "the-turns-session".to_owned(),
+            question: "Run it?".to_owned(),
+            options: vec!["yes".to_owned(), "no".to_owned()],
+            default: "no".to_owned(),
+        })
+        .expect("an ask is shown");
+        let StreamEvent::Prompt { session, .. } = event else {
+            panic!("expected a Prompt event, got {event:?}")
+        };
+        assert_eq!(session, "the-turns-session");
     }
 
     /// A gateway that is not there is a message naming the alternative, not a

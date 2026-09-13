@@ -135,9 +135,15 @@ pub enum StreamEvent {
     /// (see [`answer_prompt`]). An unanswered prompt eventually times out on the
     /// core side and takes `default`.
     Prompt {
+        /// The session this question was asked on — **not necessarily the
+        /// client's current one**, and what `turn/answer` must be sent with
+        /// (#103). A client may be driving more than one session, which is
+        /// exactly why the notification carries it.
+        session: String,
         /// What the interceptor wants to know.
         question: String,
-        /// The answers it recognises, in the order to offer them.
+        /// The answers it recognises, in the order to offer them. Empty means
+        /// free text, the protocol's own convention.
         options: Vec<String>,
         /// What core assumes if nobody answers — a denial, for the permission gate.
         default: String,
@@ -211,7 +217,11 @@ pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
         },
         "warning" => StreamEvent::Warning(field("message")),
         "done" => StreamEvent::Done(field("answer")),
+        // `serve::prompt_frame` carries `session` too — check the field name
+        // there before changing this, since #103 asks for exactly that
+        // caution: the client answers with this session, not its own.
         "prompt" => StreamEvent::Prompt {
+            session: field("session"),
             question: field("question"),
             options: value
                 .get("options")

@@ -59,7 +59,7 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::app::{Entry, ToolBlock, ToolStatus, Who};
+use crate::app::{Entry, Prompt, ToolBlock, ToolStatus, Who};
 use crate::theme::{Glyph, Theme};
 use crate::wrap::wrap;
 
@@ -403,6 +403,105 @@ pub fn span_of(entries: &[Entry], index: usize, width: usize, theme: Theme) -> (
         .get(index)
         .map_or(0, |entry| block(entry, false, width, theme).len());
     (start, height)
+}
+
+/// The ask dialog's content, as lines (#103).
+///
+/// A pure function of the model, the same pattern as [`transcript`], so the
+/// acceptance line "asserted on the rendered cells, not by inspection" has
+/// something to assert against without a terminal.
+///
+/// `selected` and `queue_len` are not read off `prompt` because they are
+/// [`crate::app::App`]'s to track, not the prompt's own — a queued question
+/// does not know its position, and `App::prompt_selected` is what can change
+/// between two frames of the same prompt. `input` is the composer's text, used
+/// only when `prompt.options` is empty (the protocol's free-text convention);
+/// ignored otherwise, because a list prompt has no free-text answer to show.
+///
+/// **The default is marked in the text itself, not only in colour** — a
+/// ` default` label and [`Glyph::Warning`] both survive `Mode::Mono`, where
+/// every colour is [`ratatui::style::Color::Reset`]. So does the closing line:
+/// it names `default` in words, because "what silence means" has to be legible
+/// with no colour spent on it at all.
+#[must_use]
+pub fn prompt_dialog(
+    prompt: &Prompt,
+    selected: Option<usize>,
+    queue_len: usize,
+    input: &str,
+    width: usize,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if queue_len > 1 {
+        lines.push(Line::from(Span::styled(
+            format!("1 of {queue_len}"),
+            Style::default().fg(theme.muted()),
+        )));
+    }
+    lines.extend(
+        wrap(&prompt.question, width)
+            .into_iter()
+            .map(|row| Line::from(Span::styled(row, Style::default().fg(theme.body())))),
+    );
+    lines.push(Line::from(String::new()));
+
+    if prompt.options.is_empty() {
+        // The protocol's free-text convention: a single-line input, with the
+        // default shown as what an empty submission sends.
+        lines.push(Line::from(vec![
+            Span::styled("> ", Style::default().fg(theme.focus())),
+            Span::styled(input.to_string(), Style::default().fg(theme.body())),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("empty answers with the default: {}", prompt.default),
+            Style::default().fg(theme.muted()),
+        )));
+    } else {
+        for (i, option) in prompt.options.iter().enumerate() {
+            let is_selected = selected == Some(i);
+            let is_default = *option == prompt.default;
+            let marker = if is_selected {
+                theme.glyph(Glyph::Caret)
+            } else {
+                " "
+            };
+            let row_style = Style::default().fg(if is_selected {
+                theme.focus()
+            } else {
+                theme.body()
+            });
+            let mut spans = vec![
+                Span::styled(
+                    format!("{marker} "),
+                    Style::default().fg(if is_selected {
+                        theme.focus()
+                    } else {
+                        theme.muted()
+                    }),
+                ),
+                Span::styled(format!("{}. ", i + 1), Style::default().fg(theme.muted())),
+                Span::styled(option.clone(), row_style),
+            ];
+            if is_default {
+                // Both a word and a glyph: colour alone is nothing under
+                // `Mode::Mono`, and the word alone is what a colour-blind
+                // reader still gets even where colour is drawn.
+                spans.push(Span::styled(
+                    format!(" {} default", theme.glyph(Glyph::Warning)),
+                    Style::default().fg(theme.warning()),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+
+    lines.push(Line::from(String::new()));
+    lines.push(Line::from(Span::styled(
+        format!("silence takes the default: {}", prompt.default),
+        Style::default().fg(theme.muted()),
+    )));
+    lines
 }
 
 #[cfg(test)]
@@ -844,5 +943,127 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn ask(session: &str, question: &str, options: &[&str], default: &str) -> crate::app::Prompt {
+        crate::app::Prompt {
+            session: session.to_string(),
+            question: question.to_string(),
+            options: options.iter().map(|s| (*s).to_string()).collect(),
+            default: default.to_string(),
+        }
+    }
+
+    /// Acceptance: the "what silence means" line is present and names the
+    /// default.
+    #[test]
+    fn the_dialog_says_what_silence_means_and_names_the_default() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let prompt = ask("s1", "write src/main.rs?", &["yes", "no"], "no");
+        let rendered: Vec<String> = super::prompt_dialog(&prompt, Some(1), 1, "", 60, theme)
+            .iter()
+            .map(plain)
+            .collect();
+        assert!(
+            rendered
+                .iter()
+                .any(|r| r.to_lowercase().contains("silence") && r.contains("no")),
+            "no line explains what happens if nobody answers: {rendered:?}"
+        );
+    }
+
+    /// Acceptance: rendered under monochrome, the default option is still
+    /// identifiable from the rendered spans' *text*, since every colour is
+    /// `Color::Reset` there.
+    #[test]
+    fn monochrome_still_marks_the_default_option_in_text() {
+        let theme = Theme::new(Mode::Mono, Depth::TrueColor, GlyphSet::Unicode);
+        let prompt = ask("s1", "which?", &["always", "yes", "no"], "no");
+        let lines = super::prompt_dialog(&prompt, Some(2), 1, "", 60, theme);
+        let rendered: Vec<String> = lines.iter().map(plain).collect();
+
+        let default_row = rendered
+            .iter()
+            .find(|r| r.contains("no"))
+            .expect("the default option's row is rendered");
+        assert!(
+            default_row.contains("default"),
+            "the default is not named in the row's text, only (perhaps) in \
+             colour that Mode::Mono has already zeroed out: {default_row:?}"
+        );
+        // And the other options do not carry that label.
+        for other in ["always", "yes"] {
+            let row = rendered
+                .iter()
+                .find(|r| r.contains(other))
+                .unwrap_or_else(|| panic!("{other}'s row is rendered"));
+            assert!(
+                !row.contains("default"),
+                "{other} is not the default and must not read as one: {row:?}"
+            );
+        }
+    }
+
+    /// The initial selection renders distinctly from the other rows, so a
+    /// selection nobody can see is not a selection here either.
+    #[test]
+    fn the_selected_option_renders_differently_from_the_rest() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let prompt = ask("s1", "which?", &["yes", "no"], "no");
+        let rendered: Vec<String> = super::prompt_dialog(&prompt, Some(0), 1, "", 60, theme)
+            .iter()
+            .map(plain)
+            .collect();
+        let yes_row = rendered.iter().find(|r| r.contains("yes")).unwrap();
+        let no_row = rendered.iter().find(|r| r.contains("no")).unwrap();
+        assert_ne!(
+            yes_row, no_row,
+            "the selected row must not read the same as an unselected one"
+        );
+    }
+
+    /// A free-text prompt (empty `options`) shows an input line rather than a
+    /// list, and still names the default as what an empty answer sends.
+    #[test]
+    fn an_empty_options_list_renders_free_text_input() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let prompt = ask("s1", "say something", &[], "nothing");
+        let rendered: Vec<String> =
+            super::prompt_dialog(&prompt, None, 1, "typed so far", 60, theme)
+                .iter()
+                .map(plain)
+                .collect();
+        assert!(
+            rendered.iter().any(|r| r.contains("typed so far")),
+            "the composer's text is not shown: {rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|r| r.contains("nothing")),
+            "the default is not named as what an empty answer sends: {rendered:?}"
+        );
+    }
+
+    /// `1 of 2` only appears once a second prompt is actually queued.
+    #[test]
+    fn the_queue_count_only_shows_when_more_than_one_is_waiting() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let prompt = ask("s1", "which?", &["yes", "no"], "no");
+        let alone: Vec<String> = super::prompt_dialog(&prompt, Some(1), 1, "", 60, theme)
+            .iter()
+            .map(plain)
+            .collect();
+        assert!(
+            !alone.iter().any(|r| r.contains("of")),
+            "a single pending prompt must not claim to be part of a queue: {alone:?}"
+        );
+
+        let queued: Vec<String> = super::prompt_dialog(&prompt, Some(1), 2, "", 60, theme)
+            .iter()
+            .map(plain)
+            .collect();
+        assert!(
+            queued.iter().any(|r| r.contains("1 of 2")),
+            "a second prompt waiting must say so: {queued:?}"
+        );
     }
 }

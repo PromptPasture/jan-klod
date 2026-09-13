@@ -135,6 +135,7 @@ fn parse_frame_reads_a_prompt_with_its_options() {
     assert_eq!(
         parse_frame("prompt", data),
         Some(StreamEvent::Prompt {
+            session: "s1".into(),
             question: "Allow tool `bash`?".into(),
             options: vec!["yes".into(), "no".into(), "always".into(), "never".into()],
             default: "no".into(),
@@ -146,11 +147,26 @@ fn parse_frame_reads_a_prompt_with_its_options() {
 fn a_prompt_without_options_still_parses() {
     // A future/odd prompt must not turn into an Error the user cannot answer.
     assert_eq!(
-        parse_frame("prompt", r#"{"question":"Proceed?","default":"no"}"#),
+        parse_frame(
+            "prompt",
+            r#"{"question":"Proceed?","default":"no","session":"s1"}"#
+        ),
         Some(StreamEvent::Prompt {
+            session: "s1".into(),
             question: "Proceed?".into(),
             options: vec![],
             default: "no".into()
         })
     );
+}
+
+/// #103's first design point, at the SSE surface: the session on the frame is
+/// what the client must answer with — not necessarily its own current one.
+#[test]
+fn parse_frame_carries_the_prompts_own_session() {
+    let data = r#"{"question":"Proceed?","default":"no","session":"a-different-session"}"#;
+    let Some(StreamEvent::Prompt { session, .. }) = parse_frame("prompt", data) else {
+        panic!("expected a Prompt event");
+    };
+    assert_eq!(session, "a-different-session");
 }

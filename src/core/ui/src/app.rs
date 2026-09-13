@@ -4,6 +4,8 @@
 //! events mutate the [`App`], each turn's answer is recorded, and the view is a
 //! pure function of this state.
 
+use std::collections::VecDeque;
+
 use crate::commands::{Availability, Command};
 use crate::composer::Composer;
 use crate::paths;
@@ -191,21 +193,56 @@ pub struct App {
     /// act at all — commands are dispatched here, and this type has never known
     /// what a transport is.
     cancel_requested: bool,
-    /// Set while a turn is blocked on a confirmation. The next submission is that
-    /// answer, not a new message — a turn is already running and typing a fresh
-    /// message would go nowhere.
-    pub pending_prompt: Option<Prompt>,
+    /// Confirmations a running turn is waiting on, oldest first (#103).
+    ///
+    /// A queue rather than one slot: a second `ask` arriving while the first is
+    /// still open must not overwrite it or stack a second modal — it waits, and
+    /// the dialog says `1 of 2`. `Turn::Blocked` is derived from this being
+    /// non-empty, the same way it used to be derived from `Option::is_some`.
+    prompts: VecDeque<Pending>,
+    /// Whether the modal for the front of [`Self::prompts`] is on screen.
+    ///
+    /// Separate from "is a prompt pending", on purpose: `Esc` closes the dialog
+    /// without answering, and the turn stays `Blocked` with the question still
+    /// queued. A single `Option` for both facts would make "closed but still
+    /// waiting" — the exact state `Esc` has to produce — inexpressible.
+    dialog_open: bool,
 }
 
 /// A confirmation a running turn is waiting on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prompt {
+    /// The session this question was asked on — **not necessarily the client's
+    /// current one** (a client may be driving more than one), and it is what
+    /// `turn/answer` must be sent with. `tui.rs` used to answer with its own
+    /// session instead of this one, which is the bug #103 opens on.
+    pub session: String,
     /// What is being asked.
     pub question: String,
-    /// The answers core recognises.
+    /// The answers core recognises. Empty means free text, the protocol's own
+    /// convention.
     pub options: Vec<String>,
-    /// What core assumes if nobody answers.
+    /// What core assumes if nobody answers — a denial, for the permission gate.
     pub default: String,
+}
+
+/// A queued prompt plus the one thing about it that changes before it is
+/// answered: which option is highlighted.
+///
+/// Kept beside the prompt rather than as a second `Option` on [`App`], so two
+/// queued questions cannot be told apart by *which* selection field happens to
+/// be set — there is one slot per prompt, and it travels with the prompt when a
+/// second `ask` is appended behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Pending {
+    prompt: Prompt,
+    /// An index into `prompt.options`. Starts on `default`'s own index — found
+    /// by searching, not assumed to be first — and `None` when `default` is not
+    /// among `options` at all: that is core contradicting itself, and the right
+    /// answer is to demand an explicit choice rather than guess one. Also `None`
+    /// for a free-text prompt (`options` empty), where there is nothing to
+    /// select.
+    selected: Option<usize>,
 }
 
 impl App {
@@ -634,8 +671,8 @@ impl App {
     /// underneath a confirmation is still streaming, and it goes back to being
     /// visibly so the moment the question is answered.
     #[must_use]
-    pub const fn turn(&self) -> Turn {
-        if self.pending_prompt.is_some() {
+    pub fn turn(&self) -> Turn {
+        if !self.prompts.is_empty() {
             return Turn::Blocked;
         }
         match self.phase {
@@ -667,7 +704,8 @@ impl App {
         }
         self.phase = Phase::Cancelling;
         self.cancel_requested = true;
-        self.pending_prompt = None;
+        self.prompts.clear();
+        self.dialog_open = false;
         // A tool block left `Running` forever is a spinner that never stops,
         // which reads as a hung client rather than as a turn that was stopped.
         self.interrupt_open_tools();
@@ -694,7 +732,8 @@ impl App {
     /// it had already said.
     pub fn end_turn(&mut self) {
         self.phase = Phase::Idle;
-        self.pending_prompt = None;
+        self.prompts.clear();
+        self.dialog_open = false;
         self.interrupt_open_tools();
     }
 
@@ -728,33 +767,150 @@ impl App {
         }
     }
 
-    /// Record that a turn is waiting on a confirmation, and show it.
+    /// A turn is waiting on a confirmation: queue it, opening the dialog if
+    /// nothing was already waiting.
+    ///
+    /// **A queue, not a stack** (#103): a second `ask` arriving while the first
+    /// is still open is appended behind it rather than replacing it, and the
+    /// open one's selection is untouched — nothing here can overwrite
+    /// [`Self::prompts`]' front. The dialog opens automatically only the first
+    /// time, because a second arrival must not reopen (or otherwise disturb)
+    /// one the user may have deliberately closed.
+    ///
+    /// The initial selection is `default`'s own index in `options`, found by
+    /// searching rather than assumed to be first. When `default` is not among
+    /// `options` at all — core contradicting itself — nothing is selected, and
+    /// answering requires an explicit choice rather than a guess.
     pub fn ask(&mut self, prompt: Prompt) {
-        self.record(
-            Who::Status,
-            format!(
-                "{} [{}] (default: {})",
-                prompt.question,
-                prompt.options.join("/"),
-                prompt.default
-            ),
-        );
-        self.pending_prompt = Some(prompt);
+        let selected = prompt.options.iter().position(|o| o == &prompt.default);
+        let opening = self.prompts.is_empty();
+        self.prompts.push_back(Pending { prompt, selected });
+        if opening {
+            self.dialog_open = true;
+        }
     }
 
-    /// Take a pending confirmation's answer from the input, if one is pending.
+    /// Whether the modal for the front prompt is on screen.
+    #[must_use]
+    pub const fn dialog_open(&self) -> bool {
+        self.dialog_open
+    }
+
+    /// Reopen the dialog for the prompt still pending, if there is one.
     ///
-    /// An empty submission answers with the prompt's own default rather than
-    /// sending an empty string, so pressing Enter on a confirmation does the safe
-    /// thing instead of something undefined.
-    pub fn take_answer(&mut self) -> Option<String> {
-        let prompt = self.pending_prompt.take()?;
+    /// `Esc` closes the dialog without answering; this is the other half —
+    /// `Enter` while a prompt is pending but the dialog is closed must show the
+    /// options again rather than answer blind, so this is what a keystroke that
+    /// is *not* a visible choice does instead of silently approving anything.
+    pub fn open_dialog(&mut self) {
+        if !self.prompts.is_empty() {
+            self.dialog_open = true;
+        }
+    }
+
+    /// `Esc`: close the dialog **without answering**. The prompt stays queued
+    /// and the turn stays `Blocked` — closing a modal must never read as a
+    /// choice, only as declining to look at it right now.
+    pub const fn close_dialog(&mut self) {
+        self.dialog_open = false;
+    }
+
+    /// The prompt at the front of the queue, if one is waiting.
+    ///
+    /// An accessor rather than the field itself, so the queue and the "is a
+    /// dialog open" flag stay this module's to keep consistent.
+    #[must_use]
+    pub fn pending_prompt(&self) -> Option<&Prompt> {
+        self.prompts.front().map(|p| &p.prompt)
+    }
+
+    /// Which option is highlighted in the front prompt, if any.
+    #[must_use]
+    pub fn prompt_selected(&self) -> Option<usize> {
+        self.prompts.front().and_then(|p| p.selected)
+    }
+
+    /// How many prompts are waiting, including the one on screen — what makes
+    /// the dialog's `1 of 2` true.
+    #[must_use]
+    pub fn prompt_queue_len(&self) -> usize {
+        self.prompts.len()
+    }
+
+    /// Move the front prompt's selection, wrapping like the `/` menu's.
+    /// A no-op on a free-text prompt (`options` empty) or with nothing pending.
+    pub fn prompt_move(&mut self, delta: isize) {
+        let Some(front) = self.prompts.front_mut() else {
+            return;
+        };
+        let len = front.prompt.options.len();
+        if len == 0 {
+            return;
+        }
+        let current = front.selected.unwrap_or(0);
+        let len_i = isize::try_from(len).unwrap_or(1);
+        let next = (isize::try_from(current).unwrap_or(0) + delta).rem_euclid(len_i);
+        front.selected = Some(usize::try_from(next).unwrap_or(0));
+    }
+
+    /// Jump the front prompt's selection to `one_based`'s option — a digit key,
+    /// as displayed. Out of range is a no-op rather than a clamp: a digit that
+    /// names nothing must not silently select something else.
+    pub fn prompt_jump(&mut self, one_based: usize) {
+        let Some(front) = self.prompts.front_mut() else {
+            return;
+        };
+        if one_based >= 1 && one_based <= front.prompt.options.len() {
+            front.selected = Some(one_based - 1);
+        }
+    }
+
+    /// Take the front prompt's answer, if one is ready to send.
+    ///
+    /// Returns `(session, answer)` — the **session the notification carried**,
+    /// never `self`'s own, because a client may be driving more than one and
+    /// the core told this client precisely which turn asked (#103's first
+    /// design point; `tui.rs` used to answer with its own session instead).
+    ///
+    /// `answer` is byte-identical to the chosen entry in `options` — never
+    /// lowercased, trimmed or otherwise normalised — except for a free-text
+    /// prompt (`options` empty), where it is the composer's text, or `default`
+    /// if that was left empty.
+    ///
+    /// Returns `None`, dequeuing nothing, when a list prompt has no selection —
+    /// `default` absent from `options` left nothing chosen, and nothing here
+    /// may guess one on the user's behalf. Dequeuing only happens once an
+    /// answer actually exists, so a prompt that cannot yet be answered is not
+    /// silently dropped.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the `pop_front` below cannot fail because
+    /// `front()` above already proved the queue non-empty, and nothing between
+    /// the two can shrink it.
+    pub fn take_answer(&mut self) -> Option<(String, String)> {
+        let front = self.prompts.front()?;
+        let answer = if front.prompt.options.is_empty() {
+            let typed = self.composer.text();
+            if typed.is_empty() {
+                front.prompt.default.clone()
+            } else {
+                typed.to_string()
+            }
+        } else {
+            front.selected.map(|i| front.prompt.options[i].clone())?
+        };
+        let Pending { prompt, .. } = self.prompts.pop_front().expect("front just checked above");
         // `take` clears the composer and its caret together, which is the point
         // of the type: an answer left behind in the buffer would be sent as the
         // next message.
-        let answer = self.composer.take().unwrap_or(prompt.default);
-        self.record(Who::You, answer.clone());
-        Some(answer)
+        self.composer.take();
+        // The next queued prompt, if any, is shown immediately rather than left
+        // behind a closed dialog — "answering the first shows the second"
+        // (#103's Acceptance) means visibly, not just in the model.
+        self.dialog_open = !self.prompts.is_empty();
+        self.record(Who::Status, format!("{} → {answer}", prompt.question));
+        Some((prompt.session, answer))
     }
 
     /// Record a client/transport error.
@@ -872,13 +1028,18 @@ mod tests {
         let mut app = App::default();
         app.begin_turn();
         app.ask(Prompt {
+            session: "s1".into(),
             question: "run `rm -rf /`?".into(),
             options: vec!["yes".into(), "no".into()],
             default: "no".into(),
         });
         assert_eq!(app.turn(), Turn::Blocked);
 
-        assert_eq!(app.take_answer().as_deref(), Some("no"), "the default");
+        assert_eq!(
+            app.take_answer(),
+            Some(("s1".to_string(), "no".to_string())),
+            "the default"
+        );
         assert_eq!(
             app.turn(),
             Turn::Streaming,
@@ -892,6 +1053,7 @@ mod tests {
         let mut app = App::default();
         app.begin_turn();
         app.ask(Prompt {
+            session: "s1".into(),
             question: "proceed?".into(),
             options: vec!["y".into(), "n".into()],
             default: "n".into(),
@@ -915,6 +1077,7 @@ mod tests {
         app.begin_turn();
         for _ in 0..2 {
             app.ask(Prompt {
+                session: "s1".into(),
                 question: "again?".into(),
                 options: vec!["y".into()],
                 default: "y".into(),
@@ -925,6 +1088,151 @@ mod tests {
         }
         app.finish_turn("done".into());
         assert_eq!(app.turn(), Turn::Idle, "an answered turn is over");
+    }
+
+    /// Acceptance: the initial selection is `default`'s own index, for an
+    /// arbitrary option order — including one where `default` is not first.
+    #[test]
+    fn the_initial_selection_is_defaults_index_wherever_it_sits() {
+        let mut app = App::default();
+        app.ask(Prompt {
+            session: "s1".into(),
+            question: "which?".into(),
+            options: vec!["always".into(), "yes".into(), "no".into()],
+            default: "no".into(),
+        });
+        assert_eq!(
+            app.prompt_selected(),
+            Some(2),
+            "the default is the third option, and the selection must find it \
+             there rather than assume position 0"
+        );
+
+        // A core that contradicts itself — `default` is not among `options` —
+        // must not have this guess at a selection either.
+        let mut confused = App::default();
+        confused.ask(Prompt {
+            session: "s1".into(),
+            question: "which?".into(),
+            options: vec!["yes".into(), "no".into()],
+            default: "always".into(),
+        });
+        assert_eq!(
+            confused.prompt_selected(),
+            None,
+            "a default absent from options must not be guessed at"
+        );
+    }
+
+    /// Acceptance: the answer sent is byte-identical to the chosen entry —
+    /// never normalised, even when it would look "cleaner" normalised.
+    #[test]
+    fn the_answer_is_byte_identical_to_the_chosen_option() {
+        let mut app = App::default();
+        app.ask(Prompt {
+            session: "s1".into(),
+            question: "which?".into(),
+            options: vec![" Yes ".into(), "NO".into()],
+            default: "NO".into(),
+        });
+        app.prompt_jump(1);
+        let (_, answer) = app.take_answer().expect("a selection was made");
+        assert_eq!(
+            answer, " Yes ",
+            "the answer must not be trimmed or lowercased"
+        );
+    }
+
+    /// Acceptance: the session sent is the one the notification carried, not
+    /// whatever the client happens to be driving elsewhere.
+    #[test]
+    fn the_answer_carries_the_prompts_own_session() {
+        let mut app = App::default();
+        app.ask(Prompt {
+            session: "the-notifications-session".into(),
+            question: "which?".into(),
+            options: vec!["yes".into(), "no".into()],
+            default: "no".into(),
+        });
+        let (session, _) = app.take_answer().expect("the default was selected");
+        assert_eq!(session, "the-notifications-session");
+    }
+
+    /// Acceptance: two overlapping `ask`s queue rather than stack, and
+    /// answering the first leaves the second exactly as it arrived.
+    #[test]
+    fn a_second_ask_queues_behind_the_first_and_neither_disturbs_the_other() {
+        let mut app = App::default();
+        app.ask(Prompt {
+            session: "first".into(),
+            question: "first?".into(),
+            options: vec!["yes".into(), "no".into()],
+            default: "no".into(),
+        });
+        app.ask(Prompt {
+            session: "second".into(),
+            question: "second?".into(),
+            options: vec!["always".into(), "yes".into(), "no".into()],
+            default: "no".into(),
+        });
+        assert_eq!(
+            app.prompt_queue_len(),
+            2,
+            "a second ask must queue, not overwrite the first"
+        );
+        assert_eq!(
+            app.pending_prompt().map(|p| p.question.as_str()),
+            Some("first?"),
+            "the front is still the first question"
+        );
+
+        let (session, answer) = app.take_answer().expect("the first has a default");
+        assert_eq!((session.as_str(), answer.as_str()), ("first", "no"));
+
+        assert_eq!(app.prompt_queue_len(), 1, "one prompt is left");
+        assert_eq!(
+            app.pending_prompt().map(|p| p.question.as_str()),
+            Some("second?"),
+            "the second is shown, unchanged"
+        );
+        assert_eq!(
+            app.prompt_selected(),
+            Some(2),
+            "the second kept its own selection — `no` is index 2 there"
+        );
+        assert!(
+            app.dialog_open(),
+            "the second prompt is shown, not left behind a closed dialog"
+        );
+    }
+
+    /// `Esc` closes the dialog without answering, and the prompt survives so it
+    /// can be reopened.
+    #[test]
+    fn esc_closes_without_answering_and_the_prompt_survives() {
+        let mut app = App::default();
+        app.ask(Prompt {
+            session: "s1".into(),
+            question: "which?".into(),
+            options: vec!["yes".into(), "no".into()],
+            default: "no".into(),
+        });
+        assert!(app.dialog_open(), "ask opens the dialog");
+
+        app.close_dialog();
+        assert!(!app.dialog_open());
+        assert_eq!(
+            app.turn(),
+            Turn::Blocked,
+            "closing the dialog must not answer the question"
+        );
+        assert!(
+            app.pending_prompt().is_some(),
+            "the prompt must survive being closed unanswered"
+        );
+
+        app.open_dialog();
+        assert!(app.dialog_open(), "it can be reopened");
     }
 
     /// The cursor only stops where there is something to open.

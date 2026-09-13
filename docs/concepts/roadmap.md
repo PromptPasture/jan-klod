@@ -958,8 +958,14 @@ toolkit was rejected; #97 records the measurement.
 - **19e — Turn lifecycle.** Streaming indicator, `Ctrl+C` cancel,
   Enter-to-steer follow-up
   ([#102](https://github.com/PromptPasture/jan-klod/issues/102)). Needs 19d.
-- **19f — The ask dialog.** The permission modal, with nothing pre-approved
-  ([#103](https://github.com/PromptPasture/jan-klod/issues/103)). Needs 19e.
+- **19f — The ask dialog. Done 2026-09-13**
+  ([#103](https://github.com/PromptPasture/jan-klod/issues/103)). The permission
+  modal, with nothing pre-approved: `App::prompts` is a queue rather than one
+  slot, the selection starts on `default`'s own index (found by search, not
+  assumed first), `Esc` closes without answering, and the answer sent carries
+  the notification's own session rather than the client's current one — the
+  bug this slice opened on. A row and its tests are in
+  `docs/concepts/security-model.md`.
 - **19g — Frame.** Header, sidebar, status bar, toasts, responsive rules
   ([#104](https://github.com/PromptPasture/jan-klod/issues/104)). Needs 19b, 19c.
 - **19h — Dialogs.** Session switcher, help overlay, quit confirm

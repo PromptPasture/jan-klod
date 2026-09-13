@@ -59,31 +59,39 @@ fn answers_and_errors_append_to_the_transcript() {
 }
 
 #[test]
-fn a_pending_prompt_captures_the_next_submission_as_its_answer() {
+fn selecting_an_option_and_answering_clears_the_wait() {
     let mut app = App::default();
     app.ask(Prompt {
+        session: "s1".into(),
         question: "Allow tool `bash`?".into(),
         options: vec!["yes".into(), "no".into()],
         default: "no".into(),
     });
-    assert!(app.pending_prompt.is_some(), "the turn is waiting");
+    assert!(app.pending_prompt().is_some(), "the turn is waiting");
 
-    "always".chars().for_each(|c| app.push_char(c));
-    assert_eq!(app.take_answer().as_deref(), Some("always"));
-    assert!(app.pending_prompt.is_none(), "answering clears the wait");
-    assert!(app.input().is_empty(), "the input is consumed");
+    app.prompt_jump(1); // "yes"
+    assert_eq!(
+        app.take_answer(),
+        Some(("s1".to_string(), "yes".to_string()))
+    );
+    assert!(app.pending_prompt().is_none(), "answering clears the wait");
 }
 
 #[test]
-fn an_empty_answer_takes_the_prompts_own_default() {
+fn an_unanswered_prompt_takes_the_prompts_own_default() {
     let mut app = App::default();
     app.ask(Prompt {
+        session: "s1".into(),
         question: "Allow tool `bash`?".into(),
         options: vec!["yes".into(), "no".into()],
         default: "no".into(),
     });
-    // Enter on an empty line must do the safe thing, not send "".
-    assert_eq!(app.take_answer().as_deref(), Some("no"));
+    // Enter with nothing else pressed must do the safe thing: the initial
+    // selection is already `default`.
+    assert_eq!(
+        app.take_answer(),
+        Some(("s1".to_string(), "no".to_string()))
+    );
 }
 
 #[test]

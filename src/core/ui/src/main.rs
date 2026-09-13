@@ -265,6 +265,7 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
             // The turn is blocked until this is answered, so ask right here on
             // the same stdin the REPL already owns.
             StreamEvent::Prompt {
+                session: prompt_session,
                 question,
                 options,
                 default,
@@ -277,7 +278,9 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
                     Ok(_) if !typed.trim().is_empty() => typed.trim().to_string(),
                     _ => default,
                 };
-                if let Err(err) = transport.answer(session, &answer) {
+                // The notification's own session, not this loop's `session` —
+                // a client may be driving more than one (#103).
+                if let Err(err) = transport.answer(&prompt_session, &answer) {
                     eprintln!("  error sending answer: {err}");
                 }
             }
