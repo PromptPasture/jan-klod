@@ -639,7 +639,7 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
 
 #[cfg(test)]
 mod tests {
-    use super::{event_for, Logs, Rest, Stdio, Transport};
+    use super::{event_for, Logs, Rest, Rpc, Stdio, Transport};
     use crate::StreamEvent;
     use jan_klod_protocol::{Notification, PROTOCOL_VERSION};
 
@@ -953,8 +953,17 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
     }
 
     /// #104: the event loop notices a dead gateway even with nothing in
-    /// flight to fail — the fake gateway here exits right after the
-    /// handshake, with no turn ever started.
+    /// flight to fail — the fake gateway here exits without a turn ever
+    /// being started.
+    ///
+    /// Both halves are waited for rather than raced against. The script used
+    /// to exit as soon as it had answered the handshake, which made
+    /// `alive()` before the exit a coin flip: on a loaded machine the child
+    /// was often already gone by the time `spawn_from` returned, and the
+    /// "still alive" assertion failed for a reason that had nothing to do
+    /// with `alive()`. So the script blocks on a second frame instead — it
+    /// cannot exit until this test lets it — and the exit is then polled for
+    /// against a deadline.
     #[cfg(unix)]
     #[test]
     fn alive_reports_false_once_the_child_has_exited() {
@@ -968,6 +977,7 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
 IFS= read -r hello
 id=$(printf '%s' "$hello" | sed 's/.*"id":\([0-9]*\).*/\1/')
 printf '{{"jsonrpc":"2.0","id":%s,"result":{{"version":"{PROTOCOL_VERSION}"}}}}\n' "$id"
+IFS= read -r goodbye
 "#
         );
         std::fs::write(&bin, script).expect("write the fake gateway");
@@ -976,17 +986,26 @@ printf '{{"jsonrpc":"2.0","id":%s,"result":{{"version":"{PROTOCOL_VERSION}"}}}}\
         let Ok(gateway) = Stdio::spawn_from(&bin, &[], Logs::Discard) else {
             panic!("the fake gateway did not start or did not shake hands")
         };
-        assert!(gateway.alive(), "the child just started");
+        // `spawn_from` returned, so the handshake was answered and the script
+        // is now blocked on its second `read` — it has no way to exit yet.
+        assert!(gateway.alive(), "the child is still blocked on stdin");
 
-        // The script exits right after the handshake; this waits for that
-        // rather than asserting on a race against it.
+        // Any frame ends that `read` and with it the script. Sent, not asked:
+        // nothing answers it, and nothing here waits for an answer.
+        gateway
+            .send(&Rpc::SessionList)
+            .expect("the frame that lets the fake gateway finish");
+
+        // The exit is still asynchronous — the deadline is long enough that
+        // only a genuinely stuck child reaches it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut seen_dead = false;
-        for _ in 0..100 {
+        while std::time::Instant::now() < deadline {
             if !gateway.alive() {
                 seen_dead = true;
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let _ = std::fs::remove_file(&bin);
         assert!(seen_dead, "alive() never reported the child had exited");
