@@ -24,7 +24,7 @@ tiny_http = "0.12"
 [dev-dependencies]
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
-jan-klod-config = { path = "../config" }
+jan-klod-config = { path = "../../config" }
 serde_json.workspace = true
 # The rpc harness reads the frames back as the contract types rather than as
 # hand-matched JSON, so a shape change fails the test instead of passing it.

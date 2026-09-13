@@ -4,6 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# This crate lives outside src/core's own directory tree (deliberately, to sit
+# alongside it rather than nested inside it), so cargo's usual upward search for
+# the workspace root won't find it; this points at it explicitly.
+workspace = "../core"
 
 [dependencies]
 serde_json.workspace = true
@@ -11,8 +15,8 @@ serde_yaml_ng.workspace = true
 thiserror.workspace = true
 
 # Off by default so a plain `cargo test` does not build the example. See the
-# same block in ../host/Cargo.toml for why that matters there; here it is only
-# consistency — `dump` is small and links no wasmtime.
+# same block in jan-klod-host's Cargo.toml for why that matters there; here it
+# is only consistency — `dump` is small and links no wasmtime.
 [features]
 examples = []
 
