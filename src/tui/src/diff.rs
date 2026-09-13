@@ -4,7 +4,7 @@
 //!
 //! `tool-git`'s `op=diff` runs `git diff --no-ext-diff --no-textconv` and hands
 //! back git's own stdout, so a tool result already *contains* a unified diff.
-//! This module parses and renders that text; `src/core/ui/README.md` records
+//! This module parses and renders that text; `src/tui/README.md` records
 //! the measurement, and it is why this crate carries no diff engine.
 //!
 //! # The sign is a character, not a colour

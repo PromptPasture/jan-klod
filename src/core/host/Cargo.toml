@@ -35,7 +35,7 @@ jan-klod-protocol = { path = "../protocol" }
 # Renamed: `provider_probe`'s generated WIT bindings already occupy the
 # `jan_klod` namespace in this crate, so the client is imported as
 # `jan_klod_client` to keep the two unambiguous.
-jan-klod-client = { package = "jan-klod", path = "../ui" }
+jan-klod-client = { package = "jan-klod", path = "../../tui" }
 # Minisign fixtures for the `ext install` signature tests — see
 # `tests/it/common/minisig.rs`. A test has to prove a *valid* signature is
 # accepted, since a suite of refusals alone passes with a verifier that rejects

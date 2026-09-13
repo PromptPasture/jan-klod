@@ -4,6 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# This crate lives outside src/core's own directory tree (deliberately — see the
+# comment below), so cargo's usual upward search for the workspace root won't find
+# it; this points at it explicitly.
+workspace = "../core"
 
 # A UI is NOT an extension — it is a separate client *process* that drives a
 # core (the LSP/server model): over stdio, having spawned it, or over REST if one
@@ -18,7 +22,7 @@ serde_json.workspace = true
 # The wire contract. Serde-only by design (#41), which is what lets a client
 # depend on it without pulling in the core or Wasmtime — the rule this crate's
 # comment above states. The stdio transport frames commands with it.
-jan-klod-protocol = { path = "../protocol" }
+jan-klod-protocol = { path = "../core/protocol" }
 # Terminal UI for the `tui` mode (binary only). Bundles the crossterm backend +
 # event types (used via `ratatui::crossterm`). The pure App model in `app` needs
 # no TUI deps and is unit-tested without a terminal.

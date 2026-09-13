@@ -1,4 +1,4 @@
-# `src/core/ui` — the terminal client
+# `src/tui` — the terminal client
 
 `jan-klod`, the client a person actually types into. It is a **separate process**
 from the core, not an extension: it spawns `jan-klod-gateway rpc` and speaks
@@ -132,7 +132,7 @@ than from git:
 
 ## Colour and glyphs come from `theme.rs`, and only from there
 
-`src/core/ui/src/theme.rs` owns the ten-step grey ramp, the four accents, the
+`src/tui/src/theme.rs` owns the ten-step grey ramp, the four accents, the
 glyph vocabulary and terminal capability detection
 ([#128](https://github.com/PromptPasture/jan-klod/issues/128)). Ask it for a
 **role** — `body()`, `border_active()`, `warning()` — and for a `Glyph`, never
