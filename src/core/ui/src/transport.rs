@@ -78,6 +78,19 @@ pub trait Transport: Send + Sync {
 
     /// How to describe this connection in a status line.
     fn describe(&self) -> String;
+
+    /// Whether the transport still looks alive, checked between turns (#104).
+    ///
+    /// The default answers `true`: most of the ways a transport dies already
+    /// surface as an `Err` from [`Transport::stream_turn`], which the caller
+    /// reads as a disconnect on its own. [`Stdio`] overrides this because it
+    /// alone holds a child process that can exit with nothing in flight to
+    /// fail — the gateway's own `Drop`/`Logs` already know about that exit;
+    /// this is what lets the client's event loop notice it before the next
+    /// turn tries to use a pipe with nothing on the other end.
+    fn alive(&self) -> bool {
+        true
+    }
 }
 
 /// The REST + SSE surface of a gateway that is already listening.
@@ -442,6 +455,17 @@ impl Transport for Stdio {
 
     fn describe(&self) -> String {
         self.described.clone()
+    }
+
+    /// `try_wait`, not `wait`: this is polled between turns while the gateway
+    /// is expected to still be running, and blocking on it would hang the
+    /// event loop against a healthy child.
+    fn alive(&self) -> bool {
+        self.child
+            .lock()
+            .ok()
+            .and_then(|mut child| child.try_wait().ok())
+            .is_none_or(|status| status.is_none())
     }
 }
 
@@ -822,6 +846,46 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
             frame.contains(r#""session":"s1""#),
             "the session did not go with it: {frame:?}"
         );
+    }
+
+    /// #104: the event loop notices a dead gateway even with nothing in
+    /// flight to fail — the fake gateway here exits right after the
+    /// handshake, with no turn ever started.
+    #[cfg(unix)]
+    #[test]
+    fn alive_reports_false_once_the_child_has_exited() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir();
+        let bin = dir.join(format!("jk-gateway-exit-{}.sh", std::process::id()));
+
+        let script = format!(
+            r#"#!/bin/sh
+IFS= read -r hello
+id=$(printf '%s' "$hello" | sed 's/.*"id":\([0-9]*\).*/\1/')
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"version":"{PROTOCOL_VERSION}"}}}}\n' "$id"
+"#
+        );
+        std::fs::write(&bin, script).expect("write the fake gateway");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let Ok(gateway) = Stdio::spawn_from(&bin, &[], Logs::Discard) else {
+            panic!("the fake gateway did not start or did not shake hands")
+        };
+        assert!(gateway.alive(), "the child just started");
+
+        // The script exits right after the handshake; this waits for that
+        // rather than asserting on a race against it.
+        let mut seen_dead = false;
+        for _ in 0..100 {
+            if !gateway.alive() {
+                seen_dead = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = std::fs::remove_file(&bin);
+        assert!(seen_dead, "alive() never reported the child had exited");
     }
 
     /// `create_session` over stdio reads its own answer, unlike `answer` and

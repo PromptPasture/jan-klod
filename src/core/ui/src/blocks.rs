@@ -93,7 +93,11 @@ const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
 /// `edit` or a `read` came for. Anything else returns nothing and the line is
 /// just the tool's name — the collapsed form exists to be scanned, and a JSON
 /// blob squeezed onto one row is not scannable.
-fn summary(tool: &ToolBlock) -> String {
+///
+/// `pub(crate)` rather than private: [`crate::sidebar`]'s CHANGED section
+/// reads the same path this line shows, so the two cannot name a call
+/// differently.
+pub(crate) fn summary(tool: &ToolBlock) -> String {
     let Some(raw) = tool.arguments.as_deref() else {
         // Not the same thing as "no arguments" — it means nothing arrived, and
         // a line that rendered `{}` here would tell a user something false they

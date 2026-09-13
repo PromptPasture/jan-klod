@@ -13,9 +13,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use jan_klod::app::{App, Prompt, Turn};
+use jan_klod::app::{App, Prompt, ToastKind, Turn};
 use jan_klod::blocks;
 use jan_klod::commands::Availability;
+use jan_klod::keymap::{self, Context};
+use jan_klod::layout;
+use jan_klod::sidebar::{self, SessionInfo};
 use jan_klod::theme::{Glyph, Theme};
 use jan_klod::transport::Transport;
 use jan_klod::viewport::Viewport;
@@ -68,9 +71,17 @@ fn event_loop(
     // list that moved because something called `chdir` would be worse than one
     // that is simply wrong about a directory that no longer exists.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // Resolved once: the header and the sidebar's SESSION section show these
+    // for the life of the run, and neither polls for them — they were true at
+    // connect time and nothing here changes them.
+    let described = transport.describe();
+    let meta = Meta {
+        session,
+        described: &described,
+        cwd: &cwd,
+    };
     app.record_status(format!(
-        "connected to {} (session `{session}`); Esc to quit",
-        transport.describe()
+        "connected to {described} (session `{session}`); Esc to quit"
     ));
 
     // Channel carrying stream events from a background turn thread.
@@ -84,7 +95,7 @@ fn event_loop(
         // Drain all pending stream events before redrawing.
         if let Some(receiver) = &rx {
             loop {
-                match apply_event(&mut app, receiver) {
+                match apply_event(&mut app, receiver, tick) {
                     Step::Applied => {}
                     Step::Drained => break,
                     Step::Ended => {
@@ -112,7 +123,7 @@ fn event_loop(
             }
         }
 
-        terminal.draw(|frame| render(frame, &app, theme, &mut view, &mut pane, tick))?;
+        terminal.draw(|frame| render(frame, &app, theme, &mut view, &mut pane, tick, &meta))?;
 
         // Short poll so we redraw incrementally during streaming.
         if !event::poll(Duration::from_millis(POLL_MS))? {
@@ -120,6 +131,15 @@ fn event_loop(
             // frame advances here rather than where a delta arrives, so a turn
             // that is thinking rather than emitting still looks alive.
             tick = tick.wrapping_add(1);
+            // The toast's own heartbeat (#104): driven off the same tick as
+            // the spinner, so its expiry needs no clock and no sleep to test.
+            app.tick(tick);
+            // The gateway can exit with nothing in flight to notice it —
+            // `Transport::alive` is what catches that case; a transport error
+            // mid-turn is caught separately, in `apply_event`.
+            if !app.disconnected() && !transport.alive() {
+                app.disconnect(format!("{} exited", transport.describe()));
+            }
             continue;
         }
         let Event::Key(key) = event::read()? else {
@@ -536,7 +556,11 @@ enum Step {
 /// the split is a real one rather than a concession: this half is a fold over
 /// `App`, while the loop's other job is spawning threads and owning the
 /// channel.
-fn apply_event(app: &mut App, receiver: &mpsc::Receiver<Result<StreamEvent, String>>) -> Step {
+fn apply_event(
+    app: &mut App,
+    receiver: &mpsc::Receiver<Result<StreamEvent, String>>,
+    tick: usize,
+) -> Step {
     match receiver.try_recv() {
         Ok(Ok(StreamEvent::Delta(text))) => app.apply_delta(&text),
         Ok(Ok(StreamEvent::Done(answer))) => {
@@ -556,7 +580,9 @@ fn apply_event(app: &mut App, receiver: &mpsc::Receiver<Result<StreamEvent, Stri
             content,
             failed,
         })) => app.record_tool_result(&id, content, failed),
-        Ok(Ok(StreamEvent::Warning(msg))) => app.record_status(format!("⚠ {msg}")),
+        // A toast (#104): the full text still lands in the transcript, via
+        // `toast_warning`, so a toast that expires unread has lost nothing.
+        Ok(Ok(StreamEvent::Warning(msg))) => app.toast_warning(msg, tick),
         Ok(Ok(StreamEvent::Prompt {
             session,
             question,
@@ -568,10 +594,22 @@ fn apply_event(app: &mut App, receiver: &mpsc::Receiver<Result<StreamEvent, Stri
             options,
             default,
         }),
-        Ok(Ok(StreamEvent::Error(err)) | Err(err)) => {
-            // A failed turn leaves the same blocks open as a finished one.
+        // A turn-level failure the core itself reported. Distinct from the
+        // arm below: this is the core saying a turn went wrong, not the
+        // connection to it dying — the transcript gets the error and the turn
+        // ends, but the transport is not declared dead over an ordinary
+        // failure.
+        Ok(Ok(StreamEvent::Error(err))) => {
             app.interrupt_open_tools();
             app.record_error(err);
+            return Step::Ended;
+        }
+        // The transport itself failed — `Transport::stream_turn` returned
+        // `Err` rather than a frame the core sent. That is a dead connection,
+        // not a turn outcome (#104): say so in the status bar and stop
+        // pretending the spinner still means something.
+        Ok(Err(err)) => {
+            app.disconnect(err);
             return Step::Ended;
         }
         Err(mpsc::TryRecvError::Empty) => return Step::Drained,
@@ -624,33 +662,71 @@ fn composer_label(app: &App) -> String {
     )
 }
 
-/// Which keys act right now — the third of #160's three signals.
-///
-/// Written from the state rather than from a fixed string, because the whole
-/// point of the trio is that `Enter` does not always mean the same thing and a
-/// hint that said "Enter to send" during a turn would be the lie the signals
-/// exist to prevent.
-fn status_hint(app: &App) -> String {
-    if let Some(prompt) = app.pending_prompt() {
-        // The dialog says what silence means; the hint's job while it is open
-        // is the keys, not the default a second time. Closed, the one thing a
-        // user needs to know is that `Enter` does not answer here — it shows
-        // the question again, because answering with nothing on screen is
-        // exactly what this dialog exists to rule out.
+/// Which [`Context`] the current state reads keybindings in — the mapping
+/// [`status_hint`] (and 19h's help overlay) reads the table through.
+fn status_context(app: &App) -> Context {
+    if app.pending_prompt().is_some() {
         return if app.dialog_open() {
-            format!(
-                "↑/↓ or 1-9 to choose · Enter to confirm · Esc to close (default: `{}`)",
-                prompt.default
-            )
+            Context::DialogOpen
         } else {
-            "Enter to reopen the prompt · Esc to quit".to_string()
+            Context::DialogClosed
         };
     }
     match app.turn() {
-        Turn::Streaming => "Enter to steer · Ctrl+C to cancel".to_string(),
-        Turn::Cancelling => "stopping · Ctrl+C already sent".to_string(),
-        Turn::Idle | Turn::Blocked => "Enter to send · Esc to quit".to_string(),
+        Turn::Streaming => Context::Streaming,
+        Turn::Cancelling => Context::Cancelling,
+        // `Blocked` is unreachable here — `pending_prompt()` above is what
+        // makes a turn `Blocked`, and this arm is the `None` branch of it.
+        Turn::Idle | Turn::Blocked => Context::Idle,
     }
+}
+
+/// Which keys act right now — the third of #160's three signals, and #104's
+/// Acceptance line 3: every word of this comes from [`keymap::BINDINGS`]
+/// rather than a hand-written string, so the table and the status bar cannot
+/// drift apart — see `keymap::the_hint_changes_when_the_table_entry_changes`
+/// for what proves it.
+///
+/// `narrow` is #104's 60–79 width band ("fewer status hints"): the first
+/// binding for the context rather than all of them, still read from the same
+/// table.
+///
+/// The one thing that is not in the table: a pending prompt's `default`,
+/// which is data the core sent this turn, not a keybinding — it is appended
+/// after the table-driven hint rather than folded into it.
+fn status_hint(app: &App, narrow: bool) -> String {
+    status_hint_from(keymap::BINDINGS, app, narrow)
+}
+
+/// [`status_hint`] against an arbitrary table.
+///
+/// The table is a **parameter** rather than closed over, and that is #104's
+/// Acceptance line 3 rather than a style choice: the hint must be *produced
+/// from* the keymap, so that a hand-written duplicate would fail. Testing
+/// `keymap::hint` with a doctored table proves only that `keymap::hint` reads
+/// its argument — it says nothing about whether this function calls it, which
+/// is precisely where a duplicate would live. Threading the table to the seam
+/// the status bar actually uses is what closes that.
+///
+/// Found by probe: replacing this body with a hand-written `match` on
+/// `App::turn` that still varied by state passed every keymap test, and failed
+/// only one unrelated assertion about the prompt default.
+fn status_hint_from(table: &[keymap::Binding], app: &App, narrow: bool) -> String {
+    let context = status_context(app);
+    let base = if narrow {
+        keymap::hint_narrow(table, context)
+    } else {
+        keymap::hint(table, context)
+    };
+    if context == Context::DialogOpen {
+        if let Some(prompt) = app.pending_prompt() {
+            // The default is *data from the notification*, not a binding, so it
+            // is appended here rather than living in the keymap — what silence
+            // means differs per prompt and the table is per build.
+            return format!("{base} (default: `{}`)", prompt.default);
+        }
+    }
+    base
 }
 
 /// The spinner frame for `tick`, or nothing when no turn is running.
@@ -670,6 +746,16 @@ fn spinner_frame(theme: Theme, turn: Turn, tick: usize) -> Option<&'static str> 
     }
 }
 
+/// What the frame needs to know that is fixed for the whole run: the session
+/// this loop is driving, how it reached the core, and where it started.
+/// Resolved once in [`event_loop`] and handed in rather than re-read, because
+/// none of the three changes while the client runs.
+struct Meta<'a> {
+    session: &'a str,
+    described: &'a str,
+    cwd: &'a std::path::Path,
+}
+
 fn render(
     frame: &mut Frame,
     app: &App,
@@ -677,20 +763,49 @@ fn render(
     view: &mut Viewport,
     pane: &mut Pane,
     tick: usize,
+    meta: &Meta<'_>,
 ) {
+    let area = frame.area();
+    let regions = layout::regions(area.width, area.height);
+
+    // Below five rows for the transcript and three for the composer, there is
+    // nothing this frame can show that is not itself misleading (#104) — a
+    // border squeezed to nothing reads as a rendering bug, not as "make the
+    // window bigger".
+    if regions.too_small {
+        render_too_small(frame, area, theme);
+        return;
+    }
+
+    render_header(
+        frame,
+        regions.header,
+        app,
+        meta,
+        theme,
+        regions.collapsed_header,
+        tick,
+    );
+    render_status_bar(frame, regions.status, app, theme, regions.collapsed_header);
+    if let Some(sidebar_area) = regions.sidebar {
+        render_sidebar(frame, sidebar_area, app, meta, theme);
+    }
+
+    let content = regions.content;
+
     // The composer grows with its content and then scrolls, so the split is
     // computed from the buffer rather than fixed at three rows. `- 2` for the
     // block border, and again for the caret glyph and the space after it.
     let caret = format!("{} ", theme.glyph(caret_glyph(app.turn())));
     let caret_cells = jan_klod::wrap::width(&caret);
-    let composer_width = usize::from(frame.area().width).saturating_sub(2 + caret_cells);
+    let composer_width = usize::from(content.width).saturating_sub(2 + caret_cells);
 
     let (composer_rows, (caret_row, caret_col)) = app.composer.visible(composer_width);
     let composer_height = u16::try_from(composer_rows.len().max(1)).unwrap_or(1);
 
     let [transcript_area, input_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(composer_height + 2)])
-            .areas(frame.area());
+            .areas(content);
 
     // The transcript is rendered by `blocks::transcript` (#147), which is a
     // pure function of the entries plus a width — so the layout is tested
@@ -698,14 +813,13 @@ fn render(
     // the role label and the wrapping all live there; what is left here is
     // where it goes on screen, which is #148's concern next.
     //
-    // `- 2` for the block's own border, which is not part of the pane the text
-    // may use. Getting that wrong is how a wrap that passes its own test still
-    // overflows on screen.
-    // `- 2` for the block's own border, which is not part of the pane the text
-    // may use. Getting that wrong is how a wrap that passes its own test still
-    // overflows on screen.
-    let inner_width = usize::from(transcript_area.width).saturating_sub(2);
-    let inner_height = usize::from(transcript_area.height).saturating_sub(2);
+    // Below 60 columns (#104) the transcript loses its border: `single_column`
+    // spends those two columns and two rows on the pane instead, and there is
+    // no border left to hold the spinner or the "more below" marker.
+    let border = !regions.single_column;
+    let reserved = if border { 2 } else { 0 };
+    let inner_width = usize::from(transcript_area.width).saturating_sub(reserved);
+    let inner_height = usize::from(transcript_area.height).saturating_sub(reserved);
     let lines = blocks::transcript(&app.transcript, app.cursor(), inner_width, theme);
 
     // Re-clamp against what this frame actually holds, *then* record it. While
@@ -719,42 +833,36 @@ fn render(
         transcript_width: inner_width,
     };
 
-    // The detach marker: a glyph and a count, never a tint. Under `Mode::Mono`
-    // every role resolves to `Color::Reset`, so a marker that were only a colour
-    // would vanish exactly when the user most needs to know the view is stale.
-    let mut block = Block::bordered().title("jan-klod");
-    // The streaming indicator, top right. It advances on the caller's poll tick
-    // (#160), so it keeps moving through a long wait in which no delta arrives.
-    if let Some(frame_glyph) = spinner_frame(theme, app.turn(), tick) {
-        block = block.title(
-            Line::from(Span::styled(
-                format!(" {frame_glyph} "),
-                Style::default().fg(theme.focus()),
-            ))
-            .right_aligned(),
-        );
-    }
-    let below = view.below(lines.len(), inner_height);
-    if below > 0 {
-        block = block.title_bottom(
-            Line::from(Span::styled(
-                format!(" {} {below} ", theme.glyph(Glyph::MoreBelow)),
-                Style::default().fg(theme.warning()),
-            ))
-            .right_aligned(),
-        );
-    }
-
     let offset = u16::try_from(view.offset()).unwrap_or(u16::MAX);
-    let transcript = Paragraph::new(lines).block(block).scroll((offset, 0));
+    let transcript = if border {
+        // The detach marker: a glyph and a count, never a tint. Under
+        // `Mode::Mono` every role resolves to `Color::Reset`, so a marker that
+        // were only a colour would vanish exactly when the user most needs to
+        // know the view is stale.
+        let mut block = Block::bordered().title("jan-klod");
+        let below = view.below(lines.len(), inner_height);
+        if below > 0 {
+            block = block.title_bottom(
+                Line::from(Span::styled(
+                    format!(" {} {below} ", theme.glyph(Glyph::MoreBelow)),
+                    Style::default().fg(theme.warning()),
+                ))
+                .right_aligned(),
+            );
+        }
+        Paragraph::new(lines).block(block).scroll((offset, 0))
+    } else {
+        Paragraph::new(lines).scroll((offset, 0))
+    };
     frame.render_widget(transcript, transcript_area);
 
     // Two of #160's three signals: what this field is (the title) and which
-    // keys act (the hint, along the bottom edge). The third is the caret above.
-    // Three separate marks rather than one sentence, because the cost of
-    // missing the change is sending a message to a turn that is still running.
+    // keys act (the status bar, below the composer rather than on its own
+    // border since #104 gave the hint a permanent home). The third is the
+    // caret above. Three separate marks rather than one sentence, because the
+    // cost of missing the change is sending a message to a turn that is still
+    // running.
     let title = composer_label(app);
-    let hint = status_hint(app);
     // The caret glyph is the prompt marker, and it is a `Glyph` so it degrades;
     // the *cursor* is the terminal's own, placed below, because a drawn block
     // does not blink and does not move with the user's own expectations.
@@ -773,15 +881,7 @@ fn render(
             ])
         })
         .collect();
-    let input = Paragraph::new(composer).block(
-        Block::bordered().title(title).title_bottom(
-            Line::from(Span::styled(
-                format!(" {hint} "),
-                Style::default().fg(theme.muted()),
-            ))
-            .right_aligned(),
-        ),
-    );
+    let input = Paragraph::new(composer).block(Block::bordered().title(title));
     frame.render_widget(input, input_area);
     // +1 for the border, and the caret column is already in display cells.
     frame.set_cursor_position((
@@ -793,6 +893,110 @@ fn render(
     // Last, so it draws over everything above — the transcript keeps streaming
     // behind it and the header keeps timing, exactly as #103 asks.
     render_prompt_dialog(frame, app, theme);
+}
+
+/// The header, one row (#104): a short wordmark, the session id, how the
+/// client reached the core, and — on the right — the turn indicator 19e gave
+/// the transcript border, moved here now that there is a header to hold it.
+///
+/// `collapsed` is #104's 60–79 width band: session id and turn state only,
+/// dropping how the client connected.
+fn render_header(
+    frame: &mut Frame,
+    area: Option<Rect>,
+    app: &App,
+    meta: &Meta<'_>,
+    theme: Theme,
+    collapsed: bool,
+    tick: usize,
+) {
+    let Some(area) = area else { return };
+    let left = if collapsed {
+        format!(" jan-klod · {} · {} ", meta.session, app.connection_state())
+    } else {
+        format!(" jan-klod · {} · {} ", meta.session, meta.described)
+    };
+    let mut block = Block::default().title(Span::styled(left, Style::default().fg(theme.body())));
+    if let Some(frame_glyph) = spinner_frame(theme, app.turn(), tick) {
+        block = block.title(
+            Line::from(Span::styled(
+                format!(" {frame_glyph} "),
+                Style::default().fg(theme.focus()),
+            ))
+            .right_aligned(),
+        );
+    }
+    frame.render_widget(
+        Paragraph::new(Vec::<Line<'static>>::new()).block(block),
+        area,
+    );
+}
+
+/// The status bar, one row (#104). Left: keybinding hints for the current
+/// state, from [`status_hint`] — which is the keymap table, never a literal.
+/// Right: a toast if one is showing, in `warning()`/`removed()` with its
+/// glyph; otherwise the connection+turn word
+/// (`ready`/`streaming`/`blocked`/`cancelling`/`disconnected`).
+fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: Theme, collapsed: bool) {
+    let hint = status_hint(app, collapsed);
+    let mut block = Block::default().title(Span::styled(
+        format!(" {hint} "),
+        Style::default().fg(theme.muted()),
+    ));
+
+    let right = app.toast().map_or_else(
+        || {
+            Span::styled(
+                format!(" {} ", app.connection_state()),
+                Style::default().fg(theme.muted()),
+            )
+        },
+        |(text, kind)| {
+            let (glyph, colour) = match kind {
+                ToastKind::Warning => (theme.glyph(Glyph::Warning), theme.warning()),
+                ToastKind::Error => (theme.glyph(Glyph::ToolFailed), theme.removed()),
+            };
+            Span::styled(format!(" {glyph} {text} "), Style::default().fg(colour))
+        },
+    );
+    block = block.title(Line::from(right).right_aligned());
+    frame.render_widget(
+        Paragraph::new(Vec::<Line<'static>>::new()).block(block),
+        area,
+    );
+}
+
+/// The sidebar (#104): SESSION, THIS TURN and CHANGED, drawn from
+/// [`sidebar::view`] — a projection of `app` and nothing else. This function's
+/// own job is placement, the same split every other pane here uses.
+fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, meta: &Meta<'_>, theme: Theme) {
+    let info = SessionInfo {
+        id: meta.session,
+        via: meta.described,
+        cwd: meta.cwd,
+    };
+    let inner_width = usize::from(area.width).saturating_sub(2);
+    let lines = sidebar::view(app, info, inner_width, theme);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::bordered().border_style(Style::default().fg(theme.border_idle()))),
+        area,
+    );
+}
+
+/// #104's Acceptance: a render below the floor a normal frame needs draws
+/// this instead of a transcript and a composer squeezed past readability.
+fn render_too_small(frame: &mut Frame, area: Rect, theme: Theme) {
+    let lines = vec![Line::from(Span::styled(
+        "terminal too small",
+        Style::default().fg(theme.warning()),
+    ))];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::bordered())
+            .alignment(ratatui::layout::Alignment::Center),
+        area,
+    );
 }
 
 /// The ask dialog (#103): a centred modal over the transcript, on `raised()`
@@ -1472,9 +1676,52 @@ mod signals {
             "the composer claims to be the same field in both states"
         );
         assert_ne!(
-            status_hint(&idle),
-            status_hint(&busy),
+            status_hint(&idle, false),
+            status_hint(&busy, false),
             "the hint names the same keys in both states"
+        );
+    }
+
+    /// #104 Acceptance 3: the status bar is **produced from** the keymap
+    /// table, so a hand-written duplicate fails.
+    ///
+    /// Hands `status_hint_from` a table whose wording exists nowhere in the
+    /// source and asserts the rendered hint carries it. A duplicate that
+    /// reimplemented the match on `App::turn` would return the real wording and
+    /// fail this outright.
+    ///
+    /// This test exists because a probe showed the keymap's own tests did not
+    /// catch it: they prove `keymap::hint` reads its argument, which says
+    /// nothing about whether the status bar calls it.
+    #[test]
+    fn the_status_bar_renders_from_the_keymap_table_and_not_a_duplicate() {
+        use jan_klod::keymap::{Binding, Context};
+
+        const DOCTORED: &[Binding] = &[
+            Binding {
+                keys: "Enter",
+                action: "ZZQQ-idle",
+                context: Context::Idle,
+            },
+            Binding {
+                keys: "Enter",
+                action: "ZZQQ-steer",
+                context: Context::Streaming,
+            },
+        ];
+
+        let idle = App::default();
+        let hint = super::status_hint_from(DOCTORED, &idle, false);
+        assert!(
+            hint.contains("ZZQQ-idle"),
+            "the idle hint ignored the table it was given: {hint:?}"
+        );
+
+        let busy = streaming();
+        let hint = super::status_hint_from(DOCTORED, &busy, false);
+        assert!(
+            hint.contains("ZZQQ-steer"),
+            "the streaming hint ignored the table it was given: {hint:?}"
         );
     }
 
@@ -1496,7 +1743,7 @@ mod signals {
         // The other two are text, so they carry in mono by construction — but
         // asserting it keeps the trio honest if either ever becomes a style.
         assert_ne!(composer_label(&idle), composer_label(&busy));
-        assert_ne!(status_hint(&idle), status_hint(&busy));
+        assert_ne!(status_hint(&idle, false), status_hint(&busy, false));
     }
 
     /// #160's second Acceptance line: the frame advances on a **poll tick**,
@@ -1541,7 +1788,7 @@ mod signals {
         assert_eq!(app.turn(), Turn::Blocked);
         assert!(composer_label(&app).contains("yes/no/always"));
         assert!(
-            status_hint(&app).contains("`no`"),
+            status_hint(&app, false).contains("`no`"),
             "the hint must name the default, because that is what silence sends"
         );
         assert_eq!(

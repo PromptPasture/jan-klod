@@ -128,7 +128,14 @@ enum Phase {
 }
 
 /// The REPL/TUI state: the input buffer and the scrollback transcript.
+///
+/// More than three bools, and each one is a fact this model already has to
+/// track separately — `should_quit`, `dialog_open`, `cancel_requested` and
+/// `disconnected` answer four different questions with no shared state
+/// machine between them, so folding them into one enum would invent a joint
+/// state nothing here has ever needed to distinguish.
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     /// The message being written, with its caret (#150).
     ///
@@ -207,6 +214,45 @@ pub struct App {
     /// queued. A single `Option` for both facts would make "closed but still
     /// waiting" — the exact state `Esc` has to produce — inexpressible.
     dialog_open: bool,
+    /// Set once the transport is known to have died — the spawned gateway
+    /// exited, or the `--addr` core stopped answering (#104). `false` is the
+    /// default and stays the common case; there is no reconnection in this
+    /// slice, so once set it never clears.
+    disconnected: bool,
+    /// A `warning`/`error` shown in the status bar for a few ticks, newest
+    /// wins (#104). The full text has already landed in the transcript by the
+    /// time this is set, via [`Self::toast_warning`]/[`Self::toast_error`] —
+    /// so a toast that expires unread has lost nothing.
+    toast: Option<Toast>,
+}
+
+/// A toast: the text, which colour it reads in, and the tick it expires on.
+///
+/// Expiry is measured in the same `tick` [`crate::tui`] advances the spinner
+/// with, not wall-clock time — see the module docs on why: a poll timeout is
+/// what this client has instead of a clock, and driving both off it is what
+/// makes a toast's expiry testable without sleeping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Toast {
+    text: String,
+    kind: ToastKind,
+    expires_at: usize,
+}
+
+/// How long a toast is shown, in poll ticks. `tui::POLL_MS` is 50ms, so this
+/// is a few seconds — long enough to read, short enough that it is gone
+/// before someone asks whether it ever will be.
+const TOAST_TICKS: usize = 60;
+
+/// Which of the two toast colours a notification reads in (#104's Scope: only
+/// `warning` and `error` toast — everything else already has its own place in
+/// the transcript).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastKind {
+    /// `warning()`.
+    Warning,
+    /// `removed()`.
+    Error,
 }
 
 /// A confirmation a running turn is waiting on.
@@ -923,6 +969,100 @@ impl App {
         self.record(Who::Status, text);
     }
 
+    /// The transport is gone — say so, permanently (#104).
+    ///
+    /// The same shape as [`Self::end_turn`], and for the same reason: whatever
+    /// was in flight cannot finish, so a spinner left running would be a
+    /// client that still looks alive. A prompt nobody can answer is dropped
+    /// rather than left `Blocked` forever, exactly as [`Self::cancel`] already
+    /// does for a turn the user stopped.
+    ///
+    /// Idempotent: a second call narrates nothing new, because the caller may
+    /// notice the same dead transport more than once (a poll tick and a failed
+    /// write, say) and only the first telling is news.
+    pub fn disconnect(&mut self, reason: impl Into<String>) {
+        if !self.disconnected {
+            self.disconnected = true;
+            self.record_error(reason);
+        }
+        // Unconditional, even on a repeat call: nothing can still be running
+        // once the transport is gone, whichever telling of it this is.
+        self.phase = Phase::Idle;
+        self.prompts.clear();
+        self.dialog_open = false;
+        self.interrupt_open_tools();
+    }
+
+    /// Whether the transport is known to be gone.
+    #[must_use]
+    pub const fn disconnected(&self) -> bool {
+        self.disconnected
+    }
+
+    /// The connection+turn word the status bar's right side shows (#104):
+    /// `ready`, `streaming`, `blocked`, `cancelling`, or `disconnected`.
+    ///
+    /// `disconnected` wins over everything else — [`Self::disconnect`] has
+    /// already forced the turn back to `Idle`, so without this a dead
+    /// transport would read as merely `ready`, which is the one thing #104
+    /// exists to stop a client from claiming.
+    #[must_use]
+    pub fn connection_state(&self) -> &'static str {
+        if self.disconnected {
+            return "disconnected";
+        }
+        match self.turn() {
+            Turn::Idle => "ready",
+            Turn::Streaming => "streaming",
+            Turn::Blocked => "blocked",
+            Turn::Cancelling => "cancelling",
+        }
+    }
+
+    /// A `warning` notification (#104): the full text lands in the transcript
+    /// immediately, as it always did, and a toast is raised beside it —
+    /// newest wins, so a second warning before the first expires replaces it
+    /// rather than queuing behind it.
+    pub fn toast_warning(&mut self, text: impl Into<String>, tick: usize) {
+        let text = text.into();
+        self.record_status(format!("⚠ {text}"));
+        self.toast = Some(Toast {
+            text,
+            kind: ToastKind::Warning,
+            expires_at: tick + TOAST_TICKS,
+        });
+    }
+
+    /// A toasted error (#104): the same relationship to the transcript as
+    /// [`Self::toast_warning`], through [`Self::record_error`] instead of a
+    /// status line — an error is a failure, not a note.
+    pub fn toast_error(&mut self, text: impl Into<String>, tick: usize) {
+        let text = text.into();
+        self.record_error(text.clone());
+        self.toast = Some(Toast {
+            text,
+            kind: ToastKind::Error,
+            expires_at: tick + TOAST_TICKS,
+        });
+    }
+
+    /// The toast on screen, if one has not expired, as `(text, kind)`.
+    #[must_use]
+    pub fn toast(&self) -> Option<(&str, ToastKind)> {
+        self.toast.as_ref().map(|t| (t.text.as_str(), t.kind))
+    }
+
+    /// Expire the toast once `tick` has passed the point it was raised for.
+    ///
+    /// Driven by [`crate::tui`]'s own poll tick rather than a clock (#104): the
+    /// spinner already advances on every poll timeout, and reusing it is what
+    /// lets a toast's expiry be asserted in a test with no `sleep` in it.
+    pub fn tick(&mut self, tick: usize) {
+        if self.toast.as_ref().is_some_and(|t| tick >= t.expires_at) {
+            self.toast = None;
+        }
+    }
+
     /// Request quit.
     pub const fn quit(&mut self) {
         self.should_quit = true;
@@ -938,7 +1078,102 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Entry, Prompt, ToolStatus, Turn, Who};
+    use super::{App, Entry, Prompt, ToastKind, ToolStatus, Turn, Who};
+
+    /// Acceptance: a dead transport moves the status word to `disconnected`
+    /// and — because `connection_state` only ever reports the stored turn,
+    /// which `disconnect` forces back to `Idle` — the spinner stops with it.
+    /// `spinner_frame` returns `None` for `Turn::Idle` and nothing else here,
+    /// so this one assertion covers both halves of #104's acceptance line.
+    #[test]
+    fn a_dead_transport_reports_disconnected_and_stops_the_turn() {
+        let mut app = App::default();
+        app.begin_turn();
+        app.apply_delta("half an answer");
+        assert_eq!(app.turn(), Turn::Streaming);
+
+        app.disconnect("jan-klod-gateway exited");
+        assert_eq!(app.connection_state(), "disconnected");
+        assert_eq!(
+            app.turn(),
+            Turn::Idle,
+            "a dead transport cannot still be streaming"
+        );
+        assert!(
+            format!("{:?}", app.transcript).contains("jan-klod-gateway exited"),
+            "the reason was not recorded"
+        );
+
+        // A prompt nobody can answer must not be left `Blocked` forever.
+        app.begin_turn();
+        app.ask(Prompt {
+            session: "s1".into(),
+            question: "proceed?".into(),
+            options: vec!["y".into()],
+            default: "y".into(),
+        });
+        app.disconnect("again"); // idempotent: no second narration
+        assert_eq!(app.turn(), Turn::Idle);
+        assert_eq!(
+            format!("{:?}", app.transcript).matches("again").count(),
+            0,
+            "a second disconnect narrated something new"
+        );
+    }
+
+    #[test]
+    fn connection_state_reports_ready_streaming_blocked_and_cancelling() {
+        let mut app = App::default();
+        assert_eq!(app.connection_state(), "ready");
+        app.begin_turn();
+        assert_eq!(app.connection_state(), "streaming");
+        app.ask(Prompt {
+            session: "s1".into(),
+            question: "q".into(),
+            options: vec!["y".into()],
+            default: "y".into(),
+        });
+        assert_eq!(app.connection_state(), "blocked");
+        app.take_answer();
+        app.cancel();
+        assert_eq!(app.connection_state(), "cancelling");
+    }
+
+    /// Acceptance: a `warning` produces both a toast and a transcript line,
+    /// and the transcript line outlives the toast — so a toast that expires
+    /// unread has lost nothing.
+    #[test]
+    fn a_warning_toasts_and_writes_the_transcript_and_the_toast_expires_first() {
+        let mut app = App::default();
+        app.toast_warning("provider fallback to gpt-4o-mini", 0);
+
+        let (text, kind) = app.toast().expect("a toast was raised");
+        assert_eq!(text, "provider fallback to gpt-4o-mini");
+        assert_eq!(kind, ToastKind::Warning);
+        assert!(
+            format!("{:?}", app.transcript).contains("provider fallback to gpt-4o-mini"),
+            "the full text did not land in the transcript"
+        );
+
+        // The toast expires; the transcript line does not move.
+        app.tick(1_000);
+        assert!(app.toast().is_none(), "the toast should have expired");
+        assert!(
+            format!("{:?}", app.transcript).contains("provider fallback to gpt-4o-mini"),
+            "the transcript line vanished with the toast — nothing should be \
+             lost when a toast expires unread"
+        );
+    }
+
+    #[test]
+    fn a_second_toast_replaces_the_first_rather_than_queuing() {
+        let mut app = App::default();
+        app.toast_warning("first", 0);
+        app.toast_error("second", 0);
+        let (text, kind) = app.toast().expect("a toast is showing");
+        assert_eq!(text, "second");
+        assert_eq!(kind, ToastKind::Error);
+    }
 
     fn tools(app: &App) -> Vec<&super::ToolBlock> {
         app.transcript

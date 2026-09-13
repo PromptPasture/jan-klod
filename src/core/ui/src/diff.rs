@@ -194,6 +194,29 @@ fn number(value: Option<usize>, cells: usize) -> String {
     value.map_or_else(|| " ".repeat(cells), |n| format!("{n:>cells$}"))
 }
 
+/// The `(added, removed)` line counts of `text`, if it parses as a unified diff.
+///
+/// `None` if it does not, which is the sidebar's signal (#104's CHANGED
+/// section) to show the path with no counts rather than guessing `+0 -0`.
+/// Shares [`parse`] with [`render`] rather than re-deriving the count from the
+/// rendered lines, so the two can never disagree about what counts as a diff.
+#[must_use]
+pub fn counts(text: &str) -> Option<(usize, usize)> {
+    let rows = parse(text)?;
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    for row in &rows {
+        if let Row::Body { sign, .. } = row {
+            match sign {
+                '+' => added += 1,
+                '-' => removed += 1,
+                _ => {}
+            }
+        }
+    }
+    Some((added, removed))
+}
+
 /// Render `text` as a unified diff, wrapped to `max` cells — or `None` if it is
 /// not one, which is the caller's signal to show it as plain text.
 #[must_use]
@@ -259,7 +282,16 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Option<Vec<Line<'static>>
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, render};
+    use super::{counts, parse, render};
+
+    /// Acceptance (#104's CHANGED section): a parsed diff's counts, and a
+    /// non-diff's `None` rather than a guessed `+0 -0`.
+    #[test]
+    fn counts_the_added_and_removed_lines_or_says_it_could_not_parse() {
+        assert_eq!(counts(TWO_HUNKS), Some((2, 1)));
+        assert_eq!(counts("replace applied to src/main.rs (3 line(s))."), None);
+        assert_eq!(counts(""), None);
+    }
     use crate::theme::{Depth, GlyphSet, Mode, Theme};
     use crate::wrap::width;
 
