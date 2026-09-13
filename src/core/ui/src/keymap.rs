@@ -62,6 +62,34 @@ pub const BINDINGS: &[Binding] = &[
         action: "quit",
         context: Context::Idle,
     },
+    // #105: the three dialogs, all reachable from `Idle`. Each also works
+    // outside it — the ask dialog is the only thing that ever refuses these
+    // keys, and `App` itself declines to open a second dialog under it — but
+    // one row is enough to make the key discoverable, which is the whole
+    // problem 19h's Why section opens on.
+    Binding {
+        keys: "Ctrl+S",
+        action: "switch session",
+        context: Context::Idle,
+    },
+    Binding {
+        keys: "?",
+        action: "help",
+        context: Context::Idle,
+    },
+    Binding {
+        keys: "Ctrl+D",
+        action: "quit",
+        context: Context::Idle,
+    },
+    // The fourth: reachable only where 19g's layout hid the sidebar's own
+    // pane — pointless otherwise, which is why it is one row rather than
+    // wired to always act (see `tui::sidebar_dialog_keys`'s docs).
+    Binding {
+        keys: "Ctrl+B",
+        action: "sidebar (narrow widths)",
+        context: Context::Idle,
+    },
     Binding {
         keys: "Enter",
         action: "steer",

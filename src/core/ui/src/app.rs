@@ -224,6 +224,37 @@ pub struct App {
     /// time this is set, via [`Self::toast_warning`]/[`Self::toast_error`] —
     /// so a toast that expires unread has lost nothing.
     toast: Option<Toast>,
+    /// The session this client is driving. Owned and mutable (#105) rather
+    /// than a `&str` held for the event loop's lifetime — switching sessions
+    /// replaces this, in [`Self::load_session`], instead of restarting the
+    /// process with a different argument.
+    session: String,
+    /// Whether the transport is the spawned-gateway kind. Set once, at
+    /// startup — see [`Self::set_stdio`] — and read only by
+    /// [`Self::request_quit`], which is the one place the distinction
+    /// matters: over stdio a turn still running when this client quits is
+    /// genuinely lost, because the gateway is this process's child.
+    stdio: bool,
+    /// The session switcher (#105), when open.
+    sessions: Option<Sessions>,
+    /// Set when something asked for a fresh `session/list` — `Ctrl+S` or
+    /// `/sessions` — and nothing has sent that ask to the core yet. The same
+    /// shape as [`Self::cancel_requested`]: this model records the intent,
+    /// the caller (which holds a transport) performs it and then calls
+    /// [`Self::open_sessions`] with what came back.
+    sessions_requested: bool,
+    /// Set when `/new` asked for a fresh session and nothing has sent
+    /// `session/create` yet. The caller performs it and then calls
+    /// [`Self::load_session`] with the new, empty session.
+    new_session_requested: bool,
+    /// The help overlay (#105), when open.
+    help: Option<Help>,
+    /// The sidebar-in-a-dialog (#105's "sidebar-in-a-dialog"), when open —
+    /// reachable through the same modal primitive at widths where 19g hides
+    /// the permanent sidebar pane.
+    sidebar_dialog: bool,
+    /// The quit confirm (#105), when open.
+    quit: Option<QuitConfirm>,
 }
 
 /// A toast: the text, which colour it reads in, and the tick it expires on.
@@ -253,6 +284,77 @@ pub enum ToastKind {
     Warning,
     /// `removed()`.
     Error,
+}
+
+/// One session `session/list` reports: an id and a preview of its first user
+/// message. What the switcher (#105) shows, populated fresh at every open —
+/// see [`App::open_sessions`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionEntry {
+    /// Session id.
+    pub id: String,
+    /// First 80 characters of the session's first user message, as
+    /// `session/list` sends it.
+    pub preview: String,
+}
+
+/// One message of a session fetched via `session/get`.
+///
+/// Already reduced to what rebuilding the transcript needs (#105's design
+/// point 3). The wire's `seq` is not kept here: nothing on this client
+/// addresses a log position, which is also why `session/fork` stays out of
+/// this slice's scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionMessage {
+    /// `system`, `user`, `assistant` or `tool`, exactly as the wire sends it.
+    pub role: String,
+    /// The message text.
+    pub content: String,
+    /// Present only on a tool result, tying it to the call it answers.
+    pub tool_call_id: Option<String>,
+}
+
+/// The session switcher's model (#105): populated once per open from
+/// `session/list`, filtered by what has been typed since.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Sessions {
+    entries: Vec<SessionEntry>,
+    query: String,
+    selected: usize,
+}
+
+/// The help overlay's model (#105): just how far it has been scrolled — the
+/// content itself is [`crate::blocks::help_dialog`], a pure function of
+/// [`crate::keymap::BINDINGS`], so there is nothing else to track here.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Help {
+    scroll: usize,
+}
+
+/// The quit confirm's model (#105).
+///
+/// Four independent facts, each answering a different question (which option
+/// is highlighted, was a turn running, would it be lost, has quit been
+/// confirmed once already) with no invalid combination between them — an enum
+/// per axis would be four one-variant-wider types replacing four flags, not a
+/// simplification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+struct QuitConfirm {
+    /// `false` is cancel, the default; `true` selects quit.
+    quit_selected: bool,
+    /// Whether a turn was running when this was opened — the case that needs
+    /// the wording to say what happens to it, and the second confirmation.
+    mid_turn: bool,
+    /// Whether quitting genuinely loses the running turn: stdio's spawned
+    /// gateway dies with this client; `--addr`'s does not. Meaningless unless
+    /// `mid_turn`, but stored either way rather than as a nested `Option` —
+    /// there is nothing that reads it without also reading `mid_turn`.
+    turn_lost: bool,
+    /// Set once quit has been selected and confirmed once while `mid_turn` —
+    /// the "second, explicit confirmation" #105 asks for. A second `Enter` on
+    /// `quit` with this set is what actually quits.
+    escalate: bool,
 }
 
 /// A confirmation a running turn is waiting on.
@@ -470,7 +572,10 @@ impl App {
         match command.availability {
             Availability::Ready => match command.name {
                 "/newline" => self.composer.push('\n'),
-                "/quit" => self.should_quit = true,
+                // Ask before leaving rather than quitting outright — the same
+                // confirming path `Ctrl+D` and `Ctrl+C` (idle, empty) use
+                // (#105).
+                "/quit" => self.request_quit(),
                 // Sets the ask; the caller sends it, because commands are
                 // dispatched here and this type holds no transport.
                 "/cancel" => {
@@ -478,6 +583,11 @@ impl App {
                         self.record(Who::Status, "no turn is running".to_string());
                     }
                 }
+                // #105: the other two asks a transport has to serve, and the
+                // one that needs none at all.
+                "/new" => self.request_new_session(),
+                "/sessions" => self.request_sessions(),
+                "/help" => self.toggle_help(),
                 // Unreachable while the table and this match agree, and a status
                 // line rather than a panic if they ever stop: a client that
                 // aborts on its own menu is worse than one that says so.
@@ -1063,9 +1173,336 @@ impl App {
         }
     }
 
-    /// Request quit.
+    /// Request quit — unconditionally and without a confirmation. Kept for
+    /// `Esc`, whose behaviour this slice leaves alone (#105's Scope names
+    /// three other triggers for the confirming version, [`Self::request_quit`]).
     pub const fn quit(&mut self) {
         self.should_quit = true;
+    }
+
+    /// The session this client is driving.
+    #[must_use]
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+
+    /// Set the session id — at startup, and again on every switch or `/new`
+    /// (#105's design point 1: the id stops being fixed for the run).
+    pub fn set_session(&mut self, id: impl Into<String>) {
+        self.session = id.into();
+    }
+
+    /// Record which kind of transport this run has, once, at startup — see
+    /// the field's own docs for why [`Self::request_quit`] needs it.
+    pub const fn set_stdio(&mut self, stdio: bool) {
+        self.stdio = stdio;
+    }
+
+    /// Whether anything has been sent this run — what the quit confirm
+    /// (#105) is skipped entirely for the lack of.
+    const fn has_sent_anything(&self) -> bool {
+        !self.history.is_empty()
+    }
+
+    // ---- session switcher (#105) ----
+
+    /// `Ctrl+S`/`/sessions`: ask the loop for a fresh `session/list`. The
+    /// switcher is never populated from a cache — see [`Self::open_sessions`].
+    /// A no-op while the ask dialog is open: that modal owns every key, and a
+    /// second dialog opening under it would be unreachable anyway.
+    pub const fn request_sessions(&mut self) {
+        if !self.dialog_open {
+            self.sessions_requested = true;
+        }
+    }
+
+    /// Take the pending `session/list` ask, if there is one. Drains, the same
+    /// contract as [`Self::take_cancel_request`].
+    pub const fn take_sessions_request(&mut self) -> bool {
+        let asked = self.sessions_requested;
+        self.sessions_requested = false;
+        asked
+    }
+
+    /// `session/list` answered: show the switcher with what it returned.
+    pub fn open_sessions(&mut self, entries: Vec<SessionEntry>) {
+        self.sessions = Some(Sessions {
+            entries,
+            query: String::new(),
+            selected: 0,
+        });
+    }
+
+    /// Whether the switcher is on screen.
+    #[must_use]
+    pub const fn sessions_open(&self) -> bool {
+        self.sessions.is_some()
+    }
+
+    /// `Esc`: close the switcher. Nothing was asked of the core, so there is
+    /// nothing to undo.
+    pub fn sessions_close(&mut self) {
+        self.sessions = None;
+    }
+
+    /// What has been typed to filter the list, since the switcher opened.
+    #[must_use]
+    pub fn sessions_query(&self) -> &str {
+        self.sessions.as_ref().map_or("", |s| s.query.as_str())
+    }
+
+    /// Type one character into the filter.
+    pub fn sessions_push_char(&mut self, c: char) {
+        if let Some(sessions) = self.sessions.as_mut() {
+            sessions.query.push(c);
+            sessions.selected = 0;
+        }
+    }
+
+    /// Delete the last character of the filter.
+    pub fn sessions_backspace(&mut self) {
+        if let Some(sessions) = self.sessions.as_mut() {
+            sessions.query.pop();
+            sessions.selected = 0;
+        }
+    }
+
+    /// The entries matching the typed filter, on id or preview, case
+    /// insensitively — empty means the empty state, not a closed list, the
+    /// same convention [`Self::menu_entries`] uses.
+    #[must_use]
+    pub fn sessions_filtered(&self) -> Vec<&SessionEntry> {
+        let Some(sessions) = self.sessions.as_ref() else {
+            return Vec::new();
+        };
+        if sessions.query.is_empty() {
+            return sessions.entries.iter().collect();
+        }
+        let needle = sessions.query.to_lowercase();
+        sessions
+            .entries
+            .iter()
+            .filter(|e| {
+                e.id.to_lowercase().contains(&needle) || e.preview.to_lowercase().contains(&needle)
+            })
+            .collect()
+    }
+
+    /// Which entry is highlighted, clamped to what the filter shows.
+    #[must_use]
+    pub fn sessions_selected(&self) -> usize {
+        let len = self.sessions_filtered().len();
+        self.sessions
+            .as_ref()
+            .map_or(0, |s| s.selected)
+            .min(len.saturating_sub(1))
+    }
+
+    /// Move the highlight, wrapping like the `/` menu's.
+    pub fn sessions_move(&mut self, delta: isize) {
+        let len = self.sessions_filtered().len();
+        if len == 0 {
+            return;
+        }
+        let current = self.sessions_selected();
+        let len_i = isize::try_from(len).unwrap_or(1);
+        let next = (isize::try_from(current).unwrap_or(0) + delta).rem_euclid(len_i);
+        if let Some(sessions) = self.sessions.as_mut() {
+            sessions.selected = usize::try_from(next).unwrap_or(0);
+        }
+    }
+
+    /// `Enter`: the session to switch to, or a refusal recorded in the
+    /// transcript and no id, when a turn is running (#105's design point 4 —
+    /// switching mid-turn is refused with a stated reason, not a silent
+    /// abandon). The switcher stays open either way; the caller closes it
+    /// once [`Self::load_session`] actually runs.
+    pub fn sessions_confirm(&mut self) -> Option<String> {
+        let id = self
+            .sessions_filtered()
+            .get(self.sessions_selected())
+            .map(|e| e.id.clone())?;
+        if self.turn() == Turn::Idle {
+            Some(id)
+        } else {
+            self.record_status(
+                "cannot switch sessions while a turn is running — cancel it first \
+                 (Ctrl+C), or wait for it to finish"
+                    .to_string(),
+            );
+            None
+        }
+    }
+
+    /// `session/get` answered (or `/new`'s `session/create` did, with an
+    /// empty transcript): replace this client's view with what the core holds
+    /// for `id` — a reload, never a stash (#105's design point 3). The
+    /// switcher closes, whether or not it was the one that asked.
+    pub fn load_session(&mut self, id: String, messages: Vec<SessionMessage>) {
+        self.session = id;
+        self.transcript = messages
+            .into_iter()
+            .filter_map(session_message_entry)
+            .collect();
+        self.cursor = None;
+        self.sessions = None;
+    }
+
+    /// `/new`: ask the loop for a fresh `session/create`.
+    pub const fn request_new_session(&mut self) {
+        if !self.dialog_open {
+            self.new_session_requested = true;
+        }
+    }
+
+    /// Take the pending `session/create` ask, if there is one. Drains, the
+    /// same contract as [`Self::take_cancel_request`].
+    pub const fn take_new_session_request(&mut self) -> bool {
+        let asked = self.new_session_requested;
+        self.new_session_requested = false;
+        asked
+    }
+
+    // ---- help overlay (#105) ----
+
+    /// Whether the overlay is on screen.
+    #[must_use]
+    pub const fn help_open(&self) -> bool {
+        self.help.is_some()
+    }
+
+    /// `?` on an empty composer, or `/help`: open or close it. A no-op while
+    /// the ask dialog is open, for the same reason [`Self::request_sessions`]
+    /// is.
+    pub fn toggle_help(&mut self) {
+        if self.dialog_open {
+            return;
+        }
+        self.help = if self.help.is_some() {
+            None
+        } else {
+            Some(Help::default())
+        };
+    }
+
+    /// `Esc`/`?`: close it.
+    pub const fn close_help(&mut self) {
+        self.help = None;
+    }
+
+    /// How far the overlay has scrolled. The renderer clamps this against
+    /// what it actually drew — this model has no width or height to know the
+    /// bound itself.
+    #[must_use]
+    pub fn help_scroll(&self) -> usize {
+        self.help.as_ref().map_or(0, |h| h.scroll)
+    }
+
+    /// Scroll by `delta` rows, negative moving up. Saturates at zero rather
+    /// than wrapping — scrolling past the top is a no-op, not a jump to the
+    /// bottom.
+    pub const fn help_scroll_by(&mut self, delta: isize) {
+        if let Some(help) = self.help.as_mut() {
+            help.scroll = help.scroll.saturating_add_signed(delta);
+        }
+    }
+
+    // ---- sidebar-in-a-dialog (#105) ----
+
+    /// Whether the sidebar's dialog is on screen.
+    #[must_use]
+    pub const fn sidebar_dialog_open(&self) -> bool {
+        self.sidebar_dialog
+    }
+
+    /// `Ctrl+B`, at a width where the sidebar has no permanent pane. A no-op
+    /// while the ask dialog is open, for the same reason
+    /// [`Self::request_sessions`] is — and the caller (`tui.rs`) is what
+    /// refuses this at a width where the sidebar is already visible, since
+    /// only it knows the last frame's layout.
+    pub const fn toggle_sidebar_dialog(&mut self) {
+        if self.dialog_open {
+            return;
+        }
+        self.sidebar_dialog = !self.sidebar_dialog;
+    }
+
+    /// `Esc`/`Ctrl+B`: close it.
+    pub const fn close_sidebar_dialog(&mut self) {
+        self.sidebar_dialog = false;
+    }
+
+    // ---- quit confirm (#105) ----
+
+    /// `Ctrl+D`, `Ctrl+C` on an empty composer while `Idle`, or `/quit`: ask
+    /// before leaving, unless nothing has happened this run — confirming an
+    /// empty session is friction with no purpose. Cancel is the initial
+    /// selection either way.
+    pub fn request_quit(&mut self) {
+        if !self.has_sent_anything() {
+            self.should_quit = true;
+            return;
+        }
+        if self.dialog_open {
+            // The ask modal owns every key; a quit confirm under it would be
+            // unreachable, the same reason `request_sessions` refuses too.
+            return;
+        }
+        let mid_turn = self.turn() != Turn::Idle;
+        self.quit = Some(QuitConfirm {
+            quit_selected: false,
+            mid_turn,
+            turn_lost: mid_turn && self.stdio,
+            escalate: false,
+        });
+    }
+
+    /// Whether the quit confirm is on screen.
+    #[must_use]
+    pub const fn quit_confirm_open(&self) -> bool {
+        self.quit.is_some()
+    }
+
+    /// `Esc`: close without quitting.
+    pub const fn quit_confirm_close(&mut self) {
+        self.quit = None;
+    }
+
+    /// What the dialog needs to render: `(mid_turn, turn_lost, escalate,
+    /// quit_selected)`.
+    #[must_use]
+    pub fn quit_confirm(&self) -> Option<(bool, bool, bool, bool)> {
+        self.quit
+            .map(|q| (q.mid_turn, q.turn_lost, q.escalate, q.quit_selected))
+    }
+
+    /// `↑`/`↓`/`Tab`: there are only two options, so this toggles rather than
+    /// moving an index.
+    pub const fn quit_confirm_move(&mut self) {
+        if let Some(q) = self.quit.as_mut() {
+            q.quit_selected = !q.quit_selected;
+        }
+    }
+
+    /// `Enter`. Cancel closes outright. Quit needs a second, explicit
+    /// confirmation when a turn is running (#105's design point 5) — the
+    /// first `Enter` on `quit` there only sets [`QuitConfirm::escalate`] and
+    /// re-asks; the second actually quits. With no turn running, one `Enter`
+    /// on `quit` is enough.
+    pub const fn quit_confirm_accept(&mut self) {
+        let Some(q) = self.quit.as_mut() else {
+            return;
+        };
+        if !q.quit_selected {
+            self.quit = None;
+            return;
+        }
+        if q.mid_turn && !q.escalate {
+            q.escalate = true;
+            return;
+        }
+        self.should_quit = true;
+        self.quit = None;
     }
 
     fn record(&mut self, who: Who, text: impl Into<String>) {
@@ -1073,6 +1510,42 @@ impl App {
             who,
             text: text.into(),
         });
+    }
+}
+
+/// One `session/get` message, as a transcript [`Entry`] — or `None` for
+/// `system`, which is skipped: the model's own instructions are not something
+/// a user typed or said (#105's design point 3).
+fn session_message_entry(message: SessionMessage) -> Option<Entry> {
+    match message.role.as_str() {
+        "user" => Some(Entry::Message {
+            who: Who::You,
+            text: message.content,
+        }),
+        "assistant" => Some(Entry::Message {
+            who: Who::Klod,
+            text: message.content,
+        }),
+        "tool" => {
+            // `session/get` carries no tool name and no `failed` flag — only
+            // `session/message`'s live notifications do (#106 added `seq`,
+            // not either of those). The call id is what is actually known, so
+            // it stands in for the name; a result is assumed to have
+            // succeeded absent any way to tell otherwise, which is the same
+            // default a core older than #162 already rendered.
+            let id = message.tool_call_id.unwrap_or_default();
+            Some(Entry::Tool(ToolBlock {
+                name: id.clone(),
+                id,
+                arguments: None,
+                status: ToolStatus::Done {
+                    content: message.content,
+                    failed: false,
+                },
+                expanded: false,
+            }))
+        }
+        _ => None,
     }
 }
 
@@ -1596,6 +2069,220 @@ mod tests {
             },
             "a finished block is not retroactively interrupted"
         );
+    }
+
+    use super::{SessionEntry, SessionMessage};
+
+    fn entries(ids: &[&str]) -> Vec<SessionEntry> {
+        ids.iter()
+            .map(|id| SessionEntry {
+                id: (*id).to_string(),
+                preview: format!("preview of {id}"),
+            })
+            .collect()
+    }
+
+    /// Acceptance: switching mid-turn is refused, with a reason, and the turn
+    /// is unaffected.
+    #[test]
+    fn switching_mid_turn_is_refused_and_the_turn_is_unaffected() {
+        let mut app = App::default();
+        app.set_session("cli");
+        app.open_sessions(entries(&["cli", "other"]));
+        app.sessions_move(1); // "other"
+        app.begin_turn();
+
+        assert_eq!(
+            app.sessions_confirm(),
+            None,
+            "a running turn must refuse the switch"
+        );
+        assert_eq!(app.turn(), Turn::Streaming, "the turn is unaffected");
+        assert_eq!(app.session(), "cli", "the session did not change");
+        assert!(
+            app.sessions_open(),
+            "the switcher stays open — it was not asked to close"
+        );
+        assert!(
+            format!("{:?}", app.transcript).contains("running"),
+            "the refusal must say why"
+        );
+
+        // Idle, the same choice is accepted.
+        app.end_turn();
+        assert_eq!(app.sessions_confirm(), Some("other".to_string()));
+    }
+
+    /// The switcher filters both id and preview, case-insensitively, and the
+    /// current session is inspectable so the caller can mark it.
+    #[test]
+    fn the_switcher_filters_by_id_or_preview() {
+        let mut app = App::default();
+        app.open_sessions(vec![
+            SessionEntry {
+                id: "alpha".to_string(),
+                preview: "hello world".to_string(),
+            },
+            SessionEntry {
+                id: "beta".to_string(),
+                preview: "nothing else".to_string(),
+            },
+        ]);
+        app.sessions_push_char('W');
+        app.sessions_push_char('o');
+        let ids: Vec<&str> = app
+            .sessions_filtered()
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["alpha"], "matched on the preview, not the id");
+
+        app.sessions_backspace();
+        app.sessions_backspace();
+        assert_eq!(
+            app.sessions_filtered().len(),
+            2,
+            "an empty filter shows all"
+        );
+    }
+
+    /// #105's design point 3: the roles map as documented, and `system` is
+    /// skipped rather than becoming an empty block.
+    #[test]
+    fn load_session_maps_roles_and_skips_system() {
+        let mut app = App::default();
+        app.load_session(
+            "s2".to_string(),
+            vec![
+                SessionMessage {
+                    role: "system".to_string(),
+                    content: "you are an agent".to_string(),
+                    tool_call_id: None,
+                },
+                SessionMessage {
+                    role: "user".to_string(),
+                    content: "hello".to_string(),
+                    tool_call_id: None,
+                },
+                SessionMessage {
+                    role: "tool".to_string(),
+                    content: "file contents".to_string(),
+                    tool_call_id: Some("call-1".to_string()),
+                },
+                SessionMessage {
+                    role: "assistant".to_string(),
+                    content: "done".to_string(),
+                    tool_call_id: None,
+                },
+            ],
+        );
+
+        assert_eq!(app.session(), "s2");
+        assert_eq!(
+            app.transcript.len(),
+            3,
+            "the system message must not become an empty block: {:?}",
+            app.transcript
+        );
+        assert_eq!(
+            app.transcript[0],
+            Entry::Message {
+                who: Who::You,
+                text: "hello".to_string()
+            }
+        );
+        match &app.transcript[1] {
+            Entry::Tool(block) => {
+                assert_eq!(block.id, "call-1");
+                assert_eq!(
+                    block.status,
+                    ToolStatus::Done {
+                        content: "file contents".to_string(),
+                        failed: false
+                    }
+                );
+            }
+            other @ Entry::Message { .. } => panic!("expected a tool block, got {other:?}"),
+        }
+        assert_eq!(
+            app.transcript[2],
+            Entry::Message {
+                who: Who::Klod,
+                text: "done".to_string()
+            }
+        );
+    }
+
+    /// The sidebar dialog toggles like the help overlay, and for the same
+    /// reason declines while the ask dialog is open.
+    #[test]
+    fn the_sidebar_dialog_toggles_and_declines_under_the_ask_dialog() {
+        let mut app = App::default();
+        app.toggle_sidebar_dialog();
+        assert!(app.sidebar_dialog_open());
+        app.toggle_sidebar_dialog();
+        assert!(!app.sidebar_dialog_open());
+
+        app.ask(Prompt {
+            session: "s1".to_string(),
+            question: "q".to_string(),
+            options: vec!["y".to_string()],
+            default: "y".to_string(),
+        });
+        app.toggle_sidebar_dialog();
+        assert!(
+            !app.sidebar_dialog_open(),
+            "the ask dialog owns every key; a second dialog under it is unreachable"
+        );
+    }
+
+    /// Acceptance: the quit confirm is skipped when nothing has happened, and
+    /// shown otherwise with cancel selected.
+    #[test]
+    fn the_quit_confirm_is_skipped_on_an_empty_session_and_shown_otherwise() {
+        let mut app = App::default();
+        app.request_quit();
+        assert!(
+            app.should_quit,
+            "nothing happened yet — confirming has no purpose"
+        );
+
+        let mut used = App::default();
+        used.take_submission(); // whitespace-only; still exercises the path
+        used.push_char('h');
+        used.take_submission();
+        used.should_quit = false;
+        used.request_quit();
+        assert!(!used.should_quit, "a session with history is not skipped");
+        assert!(used.quit_confirm_open());
+        let (mid_turn, _, _, quit_selected) = used.quit_confirm().expect("open");
+        assert!(!mid_turn);
+        assert!(!quit_selected, "cancel is selected by default");
+    }
+
+    /// Acceptance: quitting mid-turn requires a second, explicit confirmation.
+    #[test]
+    fn quitting_mid_turn_requires_a_second_confirmation() {
+        let mut app = App::default();
+        app.push_char('h');
+        app.take_submission();
+        app.begin_turn();
+        app.request_quit();
+        assert!(app.quit_confirm_open());
+
+        app.quit_confirm_move(); // select "quit"
+        app.quit_confirm_accept();
+        assert!(
+            !app.should_quit,
+            "the first confirmation mid-turn must not quit outright"
+        );
+        assert!(
+            app.quit_confirm_open(),
+            "the dialog stays open asking to confirm again"
+        );
+
+        app.quit_confirm_accept();
+        assert!(app.should_quit, "the second confirmation quits");
     }
 
     /// Two calls in flight resolve to their own blocks, which is the whole

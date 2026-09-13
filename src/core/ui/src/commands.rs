@@ -8,20 +8,13 @@
 //!
 //! # Present and honest beats absent
 //!
-//! Three of the six commands cannot act yet. They are here anyway, each carrying
-//! the reason, because **absent is not a state a user can tell from never
-//! planned**. A `/` menu that silently lacks `/cancel` teaches someone that
-//! cancelling is not a thing; one that lists it and says what it is waiting on
-//! teaches them when to look again.
-//!
-//! What each is waiting on is a fact about this crate rather than a guess.
-//! `/sessions` and `/help` wait on dialogs 19h has not built
-//! ([#105](https://github.com/PromptPasture/jan-klod/issues/105)). `/new` is a
-//! narrower case: `Transport` can send `session/create` since
-//! [#157](https://github.com/PromptPasture/jan-klod/issues/157), but *switching
-//! to* the created session is the session switcher's ownership change, which is
-//! also #105. Marking one `Ready` before its wiring exists would be exactly the
-//! lie this module is built to avoid: a command that claims to act and does not.
+//! A command that cannot act yet is still listed, carrying the reason, because
+//! **absent is not a state a user can tell from never planned**. A `/` menu
+//! that silently lacks `/cancel` teaches someone that cancelling is not a
+//! thing; one that lists it and says what it is waiting on teaches them when to
+//! look again. Every command here now acts — 19h (#105) wired the last three,
+//! `/new`, `/sessions` and `/help` — but the mechanism stays, ready for the
+//! next command that has to wait on something.
 //!
 //! # `Ready` means "acts", not "needs no transport"
 //!
@@ -73,22 +66,23 @@ pub const COMMANDS: [Command; 6] = [
     Command {
         name: "/new",
         summary: "start a new session",
-        // The transport can send `session/create` (#157); switching to the
-        // created session needs the session-owner change 19h's switcher makes,
-        // #105.
-        availability: Availability::Pending(
-            "the menu does not switch to a created session yet — see #105",
-        ),
+        // `session/create` (#157) plus the session-owner change 19h's
+        // switcher made (#105): `App::request_new_session` asks, the loop
+        // sends it and switches with `App::load_session`.
+        availability: Availability::Ready,
     },
     Command {
         name: "/sessions",
         summary: "switch session",
-        availability: Availability::Pending("the session switcher is 19h (#105)"),
+        // 19h's switcher (#105): `App::request_sessions` asks for a fresh
+        // `session/list`, the loop sends it and `App::open_sessions` shows it.
+        availability: Availability::Ready,
     },
     Command {
         name: "/help",
         summary: "show the key bindings",
-        availability: Availability::Pending("the help overlay is 19h (#105)"),
+        // 19h's overlay (#105): `App::toggle_help` needs no transport at all.
+        availability: Availability::Ready,
     },
     Command {
         name: "/quit",
@@ -207,7 +201,7 @@ mod tests {
             .collect();
         assert_eq!(
             ready,
-            vec!["/newline", "/cancel", "/quit"],
+            vec!["/newline", "/cancel", "/new", "/sessions", "/help", "/quit"],
             "a command became ready or stopped being so — say which, and why, \
              rather than editing this list to match"
         );

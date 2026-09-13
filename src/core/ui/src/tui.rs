@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use jan_klod::app::{App, Prompt, ToastKind, Turn};
+use jan_klod::app::{App, Prompt, SessionEntry, SessionMessage, ToastKind, Turn};
 use jan_klod::blocks;
 use jan_klod::commands::Availability;
 use jan_klod::keymap::{self, Context};
@@ -62,6 +62,14 @@ fn event_loop(
     theme: Theme,
 ) -> std::io::Result<()> {
     let mut app = App::default();
+    // The session id is owned by `App` and mutable from here on (#105): a
+    // switch or `/new` replaces it via `App::load_session`, rather than this
+    // loop holding a `&str` for its whole lifetime.
+    app.set_session(session.to_string());
+    // Read once: which kind of transport this run has never changes, and it is
+    // what the quit confirm's wording depends on (#105) — over stdio the
+    // spawned gateway dies with this client, over `--addr` it does not.
+    app.set_stdio(transport.is_stdio());
     let mut view = Viewport::default();
     // What the last frame drew. The scroll keys need the transcript's line count
     // and the pane's height, and only `render` knows either — it is the thing
@@ -71,12 +79,13 @@ fn event_loop(
     // list that moved because something called `chdir` would be worse than one
     // that is simply wrong about a directory that no longer exists.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    // Resolved once: the header and the sidebar's SESSION section show these
-    // for the life of the run, and neither polls for them — they were true at
-    // connect time and nothing here changes them.
+    // Resolved once: the header and the sidebar's SESSION section show `cwd`
+    // and `described` for the life of the run, and neither polls for them —
+    // they were true at connect time and nothing here changes them. The
+    // session id is *not* here any more (#105): it can change, so callers read
+    // it from `app.session()` instead.
     let described = transport.describe();
     let meta = Meta {
-        session,
         described: &described,
         cwd: &cwd,
     };
@@ -112,16 +121,10 @@ fn event_loop(
             }
         }
 
-        // One place sends a cancel, whoever asked for it — `Ctrl+C` or the `/`
-        // menu. `App::cancel` raises the ask and refuses to raise it twice, so
-        // this cannot send two to a core that is already stopping, and the menu
-        // gets to act without `App` ever learning what a transport is.
-        if app.take_cancel_request() {
-            match transport.cancel(session) {
-                Ok(()) => app.record_status("cancelling — the answer so far is kept"),
-                Err(err) => app.record_status(format!("cancel could not be sent: {err}")),
-            }
-        }
+        // Every ask `App` may have raised since the last frame — a cancel, a
+        // fresh `session/list`, a fresh `session/create` — sent by the one
+        // thing that holds a transport.
+        drain_transport_requests(&mut app, transport);
 
         terminal.draw(|frame| render(frame, &app, theme, &mut view, &mut pane, tick, &meta))?;
 
@@ -158,14 +161,29 @@ fn event_loop(
             app.refresh_completion(&cwd);
             continue;
         }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => app.quit(),
-            // `Ctrl+C` stops the running turn. *How* is the transport's
-            // business — a `turn/cancel` over stdio, a stream teardown over
-            // REST — and this does not know which it got.
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                request_cancel(&mut app);
+            // `Ctrl+D`, or `Ctrl+C` on an empty composer while `Idle` (#105):
+            // ask before leaving rather than cancelling nothing. Any other
+            // `Ctrl+C` still stops the running turn — *how* is the
+            // transport's business, a `turn/cancel` over stdio, a stream
+            // teardown over REST — and this does not know which it got.
+            KeyCode::Char('d') if ctrl => app.request_quit(),
+            KeyCode::Char('c') if ctrl => {
+                if app.turn() == Turn::Idle && app.input().is_empty() {
+                    app.request_quit();
+                } else {
+                    request_cancel(&mut app);
+                }
             }
+            // `Ctrl+S`: ask for a fresh `session/list`, drained above.
+            KeyCode::Char('s') if ctrl => app.request_sessions(),
+            // The switcher's `Enter` needs `transport.session_get`, which
+            // `App` cannot hold — handled here rather than through
+            // `enter_means`, which is the running turn's state machine and
+            // knows nothing about the switcher.
+            KeyCode::Enter if app.sessions_open() => switch_session(&mut app, transport),
             KeyCode::Enter => match enter_means(&app) {
                 // A pending confirmation is answered even though a turn is
                 // running — that turn is precisely what is blocked waiting for
@@ -187,12 +205,15 @@ fn event_loop(
                 // it again rather than answer blind. The user must see the
                 // options before `Enter` can mean anything.
                 Enter::ReopenPrompt => app.open_dialog(),
-                Enter::Steer => steer(transport.as_ref(), session, &mut app),
+                Enter::Steer => {
+                    let session = app.session().to_string();
+                    steer(transport.as_ref(), &session, &mut app);
+                }
                 Enter::Send if rx.is_none() => {
                     if let Some(message) = app.take_submission() {
                         app.begin_turn();
                         let transport = Arc::clone(transport);
-                        let session = session.to_string();
+                        let session = app.session().to_string();
                         let (tx, new_rx) = mpsc::channel();
                         thread::spawn(move || {
                             let result = transport.stream_turn(&session, &message, &mut |event| {
@@ -211,6 +232,84 @@ fn event_loop(
         }
     }
     Ok(())
+}
+
+/// Every ask `App` may have raised since the last frame, sent to `transport`
+/// (#105). One function because all three share a shape: a model that holds
+/// no transport raised an intent, and this loop — the only thing that holds
+/// one — is what performs it and reports back into the model.
+///
+/// The session switcher's own `session/get` is not here: unlike these three,
+/// it is answered from a specific keystroke (`Enter` on a highlighted entry),
+/// not drained on every frame — see [`switch_session`].
+fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
+    // `Ctrl+C` or the `/` menu. `App::cancel` raises the ask and refuses to
+    // raise it twice, so this cannot send two to a core that is already
+    // stopping, and the menu gets to act without `App` ever learning what a
+    // transport is.
+    if app.take_cancel_request() {
+        match transport.cancel(app.session()) {
+            Ok(()) => app.record_status("cancelling — the answer so far is kept"),
+            Err(err) => app.record_status(format!("cancel could not be sent: {err}")),
+        }
+    }
+
+    // `Ctrl+S`/`/sessions`. Safe here: neither is reachable while a turn is
+    // streaming and holding the reader/live socket —
+    // `App::request_sessions` declines while the ask dialog is up, and the
+    // switcher's own `Enter` (`switch_session`) is the only thing that can
+    // fire mid-turn, which `App::sessions_confirm` itself refuses.
+    if app.take_sessions_request() {
+        match transport.session_list() {
+            Ok(sessions) => app.open_sessions(
+                sessions
+                    .into_iter()
+                    .map(|s| SessionEntry {
+                        id: s.id,
+                        preview: s.preview,
+                    })
+                    .collect(),
+            ),
+            Err(err) => app.record_error(format!("session/list: {err}")),
+        }
+    }
+
+    // `/new`. `session/create` needs no id and cannot race a running turn's
+    // reader for the same reason.
+    if app.take_new_session_request() {
+        match transport.create_session() {
+            Ok(id) => app.load_session(id, Vec::new()),
+            Err(err) => app.record_error(format!("session/create: {err}")),
+        }
+    }
+}
+
+/// The session switcher's `Enter`: `App::sessions_confirm` decides whether the
+/// switch is allowed at all (refusing mid-turn, #105's design point 4); once
+/// it hands back an id, `transport.session_get` is the one call this loop
+/// makes synchronously rather than on a thread, exactly as
+/// `Transport::session_get`'s docs require — nothing else can be reading the
+/// same pipe while a switch is in progress, because a switch only ever starts
+/// when [`App::turn`] is `Idle`.
+fn switch_session(app: &mut App, transport: &Arc<dyn Transport>) {
+    let Some(id) = app.sessions_confirm() else {
+        return;
+    };
+    match transport.session_get(&id) {
+        Ok(result) => {
+            let messages = result
+                .messages
+                .into_iter()
+                .map(|m| SessionMessage {
+                    role: m.role,
+                    content: m.content,
+                    tool_call_id: m.tool_call_id,
+                })
+                .collect();
+            app.load_session(result.id, messages);
+        }
+        Err(err) => app.record_error(format!("session/get: {err}")),
+    }
 }
 
 /// What `Enter` does right now (#159).
@@ -338,6 +437,12 @@ struct Pane {
     /// gives up two more to its caret glyph. `span_of` has to be asked in the
     /// same width the frame was drawn in or it measures a layout nobody saw.
     transcript_width: usize,
+    /// Whether the last frame's `layout::regions` hid the sidebar (#105:
+    /// "sidebar-in-a-dialog"). `Ctrl+B` only opens the sidebar as a dialog
+    /// when this is true — at a width where the sidebar already has a
+    /// permanent pane, the key would open a second copy of what is already on
+    /// screen, which is the "pointless" case the Scope names.
+    sidebar_hidden: bool,
 }
 
 /// Keys that only move a caret or a viewport.
@@ -355,11 +460,10 @@ fn edit_or_scroll(
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    // The ask dialog, first and ahead of everything else (#103): while it is
-    // open it owns every key that would otherwise land in the composer or the
-    // menus below, because a digit meant to pick an option must not be typed
-    // into a message instead.
-    if dialog_keys(key, app) {
+    // Every dialog, and the two shortcuts that open one, ahead of everything
+    // below (#103, #105): while one is open it owns every key that would
+    // otherwise land in the composer or the menus below it.
+    if dialog_priority_keys(key, app, pane) {
         return true;
     }
     // `@` completion first: the two lists are mutually exclusive — one needs a
@@ -472,6 +576,63 @@ fn edit_or_scroll(
     true
 }
 
+/// Every dialog [`edit_or_scroll`] checks ahead of the composer and the `/`/`@`
+/// lists, plus the two shortcuts that open one from nowhere (#103, #105).
+///
+/// The ask dialog goes first: while it is open it owns every key, because a
+/// digit meant to pick an option must not be typed into a message instead.
+/// The quit confirm, the session switcher, the help overlay and the sidebar
+/// dialog follow — `App` itself refuses to open any of the four while the ask
+/// dialog is up (`request_quit`/`request_sessions`/`toggle_help`/
+/// `toggle_sidebar_dialog` each check `dialog_open`), so at most one of them
+/// is ever open at once. `?` and `Ctrl+B` are the two keys that open a dialog
+/// with no dialog already open to have owned them — checked last, so a `?`
+/// typed while filtering the switcher, say, still reaches its own `Char` arm
+/// rather than this one.
+fn dialog_priority_keys(
+    key: &ratatui::crossterm::event::KeyEvent,
+    app: &mut App,
+    pane: Pane,
+) -> bool {
+    if dialog_keys(key, app) {
+        return true;
+    }
+    if quit_confirm_keys(key, app) {
+        return true;
+    }
+    if sessions_keys(key, app) {
+        return true;
+    }
+    if help_keys(key, app) {
+        return true;
+    }
+    if sidebar_dialog_keys(key, app) {
+        return true;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    // `?` on an empty composer opens the help overlay; anywhere else it is
+    // punctuation, not a request for help.
+    if key.code == KeyCode::Char('?')
+        && !ctrl
+        && !key.modifiers.contains(KeyModifiers::ALT)
+        && app.composer.is_empty()
+    {
+        app.toggle_help();
+        return true;
+    }
+    // `Ctrl+B`: the sidebar as a dialog, only where 19g's layout left it with
+    // no permanent pane — `pane.sidebar_hidden` is the last frame's own
+    // answer to that, so this needs no copy of `layout::regions`' width
+    // table. At a width with a permanent sidebar the key is deliberately
+    // pointless: opening a second copy of what is already on screen would not
+    // be "reachable", it would be redundant.
+    if key.code == KeyCode::Char('b') && ctrl && pane.sidebar_hidden {
+        app.toggle_sidebar_dialog();
+        return true;
+    }
+    false
+}
+
 /// Keys the ask dialog owns while it is open (#103).
 ///
 /// Returns whether the key was consumed, the same contract as
@@ -523,6 +684,93 @@ fn dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool
         _ => {}
     }
     list_mode
+}
+
+/// Keys the quit confirm owns while it is open (#105). Consumes everything —
+/// there is no free text to type here, only cancel or quit.
+const fn quit_confirm_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
+    if !app.quit_confirm_open() {
+        return false;
+    }
+    match key.code {
+        KeyCode::Esc => app.quit_confirm_close(),
+        KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+            app.quit_confirm_move();
+        }
+        KeyCode::Enter => app.quit_confirm_accept(),
+        _ => {}
+    }
+    true
+}
+
+/// Keys the session switcher owns while it is open (#105). `Esc` closes it;
+/// `↑`/`↓` move the highlight; typing (anything not a control chord) filters.
+/// **`Enter` is not consumed here** — it falls through to the event loop's own
+/// match, which is what actually calls `Transport::session_get` and cannot be
+/// reached from this function (it holds no transport), the same reason the ask
+/// dialog's [`dialog_keys`] leaves `Enter` alone.
+fn sessions_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
+    if !app.sessions_open() {
+        return false;
+    }
+    match key.code {
+        KeyCode::Esc => {
+            app.sessions_close();
+            true
+        }
+        KeyCode::Up => {
+            app.sessions_move(-1);
+            true
+        }
+        KeyCode::Down => {
+            app.sessions_move(1);
+            true
+        }
+        KeyCode::Backspace => {
+            app.sessions_backspace();
+            true
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.sessions_push_char(c);
+            true
+        }
+        KeyCode::Enter => false,
+        _ => true,
+    }
+}
+
+/// Keys the help overlay owns while it is open (#105). `Esc`/`?` closes it;
+/// `↑`/`↓`/`PageUp`/`PageDown` scroll it.
+const fn help_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
+    if !app.help_open() {
+        return false;
+    }
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('?') => app.close_help(),
+        KeyCode::Up => app.help_scroll_by(-1),
+        KeyCode::Down => app.help_scroll_by(1),
+        KeyCode::PageUp => app.help_scroll_by(-10),
+        KeyCode::PageDown => app.help_scroll_by(10),
+        _ => {}
+    }
+    true
+}
+
+/// Keys the sidebar's dialog owns while it is open (#105). `Esc`/`Ctrl+B`
+/// closes it; it has nothing else to do with a key, since it is a read-only
+/// projection the same way the permanent sidebar pane is.
+const fn sidebar_dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
+    if !app.sidebar_dialog_open() {
+        return false;
+    }
+    match key.code {
+        KeyCode::Esc => app.close_sidebar_dialog(),
+        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.close_sidebar_dialog();
+        }
+        _ => {}
+    }
+    true
 }
 
 /// Scroll so the selected block is on screen, if there is one.
@@ -746,12 +994,12 @@ fn spinner_frame(theme: Theme, turn: Turn, tick: usize) -> Option<&'static str> 
     }
 }
 
-/// What the frame needs to know that is fixed for the whole run: the session
-/// this loop is driving, how it reached the core, and where it started.
-/// Resolved once in [`event_loop`] and handed in rather than re-read, because
-/// none of the three changes while the client runs.
+/// What the frame needs to know that is fixed for the whole run: how it
+/// reached the core, and where it started. Resolved once in [`event_loop`]
+/// and handed in rather than re-read, because neither changes while the
+/// client runs — unlike the session id (#105), which is `app.session()` now
+/// precisely because it can.
 struct Meta<'a> {
-    session: &'a str,
     described: &'a str,
     cwd: &'a std::path::Path,
 }
@@ -831,6 +1079,7 @@ fn render(
         height: inner_height,
         composer_width,
         transcript_width: inner_width,
+        sidebar_hidden: regions.sidebar.is_none(),
     };
 
     let offset = u16::try_from(view.offset()).unwrap_or(u16::MAX);
@@ -891,8 +1140,15 @@ fn render(
     render_menu(frame, app, theme, input_area);
     render_completion(frame, app, theme, input_area);
     // Last, so it draws over everything above — the transcript keeps streaming
-    // behind it and the header keeps timing, exactly as #103 asks.
+    // behind it and the header keeps timing, exactly as #103 asks. At most one
+    // of the four is ever open (`App` enforces that — see `edit_or_scroll`'s
+    // ordering comment), so which is drawn last among these four does not
+    // matter; all four are tried because each is a no-op when it is not.
     render_prompt_dialog(frame, app, theme);
+    render_sessions_dialog(frame, app, theme);
+    render_help(frame, app, theme);
+    render_sidebar_dialog(frame, app, meta, theme);
+    render_quit_confirm(frame, app, theme);
 }
 
 /// The header, one row (#104): a short wordmark, the session id, how the
@@ -912,9 +1168,13 @@ fn render_header(
 ) {
     let Some(area) = area else { return };
     let left = if collapsed {
-        format!(" jan-klod · {} · {} ", meta.session, app.connection_state())
+        format!(
+            " jan-klod · {} · {} ",
+            app.session(),
+            app.connection_state()
+        )
     } else {
-        format!(" jan-klod · {} · {} ", meta.session, meta.described)
+        format!(" jan-klod · {} · {} ", app.session(), meta.described)
     };
     let mut block = Block::default().title(Span::styled(left, Style::default().fg(theme.body())));
     if let Some(frame_glyph) = spinner_frame(theme, app.turn(), tick) {
@@ -971,7 +1231,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: Theme, col
 /// own job is placement, the same split every other pane here uses.
 fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, meta: &Meta<'_>, theme: Theme) {
     let info = SessionInfo {
-        id: meta.session,
+        id: app.session(),
         via: meta.described,
         cwd: meta.cwd,
     };
@@ -982,6 +1242,24 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, meta: &Meta<'_>, the
             .block(Block::bordered().border_style(Style::default().fg(theme.border_idle()))),
         area,
     );
+}
+
+/// The sidebar as a dialog (#105's "sidebar-in-a-dialog"): the same
+/// [`sidebar::view`] projection [`render_sidebar`] draws into its permanent
+/// pane, framed by [`render_modal`] instead — reachable at a width where 19g's
+/// layout leaves the sidebar with no pane of its own.
+fn render_sidebar_dialog(frame: &mut Frame, app: &App, meta: &Meta<'_>, theme: Theme) {
+    if !app.sidebar_dialog_open() {
+        return;
+    }
+    let info = SessionInfo {
+        id: app.session(),
+        via: meta.described,
+        cwd: meta.cwd,
+    };
+    let inner_width = usize::from(modal_width(frame.area().width)).saturating_sub(4);
+    let lines = sidebar::view(app, info, inner_width, theme);
+    render_modal(frame, " sidebar ", lines, theme, 0);
 }
 
 /// #104's Acceptance: a render below the floor a normal frame needs draws
@@ -999,16 +1277,68 @@ fn render_too_small(frame: &mut Frame, area: Rect, theme: Theme) {
     );
 }
 
-/// The ask dialog (#103): a centred modal over the transcript, on `raised()`
-/// with a `focus()` border — the one place in this client where a rendering
-/// mistake has a security consequence, so it gets its own surface rather than
-/// sharing the transcript's or the composer's.
+/// The width of any modal drawn by [`render_modal`] — roughly two thirds of
+/// the frame, capped so a huge terminal does not stretch it edge to edge, and
+/// floored so a tiny one still gets something usable rather than a sliver.
+/// Shared by every dialog's content function and [`render_modal`] itself, so
+/// the width a dialog wraps its lines to is the width it is actually drawn
+/// at.
+fn modal_width(area_width: u16) -> u16 {
+    ((area_width * 2) / 3).clamp(24, area_width.saturating_sub(4).max(24))
+}
+
+/// The one modal-dialog primitive (#105): centred, on `raised()` with a
+/// `focus()` border — the one place in this client where a rendering mistake
+/// has a security consequence (the ask dialog, #103), so every dialog gets
+/// this surface rather than drawing its own. The ask dialog, the session
+/// switcher, the help overlay and the quit confirm all go through this one
+/// function; `tui::every_dialog_shares_one_frame_implementation` is what
+/// checks a fifth cannot draw its own and drift from the rest, the way 19a
+/// checks for stray `Color` literals.
 ///
-/// Placement and colour live here; the content is
-/// [`blocks::prompt_dialog`], a pure function of the model — the same split
-/// `transcript`/`render` already draws, and the reason the acceptance line
-/// "asserted on the rendered cells, not by inspection" has something to test
-/// without a terminal.
+/// Placement and colour live here; each dialog's content is a pure function
+/// of the model in `blocks` — the same split `transcript`/`render` already
+/// draws, and the reason the acceptance line "asserted on the rendered cells,
+/// not by inspection" has something to test without a terminal.
+///
+/// `scroll` is rows, not cells — only the help overlay uses a nonzero value,
+/// since it alone can exceed the modal's height.
+fn render_modal(
+    frame: &mut Frame,
+    title: &str,
+    lines: Vec<Line<'static>>,
+    theme: Theme,
+    scroll: u16,
+) {
+    let area = frame.area();
+    let width = modal_width(area.width);
+    let height = u16::try_from(lines.len() + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height.saturating_sub(2));
+    let modal_area = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+
+    frame.render_widget(Clear, modal_area);
+    let surface = Style::default().bg(theme.raised()).fg(theme.body());
+    let block = Block::bordered()
+        .title(title.to_string())
+        .border_style(Style::default().fg(theme.focus()).bg(theme.raised()))
+        .style(surface);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .style(surface)
+            .scroll((scroll, 0)),
+        modal_area,
+    );
+}
+
+/// The ask dialog (#103): content from [`blocks::prompt_dialog`], framed by
+/// [`render_modal`].
 fn render_prompt_dialog(frame: &mut Frame, app: &App, theme: Theme) {
     if !app.dialog_open() {
         return;
@@ -1016,13 +1346,7 @@ fn render_prompt_dialog(frame: &mut Frame, app: &App, theme: Theme) {
     let Some(prompt) = app.pending_prompt() else {
         return;
     };
-    let area = frame.area();
-    // Roughly two thirds of the frame, capped so a huge terminal does not
-    // stretch the modal edge to edge, and floored so a tiny one still gets
-    // something usable rather than a sliver.
-    let modal_width = ((area.width * 2) / 3).clamp(24, area.width.saturating_sub(4).max(24));
-    let inner_width = usize::from(modal_width).saturating_sub(4);
-
+    let inner_width = usize::from(modal_width(frame.area().width)).saturating_sub(4);
     let lines = blocks::prompt_dialog(
         prompt,
         app.prompt_selected(),
@@ -1031,26 +1355,70 @@ fn render_prompt_dialog(frame: &mut Frame, app: &App, theme: Theme) {
         inner_width,
         theme,
     );
+    render_modal(frame, " confirm ", lines, theme, 0);
+}
+
+/// The session switcher (#105): content from [`blocks::sessions_dialog`],
+/// framed by [`render_modal`].
+fn render_sessions_dialog(frame: &mut Frame, app: &App, theme: Theme) {
+    if !app.sessions_open() {
+        return;
+    }
+    let inner_width = usize::from(modal_width(frame.area().width)).saturating_sub(4);
+    let entries = app.sessions_filtered();
+    let lines = blocks::sessions_dialog(
+        app.sessions_query(),
+        &entries,
+        app.sessions_selected(),
+        app.session(),
+        inner_width,
+        theme,
+    );
+    render_modal(frame, " sessions ", lines, theme, 0);
+}
+
+/// The help overlay (#105): content from [`blocks::help_dialog`], framed by
+/// [`render_modal`] — scrollable, since it is the one dialog whose content can
+/// exceed the modal's height (#105's Scope).
+fn render_help(frame: &mut Frame, app: &App, theme: Theme) {
+    if !app.help_open() {
+        return;
+    }
+    let area = frame.area();
+    let inner_width = usize::from(modal_width(area.width)).saturating_sub(4);
+    let lines = blocks::help_dialog(inner_width, theme);
     let modal_height = u16::try_from(lines.len() + 2)
         .unwrap_or(u16::MAX)
         .min(area.height.saturating_sub(2));
-    let modal_area = Rect {
-        x: area.x + (area.width.saturating_sub(modal_width)) / 2,
-        y: area.y + (area.height.saturating_sub(modal_height)) / 2,
-        width: modal_width,
-        height: modal_height,
-    };
-
-    frame.render_widget(Clear, modal_area);
-    let surface = Style::default().bg(theme.raised()).fg(theme.body());
-    let block = Block::bordered()
-        .title(" confirm ")
-        .border_style(Style::default().fg(theme.focus()).bg(theme.raised()))
-        .style(surface);
-    frame.render_widget(
-        Paragraph::new(lines).block(block).style(surface),
-        modal_area,
+    let visible = usize::from(modal_height.saturating_sub(2));
+    let max_scroll = lines.len().saturating_sub(visible);
+    let offset = app.help_scroll().min(max_scroll);
+    render_modal(
+        frame,
+        " help ",
+        lines,
+        theme,
+        u16::try_from(offset).unwrap_or(0),
     );
+}
+
+/// The quit confirm (#105): content from [`blocks::quit_dialog`], framed by
+/// [`render_modal`].
+fn render_quit_confirm(frame: &mut Frame, app: &App, theme: Theme) {
+    let Some((mid_turn, turn_lost, escalate, quit_selected)) = app.quit_confirm() else {
+        return;
+    };
+    let inner_width = usize::from(modal_width(frame.area().width)).saturating_sub(4);
+    let lines = blocks::quit_dialog(
+        app.session(),
+        mid_turn,
+        turn_lost,
+        escalate,
+        quit_selected,
+        inner_width,
+        theme,
+    );
+    render_modal(frame, " quit? ", lines, theme, 0);
 }
 
 /// Draw the `/` menu over the transcript, just above the composer.
@@ -1212,6 +1580,7 @@ mod tests {
                 height: 10,
                 composer_width: 40,
                 transcript_width: 40,
+                sidebar_hidden: false,
             },
             Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode),
         )
@@ -1260,6 +1629,7 @@ mod tests {
                 height: 10,
                 composer_width: 40,
                 transcript_width: 40,
+                sidebar_hidden: false,
             },
             Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode),
         );
@@ -1411,6 +1781,17 @@ mod tests {
                             app.transcript
                         );
                     }
+                    // #105: each of these raises the ask its own drain acts
+                    // on, or (help) needs no drain at all.
+                    "/new" => assert!(
+                        app.take_new_session_request(),
+                        "/new did not ask for a fresh session/create"
+                    ),
+                    "/sessions" => assert!(
+                        app.take_sessions_request(),
+                        "/sessions did not ask for a fresh session/list"
+                    ),
+                    "/help" => assert!(app.help_open(), "/help did not open the overlay"),
                     other => panic!("{other} is Ready and untested — add it here"),
                 },
                 jan_klod::commands::Availability::Pending(reason) => match app.transcript.last() {
@@ -1854,6 +2235,29 @@ mod enter {
                 .push("session/create".to_string());
             Ok("new".to_string())
         }
+        fn session_list(&self) -> Result<Vec<jan_klod::transport::SessionSummary>, String> {
+            self.sent
+                .lock()
+                .expect("lock")
+                .push("session/list".to_string());
+            Ok(vec![jan_klod::transport::SessionSummary {
+                id: "s1".to_string(),
+                preview: "hi".to_string(),
+            }])
+        }
+        fn session_get(
+            &self,
+            session: &str,
+        ) -> Result<jan_klod_protocol::SessionGetResult, String> {
+            self.sent
+                .lock()
+                .expect("lock")
+                .push(format!("session/get {session}"));
+            Ok(jan_klod_protocol::SessionGetResult {
+                id: session.to_string(),
+                messages: Vec::new(),
+            })
+        }
         fn cancel(&self, session: &str) -> Result<(), String> {
             self.sent
                 .lock()
@@ -2102,6 +2506,264 @@ mod enter {
             transcript.contains("actually use serde"),
             "the refused message is not shown, so the transcript has the \
              refusal without the thing refused"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dialogs {
+    //! #105's three dialogs: the wiring between `App`'s intents and
+    //! `Transport`, and the one-frame-implementation invariant.
+
+    use jan_klod::app::{App, Entry, SessionEntry, SessionMessage};
+    use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
+    use jan_klod::transport::{SessionSummary, Transport};
+    use jan_klod::viewport::Viewport;
+    use jan_klod_protocol::{SessionGetResult, TranscriptMessage};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::Mutex;
+
+    /// `?` on an empty composer opens the help overlay, through
+    /// `edit_or_scroll` rather than the model directly — so a probe that
+    /// guarded the shortcut wrongly (behind the wrong modifier, say) fails
+    /// here rather than only in `App`'s own tests.
+    #[test]
+    fn a_bare_question_mark_on_an_empty_composer_opens_help() {
+        let mut app = App::default();
+        let mut view = Viewport::default();
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        assert!(super::edit_or_scroll(
+            &KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+            &mut app,
+            &mut view,
+            super::Pane::default(),
+            theme,
+        ));
+        assert!(app.help_open());
+        assert_eq!(app.input(), "", "the `?` must not have been typed");
+
+        // Typed mid-sentence, it is punctuation.
+        let mut typing = App::default();
+        "is this on".chars().for_each(|c| typing.push_char(c));
+        super::edit_or_scroll(
+            &KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+            &mut typing,
+            &mut view,
+            super::Pane::default(),
+            theme,
+        );
+        assert!(!typing.help_open());
+        assert_eq!(typing.input(), "is this on?");
+    }
+
+    /// `Ctrl+B` is pointless at a width with a permanent sidebar pane, and
+    /// only opens the dialog where `pane.sidebar_hidden` says the last frame
+    /// had none (#105's "sidebar-in-a-dialog").
+    #[test]
+    fn ctrl_b_only_opens_the_sidebar_dialog_where_the_pane_is_hidden() {
+        let mut wide = App::default();
+        let mut view = Viewport::default();
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let wide_pane = super::Pane {
+            total: 100,
+            height: 10,
+            composer_width: 40,
+            transcript_width: 40,
+            sidebar_hidden: false,
+        };
+        super::edit_or_scroll(
+            &KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+            &mut wide,
+            &mut view,
+            wide_pane,
+            theme,
+        );
+        assert!(
+            !wide.sidebar_dialog_open(),
+            "a permanent sidebar pane makes the key pointless"
+        );
+
+        let mut narrow = App::default();
+        let narrow_pane = super::Pane {
+            sidebar_hidden: true,
+            ..wide_pane
+        };
+        super::edit_or_scroll(
+            &KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+            &mut narrow,
+            &mut view,
+            narrow_pane,
+            theme,
+        );
+        assert!(narrow.sidebar_dialog_open());
+    }
+
+    /// A fake with a real `session/list`/`session/get`, counted — the two
+    /// calls the switcher's Acceptance line names.
+    #[derive(Default)]
+    struct Fake {
+        list_calls: Mutex<usize>,
+        get_calls: Mutex<usize>,
+    }
+
+    impl Transport for Fake {
+        fn create_session(&self) -> Result<String, String> {
+            Ok("new".to_string())
+        }
+        fn session_list(&self) -> Result<Vec<SessionSummary>, String> {
+            *self.list_calls.lock().expect("lock") += 1;
+            Ok(vec![
+                SessionSummary {
+                    id: "cli".to_string(),
+                    preview: "hi".to_string(),
+                },
+                SessionSummary {
+                    id: "other".to_string(),
+                    preview: "bye".to_string(),
+                },
+            ])
+        }
+        fn session_get(&self, session: &str) -> Result<SessionGetResult, String> {
+            *self.get_calls.lock().expect("lock") += 1;
+            Ok(SessionGetResult {
+                id: session.to_string(),
+                messages: vec![
+                    TranscriptMessage {
+                        seq: 1,
+                        role: "user".to_string(),
+                        content: "hello".to_string(),
+                        tool_call_id: None,
+                    },
+                    TranscriptMessage {
+                        seq: 2,
+                        role: "tool".to_string(),
+                        content: "file contents".to_string(),
+                        tool_call_id: Some("call-1".to_string()),
+                    },
+                    TranscriptMessage {
+                        seq: 3,
+                        role: "assistant".to_string(),
+                        content: "done".to_string(),
+                        tool_call_id: None,
+                    },
+                ],
+            })
+        }
+        fn cancel(&self, _session: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn stream_turn(
+            &self,
+            _session: &str,
+            _message: &str,
+            _on_event: &mut dyn FnMut(jan_klod::StreamEvent),
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn answer(&self, _session: &str, _answer: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn follow_up(&self, _session: &str, _message: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn describe(&self) -> String {
+            "fake".to_string()
+        }
+    }
+
+    /// Acceptance: opening the switcher issues exactly one `session/list`;
+    /// selecting an entry issues exactly one `session/get`, and the rebuilt
+    /// transcript matches what it returned — including a `tool` message
+    /// resolved onto its call via `tool-call-id`.
+    #[test]
+    fn the_switcher_issues_one_list_and_one_get_and_rebuilds_the_transcript() {
+        let fake = Fake::default();
+        let mut app = App::default();
+        app.set_session("cli".to_string());
+
+        app.request_sessions();
+        assert!(app.take_sessions_request());
+        let sessions = fake.session_list().expect("the fake answers");
+        app.open_sessions(
+            sessions
+                .into_iter()
+                .map(|s| SessionEntry {
+                    id: s.id,
+                    preview: s.preview,
+                })
+                .collect(),
+        );
+        assert_eq!(*fake.list_calls.lock().expect("lock"), 1, "opened twice");
+        assert!(app.sessions_open());
+
+        app.sessions_move(1); // "other"
+        let id = app
+            .sessions_confirm()
+            .expect("idle, so the switch is accepted");
+        let result = fake.session_get(&id).expect("the fake answers");
+        let messages: Vec<SessionMessage> = result
+            .messages
+            .into_iter()
+            .map(|m| SessionMessage {
+                role: m.role,
+                content: m.content,
+                tool_call_id: m.tool_call_id,
+            })
+            .collect();
+        app.load_session(result.id, messages);
+
+        assert_eq!(*fake.get_calls.lock().expect("lock"), 1, "fetched twice");
+        assert_eq!(app.session(), "other");
+        assert!(
+            !app.sessions_open(),
+            "loading a session closes the switcher"
+        );
+        assert_eq!(app.transcript.len(), 3);
+        assert_eq!(
+            app.transcript[0],
+            Entry::Message {
+                who: jan_klod::app::Who::You,
+                text: "hello".to_string()
+            }
+        );
+        match &app.transcript[1] {
+            Entry::Tool(block) => assert_eq!(
+                block.id, "call-1",
+                "the tool message must resolve onto its call by tool-call-id"
+            ),
+            other @ Entry::Message { .. } => panic!("expected a tool block, got {other:?}"),
+        }
+        assert_eq!(
+            app.transcript[2],
+            Entry::Message {
+                who: jan_klod::app::Who::Klod,
+                text: "done".to_string()
+            }
+        );
+    }
+
+    /// #105's Acceptance: one dialog frame implementation, checked the way
+    /// 19a checks for stray `Color` literals — a grep, not a type-level proof,
+    /// because the thing being guarded against is a *second copy* of code
+    /// that would otherwise compile just as well as the first.
+    #[test]
+    fn every_dialog_shares_one_frame_implementation() {
+        let source = include_str!("tui.rs");
+        // The needle is split across two literals so this test's own source
+        // does not match itself — `include_str!` pulls in this very function,
+        // and a whole literal here would count its own assertion as a second
+        // definition.
+        let definition = format!("fn {}render_modal(", "");
+        assert_eq!(
+            source.matches(&definition).count(),
+            1,
+            "more than one function draws a dialog's frame"
+        );
+        let call_sites = source.matches("render_modal(frame,").count();
+        assert!(
+            call_sites >= 4,
+            "expected at least 4 dialogs (ask, sessions, help, quit) to call \
+             the one modal primitive, found {call_sites}"
         );
     }
 }

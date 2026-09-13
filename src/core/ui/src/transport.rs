@@ -19,9 +19,21 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio as ChildIo};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_protocol::{compatible, jsonrpc, Command as Rpc, Notification, PROTOCOL_VERSION};
+use jan_klod_protocol::{
+    compatible, jsonrpc, Command as Rpc, Notification, SessionGetResult, PROTOCOL_VERSION,
+};
 
 use crate::StreamEvent;
+
+/// One session `session/list` reports: an id and a preview of its first user
+/// message (#105).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummary {
+    /// Session id.
+    pub id: String,
+    /// First 80 characters of the session's first user message.
+    pub preview: String,
+}
 
 /// One way of driving a core.
 ///
@@ -33,6 +45,28 @@ pub trait Transport: Send + Sync {
     /// # Errors
     /// A human-readable message if the connection fails or the core refuses.
     fn create_session(&self) -> Result<String, String>;
+
+    /// Every session with a preview (#105). Populated fresh at every open of
+    /// the switcher, never cached — the model of what exists is the core's,
+    /// not this client's.
+    ///
+    /// # Errors
+    /// A human-readable message if the connection fails or the core refuses.
+    fn session_list(&self) -> Result<Vec<SessionSummary>, String>;
+
+    /// One session's transcript, to rebuild this client's view of it after a
+    /// switch (#105). **Only safe to call when no turn is streaming** — like
+    /// [`Transport::create_session`]'s stdio implementation, this reads its
+    /// own answer off the same pipe a running turn's reader holds, and a call
+    /// made while one is in flight would race it for the next line. The
+    /// session switcher enforces this by refusing to switch while a turn is
+    /// running (`App::sessions_confirm`), which is what makes it safe to call
+    /// here at all.
+    ///
+    /// # Errors
+    /// A human-readable message if the connection fails or the session does
+    /// not exist.
+    fn session_get(&self, session: &str) -> Result<SessionGetResult, String>;
 
     /// Stop the turn running on `session`, if any.
     ///
@@ -91,6 +125,17 @@ pub trait Transport: Send + Sync {
     fn alive(&self) -> bool {
         true
     }
+
+    /// Whether this transport is the spawned-gateway kind (#105). Over stdio
+    /// the gateway is a child of this process and dies with it, so a turn
+    /// still running when the client quits is genuinely lost; over `--addr`
+    /// it is not, because the gateway outlives this client. The quit confirm
+    /// worded that fact from wherever it is actually known, which is here —
+    /// the default answers `false`, since [`Rest`] is the common "it does
+    /// not" case and [`Stdio`] is the one that overrides it.
+    fn is_stdio(&self) -> bool {
+        false
+    }
 }
 
 /// The REST + SSE surface of a gateway that is already listening.
@@ -118,6 +163,14 @@ impl Rest {
 impl Transport for Rest {
     fn create_session(&self) -> Result<String, String> {
         crate::create_session(&self.addr)
+    }
+
+    fn session_list(&self) -> Result<Vec<SessionSummary>, String> {
+        crate::list_sessions(&self.addr)
+    }
+
+    fn session_get(&self, session: &str) -> Result<SessionGetResult, String> {
+        crate::get_session(&self.addr, session)
     }
 
     fn cancel(&self, _session: &str) -> Result<(), String> {
@@ -395,11 +448,58 @@ impl Stdio {
             .map(str::to_owned)
             .ok_or_else(|| "the gateway's session/create answer carried no id".to_owned())
     }
+
+    /// Send `session/list` and read its own answer. Safe only when called
+    /// while no turn is streaming — see [`Transport::session_get`]'s docs,
+    /// which this shares the caveat with.
+    fn session_list_over_stdio(&self) -> Result<Vec<SessionSummary>, String> {
+        let id = self.send(&Rpc::SessionList)?;
+        let result = self.read_until(&id, &mut |_| {})?;
+        let sessions = result
+            .get("sessions")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "the gateway's session/list answer carried no `sessions`".to_owned())?;
+        sessions
+            .iter()
+            .map(|entry| {
+                let id = entry
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "a session/list entry carried no id".to_owned())?
+                    .to_owned();
+                let preview = entry
+                    .get("preview")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                Ok(SessionSummary { id, preview })
+            })
+            .collect()
+    }
+
+    /// Send `session/get` and read its own answer. Safe only when called
+    /// while no turn is streaming, for the reason [`Transport::session_get`]
+    /// documents.
+    fn session_get_over_stdio(&self, session: &str) -> Result<SessionGetResult, String> {
+        let id = self.send(&Rpc::SessionGet {
+            session: session.to_owned(),
+        })?;
+        let result = self.read_until(&id, &mut |_| {})?;
+        serde_json::from_value(result).map_err(|err| format!("malformed session/get answer: {err}"))
+    }
 }
 
 impl Transport for Stdio {
     fn create_session(&self) -> Result<String, String> {
         self.create_session_over_stdio()
+    }
+
+    fn session_list(&self) -> Result<Vec<SessionSummary>, String> {
+        self.session_list_over_stdio()
+    }
+
+    fn session_get(&self, session: &str) -> Result<SessionGetResult, String> {
+        self.session_get_over_stdio(session)
     }
 
     fn cancel(&self, session: &str) -> Result<(), String> {
@@ -466,6 +566,10 @@ impl Transport for Stdio {
             .ok()
             .and_then(|mut child| child.try_wait().ok())
             .is_none_or(|status| status.is_none())
+    }
+
+    fn is_stdio(&self) -> bool {
+        true
     }
 }
 
@@ -946,6 +1050,107 @@ while IFS= read -r line; do :; done
         let rest = Rest::new(addr);
         let id = rest.create_session().expect("the server answers");
         assert_eq!(id, "sess-7");
+
+        server_thread.join().unwrap();
+    }
+
+    /// `session_list`/`session_get` over stdio (#105): both read their own
+    /// answer, the same shape as `create_session`, and the caveat above them
+    /// says why that is only safe with nothing else streaming.
+    #[cfg(unix)]
+    #[test]
+    fn session_list_and_session_get_over_stdio_read_their_own_answers() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir();
+        let bin = dir.join(format!("jk-gateway-sessions-{}.sh", std::process::id()));
+
+        let script = format!(
+            r#"#!/bin/sh
+IFS= read -r hello
+id=$(printf '%s' "$hello" | sed 's/.*"id":\([0-9]*\).*/\1/')
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"version":"{PROTOCOL_VERSION}"}}}}\n' "$id"
+IFS= read -r req1
+id1=$(printf '%s' "$req1" | sed 's/.*"id":\([0-9]*\).*/\1/')
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"sessions":[{{"id":"s1","preview":"hi"}}]}}}}\n' "$id1"
+IFS= read -r req2
+id2=$(printf '%s' "$req2" | sed 's/.*"id":\([0-9]*\).*/\1/')
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"id":"s1","messages":[{{"seq":1,"role":"user","content":"hi"}}]}}}}\n' "$id2"
+while IFS= read -r line; do :; done
+"#
+        );
+        std::fs::write(&bin, script).expect("write the fake gateway");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let Ok(gateway) = Stdio::spawn_from(&bin, &[], Logs::Discard) else {
+            panic!("the fake gateway did not start or did not shake hands")
+        };
+        assert!(gateway.is_stdio());
+
+        let sessions = gateway
+            .session_list()
+            .expect("the gateway answers session/list");
+        assert_eq!(
+            sessions,
+            vec![super::SessionSummary {
+                id: "s1".to_owned(),
+                preview: "hi".to_owned(),
+            }]
+        );
+
+        let result = gateway
+            .session_get("s1")
+            .expect("the gateway answers session/get");
+        let _ = std::fs::remove_file(&bin);
+
+        assert_eq!(result.id, "s1");
+        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.messages[0].role, "user");
+        assert_eq!(result.messages[0].content, "hi");
+    }
+
+    /// `session_list`/`session_get` over REST (#105): `GET /sessions` and
+    /// `GET /session/:id`, and the JSON comes back parsed.
+    #[test]
+    fn session_list_and_session_get_over_rest_get_and_parse() {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("binds ephemeral port");
+        let port = server.server_addr().to_ip().expect("ip addr").port();
+        let addr = format!("127.0.0.1:{port}");
+
+        let server_thread = std::thread::spawn(move || {
+            let request = server.recv().expect("receives request");
+            assert_eq!(request.url(), "/sessions");
+            assert_eq!(*request.method(), tiny_http::Method::Get);
+            request
+                .respond(tiny_http::Response::from_string(
+                    r#"{"sessions":[{"id":"s1","preview":"hi"}]}"#,
+                ))
+                .unwrap();
+
+            let request = server.recv().expect("receives a second request");
+            assert_eq!(request.url(), "/session/s1");
+            assert_eq!(*request.method(), tiny_http::Method::Get);
+            request
+                .respond(tiny_http::Response::from_string(
+                    r#"{"id":"s1","messages":[{"seq":1,"role":"user","content":"hi"}]}"#,
+                ))
+                .unwrap();
+        });
+
+        let rest = Rest::new(addr);
+        assert!(!rest.is_stdio());
+        let sessions = rest.session_list().expect("the server answers");
+        assert_eq!(
+            sessions,
+            vec![super::SessionSummary {
+                id: "s1".to_owned(),
+                preview: "hi".to_owned(),
+            }]
+        );
+
+        let result = rest.session_get("s1").expect("the server answers");
+        assert_eq!(result.id, "s1");
+        assert_eq!(result.messages[0].content, "hi");
 
         server_thread.join().unwrap();
     }

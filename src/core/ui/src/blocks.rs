@@ -59,7 +59,8 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::app::{Entry, Prompt, ToolBlock, ToolStatus, Who};
+use crate::app::{Entry, Prompt, SessionEntry, ToolBlock, ToolStatus, Who};
+use crate::keymap;
 use crate::theme::{Glyph, Theme};
 use crate::wrap::wrap;
 
@@ -505,6 +506,234 @@ pub fn prompt_dialog(
         format!("silence takes the default: {}", prompt.default),
         Style::default().fg(theme.muted()),
     )));
+    lines
+}
+
+/// The session switcher's content (#105).
+///
+/// The typed filter as a search line, then the matching entries — the current
+/// session marked, the highlighted one distinguished the same way
+/// [`prompt_dialog`]'s selected option is.
+///
+/// A pure function of what [`crate::app::App`] already computed
+/// (`entries`/`selected`), the same split every dialog here uses: the model
+/// decides *what* is shown, this decides how it reads.
+#[must_use]
+pub fn sessions_dialog(
+    query: &str,
+    entries: &[&SessionEntry],
+    selected: usize,
+    current: &str,
+    width: usize,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("filter: ", Style::default().fg(theme.muted())),
+            Span::styled(query.to_string(), Style::default().fg(theme.body())),
+        ]),
+        Line::from(String::new()),
+    ];
+    if entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "no session matches".to_string(),
+            Style::default().fg(theme.muted()),
+        )));
+    } else {
+        for (i, entry) in entries.iter().enumerate() {
+            let is_selected = i == selected;
+            let is_current = entry.id == current;
+            let marker = if is_selected {
+                theme.glyph(Glyph::Caret)
+            } else {
+                " "
+            };
+            let mut spans = vec![
+                Span::styled(
+                    format!("{marker} "),
+                    Style::default().fg(if is_selected {
+                        theme.focus()
+                    } else {
+                        theme.muted()
+                    }),
+                ),
+                Span::styled(
+                    entry.id.clone(),
+                    Style::default().fg(if is_selected {
+                        theme.focus()
+                    } else {
+                        theme.body()
+                    }),
+                ),
+            ];
+            if is_current {
+                // A word, not only the marker's colour — `Mode::Mono` zeroes
+                // every colour, the same rule `prompt_dialog`'s default label
+                // follows.
+                spans.push(Span::styled(
+                    " (current)".to_string(),
+                    Style::default().fg(theme.warning()),
+                ));
+            }
+            let spent = crate::wrap::width(&entry.id) + if is_current { 10 } else { 0 } + 4;
+            let room = width.saturating_sub(spent);
+            if !entry.preview.is_empty() && room >= 4 {
+                spans.push(Span::styled(
+                    format!(
+                        "  {}",
+                        elide(&entry.preview, room, theme.glyph(Glyph::Elided))
+                    ),
+                    Style::default().fg(theme.secondary()),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+    lines.push(Line::from(String::new()));
+    lines.push(Line::from(Span::styled(
+        "type to filter · ↑/↓ choose · Enter switch · Esc close".to_string(),
+        Style::default().fg(theme.muted()),
+    )));
+    lines
+}
+
+/// The help overlay's content (#105).
+///
+/// Every binding in [`crate::keymap::BINDINGS`], grouped by
+/// [`crate::keymap::Context`] — a binding added without updating this is
+/// impossible, because this reads the table rather than repeating it, the
+/// same guarantee [`crate::tui::status_hint`] already gives the status bar.
+#[must_use]
+pub fn help_dialog(width: usize, theme: Theme) -> Vec<Line<'static>> {
+    const GROUPS: [(keymap::Context, &str); 5] = [
+        (keymap::Context::Idle, "idle"),
+        (keymap::Context::Streaming, "turn running"),
+        (keymap::Context::Cancelling, "stopping"),
+        (keymap::Context::DialogOpen, "dialog open"),
+        (keymap::Context::DialogClosed, "dialog closed"),
+    ];
+    let mut lines = Vec::new();
+    for (context, label) in GROUPS {
+        let rows: Vec<&keymap::Binding> = keymap::BINDINGS
+            .iter()
+            .filter(|b| b.context == context)
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        if !lines.is_empty() {
+            lines.push(Line::from(String::new()));
+        }
+        lines.push(Line::from(Span::styled(
+            label.to_string(),
+            Style::default().fg(theme.focus()),
+        )));
+        for binding in rows {
+            let text = if binding.keys.is_empty() {
+                binding.action.to_string()
+            } else {
+                format!("{}  {}", binding.keys, binding.action)
+            };
+            lines.extend(
+                wrap(&text, width)
+                    .into_iter()
+                    .map(|row| Line::from(Span::styled(row, Style::default().fg(theme.body())))),
+            );
+        }
+    }
+    lines
+}
+
+/// The quit confirm's content (#105).
+///
+/// The session id and its resumability, what happens to a running turn
+/// (worded differently for stdio vs `--addr` — `turn_lost` is the caller's to
+/// know, see [`crate::transport::Transport::is_stdio`]), and a second warning
+/// once `escalate` asks the user to confirm again. Cancel/quit are the two
+/// options, marked the same way [`prompt_dialog`]'s default is.
+///
+/// Four `bool`s rather than an enum per axis: each is an independent fact
+/// about the model (is a turn running, would it be lost, has this been
+/// confirmed once, which option is highlighted) with no combination that is
+/// invalid, so a fifth type per axis would be ceremony over the four flags it
+/// replaced.
+#[must_use]
+#[allow(clippy::fn_params_excessive_bools)]
+pub fn quit_dialog(
+    session: &str,
+    mid_turn: bool,
+    turn_lost: bool,
+    escalate: bool,
+    quit_selected: bool,
+    width: usize,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = wrap(
+        &format!("session `{session}` is saved and can be resumed by id."),
+        width,
+    )
+    .into_iter()
+    .map(|row| Line::from(Span::styled(row, Style::default().fg(theme.body()))))
+    .collect();
+
+    if mid_turn {
+        let warning = if turn_lost {
+            "a turn is still running — quitting stops the gateway with it, and \
+             the turn is lost."
+        } else {
+            "a turn is still running on the gateway — quitting this client \
+             leaves it running unaffected."
+        };
+        lines.push(Line::from(String::new()));
+        lines.extend(
+            wrap(warning, width)
+                .into_iter()
+                .map(|row| Line::from(Span::styled(row, Style::default().fg(theme.warning())))),
+        );
+    }
+    if escalate {
+        lines.push(Line::from(String::new()));
+        lines.extend(
+            wrap("quit again to confirm.", width)
+                .into_iter()
+                .map(|row| Line::from(Span::styled(row, Style::default().fg(theme.warning())))),
+        );
+    }
+
+    lines.push(Line::from(String::new()));
+    for (i, (label, is_quit)) in [("cancel", false), ("quit", true)].into_iter().enumerate() {
+        let is_selected = quit_selected == is_quit;
+        let marker = if is_selected {
+            theme.glyph(Glyph::Caret)
+        } else {
+            " "
+        };
+        let mut spans = vec![
+            Span::styled(
+                format!("{marker} "),
+                Style::default().fg(if is_selected {
+                    theme.focus()
+                } else {
+                    theme.muted()
+                }),
+            ),
+            Span::styled(
+                format!("{}. {label}", i + 1),
+                Style::default().fg(if is_selected {
+                    theme.focus()
+                } else {
+                    theme.body()
+                }),
+            ),
+        ];
+        if !is_quit {
+            spans.push(Span::styled(
+                format!(" {} default", theme.glyph(Glyph::Warning)),
+                Style::default().fg(theme.warning()),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
     lines
 }
 
@@ -1045,6 +1274,131 @@ mod tests {
             rendered.iter().any(|r| r.contains("nothing")),
             "the default is not named as what an empty answer sends: {rendered:?}"
         );
+    }
+
+    fn session_entry(id: &str, preview: &str) -> crate::app::SessionEntry {
+        crate::app::SessionEntry {
+            id: id.to_string(),
+            preview: preview.to_string(),
+        }
+    }
+
+    /// The current session is marked in text, not only in colour — the same
+    /// rule `prompt_dialog`'s default label follows, for the same reason.
+    #[test]
+    fn the_current_session_is_marked_in_text_under_monochrome() {
+        let theme = Theme::new(Mode::Mono, Depth::TrueColor, GlyphSet::Unicode);
+        let a = session_entry("cli", "hello");
+        let b = session_entry("other", "world");
+        let refs = vec![&a, &b];
+        let rendered: Vec<String> = super::sessions_dialog("", &refs, 0, "other", 60, theme)
+            .iter()
+            .map(plain)
+            .collect();
+        let cli_row = rendered.iter().find(|r| r.contains("cli")).unwrap();
+        let other_row = rendered.iter().find(|r| r.contains("other")).unwrap();
+        assert!(!cli_row.contains("current"), "{cli_row:?}");
+        assert!(other_row.contains("current"), "{other_row:?}");
+    }
+
+    #[test]
+    fn an_empty_session_list_says_so() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let rendered: Vec<String> = super::sessions_dialog("", &[], 0, "cli", 60, theme)
+            .iter()
+            .map(plain)
+            .collect();
+        assert!(rendered.iter().any(|r| r.contains("no session matches")));
+    }
+
+    /// Acceptance: the help overlay lists every binding, grouped by context —
+    /// so a binding added without updating the table (impossible, since this
+    /// reads it) or without a group heading fails here.
+    #[test]
+    fn the_help_overlay_lists_every_binding_grouped_by_context() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let rendered: Vec<String> = super::help_dialog(60, theme).iter().map(plain).collect();
+        let joined = rendered.join("\n");
+        for binding in crate::keymap::BINDINGS {
+            if !binding.keys.is_empty() {
+                assert!(
+                    joined.contains(binding.keys),
+                    "{:?} is missing from the overlay",
+                    binding.keys
+                );
+            }
+            assert!(
+                joined.contains(binding.action),
+                "{:?} is missing from the overlay",
+                binding.action
+            );
+        }
+        for label in [
+            "idle",
+            "turn running",
+            "stopping",
+            "dialog open",
+            "dialog closed",
+        ] {
+            assert!(
+                rendered.iter().any(|r| r == label),
+                "the {label:?} group heading is missing: {rendered:?}"
+            );
+        }
+    }
+
+    /// The wording differs between the two transports — the fact
+    /// [`crate::transport::Transport::is_stdio`] exists to carry to this
+    /// function, since the model that renders it has no transport of its own.
+    #[test]
+    fn the_quit_dialog_wording_differs_between_stdio_and_addr() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let stdio = super::quit_dialog("cli", true, true, false, false, 60, theme)
+            .iter()
+            .map(plain)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let addr = super::quit_dialog("cli", true, false, false, false, 60, theme)
+            .iter()
+            .map(plain)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(stdio, addr, "the two transports must not read alike");
+        assert!(stdio.contains("lost"), "{stdio:?}");
+        assert!(!addr.contains("lost"), "{addr:?}");
+    }
+
+    /// Not mid-turn: no warning at all, and cancel is the default selection.
+    #[test]
+    fn a_quit_with_no_turn_running_carries_no_warning() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let rendered: Vec<String> =
+            super::quit_dialog("cli", false, false, false, false, 60, theme)
+                .iter()
+                .map(plain)
+                .collect();
+        assert!(!rendered.iter().any(|r| r.contains("running")));
+        let cancel_row = rendered.iter().find(|r| r.contains("cancel")).unwrap();
+        assert!(
+            cancel_row.contains("default"),
+            "cancel must be the default selection: {cancel_row:?}"
+        );
+    }
+
+    /// The escalation notice only appears once asked for.
+    #[test]
+    fn escalating_adds_a_second_warning() {
+        let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
+        let first: Vec<String> = super::quit_dialog("cli", true, true, false, true, 60, theme)
+            .iter()
+            .map(plain)
+            .collect();
+        let second: Vec<String> = super::quit_dialog("cli", true, true, true, true, 60, theme)
+            .iter()
+            .map(plain)
+            .collect();
+        assert!(!first.iter().any(|r| r.contains("again")));
+        assert!(second.iter().any(|r| r.contains("again")));
     }
 
     /// `1 of 2` only appears once a second prompt is actually queued.

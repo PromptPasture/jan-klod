@@ -451,6 +451,87 @@ pub fn create_session(addr: &str) -> Result<String, String> {
         .ok_or_else(|| format!("unexpected response: {body}"))
 }
 
+/// Send a raw `GET` request, already framed by the caller, and parse the body
+/// as JSON. Shared by [`list_sessions`] and [`get_session`] (#105) — the two
+/// `GET` routes this client reads, next to the several `POST`s above that each
+/// grew their own copy of this before there were two callers to share it with.
+///
+/// # Errors
+/// Returns a human-readable error if the connection fails or the body is not
+/// well-formed JSON.
+fn get_json(addr: &str, request: &str) -> Result<serde_json::Value, String> {
+    let mut stream =
+        TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|err| err.to_string())?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| format!("sending request: {err}"))?;
+
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .map_err(|err| format!("reading response: {err}"))?;
+    let body = raw
+        .split_once("\r\n\r\n")
+        .map_or(raw.as_str(), |(_h, b)| b)
+        .trim();
+    serde_json::from_str(body)
+        .map_err(|err| format!("malformed response body: {err} (in {body:?})"))
+}
+
+/// List every session on the core at `addr` (`host:port`), with a preview:
+/// `GET /sessions` (#105).
+///
+/// # Errors
+/// Returns a human-readable error if the connection fails or the response is
+/// not well-formed.
+pub fn list_sessions(addr: &str) -> Result<Vec<transport::SessionSummary>, String> {
+    let request = format!(
+        "GET /sessions HTTP/1.1\r\nHost: {addr}\r\n{}Connection: close\r\n\r\n",
+        auth_header()
+    );
+    let value = get_json(addr, &request)?;
+    let sessions = value
+        .get("sessions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| format!("unexpected response: {value}"))?;
+    sessions
+        .iter()
+        .map(|entry| {
+            let id = entry
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("a session carried no id: {entry}"))?
+                .to_owned();
+            let preview = entry
+                .get("preview")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            Ok(transport::SessionSummary { id, preview })
+        })
+        .collect()
+}
+
+/// One session's transcript and metadata: `GET /session/:id` (#105).
+///
+/// # Errors
+/// Returns a human-readable error if the connection fails or the response is
+/// not well-formed.
+pub fn get_session(
+    addr: &str,
+    session: &str,
+) -> Result<jan_klod_protocol::SessionGetResult, String> {
+    let request = format!(
+        "GET /session/{session} HTTP/1.1\r\nHost: {addr}\r\n{}Connection: close\r\n\r\n",
+        auth_header()
+    );
+    let value = get_json(addr, &request)?;
+    serde_json::from_value(value).map_err(|err| format!("malformed session/get response: {err}"))
+}
+
 /// Drive one turn against the core at `addr` (`host:port`): `POST` the message and
 /// return the answer text.
 ///
