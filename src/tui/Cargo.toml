@@ -22,7 +22,7 @@ serde_json.workspace = true
 # The wire contract. Serde-only by design (#41), which is what lets a client
 # depend on it without pulling in the core or Wasmtime — the rule this crate's
 # comment above states. The stdio transport frames commands with it.
-jan-klod-protocol = { path = "../core/protocol" }
+jan-klod-protocol = { path = "../protocol" }
 # Terminal UI for the `tui` mode (binary only). Bundles the crossterm backend +
 # event types (used via `ratatui::crossterm`). The pure App model in `app` needs
 # no TUI deps and is unit-tested without a terminal.

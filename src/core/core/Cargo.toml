@@ -11,7 +11,7 @@ jan-klod-config = { path = "../../config" }
 # and frames the answers. Never the other way round — `jan-klod-protocol` carries
 # nothing beyond serde/serde_json (#41), and depending on the core would drag
 # wasmtime into every client that reads a frame.
-jan-klod-protocol = { path = "../protocol" }
+jan-klod-protocol = { path = "../../protocol" }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 serde_json.workspace = true

@@ -32,7 +32,7 @@ jan-klod-config = { path = "../config" }
 serde_json.workspace = true
 # The rpc harness reads the frames back as the contract types rather than as
 # hand-matched JSON, so a shape change fails the test instead of passing it.
-jan-klod-protocol = { path = "../core/protocol" }
+jan-klod-protocol = { path = "../protocol" }
 # The shipped-defaults gate drives core through the *real* UI client library
 # rather than a hand-rolled HTTP client, so the test exercises the same code a
 # user's TUI runs. Test-only: the `jan-klod` binary does not depend on the UI.
