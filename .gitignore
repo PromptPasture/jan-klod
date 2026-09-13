@@ -642,8 +642,12 @@ src/*/*.cdx.json
 src/gui/gen/
 
 # The default session store (`storage.path`), written by any real boot —
-# `make run`, `make serve`, or a gateway started by hand.
-/jan-klod.db
+# `make run`, `make serve`, or a gateway started by hand. Unanchored, for the
+# reason `wasmtime-cache/` below is: the default sits beside whichever
+# config.yaml was booted, so it lands wherever the gateway was started. The
+# root-anchored rule this replaces is how a stray copy rode into src/host/
+# through a directory move and stayed tracked until 2026-09-13.
+jan-klod.db
 
 # Bundle output (make bundle)
 /dist/
