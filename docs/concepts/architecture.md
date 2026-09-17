@@ -26,7 +26,7 @@ Core runs as a **standalone user-privilege process** (not a daemon) and is **hea
 - **Agent loop mechanism** — thin conductor (`stream → tools → loop`) + **interceptor dispatch** (see [Agent loop architecture](#agent-loop-architecture))
 - Observability (structured logging, Prometheus, OpenTelemetry)
 
-**Zero agent behaviour in core.** The loop is pure *mechanism* — no policy. Every decision (loop entry, model, tools, history trim, tool permit) comes from sandboxed **interceptor** extensions. A core-only boot with no interceptors runs bare `stream → tools → loop`. HTTP API, UIs, and chat integrations are extensions or separate clients, never built in.
+**Zero agent behaviour in core.** The loop is pure *mechanism* — no policy. Every decision (loop entry, model, tools, history trim, tool permit) comes from sandboxed **interceptor** extensions. A core-only boot with no interceptors runs bare `stream → tools → loop`. UIs are separate clients, and the kernel crate holds no transport at all: REST, stdio JSON-RPC, ACP and MCP live in the `jan-klod-host` binary crate that serves them ([#179](https://github.com/PromptPasture/jan-klod/issues/179)), and the Telegram poller sits beside them until [#173](https://github.com/PromptPasture/jan-klod/issues/173) makes it an extension.
 
 > **Why the loop is in core (not an extension).** With every decision moved to interceptors, the loop is ~200 lines of conductor (provider call, tool dispatch, interceptor dispatch, streaming handles, cancel, steering queue). Native Rust keeps "nothing trusted" (core is the trusted host; all providers/tools/stores/interceptors stay sandboxed WASM) and avoids WASM loop driving WASM interceptor chain across component boundaries twice. Trade-off: the conductor is no longer swappable/polyglot. See [the decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
 
@@ -265,11 +265,11 @@ for the rationale.
 
 ## Transport
 
-The HTTP surface is **host-side** — `jan_klod_core::serve` runs a synchronous `tiny_http` listener exposing core over **REST + Server-Sent Events (SSE)**. UI clients, browsers, and remote ACP callers consume it. Curl-debuggable, browser-compatible, no stub generation. Endpoints: `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`.
+The HTTP surface is **host-side** — `jan_klod_host::serve` runs a synchronous `tiny_http` listener exposing core over **REST + Server-Sent Events (SSE)**. UI clients, browsers, and remote ACP callers consume it. Curl-debuggable, browser-compatible, no stub generation. Endpoints: `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`.
 
 **It is no longer the only surface.** Phase 13 made the client surface a versioned contract ranked as WIT — `jan-klod-protocol`, with typed commands/notifications and version negotiated at connect (see [Contracts](contracts.md#ui--core-client-surface)) — and gave it a second transport:
 
-**stdio JSON-RPC** (`jan-klod-gateway rpc`, `jan_klod_core::rpc`) is the TUI default and editor use. Newline-delimited JSON-RPC 2.0 on the process's stdin/stdout: **no port, no token, nothing left running** (client spawns and owns the gateway). Stdout carries frames only; all logs go to stderr.
+**stdio JSON-RPC** (`jan-klod-gateway rpc`, `jan_klod_host::rpc`) is the TUI default and editor use. Newline-delimited JSON-RPC 2.0 on the process's stdin/stdout: **no port, no token, nothing left running** (client spawns and owns the gateway). Stdout carries frames only; all logs go to stderr.
 
 The two differ structurally. Over REST, mid-turn confirmation answers on a *second connection* and cancel is client disconnect. Over stdio there's one pipe: a reader thread holds it during the turn, handing frames to the loop between turn events — how `turn/cancel` gets read and how `turn/follow-up` (steering a running turn) becomes possible, which REST cannot do.
 
@@ -277,7 +277,7 @@ The two differ structurally. Over REST, mid-turn confirmation answers on a *seco
 
 ### The MCP port (`jan-klod-gateway mcp`)
 
-A third surface, first one core doesn't define: **MCP's stdio transport is the framing `rpc` already speaks** — newline-delimited JSON-RPC 2.0, stdout frames and nothing else, stderr logs. `jan_klod_core::mcp` is a method-name-and-payload adapter over the same envelope, not a second transport, costing no dependency.
+A third surface, first one core doesn't define: **MCP's stdio transport is the framing `rpc` already speaks** — newline-delimited JSON-RPC 2.0, stdout frames and nothing else, stderr logs. `jan_klod_host::mcp` is a method-name-and-payload adapter over the same envelope, not a second transport, costing no dependency.
 
 `rmcp`, the official Rust SDK, is async on tokio. This core is deliberately synchronous — the session is `!Send` and single-threaded (why `tiny_http` over `axum`) — so adopting it would be an architectural change.
 
