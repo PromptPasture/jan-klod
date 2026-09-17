@@ -22,6 +22,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::host::ConfigSection;
 // `Store` is wasmtime's here, so the core's persistent store needs a distinct name.
+use crate::contributions;
 use crate::intercept::{
     self, BlockReason, Decision, HookState, InterceptInput, Interceptor, InterceptorError, Phase,
     UserPrompt,
@@ -39,6 +40,20 @@ mod bind {
     });
 }
 
+// The host's *view* of a component that also contributes to a client surface.
+// A world with one export and no imports, read off an instance that was
+// instantiated against `interceptor-world` — absent means the component
+// contributes nothing (`wit/client-surface.wit`). Separate `bindgen!` rather
+// than binding `interceptor-contributor-world`, because that would generate a
+// second copy of every interceptor type for the same shapes.
+#[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
+mod surface_bind {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "client-surface-view",
+    });
+}
+
 use bind::exports::jan_klod::interfaces::interceptor as g_icept;
 use bind::jan_klod::interfaces::host_config as g_config;
 use bind::jan_klod::interfaces::host_event as g_event;
@@ -46,6 +61,7 @@ use bind::jan_klod::interfaces::host_log as g_log;
 use bind::jan_klod::interfaces::host_storage as g_storage;
 use bind::jan_klod::interfaces::llm_provider as g_llm;
 use bind::jan_klod::interfaces::llm_types as g_types;
+use surface_bind::exports::jan_klod::interfaces::client_surface as g_surface;
 
 /// The completion backend an interceptor's `llm-provider` import resolves to:
 /// given the request the guest assembled, return the assistant text.
@@ -393,6 +409,9 @@ pub struct WasmInterceptor {
     id: String,
     store: Store<InterceptorHost>,
     world: bind::InterceptorWorld,
+    /// Present only when the component also exports `client-surface`. The
+    /// probe: absent means it contributes nothing to a client's interface.
+    surface: Option<surface_bind::ClientSurfaceView>,
     phases: Vec<Phase>,
 }
 
@@ -458,8 +477,17 @@ impl WasmInterceptor {
             ),
         };
         let mut store = Store::new(engine, host);
-        let world = bind::InterceptorWorld::instantiate(&mut store, component, &linker)
+        // Instantiated once and viewed twice. `InterceptorWorld` is what this
+        // component is required to be; `ClientSurfaceView` is what it may also
+        // be, and constructing it only looks up exports — so a component
+        // without `client-surface` fails here and nowhere else, which is the
+        // probe `wit/client-surface.wit` describes.
+        let instance = linker
+            .instantiate(&mut store, component)
             .map_err(|source| CoreError::instantiate(id, source))?;
+        let world = bind::InterceptorWorld::new(&mut store, &instance)
+            .map_err(|source| CoreError::instantiate(id, source))?;
+        let surface = surface_bind::ClientSurfaceView::new(&mut store, &instance).ok();
 
         // Lifecycle init -> start.
         let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
@@ -487,6 +515,7 @@ impl WasmInterceptor {
             id: id.to_string(),
             store,
             world,
+            surface,
             phases,
         })
     }
@@ -499,6 +528,67 @@ impl Interceptor for WasmInterceptor {
 
     fn subscribed_phases(&self) -> Vec<Phase> {
         self.phases.clone()
+    }
+
+    /// Ask the component what it contributes, if it exports the interface.
+    ///
+    /// A trap is logged and read as "nothing". This is a declaration, not a
+    /// decision: a guest that cannot say what it offers should cost a client
+    /// its menu entry, never its turn — the opposite of the fail-closed policy
+    /// `tool-call` runs under.
+    fn contributions(&mut self) -> Option<contributions::Contributions> {
+        let surface = self.surface.as_ref()?;
+        match surface
+            .jan_klod_interfaces_client_surface()
+            .call_contribute(&mut self.store)
+        {
+            Ok(declared) => Some(from_gen_contributions(&self.id, declared)),
+            Err(error) => {
+                eprintln!(
+                    "jan-klod: {}: could not read its contributions: {error}",
+                    self.id
+                );
+                None
+            }
+        }
+    }
+
+    fn invoke_contribution(
+        &mut self,
+        name: &str,
+        arguments: &[contributions::ArgumentValue],
+    ) -> Result<contributions::InvokeOutcome, contributions::InvokeError> {
+        let surface = self
+            .surface
+            .as_ref()
+            .ok_or(contributions::InvokeError::Unknown)?;
+        let gen_arguments: Vec<g_surface::ArgumentValue> = arguments
+            .iter()
+            .map(|argument| g_surface::ArgumentValue {
+                name: argument.name.clone(),
+                value: argument.value.clone(),
+            })
+            .collect();
+        match surface.jan_klod_interfaces_client_surface().call_invoke(
+            &mut self.store,
+            name,
+            &gen_arguments,
+        ) {
+            // A trap is the extension failing, not the client asking wrongly,
+            // so it is reported as such rather than as an unknown name.
+            Err(error) => Err(contributions::InvokeError::Failed(error.to_string())),
+            Ok(Err(g_surface::InvokeError::Unknown)) => Err(contributions::InvokeError::Unknown),
+            Ok(Err(g_surface::InvokeError::InvalidArguments)) => {
+                Err(contributions::InvokeError::InvalidArguments)
+            }
+            Ok(Err(g_surface::InvokeError::Failed)) => Err(contributions::InvokeError::Failed(
+                "the extension refused it".to_owned(),
+            )),
+            Ok(Ok(outcome)) => Ok(contributions::InvokeOutcome {
+                text: outcome.text,
+                contributions_changed: outcome.contributions_changed,
+            }),
+        }
     }
 
     fn intercept(&mut self, input: &InterceptInput) -> Result<Decision, InterceptorError> {
@@ -761,6 +851,65 @@ const fn from_gen_error(err: g_icept::InterceptorError) -> InterceptorError {
         g_icept::InterceptorError::Internal => InterceptorError::Internal,
         g_icept::InterceptorError::InvalidState => InterceptorError::InvalidState,
         g_icept::InterceptorError::DependencyFailed => InterceptorError::DependencyFailed,
+    }
+}
+
+/// Generated contributions → the host-side shape, tagged with who declared them.
+///
+/// The extension id comes from the host, never from the guest: a component that
+/// named itself could claim another's contributions, and a client routing an
+/// invocation by that name would reach the wrong one.
+fn from_gen_contributions(
+    extension: &str,
+    declared: g_surface::Contributions,
+) -> contributions::Contributions {
+    contributions::Contributions {
+        extension: extension.to_owned(),
+        commands: declared
+            .commands
+            .into_iter()
+            .map(|command| contributions::Command {
+                name: command.name,
+                title: command.title,
+                description: command.description,
+                arguments: command
+                    .arguments
+                    .into_iter()
+                    .map(|argument| contributions::Argument {
+                        name: argument.name,
+                        description: argument.description,
+                        required: argument.required,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        status_items: declared
+            .status_items
+            .into_iter()
+            .map(|item| contributions::StatusItem {
+                name: item.name,
+                text: item.text,
+                detail: item.detail,
+            })
+            .collect(),
+        forms: declared
+            .forms
+            .into_iter()
+            .map(|form| contributions::Form {
+                name: form.name,
+                title: form.title,
+                fields: form
+                    .fields
+                    .into_iter()
+                    .map(|field| contributions::Field {
+                        name: field.name,
+                        label: field.label,
+                        options: field.options,
+                        default_value: field.default_value,
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 

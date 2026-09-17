@@ -274,6 +274,30 @@ pub trait Interceptor {
     /// (not to be confused with [`Decision::Block`], a normal outcome). The
     /// engine applies the fail-closed-at-`tool-call` policy.
     fn intercept(&mut self, input: &InterceptInput) -> Result<Decision, InterceptorError>;
+
+    /// What this extension contributes to a client's interface, if anything.
+    ///
+    /// Defaulted to nothing, because contributing is opt-in at every level:
+    /// most interceptors do not export `client-surface`, and a host that
+    /// required every implementer to say "none" would make the absence of a
+    /// declaration look like an omission rather than the answer it is.
+    fn contributions(&mut self) -> Option<crate::contributions::Contributions> {
+        None
+    }
+
+    /// Run a contribution this extension declared.
+    ///
+    /// # Errors
+    /// [`crate::contributions::InvokeError::Unknown`] when nothing of that name
+    /// is contributed — which is also the default, since an extension that
+    /// declares nothing can run nothing.
+    fn invoke_contribution(
+        &mut self,
+        _name: &str,
+        _arguments: &[crate::contributions::ArgumentValue],
+    ) -> Result<crate::contributions::InvokeOutcome, crate::contributions::InvokeError> {
+        Err(crate::contributions::InvokeError::Unknown)
+    }
 }
 
 /// The attached driver (TUI, chat, api-*) that answers an `Ask`.
@@ -310,6 +334,38 @@ impl Dispatcher {
     #[must_use]
     pub fn new(interceptors: Vec<Box<dyn Interceptor>>) -> Self {
         Self { interceptors }
+    }
+
+    /// What the loaded extensions contribute to a client's interface, in load
+    /// order, skipping those that contribute nothing.
+    ///
+    /// Read on demand rather than cached at boot: an extension may report a
+    /// change after an invocation, and a set read once would then be stale in
+    /// every client at the same time.
+    pub fn contributions(&mut self) -> Vec<crate::contributions::Contributions> {
+        self.interceptors
+            .iter_mut()
+            .filter_map(|interceptor| interceptor.contributions())
+            .filter(|set| !set.is_empty())
+            .collect()
+    }
+
+    /// Run a contribution, routed by the declaring extension's id.
+    ///
+    /// # Errors
+    /// [`crate::contributions::InvokeError::Unknown`] when no loaded extension
+    /// has that id, or it contributes no such name.
+    pub fn invoke_contribution(
+        &mut self,
+        extension: &str,
+        name: &str,
+        arguments: &[crate::contributions::ArgumentValue],
+    ) -> Result<crate::contributions::InvokeOutcome, crate::contributions::InvokeError> {
+        self.interceptors
+            .iter_mut()
+            .find(|interceptor| interceptor.id() == extension)
+            .ok_or(crate::contributions::InvokeError::Unknown)?
+            .invoke_contribution(name, arguments)
     }
 
     /// Dispatch one `phase`: call each subscribed interceptor in load order,

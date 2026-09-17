@@ -178,3 +178,17 @@ world interceptor-contributor-world {
 
     export client-surface;
 }
+
+/// The host's *view* of a component that contributes — not a target a guest is
+/// authored against.
+///
+/// The host instantiates a guest against its category world (`interceptor-world`
+/// and friends), then reads this one off the same instance to see whether the
+/// export is there. One world with one export and no imports is what makes the
+/// probe typed: absent means the component contributes nothing, present means
+/// the generated bindings marshal the records rather than the host doing it by
+/// hand. A guest exports this by targeting `interceptor-contributor-world`
+/// above, never this world.
+world client-surface-view {
+    export client-surface;
+}

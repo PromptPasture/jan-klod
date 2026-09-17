@@ -37,8 +37,10 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Instant;
 
+use jan_klod_core::contributions;
 use jan_klod_protocol::{
-    compatible, jsonrpc, Command, HelloResult, Notification, COMMAND_METHODS, PROTOCOL_VERSION,
+    compatible, jsonrpc, Command, HelloResult, Notification, SurfaceInvokeResult, COMMAND_METHODS,
+    PROTOCOL_VERSION,
 };
 
 use jan_klod_core::conductor::{Event, EventSink, Flow, RunResult};
@@ -264,6 +266,24 @@ fn command<W: Write>(
         Command::Hello { version } => {
             if compatible(PROTOCOL_VERSION, &version) {
                 *negotiated = true;
+                // What the extensions offer, before the client asks. Sent
+                // only when something is contributed: an absent notification
+                // and an empty one say the same thing, and the common case is
+                // that nothing contributes at all. A client that renders none
+                // of it ignores the frame and runs turns unchanged
+                // (`wit/client-surface.wit`), so a write failure here is not
+                // worth failing the handshake over.
+                let Notification::SurfaceContributions { extensions } =
+                    contributions_notification(agent)
+                else {
+                    unreachable!("contributions_notification builds that variant")
+                };
+                if !extensions.is_empty() {
+                    let _ = write_notification(
+                        &mut *wire.writer.borrow_mut(),
+                        &Notification::SurfaceContributions { extensions },
+                    );
+                }
                 answer(
                     id,
                     serde_json::to_value(HelloResult::default()).unwrap_or_default(),
@@ -310,16 +330,52 @@ fn command<W: Write>(
             jsonrpc::INVALID_REQUEST,
             "no turn is running to steer: send `session/message` to start one".to_owned(),
         )),
-        // Declared in the contract before a transport serves it, the way
-        // `session/fork` was: non-Rust clients generate from the schema, so a
-        // command that exists only in Rust is how the two drift. Refused
-        // rather than ignored — a client that invokes a contribution has to
-        // learn that nothing ran. The host side is #203.
-        Command::SurfaceInvoke { .. } => Served::Answer(refuse(
-            id,
-            jsonrpc::METHOD_NOT_FOUND,
-            "contributions are declared but not yet served here".to_owned(),
-        )),
+        Command::SurfaceInvoke {
+            extension,
+            name,
+            arguments,
+        } => {
+            let arguments: Vec<contributions::ArgumentValue> = arguments
+                .into_iter()
+                .map(|argument| contributions::ArgumentValue {
+                    name: argument.name,
+                    value: argument.value,
+                })
+                .collect();
+            match agent.invoke_contribution(&extension, &name, &arguments) {
+                Ok(outcome) => {
+                    // The set moved, so every client's copy is stale. Told
+                    // rather than polled, and told before the answer, so a
+                    // client that re-renders on the notification has the new
+                    // set in hand when the result arrives. Sent even when it
+                    // is now empty — unlike at connect, because a client
+                    // showing items that have just gone away has to hear it.
+                    if outcome.contributions_changed {
+                        let declared = contributions_notification(agent);
+                        let _ = write_notification(&mut *wire.writer.borrow_mut(), &declared);
+                    }
+                    answer(
+                        id,
+                        serde_json::to_value(SurfaceInvokeResult {
+                            text: outcome.text,
+                            contributions_changed: outcome.contributions_changed,
+                        })
+                        .unwrap_or_default(),
+                    )
+                }
+                // A name nobody contributes is the caller's mistake; the
+                // other two are the extension's, and the codes say which.
+                Err(error @ contributions::InvokeError::Unknown) => {
+                    Served::Answer(refuse(id, jsonrpc::METHOD_NOT_FOUND, error.to_string()))
+                }
+                Err(error @ contributions::InvokeError::InvalidArguments) => {
+                    Served::Answer(refuse(id, jsonrpc::INVALID_PARAMS, error.to_string()))
+                }
+                Err(error @ contributions::InvokeError::Failed(_)) => {
+                    Served::Answer(refuse(id, jsonrpc::INTERNAL_ERROR, error.to_string()))
+                }
+            }
+        }
     }
 }
 
@@ -621,6 +677,67 @@ fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::i
     output.write_all(text.as_bytes())?;
     output.write_all(b"\n")?;
     output.flush()
+}
+
+/// What the loaded extensions contribute, as the notification clients read.
+///
+/// The kernel's shapes are not the wire's — `jan-klod-core` does not depend on
+/// `jan-klod-protocol` — so a surface maps between them, the same way
+/// [`notification_for`] maps a turn event.
+fn contributions_notification(agent: &mut AgentSession) -> Notification {
+    let extensions = agent
+        .contributions()
+        .into_iter()
+        .map(|set| jan_klod_protocol::Contributions {
+            extension: set.extension,
+            commands: set
+                .commands
+                .into_iter()
+                .map(|command| jan_klod_protocol::SurfaceCommand {
+                    name: command.name,
+                    title: command.title,
+                    description: command.description,
+                    arguments: command
+                        .arguments
+                        .into_iter()
+                        .map(|argument| jan_klod_protocol::Argument {
+                            name: argument.name,
+                            description: argument.description,
+                            required: argument.required,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            status_items: set
+                .status_items
+                .into_iter()
+                .map(|item| jan_klod_protocol::StatusItem {
+                    name: item.name,
+                    text: item.text,
+                    detail: item.detail,
+                })
+                .collect(),
+            forms: set
+                .forms
+                .into_iter()
+                .map(|form| jan_klod_protocol::SurfaceForm {
+                    name: form.name,
+                    title: form.title,
+                    fields: form
+                        .fields
+                        .into_iter()
+                        .map(|field| jan_klod_protocol::Field {
+                            name: field.name,
+                            label: field.label,
+                            options: field.options,
+                            default_value: field.default_value,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    Notification::SurfaceContributions { extensions }
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bindings;
 pub mod conductor;
+pub mod contributions;
 pub mod delegate;
 pub mod egress;
 pub mod event_log;
@@ -1520,6 +1521,30 @@ impl AgentSession {
                 detail: "the store lock is poisoned".to_owned(),
             })?
             .fork_events(from, at_seq, into)
+    }
+
+    /// What the loaded extensions contribute to a client's interface.
+    ///
+    /// Read from the components each time rather than cached: an invocation
+    /// may report that the set changed, and a cache would leave every attached
+    /// client showing the old one.
+    pub fn contributions(&mut self) -> Vec<contributions::Contributions> {
+        self.dispatcher.contributions()
+    }
+
+    /// Run a contribution, routed to the extension that declared it.
+    ///
+    /// # Errors
+    /// [`contributions::InvokeError`] when no such extension or name is
+    /// contributed, the arguments are unusable, or the extension fails.
+    pub fn invoke_contribution(
+        &mut self,
+        extension: &str,
+        name: &str,
+        arguments: &[contributions::ArgumentValue],
+    ) -> Result<contributions::InvokeOutcome, contributions::InvokeError> {
+        self.dispatcher
+            .invoke_contribution(extension, name, arguments)
     }
 
     /// All known session ids, newest first.
