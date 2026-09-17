@@ -1,0 +1,218 @@
+package jan-klod:interfaces@0.3.0;
+
+/// Drive a session from inside the sandbox — the inward twin of the client
+/// protocol (Phase 22).
+///
+/// `jan-klod-protocol` is what a *client* says to the runtime: create a
+/// session, list them, read one, fork it, send a message, answer a prompt.
+/// This interface offers the same vocabulary *inward*, to a granted guest. The
+/// symmetry is the point: a Telegram bot and a terminal client want the same
+/// six things, and one of them happens to run in a component. Where the shapes
+/// differ, `jan-klod-protocol` (`src/protocol/src/lib.rs`) is right and this
+/// follows it.
+///
+/// It is the most powerful capability in the set — a holder drives the loop,
+/// spends tokens, and reads what was said — so it is **default-deny**, granted
+/// per component in `config.yaml`, declared in the manifest, and cross-checked
+/// at boot against what the component actually imports, like every other grant.
+///
+/// Implemented by the host; imported by `chat-*` extensions and by anything
+/// else that drives a session rather than participating in one.
+///
+/// # What a grant reaches
+///
+/// **The sessions the component created, plus the session that invoked it.**
+/// `create-session` records the calling component as owner, and every later
+/// call checks that record. A chat bot needs no configuration for this: it
+/// creates a session per conversation, so it holds exactly its own.
+///
+/// A wider **prefix grant** exists for a component whose job is reading
+/// sessions it did not create — an exporter, an archiver — and it is written in
+/// `config.yaml` *and* declared in the manifest, like any other widening.
+///
+/// Lineage is **host-resolved**: a fork's parent is reachable because the host
+/// knows the link, never because a guest named an id it guessed.
+///
+/// The surveyed harnesses land in the same place. Claude Code hands a hook one
+/// `transcript_path` for *this* conversation; Codex passes the same triple, and
+/// where it exposes a second session — a subagent's parent — the host resolves
+/// it from the thread's own parent id rather than letting the extension ask.
+/// oh-my-pi's `SessionManager.list(cwd)` is project-scoped, with "everything
+/// everywhere" a separate `listAll()`. MCP, the one with a real boundary, gives
+/// a server no conversation access at all.
+///
+/// One deliberate divergence, so it is not read as an oversight: those products
+/// hand over a **filesystem path** and let OS permissions be the boundary —
+/// nothing stops a Claude Code hook from opening a sibling session's JSONL. We
+/// hand over a capability, which is narrower by construction. We copy their
+/// *scope*, not their enforcement.
+///
+/// # When the driver dies mid-turn
+///
+/// A guest that traps while a turn runs leaves that turn **abandoned and
+/// recorded incomplete**, through the conductor's existing path — not silently
+/// dropped, and not left looking finished. A half-written answer that reads as
+/// a whole one is the failure that path exists to prevent, and a driver
+/// vanishing is the same situation as a client disconnecting mid-stream, which
+/// the runtime already handles.
+///
+/// No function expresses this: it is host behaviour towards a guest that is no
+/// longer there to be told. It is written here because the author of a driver
+/// has to know what becomes of a turn they started and did not finish.
+interface host-agent {
+    use llm-types.{message};
+
+    /// Opaque session identifier, the same string the client protocol uses.
+    type session-id = string;
+
+    /// Why a call failed.
+    ///
+    /// `busy` is its own case rather than a flavour of `failed` so a bot can
+    /// tell "wait and retry" from "something is broken" and queue on its own
+    /// side. Everything else the host might do about a busy session — a queue,
+    /// a timeout, a priority — is scheduling policy, and the core holds
+    /// mechanism, not policy.
+    enum agent-error {
+        /// No grant, or a session outside the one held. Indistinguishable on
+        /// purpose: a guest learning that a session exists but is not its own
+        /// has learned something a capability boundary should not tell it.
+        denied,
+        /// A turn is already running in this session. See `send-message`.
+        busy,
+        /// No such session, within what this component may reach.
+        not-found,
+        /// The host could not serve the call (store failure, boot state).
+        failed,
+    }
+
+    /// One session as a lister sees it. Mirrors the client protocol's session
+    /// list projection, which spells the same value `id`.
+    record session-summary {
+        id: session-id,
+        /// First 80 characters of the first user message.
+        preview: string,
+    }
+
+    /// A session's messages, as `session/get` returns them.
+    record transcript {
+        session: session-id,
+        messages: list<message>,
+        /// Log position of the last message, which `fork-session` takes as
+        /// `at-seq`. Sparse: events with no message still consume a position.
+        last-seq: u64,
+    }
+
+    /// What a fork produced.
+    record fork-result {
+        /// The child session. Generated by the host — a guest-picked id could
+        /// collide with a live session.
+        id: session-id,
+        /// How many events were copied.
+        copied: u64,
+    }
+
+    /// A tool the loop is about to run, or has run.
+    record tool-event {
+        /// Call id; a `tool-finished` carries the id of the `tool-started` it answers.
+        id: string,
+        /// Tool name on `tool-started`; empty on `tool-finished`.
+        name: string,
+        /// JSON arguments on `tool-started`, result content on `tool-finished`.
+        body: string,
+        /// Whether the call failed. Meaningful on `tool-finished` only.
+        failed: bool,
+    }
+
+    /// A question the turn is blocked on. Answer it with `answer-prompt`;
+    /// leaving it unanswered takes `default-answer`, as everywhere else.
+    record prompt {
+        question: string,
+        /// Empty means free text; non-empty means choose one.
+        options: list<string>,
+        default-answer: string,
+    }
+
+    /// What happened in a session since the last poll.
+    ///
+    /// The same events the client protocol notifies, in the same order. A
+    /// driver that renders these renders what a terminal client would.
+    variant event {
+        /// A chunk of assistant text.
+        text-delta(string),
+        /// A tool is about to run, the `tool-call` gate having allowed it.
+        tool-started(tool-event),
+        /// A tool returned.
+        tool-finished(tool-event),
+        /// A non-fatal notice — a provider fallback, a degraded path.
+        warning(string),
+        /// The turn finished; carries the authoritative answer.
+        done(string),
+        /// The turn is blocked on the user.
+        asked(prompt),
+        /// The turn failed.
+        failed(string),
+    }
+
+    /// Allocate a session, owned by the calling component.
+    ///
+    /// Ownership is what a default grant reaches, so this is the call that
+    /// creates reach rather than a call that consumes it.
+    create-session: func() -> result<session-id, agent-error>;
+
+    /// The sessions this component may reach.
+    ///
+    /// Its own, and the one that invoked it. A component with a prefix grant
+    /// sees that prefix. Never everything.
+    list-sessions: func() -> result<list<session-summary>, agent-error>;
+
+    /// Every session in the store.
+    ///
+    /// A **separate function behind its own grant flag**, not a parameter on
+    /// `list-sessions`. A flag on a call is easy to pass by accident and
+    /// invisible in a manifest; a second function is granted or it is not, and
+    /// the grant says which one the component asked for. oh-my-pi draws the
+    /// same line between `list(cwd)` and `listAll()` as an API-design choice;
+    /// here it is a security boundary, so it is drawn in the interface.
+    list-all-sessions: func() -> result<list<session-summary>, agent-error>;
+
+    /// Read one session's messages.
+    get-session: func(session: session-id) -> result<transcript, agent-error>;
+
+    /// Fork a session at `at-seq` into a fresh child, owned by this component.
+    ///
+    /// The parent must be reachable; the child is the component's own from the
+    /// moment it exists. This is the only place a guest gains reach to lineage,
+    /// and the host resolves it — the guest names a session it already holds.
+    fork-session: func(session: session-id, at-seq: u64) -> result<fork-result, agent-error>;
+
+    /// Start a turn. Returns as soon as the turn is accepted; its events
+    /// arrive through `next-events`.
+    ///
+    /// **Run to completion, nesting refused.** A session already running a turn
+    /// returns `busy`. The alternative — a host-side queue — puts scheduling
+    /// policy in the core, and a guest that wants a queue can hold one: it
+    /// knows its own conversation, and the host does not.
+    send-message: func(session: session-id, text: string) -> result<_, agent-error>;
+
+    /// Take up to `max` events from the session's queue, oldest first.
+    ///
+    /// **Polling, not push.** The host is synchronous and has no path into a
+    /// guest; inventing one for this capability would be a larger change than
+    /// the capability. The bound mirrors what `host-process` already does with
+    /// command output: a call returns what fits and the caller comes back.
+    ///
+    /// An empty list means nothing has happened yet, which is not an error. A
+    /// guest wanting lower latency polls more often; a guest that dies stops
+    /// polling, which is also what happens to its turn — see below.
+    next-events: func(session: session-id, max: u32) -> result<list<event>, agent-error>;
+
+    /// Answer the prompt a `asked` event carried.
+    ///
+    /// This is what makes the holder a **driver** rather than an observer, and
+    /// it is the piece `host-http` could never have carried: a chat bot has to
+    /// be able to put the loop's question to a person and hand the answer back.
+    ///
+    /// Answering when nothing is pending is `not-found`, not a silent success —
+    /// a driver that answers into the void should learn that it did.
+    answer-prompt: func(session: session-id, answer: string) -> result<_, agent-error>;
+}
