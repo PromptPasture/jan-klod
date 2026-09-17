@@ -26,6 +26,7 @@ mod ext_registry;
 mod gate;
 mod generated_guest;
 mod grep_budget;
+mod guardrails;
 mod host_fs;
 mod host_process;
 mod installed_layout;

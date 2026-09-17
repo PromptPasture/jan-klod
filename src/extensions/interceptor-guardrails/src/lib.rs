@@ -114,7 +114,7 @@ mod component {
             Ok(())
         }
         fn start() -> Result<(), String> {
-            log(LogLevel::Info, "started; matching tool arguments");
+            log(LogLevel::Info, "started; matching content");
             Ok(())
         }
         fn stop() {
