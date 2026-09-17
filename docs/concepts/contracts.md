@@ -183,8 +183,9 @@ An answer that arrives when nothing asked is refused on both — `409` over REST
 | `turn/answer` | `session`, `answer` | `POST /session/:id/answer` |
 | `turn/cancel` | `session` | — (today: drop the SSE connection) |
 | `turn/follow-up` | `session`, `message` | — (no steering over REST) |
+| `surface/invoke` | `extension`, `name`, `arguments` | — (contributions are new) |
 
-**Notifications** (core → client). The first five are `conductor::Event` one for one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable command, `session/updated` a transcript that moved:
+**Notifications** (core → client). The first five are `conductor::Event` one for one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable command, `session/updated` a transcript that moved, `surface/contributions` what the extensions offer a client to render ([`wit/client-surface.wit`](../../wit/client-surface.wit)) — sent at connect and again whenever the set changes:
 
 | Notification | Params | SSE frame today |
 |---|---|---|
@@ -196,6 +197,7 @@ An answer that arrives when nothing asked is refused on both — `409` over REST
 | `ask` | `session`, `question`, `options`, `default` | `prompt` |
 | `error` | `message` | `error` (payload key `error`) |
 | `session/updated` | `session`, `preview` | — |
+| `surface/contributions` | `extensions` | — |
 
 REST + SSE is a **projection** of this, not a second contract, and it keeps its own older spellings — `delta`, `tool`, `prompt` — deliberately. Neither side is being renamed to match: `core/tests/protocol_events.rs` asserts every key an SSE frame carries reaches the notification with an equal value, which is what holds the two together.
 
@@ -217,6 +219,7 @@ command, `session/updated` a transcript that moved:
 | `ask` | `session`, `question`, `options`, `default` | `prompt` |
 | `error` | `message` | `error` (payload key `error`) |
 | `session/updated` | `session`, `preview` | — |
+| `surface/contributions` | `extensions` | — |
 
 REST + SSE is a **projection** of this, not a second contract, and it keeps its
 own older spellings — `delta`, `tool`, `prompt` — deliberately. Neither side is

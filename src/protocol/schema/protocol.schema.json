@@ -145,6 +145,56 @@
           "additionalProperties": false,
           "properties": {
             "method": {
+              "const": "surface/invoke"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "arguments": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "value"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "extension": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "arguments",
+                "extension",
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "surface/invoke",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
               "const": "turn/answer"
             },
             "params": {
@@ -368,6 +418,167 @@
             "params"
           ],
           "title": "session/updated",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "surface/contributions"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "extensions": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "commands": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "arguments": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "required": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "description",
+                                  "name",
+                                  "required"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "arguments",
+                            "description",
+                            "name",
+                            "title"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "extension": {
+                        "type": "string"
+                      },
+                      "forms": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fields": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "default": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "options": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "default",
+                                  "label",
+                                  "name",
+                                  "options"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "fields",
+                            "name",
+                            "title"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "status-items": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "detail": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "text": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "detail",
+                            "name",
+                            "text"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "commands",
+                      "extension",
+                      "forms",
+                      "status-items"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "extensions"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "surface/contributions",
           "type": "object"
         },
         {
@@ -724,6 +935,171 @@
               "const": "2.0"
             },
             "method": {
+              "const": "surface/contributions"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "extensions": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "commands": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "arguments": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "required": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "description",
+                                  "name",
+                                  "required"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "arguments",
+                            "description",
+                            "name",
+                            "title"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "extension": {
+                        "type": "string"
+                      },
+                      "forms": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fields": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "default": {
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "options": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "default",
+                                  "label",
+                                  "name",
+                                  "options"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "fields",
+                            "name",
+                            "title"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "status-items": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "detail": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "text": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "detail",
+                            "name",
+                            "text"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "commands",
+                      "extension",
+                      "forms",
+                      "status-items"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "extensions"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params",
+            "jsonrpc"
+          ],
+          "title": "surface/contributions",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
               "const": "text-delta"
             },
             "params": {
@@ -1054,6 +1430,64 @@
               "const": "2.0"
             },
             "method": {
+              "const": "surface/invoke"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "arguments": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "value"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "extension": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "arguments",
+                "extension",
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params",
+            "jsonrpc",
+            "id"
+          ],
+          "title": "surface/invoke",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/jsonrpc.Id"
+            },
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
               "const": "turn/answer"
             },
             "params": {
@@ -1204,5 +1638,5 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Commands a client sends and notifications the core reports, as the `method`/`params` contract and again inside the JSON-RPC 2.0 frame the transports send. `Command` and `Notification` are the contract; the `jsonrpc.*` definitions are what goes over a pipe or a socket.",
   "title": "Jan-Klod client protocol",
-  "x-protocol-version": "0.1.0"
+  "x-protocol-version": "0.2.0"
 }

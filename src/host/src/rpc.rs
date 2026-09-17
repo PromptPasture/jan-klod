@@ -310,6 +310,16 @@ fn command<W: Write>(
             jsonrpc::INVALID_REQUEST,
             "no turn is running to steer: send `session/message` to start one".to_owned(),
         )),
+        // Declared in the contract before a transport serves it, the way
+        // `session/fork` was: non-Rust clients generate from the schema, so a
+        // command that exists only in Rust is how the two drift. Refused
+        // rather than ignored — a client that invokes a contribution has to
+        // learn that nothing ran. The host side is #203.
+        Command::SurfaceInvoke { .. } => Served::Answer(refuse(
+            id,
+            jsonrpc::METHOD_NOT_FOUND,
+            "contributions are declared but not yet served here".to_owned(),
+        )),
     }
 }
 

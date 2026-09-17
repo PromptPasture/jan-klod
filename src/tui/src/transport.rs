@@ -547,9 +547,12 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
             content: content.clone(),
             failed: *failed,
         }),
-        // `session/updated`: client shows one session, list moves aren't
-        // needed.
-        Notification::SessionUpdated { .. } => None,
+        // Neither belongs in this client's stream. `session/updated`: it
+        // shows one session, so list moves are noise. `surface/contributions`:
+        // nothing renders them yet (#190), and ignoring them is a valid client
+        // rather than a gap — `wit/client-surface.wit` makes that a rule, so
+        // no extension may assume a contribution was rendered.
+        Notification::SessionUpdated { .. } | Notification::SurfaceContributions { .. } => None,
     }
 }
 

@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 /// The protocol version this build speaks, as semver.
 ///
 /// See the crate documentation for what a change to each field means.
-pub const PROTOCOL_VERSION: &str = "0.1.0";
+pub const PROTOCOL_VERSION: &str = "0.2.0";
 
 /// Every `method` a [`Command`] can carry.
 ///
@@ -60,13 +60,14 @@ pub const COMMAND_METHODS: &[&str] = &[
     "turn/answer",
     "turn/cancel",
     "turn/follow-up",
+    "surface/invoke",
 ];
 
 /// Whether a client built against `client` can talk to a core speaking `core`.
 ///
 /// Same major, and — while major is `0` — the same minor too. The second
-/// clause decides today: since [`PROTOCOL_VERSION`] is `0.1.0`, a major-only
-/// check would accept a `0.9` client on a `0.1` core. A malformed version is
+/// clause decides today: since [`PROTOCOL_VERSION`] is `0.2.0`, a major-only
+/// check would accept a `0.9` client on a `0.2` core. A malformed version is
 /// incompatible; guessing at one makes the check decoration rather than truth.
 ///
 /// # This rule is deliberately duplicated
@@ -174,6 +175,24 @@ pub enum Command {
         session: String,
         /// The steering message.
         message: String,
+    },
+    /// `surface/invoke` — run a command or form an extension contributed
+    /// (`wit/client-surface.wit`).
+    ///
+    /// Not a session command: a contribution belongs to an extension, and a
+    /// user invoking one is not taking a turn. The host routes it to the
+    /// declaring component and answers with [`SurfaceInvokeResult`].
+    #[serde(rename = "surface/invoke")]
+    SurfaceInvoke {
+        /// The extension that declared it, as `Contributions::extension`.
+        /// Two extensions may contribute the same `name`, so the pair is what
+        /// identifies a contribution.
+        extension: String,
+        /// The contributed `name`.
+        name: String,
+        /// Whatever the client gathered. An argument the contribution did not
+        /// declare is the extension's to refuse.
+        arguments: Vec<ArgumentValue>,
     },
 }
 
@@ -311,6 +330,23 @@ pub enum Notification {
         /// What went wrong, as the user should see it.
         message: String,
     },
+    /// `surface/contributions` — what every enabled extension contributes to
+    /// the user interface (`wit/client-surface.wit`).
+    ///
+    /// Sent **at connect**, so a client that just attached can render without
+    /// asking, and **again whenever the set changes** — an extension enabled,
+    /// disabled, or one whose `surface/invoke` reported a change. One
+    /// notification rather than two: a client needs the whole set on both
+    /// occasions, and a delta would be a second shape to get right for no gain.
+    ///
+    /// A client that ignores this runs turns exactly as before. Contributions
+    /// are additive, and no extension may assume one was rendered.
+    #[serde(rename = "surface/contributions")]
+    SurfaceContributions {
+        /// One entry per contributing extension, in load order. Empty is
+        /// normal: nothing contributes until something does.
+        extensions: Vec<Contributions>,
+    },
     /// `session/updated` — this session's transcript changed.
     #[serde(rename = "session/updated")]
     SessionUpdated {
@@ -377,4 +413,113 @@ pub struct SessionGetResult {
     pub id: String,
     /// The transcript, oldest first.
     pub messages: Vec<TranscriptMessage>,
+}
+
+// ─── Client surface ──────────────────────────────────────────────────────────
+//
+// The wire half of `wit/client-surface.wit`: an extension declares what it
+// offers, the host collects the declarations, and this carries them to every
+// client. The shapes mirror the WIT rather than improving on it — two
+// vocabularies for one contract is how a guest author and a client author stop
+// agreeing.
+//
+// **Every string here is data.** A contributed `title` can carry whatever an
+// MCP server wrote in a tool description, so a renderer escapes it: no terminal
+// escape sequences, no markup, no length a layout cannot survive. The rule is
+// in the WIT doc and repeated here because a client author may never read the
+// WIT.
+
+/// One argument a contributed command takes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Argument {
+    /// Machine name, unique within the command.
+    pub name: String,
+    /// One line, shown to the user. Data, not markup.
+    pub description: String,
+    /// Whether the command can run without it.
+    pub required: bool,
+}
+
+/// Something a user can invoke: a slash command, a menu entry, a button.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceCommand {
+    /// Machine name, unique within the extension.
+    pub name: String,
+    /// Short label. Data, not markup.
+    pub title: String,
+    /// One line of help. Data, not markup.
+    pub description: String,
+    /// In declaration order.
+    pub arguments: Vec<Argument>,
+}
+
+/// A short piece of state an extension wants visible. Read-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusItem {
+    /// Machine name, unique within the extension.
+    pub name: String,
+    /// The text to show, already short. Data, not markup.
+    pub text: String,
+    /// One line of detail, for a client with room for it.
+    pub detail: String,
+}
+
+/// One field of a contributed form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Field {
+    /// Machine name, unique within the form.
+    pub name: String,
+    /// Label. Data, not markup.
+    pub label: String,
+    /// Empty means free text; non-empty means choose one.
+    pub options: Vec<String>,
+    /// Used when the client cannot prompt, or the user declines to fill it.
+    #[serde(rename = "default")]
+    pub default_value: String,
+}
+
+/// A small set of fields gathered in one go.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceForm {
+    /// Machine name, unique within the extension.
+    pub name: String,
+    /// Short label. Data, not markup.
+    pub title: String,
+    /// In declaration order.
+    pub fields: Vec<Field>,
+}
+
+/// Everything one extension contributes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Contributions {
+    /// The declaring extension's instance id, e.g. `interceptor.system`.
+    pub extension: String,
+    /// Commands, in declaration order.
+    pub commands: Vec<SurfaceCommand>,
+    /// Status items, in declaration order.
+    #[serde(rename = "status-items")]
+    pub status_items: Vec<StatusItem>,
+    /// Forms, in declaration order.
+    pub forms: Vec<SurfaceForm>,
+}
+
+/// An argument as the client supplied it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArgumentValue {
+    /// The declared argument's name.
+    pub name: String,
+    /// What the user gave.
+    pub value: String,
+}
+
+/// What the core answers [`Command::SurfaceInvoke`] with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceInvokeResult {
+    /// Shown to the user. Data, not markup.
+    pub text: String,
+    /// Whether the contribution set changed, so a client knows the
+    /// [`Notification::SurfaceContributions`] it is about to receive is not a
+    /// duplicate of the one it already has.
+    #[serde(rename = "contributions-changed")]
+    pub contributions_changed: bool,
 }

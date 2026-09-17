@@ -22,6 +22,7 @@ const fn expected_method(command: &Command) -> &'static str {
         Command::TurnAnswer { .. } => "turn/answer",
         Command::TurnCancel { .. } => "turn/cancel",
         Command::TurnFollowUp { .. } => "turn/follow-up",
+        Command::SurfaceInvoke { .. } => "surface/invoke",
     }
 }
 
@@ -55,6 +56,14 @@ fn every_command() -> Vec<Command> {
         Command::TurnFollowUp {
             session: "s1".to_owned(),
             message: "actually, in Rust".to_owned(),
+        },
+        Command::SurfaceInvoke {
+            extension: "interceptor.system".to_owned(),
+            name: "prompt".to_owned(),
+            arguments: vec![jan_klod_protocol::ArgumentValue {
+                name: "verbose".to_owned(),
+                value: "true".to_owned(),
+            }],
         },
     ]
 }
@@ -123,6 +132,7 @@ const fn expected_notification_method(notification: &Notification) -> &'static s
         Notification::Ask { .. } => "ask",
         Notification::Error { .. } => "error",
         Notification::SessionUpdated { .. } => "session/updated",
+        Notification::SurfaceContributions { .. } => "surface/contributions",
     }
 }
 
@@ -161,6 +171,38 @@ fn every_notification() -> Vec<Notification> {
         Notification::SessionUpdated {
             session: "s1".to_owned(),
             preview: "hello".to_owned(),
+        },
+        // Fully populated, nested included: the schema is derived from this
+        // value, so an empty list here would describe a list of nothing.
+        Notification::SurfaceContributions {
+            extensions: vec![jan_klod_protocol::Contributions {
+                extension: "interceptor.system".to_owned(),
+                commands: vec![jan_klod_protocol::SurfaceCommand {
+                    name: "prompt".to_owned(),
+                    title: "System prompt".to_owned(),
+                    description: "Show the standing instructions".to_owned(),
+                    arguments: vec![jan_klod_protocol::Argument {
+                        name: "verbose".to_owned(),
+                        description: "Include the built-in text".to_owned(),
+                        required: false,
+                    }],
+                }],
+                status_items: vec![jan_klod_protocol::StatusItem {
+                    name: "prompt-source".to_owned(),
+                    text: "built-in".to_owned(),
+                    detail: "no `prompt` key is configured".to_owned(),
+                }],
+                forms: vec![jan_klod_protocol::SurfaceForm {
+                    name: "set-prompt".to_owned(),
+                    title: "Replace the system prompt".to_owned(),
+                    fields: vec![jan_klod_protocol::Field {
+                        name: "text".to_owned(),
+                        label: "Instructions".to_owned(),
+                        options: vec!["built-in".to_owned(), "custom".to_owned()],
+                        default_value: "built-in".to_owned(),
+                    }],
+                }],
+            }],
         },
     ]
 }
@@ -473,18 +515,42 @@ fn schema_path() -> std::path::PathBuf {
 /// The JSON Schema for one field, inferred from a populated sample value.
 ///
 /// Panics on a kind it does not handle, rather than guessing: a field whose type
-/// stops being a string, a bool or a list of strings must be described
-/// deliberately, not approximated.
+/// stops being one of these must be described deliberately, not approximated.
+///
+/// Objects and lists of objects recurse, which the client surface needs — a
+/// contribution is a record holding lists of records. Every sample must still
+/// be **fully populated**, because an absent field describes nothing: the
+/// recursion can only report the shape it is shown.
 fn field_schema(value: &serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::String(_) => serde_json::json!({ "type": "string" }),
         serde_json::Value::Bool(_) => serde_json::json!({ "type": "boolean" }),
+        serde_json::Value::Object(members) => {
+            let properties: serde_json::Map<String, serde_json::Value> = members
+                .iter()
+                .map(|(key, value)| (key.clone(), field_schema(value)))
+                .collect();
+            let required: Vec<&String> = members.keys().collect();
+            serde_json::json!({
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": false,
+            })
+        }
         serde_json::Value::Array(items) => {
+            let first = items.first().unwrap_or_else(|| {
+                panic!("extend field_schema: a sample list must be non-empty, got {value}")
+            });
+            // One element describes the list, so every element must agree —
+            // otherwise the schema would describe whichever happened to be
+            // first and silently permit the rest.
+            let item = field_schema(first);
             assert!(
-                !items.is_empty() && items.iter().all(serde_json::Value::is_string),
-                "extend field_schema: a sample list must be non-empty and all strings, got {value}"
+                items.iter().all(|other| field_schema(other) == item),
+                "extend field_schema: a sample list must be homogeneous, got {value}"
             );
-            serde_json::json!({ "type": "array", "items": { "type": "string" } })
+            serde_json::json!({ "type": "array", "items": item })
         }
         // Described as a non-negative integer, not a bare `number`. Every
         // numeric field this contract has is a count or a position in a

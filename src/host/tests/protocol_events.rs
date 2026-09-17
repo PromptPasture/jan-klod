@@ -62,6 +62,7 @@ fn every_event_maps_to_a_notification() {
             Notification::Ask { .. } => "Ask",
             Notification::Error { .. } => "Error",
             Notification::SessionUpdated { .. } => "SessionUpdated",
+            Notification::SurfaceContributions { .. } => "SurfaceContributions",
         };
         assert_eq!(name, expected, "mapping of {event:?}");
     }
@@ -136,12 +137,14 @@ fn the_notifications_without_an_event_are_accounted_for() {
                 Notification::Ask { .. }
                     | Notification::Error { .. }
                     | Notification::SessionUpdated { .. }
+                    | Notification::SurfaceContributions { .. }
             )
         })
         .count();
     assert_eq!(
         without_events, 0,
-        "no conductor event may map to `ask`, `error` or `session/updated`"
+        "no conductor event may map to `ask`, `error`, `session/updated` or \
+         `surface/contributions`"
     );
 }
 

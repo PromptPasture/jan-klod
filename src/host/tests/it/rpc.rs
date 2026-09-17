@@ -229,14 +229,17 @@ fn a_client_one_minor_behind_is_refused() {
     let Some((_dir, mut agent)) = booted("minor") else {
         return;
     };
-    // Guard: update frame if PROTOCOL_VERSION leaves 0.1.
+    // Guard: update the frame below if PROTOCOL_VERSION leaves 0.2.
     assert!(
-        PROTOCOL_VERSION.starts_with("0.1."),
-        "this case is written against a 0.1 core, not {PROTOCOL_VERSION}"
+        PROTOCOL_VERSION.starts_with("0.2."),
+        "this case is written against a 0.2 core, not {PROTOCOL_VERSION}"
     );
+    // One minor behind, which is what the name says. Against the 0.1 core this
+    // was written for it sent `0.2.0` — a client one minor *ahead* — and the
+    // rule refuses both, so the case reads truer at its own name now.
     let served = exchange(
         &mut agent,
-        &[r#"{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{"version":"0.2.0"}}"#],
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{"version":"0.1.0"}}"#],
     );
     let responses = responses(&served);
     assert_eq!(responses.len(), 1);
