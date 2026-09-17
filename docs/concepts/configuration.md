@@ -243,6 +243,43 @@ set is closed and read-only; `fs` is listed per op because it can also write.
 `fetch` is deliberately absent — it is network egress, which is worth a question
 even though it does not touch the workspace.
 
+### `guardrails`
+
+Where `permission` asks whether an action may happen, `guardrails` looks at what
+the text says — tool arguments, the model's output, the assembled answer, and
+the messages heading for the provider. **Off by default**: a content filter
+nobody asked for is a surprise, and with no rules it changes nothing.
+
+Two optional lists, both under the extension's own key:
+
+```yaml
+    guardrails:
+      enabled: true
+      deny-tool-arguments:              # matched against a call's arguments
+        - pattern: "rm +-rf +/"         # required
+          tool: shell                   # optional; every tool when absent
+          reason: "a recursive delete"  # optional; shown to whoever is refused
+          decision: block               # optional; `block` or `ask`, default `block`
+      redact:                           # matched against model output, the final
+        - pattern: "sk-[A-Za-z0-9]{16,}"  # answer, and outbound messages
+          with: "[redacted]"            # optional; this is the default
+          decision: replace             # optional; `replace` or `block`, default `replace`
+```
+
+Rules are **data** — patterns and a decision each, never code. The engine is the
+`regex` crate, which matches in linear time and cannot backtrack: matching sits
+on the path of every tool call, so a pattern that could be made to hang would be
+a denial-of-service surface inside the thing meant to prevent them. Lookaround
+and backreferences are the price, and a pattern using them is refused when the
+rules load rather than silently never matching.
+
+A malformed rule invalidates the **whole** set; every dispatch then reports an
+internal error and the host fails closed at `tool-call`. A typo stops tool calls
+until it is fixed rather than leaving a guardrail that is silently absent.
+
+Full rule reference, including how the lists compose:
+[`src/extensions/interceptor-guardrails/README.md`](../../src/extensions/interceptor-guardrails/README.md).
+
 ## Inspecting a config
 
 `make config` resolves the repo's `config.yaml` and prints the plan (instance → wasm), exercising the loader:

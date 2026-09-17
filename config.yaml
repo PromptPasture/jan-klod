@@ -125,6 +125,48 @@ extensions:
       # safe-calls: [find, fs:read, fs:grep, git, edit:view, proc-probe]
       # allow-absolute-paths: false
       # allow-parent-traversal: false
+    guardrails:
+      enabled: false           # tool-call + after-response + finalize +
+                               # select-context: content policy. The permission
+                               # gate above asks whether an action may happen;
+                               # this one looks at what the text says. Off by
+                               # default — a content filter nobody asked for is
+                               # a surprise, and with no rules it does nothing
+                               # anyway.
+      #
+      # Rules are DATA: patterns and a decision each, never code. The engine is
+      # the `regex` crate, which matches in linear time and cannot backtrack —
+      # a pattern that could be made to hang would be a denial-of-service
+      # surface inside the thing meant to prevent them. The price is that
+      # lookaround and backreferences are refused when the rules load.
+      #
+      # A malformed rule invalidates the WHOLE set, and the host then fails
+      # closed at `tool-call`: a typo stops tool calls until it is fixed,
+      # loudly, rather than leaving a guardrail that silently is not there.
+      #
+      # Full reference: src/extensions/interceptor-guardrails/README.md
+      #
+      #   deny-tool-arguments   — matched against a call's arguments
+      #       pattern    (required)  the expression to match
+      #       tool       (optional)  limit to one tool; every tool when absent
+      #       reason     (optional)  shown to whoever is refused
+      #       decision   (optional)  `block` or `ask`; default `block`
+      #   redact                — matched against model output, the final answer,
+      #                           and messages on their way to the provider
+      #       pattern    (required)
+      #       with       (optional)  replacement; default `[redacted]`
+      #       reason     (optional)  shown when the rule refuses
+      #       decision   (optional)  `replace` or `block`; default `replace`
+      #
+      # Both lists are optional. A blocking rule wins over redaction wherever
+      # both match. Examples, commented out:
+      # deny-tool-arguments:
+      #   - pattern: "rm +-rf +/"
+      #     tool: shell
+      #     reason: "a recursive delete of a root path"
+      # redact:
+      #   - pattern: "sk-[A-Za-z0-9]{16,}"
+      #     with: "[redacted api key]"
 
   # ---- Capability catalogues ----
   registry:
