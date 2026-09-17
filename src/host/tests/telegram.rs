@@ -1,6 +1,6 @@
 //! Telegram update parsing and offset advance.
 
-use jan_klod_core::telegram::{next_offset, parse_updates, Update};
+use jan_klod_host::telegram::{next_offset, parse_updates, Update};
 
 fn updates_body(update_id: i64, chat_id: i64, text: &str) -> Vec<u8> {
     serde_json::json!({

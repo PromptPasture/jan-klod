@@ -930,7 +930,7 @@ fn telegram(args: &[String]) -> ExitCode {
     let mut offset = 0;
     let mut consecutive_errors: u32 = 0;
     loop {
-        match jan_klod_core::telegram::poll_once(&mut agent, &fetch, &token, offset) {
+        match jan_klod_host::telegram::poll_once(&mut agent, &fetch, &token, offset) {
             Ok(next) => {
                 consecutive_errors = 0;
                 offset = next;

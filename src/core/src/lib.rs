@@ -34,7 +34,6 @@ pub mod sandbox_landlock;
 pub mod sandbox_seatbelt;
 pub mod session;
 pub mod store;
-pub mod telegram;
 pub mod tool_host;
 mod wasm_cache;
 

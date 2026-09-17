@@ -4,8 +4,8 @@
 
 use std::cell::RefCell;
 
-use jan_klod_core::telegram::poll_once;
 use jan_klod_core::Runtime;
+use jan_klod_host::telegram::poll_once;
 
 use crate::common;
 

@@ -13,3 +13,4 @@ pub mod acp;
 pub mod mcp;
 pub mod rpc;
 pub mod serve;
+pub mod telegram;

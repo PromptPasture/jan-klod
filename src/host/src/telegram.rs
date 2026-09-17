@@ -16,9 +16,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crate::conductor::RunResult;
-use crate::intercept::{Driver, UserPrompt};
-use crate::AgentSession;
+use jan_klod_core::conductor::RunResult;
+use jan_klod_core::intercept::{Driver, UserPrompt};
+use jan_klod_core::AgentSession;
 
 /// One inbound Telegram message worth answering.
 #[derive(Debug, Clone, PartialEq, Eq)]
