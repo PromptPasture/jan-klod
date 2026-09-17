@@ -450,7 +450,7 @@ impl Connection {
     /// serve it anyway — is a decision for the box that runs a turn, since
     /// before then there is nothing it could affect.
     fn new_session(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        let id = crate::serve::new_session_id();
+        let id = crate::session::new_session_id();
         self.sessions.push(id.clone());
         let cwd = params
             .get("cwd")

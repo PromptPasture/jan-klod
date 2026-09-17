@@ -43,7 +43,7 @@ use jan_klod_protocol::{
 
 use crate::conductor::{Event, EventSink, Flow, RunResult};
 use crate::intercept::{Driver, UserPrompt};
-use crate::serve::{self, Forked};
+use crate::session::{self, Forked};
 use crate::AgentSession;
 
 /// Serve frames from `input`, answering on `output`, until EOF.
@@ -281,10 +281,12 @@ fn command<W: Write>(
             jsonrpc::INVALID_REQUEST,
             "send `protocol/hello` first".to_owned(),
         )),
-        Command::SessionCreate => answer(id, serde_json::json!({ "id": serve::new_session_id() })),
-        Command::SessionList => answer(id, serve::sessions_payload(agent)),
-        Command::SessionGet { session } => answer(id, serve::session_payload(agent, &session)),
-        Command::SessionFork { session, at_seq } => match serve::fork(agent, &session, at_seq) {
+        Command::SessionCreate => {
+            answer(id, serde_json::json!({ "id": session::new_session_id() }))
+        }
+        Command::SessionList => answer(id, session::sessions_payload(agent)),
+        Command::SessionGet { session } => answer(id, session::session_payload(agent, &session)),
+        Command::SessionFork { session, at_seq } => match session::fork(agent, &session, at_seq) {
             Forked::Created(payload) => answer(id, payload),
             // Requested events don't exist—caller's arguments, not core failure
             Forked::Empty(message) => Served::Answer(refuse(id, jsonrpc::INVALID_PARAMS, message)),
@@ -436,7 +438,7 @@ impl<W: Write> RpcDriver<'_, W> {
     /// and `recv_timeout` reports that as `Disconnected` — a real signal
     /// instead of a probe.
     fn wait_for_answer(&self) -> Option<String> {
-        let deadline = Instant::now() + serve::answer_timeout();
+        let deadline = Instant::now() + session::answer_timeout();
         // Only while parked here is an answer something to take.
         self.state.asking.set(true);
         let answer = self.wait_until(deadline);

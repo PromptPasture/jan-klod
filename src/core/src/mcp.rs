@@ -173,7 +173,7 @@ fn call_ask(agent: &mut AgentSession, params: &serde_json::Value) -> serde_json:
 
 /// The two read tools, over the payloads the REST surface already builds.
 ///
-/// `serve::sessions_payload` and `serve::session_payload` are reused rather
+/// `session::sessions_payload` and `session::session_payload` are reused rather
 /// than re-derived: a second reader of the same transcripts would be a second
 /// answer to "what sessions are there", and they would drift.
 ///
@@ -186,9 +186,9 @@ fn call_sessions(agent: &AgentSession, params: &serde_json::Value, one: bool) ->
         let Some(id) = arguments.get("session").and_then(serde_json::Value::as_str) else {
             return content("`session_get` needs a `session` string", true);
         };
-        crate::serve::session_payload(agent, id)
+        crate::session::session_payload(agent, id)
     } else {
-        crate::serve::sessions_payload(agent)
+        crate::session::sessions_payload(agent)
     };
     match serde_json::to_string_pretty(&payload) {
         Ok(text) => content(&text, false),

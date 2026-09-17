@@ -349,7 +349,7 @@ impl Default for HelloResult {
 /// the log anything sat, and a client could fork only at a number with no way
 /// to obtain it. Commands are declared in this crate ahead of any transport,
 /// *because non-Rust clients generate from the schema*; their result was left
-/// as untyped JSON in `serve::session_payload`, reaching neither schema nor
+/// as untyped JSON in `session::session_payload`, reaching neither schema nor
 /// generated clients.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptMessage {

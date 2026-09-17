@@ -162,7 +162,7 @@ fn two_calls_without_a_session_continue_the_same_one() {
     }
 
     // Transcript proves: one session with both turns, not two separate ones.
-    let sessions = jan_klod_core::serve::sessions_payload(&agent);
+    let sessions = jan_klod_core::session::sessions_payload(&agent);
     let ids: Vec<&str> = sessions["sessions"]
         .as_array()
         .map(|rows| {
