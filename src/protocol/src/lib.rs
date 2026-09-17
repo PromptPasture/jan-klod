@@ -1,6 +1,6 @@
 //! One versioned wire contract shared by every client.
 //!
-//! Today a client is whatever `jan_klod_core::serve` happens to serve — REST
+//! Today a client is whatever `jan_klod_host::serve` happens to serve — REST
 //! routes plus an SSE stream — so each new client (TUI, web, editor) reads the
 //! route table and drifts from the others. This crate makes that surface a
 //! contract of the same rank as the WIT package: named commands, named
@@ -102,7 +102,7 @@ pub fn compatible(core: &str, client: &str) -> bool {
 /// adjacent tagging produces — internal or external tagging would not.
 ///
 /// Each variant names the surface it comes from. `session/*` and `turn/answer`
-/// are the routes `jan_klod_core::serve` serves today; `turn/cancel` and
+/// are the routes `jan_klod_host::serve` serves today; `turn/cancel` and
 /// `turn/follow-up` are new, because over REST the only way to stop a turn is
 /// to drop the SSE connection and there is no way at all to steer one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,7 +218,7 @@ pub const SSE_FRAME_KINDS: [&str; 7] = [
 ///
 /// # These are not the SSE event names
 ///
-/// The SSE projection in `jan_klod_core::serve` predates this contract and
+/// The SSE projection in `jan_klod_host::serve` predates this contract and
 /// keeps its own names: `delta` for `text-delta`, `tool` for `tool-invoked`,
 /// and `prompt` for `ask`. `tool-result`, `warning`, `done` and `error` match.
 /// Do not "fix" either side to agree with the other — the projection is allowed

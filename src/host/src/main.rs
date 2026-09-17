@@ -870,7 +870,7 @@ fn serve(args: &[String]) -> ExitCode {
     }
     println!("jan-klod: serving on http://{bind} — POST {{\"session\":\"…\",\"message\":\"…\"}}");
 
-    if let Err(err) = jan_klod_core::serve::serve_authed(&server, &mut agent, token.as_deref()) {
+    if let Err(err) = jan_klod_host::serve::serve_authed(&server, &mut agent, token.as_deref()) {
         eprintln!("jan-klod: serve loop failed: {err}");
         return ExitCode::FAILURE;
     }

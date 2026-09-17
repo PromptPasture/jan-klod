@@ -107,7 +107,7 @@ fn a_disconnected_client_does_not_hold_the_turn_open() {
     });
 
     let started = std::time::Instant::now();
-    jan_klod_core::serve::serve_once_authed(&server, &mut agent, None).expect("serves the turn");
+    jan_klod_host::serve::serve_once_authed(&server, &mut agent, None).expect("serves the turn");
     let elapsed = started.elapsed();
     let _ = client.join();
 

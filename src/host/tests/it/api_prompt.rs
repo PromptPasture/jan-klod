@@ -9,8 +9,8 @@ use std::thread;
 
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
-use jan_klod_core::serve::serve_once;
 use jan_klod_core::Runtime;
+use jan_klod_host::serve::serve_once;
 use tiny_http::Server;
 
 use crate::common;

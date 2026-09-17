@@ -1428,7 +1428,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
- "tiny_http",
  "toml",
  "ureq",
  "url",

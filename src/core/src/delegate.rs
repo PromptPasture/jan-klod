@@ -6,7 +6,7 @@
 //! Wire format is transport-specific; the seam is unit-tested offline.
 //!
 //! Inbound delegation (core called *by* another ACP orchestrator) is just the
-//! host-side REST surface (`jan_klod_core::serve`).
+//! host-side REST surface (`jan_klod_host::serve`).
 //!
 //! # Not wired
 //!

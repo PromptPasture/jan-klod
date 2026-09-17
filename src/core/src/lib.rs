@@ -35,7 +35,6 @@ pub mod rpc;
 pub mod sandbox;
 pub mod sandbox_landlock;
 pub mod sandbox_seatbelt;
-pub mod serve;
 pub mod session;
 pub mod store;
 pub mod telegram;

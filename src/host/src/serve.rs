@@ -16,12 +16,12 @@ use std::time::{Duration, Instant};
 
 use tiny_http::{Header, Method, Request, Response, Server};
 
-use crate::conductor::{Event, EventSink, Flow, RunResult};
-use crate::intercept::{Driver, UserPrompt};
-use crate::session::{
+use jan_klod_core::conductor::{Event, EventSink, Flow, RunResult};
+use jan_klod_core::intercept::{Driver, UserPrompt};
+use jan_klod_core::session::{
     answer_timeout, fork, new_session_id, session_payload, sessions_payload, Forked,
 };
-use crate::AgentSession;
+use jan_klod_core::AgentSession;
 
 /// How often the wait pokes the event stream while parked. A vanished client
 /// (post-write) looks fine until FIN is processed; each tick writes an SSE

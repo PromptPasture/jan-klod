@@ -14,7 +14,7 @@
 use jan_klod_core::conductor::Event;
 use jan_klod_core::intercept::{ToolCall, ToolOutcome, UserPrompt};
 use jan_klod_core::rpc::notification_for;
-use jan_klod_core::serve;
+use jan_klod_host::serve;
 use jan_klod_protocol::Notification;
 
 /// One event of each variant, every field distinguishable, so a field mapped to

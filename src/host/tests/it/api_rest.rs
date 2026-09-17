@@ -5,8 +5,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::thread;
 
-use jan_klod_core::serve::serve_once;
 use jan_klod_core::Runtime;
+use jan_klod_host::serve::serve_once;
 use tiny_http::Server;
 
 use crate::common;

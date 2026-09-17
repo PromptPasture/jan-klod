@@ -24,10 +24,6 @@ ureq = "3"
 # Host-side persistent store (Phase 3 Slice 3a). `bundled` compiles SQLite from
 # source so there is no system-lib dependency; host-side, so no wasm constraint.
 rusqlite = { version = "0.32", features = ["bundled"] }
-# Host-side inbound HTTP surface (Phase 3 Slice 3b). Synchronous/blocking, which
-# matches the sync loop + the !Send Wasmtime-backed AgentSession (no async runtime,
-# no cross-thread sharing of the session). See docs/concepts/architecture.md#transport.
-tiny_http = "0.12"
 # SHA-256 for `ext install --sha256` (Slice 16c-1). **Zero new packages**:
 # `sha2` 0.10 is already in Cargo.lock, pulled in by wasmtime-wasi via wiggle,
 # so this only makes a transitive crate a direct one. Measured before adding,
