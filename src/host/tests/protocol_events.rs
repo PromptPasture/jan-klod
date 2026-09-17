@@ -7,13 +7,13 @@
 //!
 //! The mapping used to live here, because #41 added no transport and the core
 //! had no runtime reason to hold a protocol type. Slice 13b gave it one, so the
-//! function moved to `jan_klod_core::rpc::notification_for` and this file
+//! function moved to `jan_klod_host::rpc::notification_for` and this file
 //! asserts *that* — a test that validated its own copy of a mapping would pass
 //! while the copy the stdio transport actually sends drifted away from it.
 
 use jan_klod_core::conductor::Event;
 use jan_klod_core::intercept::{ToolCall, ToolOutcome, UserPrompt};
-use jan_klod_core::rpc::notification_for;
+use jan_klod_host::rpc::notification_for;
 use jan_klod_host::serve;
 use jan_klod_protocol::Notification;
 

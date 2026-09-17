@@ -7,17 +7,9 @@ publish.workspace = true
 
 [dependencies]
 jan-klod-config = { path = "../config" }
-# The wire contract. A real dependency since Slice 13b: `rpc` serves the commands
-# and frames the answers. Never the other way round — `jan-klod-protocol` carries
-# nothing beyond serde/serde_json (#41), and depending on the core would drag
-# wasmtime into every client that reads a frame.
-jan-klod-protocol = { path = "../protocol" }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 serde_json.workspace = true
-# `derive` only, for the MCP frame shape — zero new packages, since serde and
-# serde_derive are both already in Cargo.lock via serde_json/serde_yaml_ng.
-serde.workspace = true
 toml = "0.9"
 thiserror.workspace = true
 ureq = "3"
@@ -38,6 +30,12 @@ sha2 = "0.10"
 # at one more package.
 minisign-verify = "0.2.5"
 url = "2"
+
+# `derive` only, and only for the `registry_index` example, which writes the
+# index as a struct in declaration order. No runtime code here derives any more:
+# the frame shapes that did left with the surfaces (#179).
+[dev-dependencies]
+serde.workspace = true
 
 
 # Landlock, for the Linux command sandbox (Slice 15c). Target-gated, so it never

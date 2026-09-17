@@ -12,8 +12,8 @@ use std::sync::Arc;
 use jan_klod_client::transport::Transport as _;
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
-use jan_klod_core::rpc;
 use jan_klod_core::Runtime;
+use jan_klod_host::rpc;
 use jan_klod_protocol::{jsonrpc, PROTOCOL_VERSION};
 
 use crate::common;

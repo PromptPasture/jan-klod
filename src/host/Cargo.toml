@@ -17,9 +17,17 @@ jan-klod-core = { path = "../core" }
 # AgentSession (no async runtime, no cross-thread sharing of the session). See
 # docs/concepts/architecture.md#transport.
 tiny_http = "0.12"
-# The surfaces speak JSON on the wire. Already in the lock via jan-klod-core,
-# so naming it here costs no package.
+# The surfaces speak JSON on the wire: `serde` derives the frame types the
+# stdio surfaces parse, `serde_json` reads and writes them. Both are already in
+# the lock via jan-klod-core, so naming them here costs no package.
+serde.workspace = true
 serde_json.workspace = true
+# The wire contract. `rpc` serves the commands and frames the answers; `acp` and
+# `mcp` share its JSON-RPC framing. Never the other way round —
+# `jan-klod-protocol` carries nothing beyond serde/serde_json (#41), and
+# depending on this crate would drag wasmtime into every client that reads a
+# frame. Was a dev-dependency here while the surfaces lived in the kernel.
+jan-klod-protocol = { path = "../protocol" }
 
 # Examples and integration tests drive the guests over the Component Model:
 # spike_gate (Slice 1a gate), provider_probe (live single provider leg),
@@ -31,9 +39,6 @@ serde_json.workspace = true
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 jan-klod-config = { path = "../config" }
-# The rpc harness reads the frames back as the contract types rather than as
-# hand-matched JSON, so a shape change fails the test instead of passing it.
-jan-klod-protocol = { path = "../protocol" }
 # The shipped-defaults gate drives core through the *real* UI client library
 # rather than a hand-rolled HTTP client, so the test exercises the same code a
 # user's TUI runs. Test-only: the `jan-klod` binary does not depend on the UI.

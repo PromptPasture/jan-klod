@@ -41,10 +41,10 @@ use jan_klod_protocol::{
     compatible, jsonrpc, Command, HelloResult, Notification, COMMAND_METHODS, PROTOCOL_VERSION,
 };
 
-use crate::conductor::{Event, EventSink, Flow, RunResult};
-use crate::intercept::{Driver, UserPrompt};
-use crate::session::{self, Forked};
-use crate::AgentSession;
+use jan_klod_core::conductor::{Event, EventSink, Flow, RunResult};
+use jan_klod_core::intercept::{Driver, UserPrompt};
+use jan_klod_core::session::{self, Forked};
+use jan_klod_core::AgentSession;
 
 /// Serve frames from `input`, answering on `output`, until EOF.
 ///

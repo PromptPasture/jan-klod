@@ -48,7 +48,7 @@ extensions:
 fn exchange(agent: &mut jan_klod_core::AgentSession, lines: &[&str]) -> Vec<serde_json::Value> {
     let input = lines.join("\n") + "\n";
     let mut output = Vec::new();
-    jan_klod_core::mcp::serve(std::io::Cursor::new(input), &mut output, agent)
+    jan_klod_host::mcp::serve(std::io::Cursor::new(input), &mut output, agent)
         .expect("the server writes its frames");
     let text = String::from_utf8(output).expect("frames are UTF-8");
     text.lines()

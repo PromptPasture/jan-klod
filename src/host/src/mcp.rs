@@ -31,7 +31,7 @@ use std::io::{BufRead, Write};
 
 use jan_klod_protocol::jsonrpc;
 
-use crate::{AgentSession, HeadlessDriver};
+use jan_klod_core::{AgentSession, HeadlessDriver};
 
 /// The MCP spec revision this server implements.
 ///
@@ -164,10 +164,10 @@ fn call_ask(agent: &mut AgentSession, params: &serde_json::Value) -> serde_json:
     // frame as an answer, editors couldn't answer anyway.
     let mut driver = HeadlessDriver;
     match agent.run_with_driver(&mut driver, session, question) {
-        crate::conductor::RunResult::Answered { text, .. } => content(&text, false),
+        jan_klod_core::conductor::RunResult::Answered { text, .. } => content(&text, false),
         // The message is written for a person; an enum's Debug is not a
         // diagnosis, and this one reaches a model.
-        crate::conductor::RunResult::Failed(message) => content(&message, true),
+        jan_klod_core::conductor::RunResult::Failed(message) => content(&message, true),
     }
 }
 
@@ -186,9 +186,9 @@ fn call_sessions(agent: &AgentSession, params: &serde_json::Value, one: bool) ->
         let Some(id) = arguments.get("session").and_then(serde_json::Value::as_str) else {
             return content("`session_get` needs a `session` string", true);
         };
-        crate::session::session_payload(agent, id)
+        jan_klod_core::session::session_payload(agent, id)
     } else {
-        crate::session::sessions_payload(agent)
+        jan_klod_core::session::sessions_payload(agent)
     };
     match serde_json::to_string_pretty(&payload) {
         Ok(text) => content(&text, false),

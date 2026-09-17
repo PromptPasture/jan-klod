@@ -101,7 +101,7 @@ fn acp() -> ExitCode {
 
     let input = std::io::BufReader::new(std::io::stdin());
     let output = std::io::stdout();
-    match jan_klod_core::acp::serve(input, output, &mut agent) {
+    match jan_klod_host::acp::serve(input, output, &mut agent) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("jan-klod: acp: {err}");
@@ -146,7 +146,7 @@ fn mcp() -> ExitCode {
 
     let input = std::io::BufReader::new(std::io::stdin());
     let mut output = std::io::stdout();
-    match jan_klod_core::mcp::serve(input, &mut output, &mut agent) {
+    match jan_klod_host::mcp::serve(input, &mut output, &mut agent) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("jan-klod: mcp: {err}");
@@ -749,7 +749,7 @@ fn rpc(args: &[String]) -> ExitCode {
     // reader to a thread so a mid-turn cancel can be read, and a `StdinLock`
     // holds a `MutexGuard`, which is not `Send`.
     let input = std::io::BufReader::new(std::io::stdin());
-    match jan_klod_core::rpc::serve(input, std::io::stdout(), &mut agent) {
+    match jan_klod_host::rpc::serve(input, std::io::stdout(), &mut agent) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("jan-klod: rpc loop failed: {err}");

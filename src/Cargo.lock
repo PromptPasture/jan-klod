@@ -1420,7 +1420,6 @@ name = "jan-klod-core"
 version = "0.1.0"
 dependencies = [
  "jan-klod-config",
- "jan-klod-protocol",
  "landlock",
  "minisign-verify",
  "rusqlite",
@@ -1445,6 +1444,7 @@ dependencies = [
  "jan-klod-core",
  "jan-klod-protocol",
  "ring",
+ "serde",
  "serde_json",
  "sha2",
  "tiny_http",

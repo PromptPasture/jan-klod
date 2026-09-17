@@ -9,4 +9,7 @@
 //! The binary is the only production caller. The modules are public because the
 //! integration tests drive a surface directly, without a subprocess.
 
+pub mod acp;
+pub mod mcp;
+pub mod rpc;
 pub mod serve;

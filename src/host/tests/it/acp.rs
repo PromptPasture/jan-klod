@@ -12,8 +12,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use jan_klod_core::acp::Connection;
 use jan_klod_core::Runtime;
+use jan_klod_host::acp::Connection;
 
 use crate::common;
 
@@ -73,11 +73,11 @@ impl Editor {
         agent: &mut jan_klod_core::AgentSession,
         line: &str,
     ) -> Option<serde_json::Value> {
-        self.send_with(agent, line, &jan_klod_core::acp::NoAsker)
+        self.send_with(agent, line, &jan_klod_host::acp::NoAsker)
     }
 
-    /// The same, with a chosen [`jan_klod_core::acp::Asker`].
-    fn send_with<A: jan_klod_core::acp::Asker>(
+    /// The same, with a chosen [`jan_klod_host::acp::Asker`].
+    fn send_with<A: jan_klod_host::acp::Asker>(
         &mut self,
         agent: &mut jan_klod_core::AgentSession,
         line: &str,
@@ -253,7 +253,7 @@ impl Answering {
     }
 }
 
-impl jan_klod_core::acp::Asker for Answering {
+impl jan_klod_host::acp::Asker for Answering {
     fn ask(&self, _session: &str, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
         self.asked.borrow_mut().push(prompt.question.clone());
         // A real editor picks an `optionId` from the prompt's own options.
