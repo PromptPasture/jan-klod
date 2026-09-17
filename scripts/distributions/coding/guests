@@ -8,6 +8,7 @@ interceptor-context
 interceptor-system
 interceptor-tool-selector
 interceptor-permission
+interceptor-guardrails
 registry-skills
 tool-fs
 tool-edit

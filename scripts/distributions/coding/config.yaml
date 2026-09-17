@@ -33,6 +33,30 @@ extensions:
       enabled: true
     permission:
       enabled: true
+    # Content policy. `permission` above asks whether an action may happen;
+    # this looks at what the text says. Keys and the full rule reference:
+    # docs/concepts/configuration.md#guardrails.
+    guardrails:
+      enabled: true
+      # Redaction only, and deliberately so. A `deny-tool-arguments` rule needs
+      # something to refuse: this distribution enables no shell (`execution` is
+      # off below) and its `git` is read-only — status, diff, log, show, branch,
+      # with commit/push/checkout/reset refused by the tool itself. A rule with
+      # no reachable target is a demonstration, not a guardrail. Deployments
+      # that turn commands on should add one; the root config.yaml shows how.
+      #
+      # These two are shapes that cannot be anything else, and both reach the
+      # transcript by the ordinary route: the agent reads a file, the key is in
+      # it, and the answer is written to the session log and every attached
+      # client. Redacting at the boundary keeps a credential from outliving the
+      # turn that happened to see it.
+      redact:
+        - pattern: "sk-[A-Za-z0-9]{16,}"
+          with: "[redacted api key]"
+          reason: "an API key of the shape this distribution's own provider uses"
+        - pattern: "gh[pousr]_[A-Za-z0-9]{36}"
+          with: "[redacted github token]"
+          reason: "a GitHub token, and this distribution ships git tooling"
 
   # --- skills ---------------------------------------------------------------
   registry:
