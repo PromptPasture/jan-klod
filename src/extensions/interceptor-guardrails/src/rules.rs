@@ -469,6 +469,24 @@ mod tests {
         assert!(rules.review_text("secret").is_none());
     }
 
+    /// Backreferences are the other thing the engine's linear-time guarantee
+    /// costs, and the README says so — so the claim gets a test.
+    #[test]
+    fn a_backreference_is_refused_like_lookaround() {
+        let error = Rules::from_config(&config(r#"{"redact":[{"pattern":"(a)\\1"}]}"#))
+            .expect_err("the engine has no backreferences");
+        assert!(matches!(error, RuleError::Pattern(_)), "{error:?}");
+    }
+
+    /// Case-insensitive matching via an inline flag is the one piece of syntax
+    /// the README promises by name.
+    #[test]
+    fn an_inline_flag_works() {
+        let rules =
+            Rules::from_config(&config(r#"{"redact":[{"pattern":"(?i)secret"}]}"#)).expect("valid");
+        assert!(rules.review_text("SECRET").is_some());
+    }
+
     /// Lookaround is not supported by the engine, and a pattern that uses it is
     /// a configuration error rather than a rule that silently never fires.
     #[test]
