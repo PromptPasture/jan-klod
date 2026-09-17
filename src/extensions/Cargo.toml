@@ -8,6 +8,7 @@ members = [
     "registry-skills",
     "registry-mcp",
     "interceptor-intent-router",
+    "interceptor-guardrails",
     "interceptor-permission",
     "interceptor-tool-selector",
     "interceptor-context",
@@ -34,6 +35,7 @@ guest-fs = { path = "guest-fs" }
 wit-bindgen = "0.58"
 serde_json = "1"
 whatlang = "0.16"
+regex = "1"
 
 # Linting policy, declared once and inherited by every guest via `lints.workspace =
 # true`. Same strict policy as the host workspace (src/Cargo.toml) — the guests
