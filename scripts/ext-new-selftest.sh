@@ -3,9 +3,11 @@
 #
 # Two claims, and they are different claims:
 #
-#   1. Every kind generates a crate naming the right world and the right trait.
-#      Cheap — no build — so it covers all five templates on every `make test`,
-#      where compiling all five would not be affordable enough to run that often.
+#   1. Every kind generates a crate naming the right world and the right trait,
+#      and every kind with a TypeScript template exports the names its world
+#      expects. Cheap — no build — so it covers all seven templates on every
+#      `make test`, where compiling them all would not be affordable enough to
+#      run that often.
 #
 #   2. The committed `tool-hello` is still **exactly** what the generator emits.
 #      That is the drift check. Without it the committed example slowly becomes
@@ -59,6 +61,55 @@ check_kind interceptor     interceptor-world    Interceptor
 check_kind registry-skills skill-registry-world SkillRegistry
 check_kind registry-mcp    mcp-registry-world   McpRegistry
 
+echo "ext-new-selftest: the TypeScript templates export what their world wants"
+
+# The TS path is claim 1 only. There is no claim-2 twin for it: the committed
+# `tool-hello-ts` greets by name so the gate can find its words in a
+# transcript, and a generated stub that did that would be a template teaching
+# a behaviour instead of a shape. `tool-hello` mirrors the generator;
+# `tool-hello-ts` does not, on purpose.
+check_ts_kind() {
+    kind="$1"
+    export_name="$2"
+    name="probe-ts-$kind"
+    EXT_ROOT="$WORK/ts" sh "$ROOT/scripts/ext-new.sh" "$name" "$kind" ts >/dev/null
+
+    guest="$WORK/ts/$name/src/guest.ts"
+    for want in "export const extensionLifecycle" "export const $export_name"; do
+        grep -q "$want" "$guest" || {
+            echo "ext-new-selftest: ts/$kind is missing \`$want\`" >&2
+            exit 1
+        }
+    done
+    # `throw` is the TypeScript `todo!()`: it makes the first invocation a
+    # trap the host reports as a guest crash. Comments stripped for the same
+    # reason as above.
+    ! grep -v '^[[:space:]]*[/*]' "$guest" | grep -q 'throw ' || {
+        echo "ext-new-selftest: ts/$kind left a throw in the template" >&2
+        exit 1
+    }
+    # The generator substitutes the name; a leftover placeholder would ship a
+    # tool the model sees as NAME_PLACEHOLDER.
+    ! grep -q 'NAME_PLACEHOLDER' "$guest" || {
+        echo "ext-new-selftest: ts/$kind did not substitute NAME_PLACEHOLDER" >&2
+        exit 1
+    }
+    grep -q "\"name\": \"$name\"" "$WORK/ts/$name/package.json" || {
+        echo "ext-new-selftest: ts/$kind package.json does not name $name" >&2
+        exit 1
+    }
+    printf '  ts/%s -> %s\n' "$kind" "$export_name"
+}
+
+check_ts_kind tool        toolCallable
+check_ts_kind interceptor interceptor
+
+echo "ext-new-selftest: a kind with no TypeScript template is refused"
+if EXT_ROOT="$WORK/ts" sh "$ROOT/scripts/ext-new.sh" probe-ts-provider provider ts >/dev/null 2>&1; then
+    echo "ext-new-selftest: LANG=ts KIND=provider was ACCEPTED — there is no stub" >&2
+    exit 1
+fi
+
 echo "ext-new-selftest: an unknown kind is refused"
 if EXT_ROOT="$WORK/kinds" sh "$ROOT/scripts/ext-new.sh" probe-agent agent >/dev/null 2>&1; then
     echo "ext-new-selftest: KIND=agent was ACCEPTED — there is no agent world" >&2
@@ -76,4 +127,4 @@ for file in Cargo.toml src/lib.rs; do
     fi
 done
 
-echo "ext-new-selftest: 5 kinds, 1 refusal and 0 drift, as required"
+echo "ext-new-selftest: 5 Rust kinds, 2 TypeScript kinds, 2 refusals and 0 drift, as required"

@@ -95,7 +95,10 @@ test:
 # and the host refuses to instantiate it — deliberately: a guest reaches the
 # network through `host-http`, where the egress policy is, and a linker that
 # also offered `wasi:http` would hand every guest a way around it.
-TS_GUEST := tool-hello-ts
+# The TypeScript list, written to by `scripts/ext-new.sh` the way `GUESTS`
+# above is. The world each one binds comes from its name prefix, the same rule
+# the Rust kinds follow, so a new guest needs no second edit here.
+TS_GUESTS := tool-hello-ts
 ESBUILD := $(ROOT)/src/web/node_modules/.bin/esbuild
 
 .PHONY: ts-guest
@@ -104,20 +107,28 @@ ESBUILD := $(ROOT)/src/web/node_modules/.bin/esbuild
 # a failure two lines later.
 ts-guest:
 	@if ! command -v jco >/dev/null 2>&1; then \
-	  echo "skipping $(TS_GUEST): jco is not on PATH"; \
+	  echo "skipping $(TS_GUESTS): jco is not on PATH"; \
 	  echo "  install it with: npm install -g @bytecodealliance/jco@$(JCO_VERSION)"; \
 	elif [ ! -x $(ESBUILD) ]; then \
-	  echo "skipping $(TS_GUEST): src/web's esbuild is not installed"; \
+	  echo "skipping $(TS_GUESTS): src/web's esbuild is not installed"; \
 	  echo "  install it with: cd src/web && npm ci"; \
 	else \
 	  set -e; \
-	  mkdir -p $(TS_GUEST)/build $(EXT_DIR); \
-	  $(ESBUILD) $(TS_GUEST)/src/guest.ts --bundle --format=esm \
-	    --target=es2022 --outfile=$(TS_GUEST)/build/guest.js; \
-	  jco componentize $(TS_GUEST)/build/guest.js --wit $(WIT_DIR) \
-	    --world-name tool-world --disable http --disable fetch-event \
-	    -o $(EXT_DIR)/$(TS_GUEST).wasm; \
-	  sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(WIT_DIR) $(TS_GUEST); \
+	  mkdir -p $(EXT_DIR); \
+	  for g in $(TS_GUESTS); do \
+	    case $$g in \
+	      tool-*) world=tool-world ;; \
+	      interceptor-*) world=interceptor-world ;; \
+	      *) echo "ts-guest: $$g has no world for its prefix" >&2; exit 1 ;; \
+	    esac; \
+	    mkdir -p $$g/build; \
+	    $(ESBUILD) $$g/src/guest.ts --bundle --format=esm \
+	      --target=es2022 --outfile=$$g/build/guest.js; \
+	    jco componentize $$g/build/guest.js --wit $(WIT_DIR) \
+	      --world-name $$world --disable http --disable fetch-event \
+	      -o $(EXT_DIR)/$$g.wasm; \
+	    sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(WIT_DIR) $$g; \
+	  done; \
 	fi
 
 # Lint every guest, twice, because each run sees a different half of one.
