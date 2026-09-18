@@ -54,7 +54,7 @@ help:
 	@echo "  all         build the host workspace + Rust guests (default)"
 	@echo "  core        build the host workspace"
 	@echo "  extensions  build the Rust guests, staged in ext/ (alias: ext)"
-	@echo "  ext-new     scaffold a new extension: NAME=<name> KIND=<kind> [LANG=rust|ts]"
+	@echo "  ext-new     scaffold a new extension: NAME=<name> KIND=<kind> [LANG=rust|ts|py]"
 	@echo "  gui         build the Tauri shell and stage it beside jan-klod"
 	@echo "  bundle      release archive; DIST=coding|headless-chat|minimal for one,"
 	@echo "              GUI=1 to ship the window too (archive gains '-gui')"
@@ -138,16 +138,17 @@ ext: extensions
 # one, so a generated agent crate could compile against nothing and never load
 # (#111).
 #
-# LANG ∈ rust (default) | ts. The TypeScript path covers tool and interceptor
-# only, and its build needs `jco` — which `make setup` does not install, for
-# the 326 MB reason in versions.mk (#187).
+# LANG ∈ rust (default) | ts | py. Both non-Rust paths cover tool and
+# interceptor only, and their builds need a toolchain `make setup` does not
+# install — `jco` (326 MB) or `componentize-py` (50 MB), for the reasons in
+# versions.mk (#187, #188).
 #
 # `LANG` is also the locale variable, and make imports the environment, so a
 # bare `$(LANG)` reads `en_US.UTF-8` on most machines. Only a command-line
 # `LANG=` is the language axis; the inherited locale is left alone, both here
 # and in every recipe that runs a locale-sensitive tool.
 EXT_LANG := $(if $(filter command line,$(origin LANG)),$(LANG),rust)
-EXT_NEW_USAGE := usage: make ext-new NAME=<name> KIND=<kind> [LANG=rust|ts]
+EXT_NEW_USAGE := usage: make ext-new NAME=<name> KIND=<kind> [LANG=rust|ts|py]
 ext-new:
 	@test -n "$(NAME)" || { echo "$(EXT_NEW_USAGE)" >&2; exit 2; }
 	@test -n "$(KIND)" || { echo "$(EXT_NEW_USAGE)" >&2; exit 2; }

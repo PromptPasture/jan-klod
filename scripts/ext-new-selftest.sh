@@ -4,10 +4,10 @@
 # Two claims, and they are different claims:
 #
 #   1. Every kind generates a crate naming the right world and the right trait,
-#      and every kind with a TypeScript template exports the names its world
-#      expects. Cheap — no build — so it covers all seven templates on every
-#      `make test`, where compiling them all would not be affordable enough to
-#      run that often.
+#      and every kind with a TypeScript or Python template names what its
+#      world expects. Cheap — no build — so it covers all nine templates on
+#      every `make test`, where compiling them all would not be affordable
+#      enough to run that often.
 #
 #   2. The committed `tool-hello` is still **exactly** what the generator emits.
 #      That is the drift check. Without it the committed example slowly becomes
@@ -110,6 +110,59 @@ if EXT_ROOT="$WORK/ts" sh "$ROOT/scripts/ext-new.sh" probe-ts-provider provider 
     exit 1
 fi
 
+echo "ext-new-selftest: the Python templates implement what their world wants"
+
+# Same claim as the TypeScript block, one step stronger: `componentize-py`
+# generates bindings, so the stub names classes that must exist in the
+# generated `wit_world` package. Checked as text here for the same reason the
+# Rust kinds are — a build per kind is not affordable on every `make test` —
+# and the componentize step is what proves it for real.
+check_py_kind() {
+    kind="$1"
+    class_name="$2"
+    name="probe-py-$kind"
+    EXT_ROOT="$WORK/py" sh "$ROOT/scripts/ext-new.sh" "$name" "$kind" py >/dev/null
+
+    app="$WORK/py/$name/app.py"
+    for want in "class ExtensionLifecycle(" "class $class_name(" "import wit_world"; do
+        grep -q "$want" "$app" || {
+            echo "ext-new-selftest: py/$kind is missing \`$want\`" >&2
+            exit 1
+        }
+    done
+    # `raise` is the Python `todo!()`. `NotImplementedError` in particular is
+    # what the generated `Protocol`s raise, so a stub that inherited without
+    # overriding would trap on first call and look like a host bug.
+    ! grep -v '^[[:space:]]*#' "$app" | grep -q 'raise ' || {
+        echo "ext-new-selftest: py/$kind left a raise in the template" >&2
+        exit 1
+    }
+    ! grep -q 'NAME_PLACEHOLDER' "$app" || {
+        echo "ext-new-selftest: py/$kind did not substitute NAME_PLACEHOLDER" >&2
+        exit 1
+    }
+    grep -q "^name = \"$name\"" "$WORK/py/$name/pyproject.toml" || {
+        echo "ext-new-selftest: py/$kind pyproject.toml does not name $name" >&2
+        exit 1
+    }
+    # Syntax, which the other two languages get from their compilers here and
+    # Python does not get until componentize time.
+    python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$app" || {
+        echo "ext-new-selftest: py/$kind is not valid Python" >&2
+        exit 1
+    }
+    printf '  py/%s -> %s\n' "$kind" "$class_name"
+}
+
+check_py_kind tool        ToolCallable
+check_py_kind interceptor Interceptor
+
+echo "ext-new-selftest: a kind with no Python template is refused"
+if EXT_ROOT="$WORK/py" sh "$ROOT/scripts/ext-new.sh" probe-py-provider provider py >/dev/null 2>&1; then
+    echo "ext-new-selftest: LANG=py KIND=provider was ACCEPTED — there is no stub" >&2
+    exit 1
+fi
+
 echo "ext-new-selftest: an unknown kind is refused"
 if EXT_ROOT="$WORK/kinds" sh "$ROOT/scripts/ext-new.sh" probe-agent agent >/dev/null 2>&1; then
     echo "ext-new-selftest: KIND=agent was ACCEPTED — there is no agent world" >&2
@@ -127,4 +180,4 @@ for file in Cargo.toml src/lib.rs; do
     fi
 done
 
-echo "ext-new-selftest: 5 Rust kinds, 2 TypeScript kinds, 2 refusals and 0 drift, as required"
+echo "ext-new-selftest: 5 Rust, 2 TypeScript, 2 Python kinds, 3 refusals and 0 drift, as required"
