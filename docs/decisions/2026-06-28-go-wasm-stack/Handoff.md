@@ -9,6 +9,13 @@ updated: 2026-06-28
 
 # Handoff — Stack Decision: Go + Wazero + WASM
 
+> **Superseded** by [2026-06-29 — Component Model on Rust + Wasmtime](../2026-06-29-component-model-rust/Handoff.md).
+> The host is Rust on Wasmtime; there is no pure-Go Component Model host, which
+> is the reason recorded there. **What outlived it:** this is the record that
+> replaced Java/Quarkus, and the architecture it says is unchanged — extensions,
+> blue/green, configurator, the loop — is still the shape of the system. Only the
+> language and the loading mechanism moved on.
+
 ## What this is
 
 Replaced Java/Quarkus with **Go + Wazero + WASM component model**. Architecture (extensions, blue/green, configurator, loop) unchanged; only language + loading changed.

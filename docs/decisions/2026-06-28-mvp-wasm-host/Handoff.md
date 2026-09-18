@@ -9,6 +9,13 @@ updated: 2026-06-28
 
 # Handoff — MVP WASM Host: ABI, no-CGo, SQLite placement
 
+> **Superseded** by [2026-06-29 — Component Model on Rust + Wasmtime](../2026-06-29-component-model-rust/Handoff.md).
+> The core-module JSON ABI below exists because Wazero had no Component Model;
+> the host is Wasmtime now and extensions are components with WIT contracts, so
+> the ABI reasoning is history. **What outlived it:** SQLite runs host-side, not
+> in a guest — still true, and re-argued from scratch in
+> [2026-08-10 — Storage is not an extension](../2026-08-10-storage-is-not-an-extension/Handoff.md).
+
 ## What this is
 
 First MVP slice: Go core loads sandboxed WASM, calls across boundary. Three findings revise (not overturn) [Go + Wazero stack](../2026-06-28-go-wasm-stack/Handoff.md).

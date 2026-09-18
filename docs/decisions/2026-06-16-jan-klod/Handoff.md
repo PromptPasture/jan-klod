@@ -9,6 +9,13 @@ updated: 2026-06-16
 
 # Handoff — 🥷 Jan Klod Agent Project
 
+> **Superseded.** This is the original Java/Quarkus design. The stack moved to
+> Go + Wazero on [2026-06-28](../2026-06-28-go-wasm-stack/Handoff.md) and to
+> Rust + Wasmtime on [2026-06-29](../2026-06-29-component-model-rust/Handoff.md).
+> The taxonomy, the configurator idea and the blue/green shape survived; every
+> language, runtime and API decision below did not. Kept because the questions
+> it opens are still the project's, and later records answer them by name.
+
 ## What this is
 
 **Jan-Klod** brainstorm: minimal, stable Java/Quarkus core + typed extensions + curated bundles + Initializr-style configurator.
