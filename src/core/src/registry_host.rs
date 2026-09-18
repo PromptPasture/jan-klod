@@ -372,6 +372,10 @@ impl mcp_proc::Host for McpHost {
         Err(mcp_proc::ProcError::Denied)
     }
 
+    fn granted(&mut self) -> Vec<String> {
+        self.process.long_lived_names()
+    }
+
     fn spawn(&mut self, name: String) -> Result<u32, mcp_proc::ProcError> {
         self.children
             .spawn(&self.process, &name)

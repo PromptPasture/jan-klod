@@ -57,13 +57,15 @@ mod component {
             ToolMeta {
                 name: "proc-probe".to_string(),
                 description: "Run a command via host-process and return its stdout, \
-                              or with {\"spawn\": name} ask for a long-lived child."
+                              with {\"spawn\": name} ask for a long-lived child, \
+                              or with {\"granted\": true} list the names granted."
                     .to_string(),
                 arguments_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "command": { "type": "string" },
                         "args": { "type": "array", "items": { "type": "string" } },
+                        "granted": { "type": "boolean" },
                         "spawn": { "type": "string" },
                         "send": { "type": "string" },
                         "leak": { "type": "boolean" }
@@ -76,6 +78,17 @@ mod component {
         fn invoke(arguments: String) -> Result<String, ToolError> {
             let value: serde_json::Value =
                 serde_json::from_str(&arguments).map_err(|_| ToolError::InvalidArguments)?;
+
+            // `{"granted": true}` asks which long-lived names exist (#220).
+            // Returned as a line rather than JSON so a test can assert on the
+            // names without this probe growing a result format.
+            if value
+                .get("granted")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                return Ok(format!("granted {}", host_process::granted().join(" ")));
+            }
 
             // `{"spawn": "<name>"}` asks for a long-lived child (#109).
             // Outcome comes back as text, not error: ToolError carries no message,

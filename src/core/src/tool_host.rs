@@ -289,6 +289,10 @@ impl g_proc::Host for ToolHost {
     // Every call goes through `self.children`, keyed by host-issued handles.
     // Unknown handle = `Denied` (not panic/silent): guest can pass any integer.
 
+    fn granted(&mut self) -> Vec<String> {
+        self.process.long_lived_names()
+    }
+
     fn spawn(&mut self, name: String) -> Result<u32, g_proc::ProcError> {
         // Admission **before** spawn (not after). A spawn-then-check window is all
         // a capability needs to break default-deny. `proc-error` carries no payload;

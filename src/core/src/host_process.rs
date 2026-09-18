@@ -184,6 +184,18 @@ impl ProcessRunner {
         self
     }
 
+    /// The names an operator granted, in configured order.
+    ///
+    /// Names and nothing else: what a name runs stays here, because that is
+    /// what makes this grant narrower than `execution.enabled` (#220).
+    #[must_use]
+    pub fn long_lived_names(&self) -> Vec<String> {
+        self.long_lived
+            .iter()
+            .map(|child| child.name.clone())
+            .collect()
+    }
+
     /// The grant for `name`, or `None` if the operator did not name it.
     ///
     /// The entire admission decision: a guest supplies a name and gets back

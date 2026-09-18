@@ -61,6 +61,11 @@ fn run_spawn(execution: &str, name: &str) -> ProbeTurn {
     run_arguments_in(None, execution, &serde_json::json!({ "spawn": name }))
 }
 
+/// Ask `tool-proc-probe` which long-lived names it may start (#220).
+fn run_granted(execution: &str) -> ProbeTurn {
+    run_arguments_in(None, execution, &serde_json::json!({ "granted": true }))
+}
+
 /// [`run_spawn`] but guest doesn't kill child — the "guest forgets" case the
 /// host's lifetime guarantee covers.
 fn run_spawn_and_leak(execution: &str, name: &str) -> ProbeTurn {
@@ -551,6 +556,67 @@ fn the_long_lived_grant_is_read_from_config() {
     assert!(
         policy.long_lived_grant("not-in-the-config").is_none(),
         "and an unnamed one is not"
+    );
+}
+
+/// A guest can see which names it may start, so a model can ask for one
+/// (#220).
+///
+/// Without this a name is discoverable only by guessing it and reading the
+/// refusal, which is no way to offer a tool: a model cannot enumerate what
+/// an operator wrote down, and a refusal that cannot say what *is*
+/// available reads as a dead end rather than as a wrong name.
+#[test]
+fn a_guest_can_list_the_long_lived_names_it_was_granted() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_granted(GRANTED);
+    assert!(
+        turn.produced("granted echoer"),
+        "the granted name was not listed: {}",
+        turn.tool_result
+    );
+}
+
+/// And it sees the name only — never what the name runs.
+///
+/// That distinction is the whole of why this grant is narrower than
+/// `execution.enabled`: the operator writes the command down and the guest
+/// asks for it by name. A listing that leaked `cat` would hand back the
+/// thing the design withholds. Its control is the test above: without a
+/// grant that *is* listed, asserting the absence of `cat` passes against a
+/// host that lists nothing at all.
+#[test]
+fn the_listing_names_children_without_naming_their_commands() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_granted(GRANTED);
+    assert!(
+        !turn.produced("cat"),
+        "the command behind the name was disclosed: {}",
+        turn.tool_result
+    );
+}
+
+/// Granting nothing lists nothing — the default, and the case a guest with
+/// the capability and no grant is in.
+#[test]
+fn an_ungranting_deployment_lists_no_children() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let turn = run_granted("execution:\n  enabled: true\n");
+    assert!(
+        turn.produced("granted "),
+        "the probe did not answer at all: {}",
+        turn.tool_result
+    );
+    assert!(
+        !turn.produced("echoer"),
+        "a name nobody granted was listed: {}",
+        turn.tool_result
     );
 }
 

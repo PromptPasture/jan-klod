@@ -59,6 +59,20 @@ interface host-process {
     /// own children.
     type child-handle = u32;
 
+    /// The long-lived children this deployment granted, by name.
+    ///
+    /// Empty means none, which is the default. A guest could already learn
+    /// this by asking for names one at a time and reading the refusals, so
+    /// this discloses nothing new — it makes discovery possible without a
+    /// guess, which is what a *tool* needs: a model that cannot see the
+    /// names cannot ask for one, and a refusal that cannot say what is
+    /// available reads as a dead end rather than as a wrong name (#220).
+    ///
+    /// Names only. The command and arguments behind a name stay the host's,
+    /// because that is the whole of what makes this grant narrower than
+    /// `execution.enabled`.
+    granted: func() -> list<string>;
+
     /// Start the long-lived child **named** in `execution.long-lived`.
     ///
     /// The name is the whole of the guest's say: the command and its arguments
