@@ -444,8 +444,24 @@ const STDERR_DRAIN: Duration = Duration::from_millis(200);
 pub struct LiveChild {
     child: std::process::Child,
     stdin: Option<std::process::ChildStdin>,
-    /// Chunks the reader thread has pulled off stdout.
-    stdout: std::sync::mpsc::Receiver<Vec<u8>>,
+    /// What the reader thread has pulled off stdout and nobody has taken.
+    ///
+    /// **Bounded by the runner's output cap, oldest dropped** (#220). A
+    /// channel here grew without limit for as long as a child ran, which was
+    /// survivable while only `registry-mcp` held children — it reads every
+    /// reply it asked for — and is not now that a model can start one and
+    /// forget it. stderr has been capped since #133 for the same reason;
+    /// this is the half that was missed.
+    ///
+    /// Oldest rather than newest, matching the stderr tail: a caller polling
+    /// a server wants what it just printed. The condvar is what lets a read
+    /// wait for the first byte without the reader thread blocking on a
+    /// bounded channel — an undrained pipe stops the *child*, which is the
+    /// failure #133 fixed and this must not reintroduce.
+    stdout: std::sync::Arc<(
+        std::sync::Mutex<std::collections::VecDeque<u8>>,
+        std::sync::Condvar,
+    )>,
     /// The tail of stderr, delivered once when that pipe reaches EOF (#133).
     ///
     /// A whole channel for one message: a shared buffer read when exit is
@@ -455,9 +471,6 @@ pub struct LiveChild {
     /// when it's worth reading. EOF is the only signal saying "stream finished",
     /// and only the thread sees it.
     stderr: std::sync::mpsc::Receiver<String>,
-    /// What a previous read didn't take, kept so `max_bytes` bounds the
-    /// *answer* not the remainder of a chunk.
-    pending: Vec<u8>,
     /// The runner's output cap, applied per read.
     cap: usize,
     /// The grant this child was started under, so logs can name it.
@@ -475,14 +488,43 @@ impl LiveChild {
     /// Take the pipes and start the reader threads.
     fn new(mut child: std::process::Child, cap: usize, name: String) -> Self {
         let stdin = child.stdin.take();
-        let (tx, stdout) = std::sync::mpsc::channel();
+        let stdout = std::sync::Arc::new((
+            std::sync::Mutex::new(std::collections::VecDeque::new()),
+            std::sync::Condvar::new(),
+        ));
         if let Some(mut out) = child.stdout.take() {
+            let buffer = std::sync::Arc::clone(&stdout);
+            let child_name = name.clone();
             std::thread::spawn(move || {
                 let mut buf = [0_u8; 8192];
+                let mut dropped_any = false;
                 while let Ok(n) = out.read(&mut buf) {
-                    if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                    if n == 0 {
                         break;
                     }
+                    let (lock, arrived) = &*buffer;
+                    let Ok(mut unread) = lock.lock() else {
+                        break;
+                    };
+                    unread.extend(&buf[..n]);
+                    if unread.len() > cap {
+                        let over = unread.len() - cap;
+                        unread.drain(..over);
+                        if !dropped_any {
+                            dropped_any = true;
+                            // Once per child, not per overflow: the second
+                            // line says nothing the first did not, and a
+                            // chatty server would write one per read.
+                            eprintln!(
+                                "WARN [core] host-process: `{child_name}` has \
+                                 printed more than the {cap}-byte output cap \
+                                 without being read; the oldest output is \
+                                 being dropped"
+                            );
+                        }
+                    }
+                    drop(unread);
+                    arrived.notify_all();
                 }
             });
         }
@@ -519,7 +561,6 @@ impl LiveChild {
             stdin,
             stdout,
             stderr,
-            pending: Vec::new(),
             cap,
             name,
             exit_reported: false,
@@ -546,17 +587,21 @@ impl LiveChild {
     /// child is finished. [`Self::is_running`] answers that, and the two are
     /// different questions.
     pub fn read_stdout(&mut self, max_bytes: usize, timeout: Duration) -> String {
-        if self.pending.is_empty() {
-            if let Ok(chunk) = self.stdout.recv_timeout(timeout) {
-                self.pending = chunk;
-            }
-        }
+        let (lock, arrived) = &*self.stdout;
+        let Ok(unread) = lock.lock() else {
+            return String::new();
+        };
+        // Wait only while there is nothing at all; anything already buffered
+        // is answered immediately, which is what makes polling cheap.
+        let Ok((mut unread, _)) = arrived.wait_timeout_while(unread, timeout, |u| u.is_empty())
+        else {
+            return String::new();
+        };
         // The runner's cap bounds a single read the way it bounds `exec`'s
         // captured output: a guest asking for more than the operator allows gets
         // the operator's number.
-        let take = max_bytes.min(self.cap).min(self.pending.len());
-        let rest = self.pending.split_off(take);
-        let taken = std::mem::replace(&mut self.pending, rest);
+        let take = max_bytes.min(self.cap).min(unread.len());
+        let taken: Vec<u8> = unread.drain(..take).collect();
         String::from_utf8_lossy(&taken).into_owned()
     }
 
@@ -950,6 +995,64 @@ mod tests {
         assert!(
             !clean.contains("last stderr"),
             "a silent exit should not claim last words: {clean}"
+        );
+    }
+
+    /// A child nobody reads does not grow the host without bound (#220).
+    ///
+    /// stderr has been capped since #133; stdout's buffer was a channel, so
+    /// it grew for as long as a child ran. That was survivable while only
+    /// `registry-mcp` held children — it reads every reply it asked for —
+    /// and stopped being survivable when a *model* could start one and
+    /// forget it, which is the ordinary case rather than the exotic one.
+    ///
+    /// The child floods and then stays up, because the interesting state is
+    /// "still running, still unread". The assertion is on what a reader can
+    /// drain afterwards: more than the cap means it was all still held.
+    #[test]
+    fn an_unread_childs_stdout_is_bounded_by_the_output_cap() {
+        let cap = 512;
+        let (ws, _) = runner();
+        let runner =
+            ProcessRunner::new(ws, Duration::from_secs(5), cap).with_long_lived(vec![LongLived {
+                name: "floods".to_string(),
+                command: "sh".to_string(),
+                // Ends by naming itself, so "the tail, not the head" is
+                // checkable rather than merely asserted, and then holds the
+                // process open so nothing is reaped mid-test.
+                args: vec![
+                    "-c".to_string(),
+                    "i=0; while [ $i -lt 2000 ]; do echo padding-padding-padding; \
+                     i=$((i+1)); done; echo THE-LATEST-LINE; exec sleep 30"
+                        .to_string(),
+                ],
+            }]);
+
+        let mut floods = runner.spawn_long_lived("floods").expect("it starts");
+        // Nobody reads while it floods — the whole point. ~54 KB written
+        // against a 512-byte cap.
+        std::thread::sleep(Duration::from_millis(400));
+
+        let mut drained = String::new();
+        loop {
+            let chunk = floods.read_stdout(cap, Duration::from_millis(50));
+            if chunk.is_empty() {
+                break;
+            }
+            drained.push_str(&chunk);
+        }
+        floods.kill();
+
+        assert!(
+            drained.len() <= cap,
+            "an unread child held {} bytes against a {cap}-byte cap; the \
+             buffer is unbounded again",
+            drained.len()
+        );
+        assert!(
+            drained.contains("THE-LATEST-LINE"),
+            "the *last* cap bytes: a caller polling a server wants what it \
+             just printed, not its first words: {drained}"
         );
     }
 
