@@ -604,9 +604,15 @@ fn serve_queued<W: Write>(
 /// Serve one frame that arrived while a turn is running.
 ///
 /// Returns the text of a `turn/answer` for this session, if that is what it
-/// was. Everything else is answered in place: the core is mid-turn and
-/// single-threaded, and a client told "busy" can retry, while one left hanging
-/// cannot.
+/// was. Everything else is answered in place: **this transport** serves one
+/// session on one thread and is mid-turn, and a client told "busy" can
+/// retry, while one left hanging cannot.
+///
+/// It used to say "the core is single-threaded", which was true of the
+/// process until Phase 20 and is now true only here. The core runs a turn
+/// per session (`host::sessions`); stdio still runs one, because a client
+/// that spawned the gateway owns it and there is no second client to
+/// serve.
 fn serve_frame<W: Write>(
     frame: Incoming,
     state: &TurnState,

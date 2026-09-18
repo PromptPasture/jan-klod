@@ -429,12 +429,19 @@ const STDERR_DRAIN: Duration = Duration::from_millis(200);
 ///
 /// # Why a reader thread rather than a poll
 ///
-/// The core is single-threaded, and `read` on a pipe blocks until there's
+/// A turn runs on one thread, and `read` on a pipe blocks until there's
 /// something to read. A silent child — a stdio server with no reply yet —
-/// would hang the runtime, taking the turn, transport and every instance.
-/// So one thread per child does the blocking read and hands chunks over a
-/// channel, and the guest-facing read is `recv_timeout` that always returns.
-/// Same shape `core::acp`'s `drain` uses for the editor's pipe.
+/// would hang that thread, taking the turn and everything queued behind it
+/// on that session. So one thread per child does the blocking read and
+/// hands chunks over a channel, and the guest-facing read is
+/// `recv_timeout` that always returns. Same shape `core::acp`'s `drain`
+/// uses for the editor's pipe.
+///
+/// This said "the core is single-threaded" until Phase 20, when it stopped
+/// being true of the process — the core runs a turn per session
+/// (`host::sessions`). The reason survives the change and is if anything
+/// narrower: one hung read no longer takes every session with it, only the
+/// one whose turn it is.
 ///
 /// The thread ends when the pipe closes, when the child exits, so nothing
 /// must stop it.
