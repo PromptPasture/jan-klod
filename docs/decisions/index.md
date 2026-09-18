@@ -2,6 +2,7 @@
 
 Session handoffs and architecture decision records, newest first.
 
+- [2026-09-18 — Two turns at once](2026-09-18-two-turns-at-once/Decision.md) — per-session `AgentSession`s rather than a resumable turn; measured **1.35 MB and 3.5 ms** per extra agent, `Runtime` already `Send + Sync`, store already shared. Consequences: interceptor and tool state become per-session, adoption needs coordination
 - [2026-09-13 — REST concurrency and the `!Send` session](2026-09-13-rest-concurrency-and-the-send-session/Handoff.md) — adopt `axum` + `tokio`; marginal cost **16 packages** (36 already in lock), passes `deny.toml` unmodified, `!Send` from local traits not wasmtime. Fixes #43 (TcpStream capabilities) and REST concurrency independent of WebSocket
 - [2026-09-08 — Vision: Harness as a Platform](2026-09-08-harness-platform-vision/Vision.md) — post-v0.1 vision: agent runtime (kernel + distributions + clients), five-layer architecture, six decisions (Phases 13–18) — client protocol as contract, event-sourced log, OS-sandbox for host-process, capability manifest + registry, web client + Tauri shell, MCP + ACP in both directions
 - [2026-08-10 — Storage is not an extension](2026-08-10-storage-is-not-an-extension/Handoff.md) — retire `memory-store.wit` and `store-*` family (unused, inert); persistence stays host-side behind `host-storage` (namespaced per-component, granted explicitly)

@@ -2310,6 +2310,22 @@ mod tests {
         assert!(categorise("tool-").is_err(), "no kind");
     }
 
+    /// `Runtime` can be shared across threads, which is what lets each
+    /// session build its own `AgentSession` rather than being handed one
+    /// (#228).
+    ///
+    /// A compile-time assertion written as a test: `AgentSession` is
+    /// `!Send` and cannot cross a thread, so per-session ownership only
+    /// works if the *builder* can. The decision record measured the rest;
+    /// this is the half that a future change could silently take away —
+    /// one `Rc` in a field here and the design stops compiling somewhere
+    /// far from the cause.
+    #[test]
+    fn a_runtime_can_be_shared_across_threads() {
+        const fn needs<T: Send + Sync>() {}
+        needs::<Runtime>();
+    }
+
     #[test]
     fn config_section_resolves_dot_paths() {
         let section = ConfigSection::new(json!({
