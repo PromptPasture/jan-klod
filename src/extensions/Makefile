@@ -148,9 +148,10 @@ ts-guest:
 #     File exists`, which makes the second build of any day the broken one.
 #   * There is no `--disable` flag to reach for. CPython's standard library
 #     imports `wasi:filesystem`, `wasi:sockets` and `wasi:cli` to initialise,
-#     and componentize-py offers no way to drop them. They are inert here —
-#     `WasiCtxBuilder::new()` gives no preopens and denies every socket
-#     address — but they are invisible to the manifest, which is #211.
+#     and componentize-py offers no way to drop them. They are inert, and
+#     tested to be: `docs/concepts/security-model.md` has a row per refusal
+#     naming the `sandbox_boundary.rs` case that proves it, because
+#     `tool-escape-probe` reaches for the same doors on purpose.
 PY_GUESTS := tool-hello-py
 
 .PHONY: py-guest

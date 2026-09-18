@@ -13,8 +13,9 @@ Different: **size**, and **what the runtime imports**. `componentize-py`
 embeds CPython, so this component is ~18.4 MB against `tool-hello`'s 55 KB —
 larger even than the TypeScript guest's 12.7 MB. And CPython's standard
 library needs `wasi:filesystem`, `wasi:sockets` and `wasi:cli` to initialise,
-so the component imports them. `docs/concepts/security-model.md` and #211
-cover why that is inert and why it is still worth naming.
+so the component imports them. They are denied for every guest, in every
+language: `docs/concepts/security-model.md` carries a row per refusal naming
+the `sandbox_boundary.rs` case that proves it. A Rust guest simply never asks.
 
 ## Bindings, unlike the TypeScript path
 
