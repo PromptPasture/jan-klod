@@ -43,12 +43,13 @@ pub struct SessionInfo<'a> {
 pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    heading(&mut lines, "SESSION", theme);
-    row(&mut lines, format!("id    {}", session.id), theme);
-    row(&mut lines, format!("via   {}", session.via), theme);
+    heading(&mut lines, "SESSION", width, theme);
+    row(&mut lines, format!("id    {}", session.id), width, theme);
+    row(&mut lines, format!("via   {}", session.via), width, theme);
     row(
         &mut lines,
         format!("state {}", app.connection_state()),
+        width,
         theme,
     );
     let cwd = session.cwd.display().to_string();
@@ -56,19 +57,21 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
     row(
         &mut lines,
         format!("cwd   {}", truncate_from_left(theme, &cwd, budget)),
+        width,
         theme,
     );
 
     lines.push(Line::default());
-    heading(&mut lines, "THIS TURN", theme);
+    heading(&mut lines, "THIS TURN", width, theme);
     let turn_tools = this_turn_tools(app);
     if turn_tools.is_empty() {
-        row(&mut lines, "(nothing yet)".to_string(), theme);
+        row(&mut lines, "(nothing yet)".to_string(), width, theme);
     } else {
         for tool in turn_tools {
             row(
                 &mut lines,
                 format!("{} {}", tool_glyph(tool, theme), tool.name),
+                width,
                 theme,
             );
         }
@@ -81,48 +84,67 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
     let contributed = app.contributed_status();
     if !contributed.is_empty() {
         lines.push(Line::default());
-        heading(&mut lines, "EXTENSIONS", theme);
+        heading(&mut lines, "EXTENSIONS", width, theme);
         for item in contributed {
             // Cut to the pane here, where the cell is known. The text was
             // already made inert when it arrived; this only fits it.
             row(
                 &mut lines,
-                crate::untrusted::inert_within(&format!("{} {}", item.extension, item.text), width),
+                // `row` cuts and marks this like every other line now (#206).
+                format!("{} {}", item.extension, item.text),
+                width,
                 theme,
             );
         }
     }
 
     lines.push(Line::default());
-    heading(&mut lines, "CHANGED", theme);
+    heading(&mut lines, "CHANGED", width, theme);
     let changed = changed_files(app);
     if changed.is_empty() {
-        row(&mut lines, "(nothing yet)".to_string(), theme);
+        row(&mut lines, "(nothing yet)".to_string(), width, theme);
     } else {
         for (path, counts) in changed {
             let text = counts.map_or_else(
                 || path.clone(),
                 |(added, removed)| format!("{path} +{added} -{removed}"),
             );
-            row(&mut lines, text, theme);
+            row(&mut lines, text, width, theme);
         }
     }
 
     lines
 }
 
-fn heading(lines: &mut Vec<Line<'static>>, text: &str, theme: Theme) {
+fn heading(lines: &mut Vec<Line<'static>>, text: &str, width: usize, theme: Theme) {
     lines.push(Line::from(Span::styled(
-        text.to_string(),
+        cut(text, width, theme),
         Style::default().fg(theme.muted()),
     )));
 }
 
-fn row(lines: &mut Vec<Line<'static>>, text: String, theme: Theme) {
+fn row(lines: &mut Vec<Line<'static>>, text: String, width: usize, theme: Theme) {
     lines.push(Line::from(Span::styled(
-        text,
+        cut(&text, width, theme),
         Style::default().fg(theme.secondary()),
     )));
+}
+
+/// Every line this widget emits, cut to the pane and marked when cut.
+///
+/// **In one place on purpose.** Before this, `cwd` cut itself and every other
+/// row was handed to `ratatui` whole and clipped at the frame with no marker,
+/// so a shortened value read as the whole value (#206). Putting the cut in
+/// the two functions every line goes through fixes the rows that exist and
+/// the rows a later section adds — which is how this arrived: the EXTENSIONS
+/// section came with #190 and brought the bug with it.
+///
+/// `cwd` is unaffected: it pre-cuts from the left into `width - "cwd   "`, so
+/// the finished line is already exactly `width` and this is a no-op on it.
+/// A path's leaf is the readable part, which is why that one cut runs the
+/// other way.
+fn cut(text: &str, width: usize, theme: Theme) -> String {
+    crate::untrusted::inert_within(text, width, theme.glyph(Glyph::Elided))
 }
 
 /// Truncated from left: the readable part (the leaf) stays visible, not the

@@ -42,10 +42,6 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::wrap::width;
 
-/// Marks a label that was cut. One character, so the budget it is fitted into
-/// stays predictable.
-const ELLIPSIS: char = '…';
-
 /// Whether `c` must not reach a frame.
 const fn is_hostile(c: char) -> bool {
     // C0 + DEL, then C1. `is_control` covers both ranges; naming them is for
@@ -68,14 +64,19 @@ pub fn inert(text: &str) -> String {
     text.chars().filter(|c| !is_hostile(*c)).collect()
 }
 
-/// [`inert`], then cut to `cells` display columns.
+/// [`inert`], then cut to `cells` display columns, marked with `marker`.
 ///
 /// Cutting is by grapheme, so a two-cell emoji is kept or dropped whole. When
-/// something is cut, the last column carries [`ELLIPSIS`] — a reader has to be
-/// able to tell a short label from a shortened one, or a truncated command
-/// name looks like the name.
+/// something is cut, the tail carries `marker` — a reader has to be able to
+/// tell a short label from a shortened one, or a truncated command name looks
+/// like the name.
+///
+/// The marker is a parameter rather than a constant because the caller owns
+/// the theme: an ASCII theme renders elision as `...`, and a widget that cut
+/// some rows with `…` and others with `...` would show unicode to the one
+/// user who asked for none (#206).
 #[must_use]
-pub fn inert_within(text: &str, cells: usize) -> String {
+pub fn inert_within(text: &str, cells: usize, marker: &str) -> String {
     let clean = inert(text);
     if width(&clean) <= cells {
         return clean;
@@ -83,8 +84,12 @@ pub fn inert_within(text: &str, cells: usize) -> String {
     if cells == 0 {
         return String::new();
     }
-    // One column is spent on the marker, so the text gets the rest.
-    let budget = cells - 1;
+    // The marker's own width comes out of the budget, so the result still
+    // fits `cells` when the marker is wider than one column.
+    let Some(budget) = cells.checked_sub(width(marker)) else {
+        // No room for even the marker: cut to the marker itself, truncated.
+        return marker.chars().take(cells).collect();
+    };
     let mut out = String::new();
     let mut used = 0;
     for grapheme in clean.graphemes(true) {
@@ -95,7 +100,7 @@ pub fn inert_within(text: &str, cells: usize) -> String {
         out.push_str(grapheme);
         used += w;
     }
-    out.push(ELLIPSIS);
+    out.push_str(marker);
     out
 }
 
@@ -158,12 +163,12 @@ mod tests {
 
     #[test]
     fn a_label_that_fits_is_returned_whole() {
-        assert_eq!(inert_within("short", 10), "short");
+        assert_eq!(inert_within("short", 10, "…"), "short");
     }
 
     #[test]
     fn a_long_label_is_cut_to_its_budget_and_says_so() {
-        let cut = inert_within("a very long contributed label", 10);
+        let cut = inert_within("a very long contributed label", 10, "…");
         assert_eq!(width(&cut), 10, "{cut:?} must fill exactly its cells");
         assert!(cut.ends_with('…'), "{cut:?} should show it was cut");
     }
@@ -172,7 +177,7 @@ mod tests {
     /// broken cell, not a narrower one.
     #[test]
     fn a_wide_grapheme_is_never_split() {
-        let cut = inert_within("🚀🚀🚀", 4);
+        let cut = inert_within("🚀🚀🚀", 4, "…");
         assert!(width(&cut) <= 4, "{cut:?}");
         assert!(!cut.contains('\u{fffd}'), "{cut:?}");
     }
@@ -181,11 +186,11 @@ mod tests {
     /// escape sequences cannot use them to push real text out of view.
     #[test]
     fn control_characters_do_not_consume_the_width_budget() {
-        assert_eq!(inert_within("\x1b\x1b\x1babc", 4), "abc");
+        assert_eq!(inert_within("\x1b\x1b\x1babc", 4, "…"), "abc");
     }
 
     #[test]
     fn a_zero_cell_budget_renders_nothing() {
-        assert!(inert_within("anything", 0).is_empty());
+        assert!(inert_within("anything", 0, "…").is_empty());
     }
 }
