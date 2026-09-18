@@ -38,6 +38,7 @@ mod manifest;
 mod mcp;
 mod persistence;
 mod polyglot;
+mod polyglot_py;
 mod polyglot_ts;
 mod prompt_disconnect;
 mod provider_chain;
