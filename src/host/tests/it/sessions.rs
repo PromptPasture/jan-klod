@@ -42,7 +42,7 @@ fn paced_factory(calls: &Arc<AtomicU32>) -> Factory {
     })
 }
 
-fn booted(tag: &str) -> Option<(common::TempDir, Arc<Runtime>)> {
+fn booted(tag: &str) -> Option<(common::TempDir, Runtime)> {
     if !common::guests_staged(&["provider-openai.wasm"]) {
         return None;
     }
@@ -70,7 +70,7 @@ extensions:
     .expect("writes the config");
     let runtime =
         Runtime::boot(&config, common::repo_root().join("ext")).expect("the runtime boots");
-    Some((guard, Arc::new(runtime)))
+    Some((guard, runtime))
 }
 
 /// The point of the slice: a turn in one session does not wait for a turn
@@ -86,7 +86,7 @@ fn two_sessions_run_turns_at_the_same_time() {
         return;
     };
     let calls = Arc::new(AtomicU32::new(0));
-    let agents = Agents::new(Arc::clone(&runtime), paced_factory(&calls));
+    let agents = Agents::new(runtime, paced_factory(&calls));
 
     let slow_done: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let fast_done: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
@@ -188,7 +188,7 @@ fn dropping_the_registry_stops_every_agent() {
         return;
     };
     let calls = Arc::new(AtomicU32::new(0));
-    let agents = Agents::new(Arc::clone(&runtime), paced_factory(&calls));
+    let agents = Agents::new(runtime, paced_factory(&calls));
 
     let kept = agents.of("one");
     agents.of("two");

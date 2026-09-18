@@ -127,10 +127,7 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = tool_then_answer_http;
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
 
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
@@ -206,10 +203,7 @@ fn an_answer_with_nothing_pending_is_refused() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = tool_then_answer_http;
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
 
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
@@ -252,10 +246,7 @@ fn a_bystander_is_served_while_another_session_is_confirming() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = tool_then_answer_http;
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
@@ -318,10 +309,7 @@ fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = tool_then_answer_http;
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 

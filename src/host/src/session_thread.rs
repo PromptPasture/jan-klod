@@ -33,7 +33,16 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 /// Work for the thread that owns a `T`.
-type Job<T> = Box<dyn FnOnce(&mut T) + Send>;
+///
+/// Returns how to deliver its answer rather than delivering it, so the
+/// loop can run its between-jobs hook *first*. Otherwise a caller is
+/// unblocked while the hook is still running and can race it — which is
+/// exactly what happened when a session's next request arrived before
+/// the previous turn's install had been adopted (#231).
+type Job<T> = Box<dyn FnOnce(&mut T) -> Deliver + Send>;
+
+/// Hands a finished job's answer to whoever is waiting.
+type Deliver = Box<dyn FnOnce() + Send>;
 
 /// What arrives on the queue: work, or the end of it.
 ///
@@ -152,10 +161,16 @@ impl<T> Jobs<T> {
             // exists to report rather than hide.
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || job(owned)));
+            // Handed back rather than sent: the loop delivers it once
+            // its hook has run, so nothing a caller does next can race
+            // work that belongs to this turn.
+            //
             // The receiver may already be gone (a caller that stopped
             // waiting). Its answer is dropped, not an error: the work was
             // done either way.
-            let _ = answer.send(outcome.map_err(|_| NoAnswer::Panicked));
+            Box::new(move || {
+                let _ = answer.send(outcome.map_err(|_| NoAnswer::Panicked));
+            })
         });
         self.sender()
             .send(Task::Work(boxed))
@@ -179,6 +194,7 @@ impl<T> Jobs<T> {
     {
         let boxed: Job<T> = Box::new(move |owned| {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || job(owned)));
+            Box::new(|| {})
         });
         self.sender()
             .send(Task::Work(boxed))
@@ -204,9 +220,30 @@ impl<T> Jobs<T> {
 /// for an owner shutting down while callers still hold handles, and the
 /// last handle dropping, which is what a short-lived surface does.
 pub fn serve<T>(owned: &mut T, jobs: &Receiver<Task<T>>) {
+    serve_each(owned, jobs, |_| {});
+}
+
+/// [`serve`], with `after` run on the owned value once per job.
+///
+/// The hook exists for work that belongs *between* jobs rather than
+/// inside one — a session noticing what its turn installed, for instance
+/// (#231). Putting it here rather than at each call site means every
+/// transport gets it: a route added later cannot forget, because it is
+/// not a route's decision.
+pub fn serve_each<T, F>(owned: &mut T, jobs: &Receiver<Task<T>>, mut after: F)
+where
+    F: FnMut(&mut T),
+{
     while let Ok(task) = jobs.recv() {
         match task {
-            Task::Work(job) => job(owned),
+            Task::Work(job) => {
+                let deliver = job(owned);
+                // Hook first, answer second: a caller must not be able to
+                // act on this turn's answer before the work that belongs
+                // to the turn has finished.
+                after(owned);
+                deliver();
+            }
             Task::Stop => return,
         }
     }

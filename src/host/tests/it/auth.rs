@@ -87,10 +87,7 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
     let config = write_config(&dir);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
@@ -138,10 +135,7 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     let config = write_config(&dir);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
@@ -258,10 +252,7 @@ extensions:
 
     let ext_dir = common::repo_root().join("ext");
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 

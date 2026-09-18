@@ -47,10 +47,7 @@ extensions:
     .expect("writes the config");
     let runtime =
         Runtime::boot(&config, common::repo_root().join("ext")).expect("the runtime boots");
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(|| common::canned_http("pong")),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(|| common::canned_http("pong")));
     Some((guard, agents))
 }
 
@@ -404,10 +401,7 @@ extensions:
     };
     let runtime =
         Runtime::boot(&config, common::repo_root().join("ext")).expect("the runtime boots");
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     Some((guard, agents))
 }
 

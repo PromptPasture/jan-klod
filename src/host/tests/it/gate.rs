@@ -469,10 +469,7 @@ extensions:
     });
     let runtime =
         Runtime::boot(&config, common::repo_root().join("ext")).expect("the runtime boots");
-    let agents = Arc::new(jan_klod_host::sessions::Agents::new(
-        Arc::new(runtime),
-        factory,
-    ));
+    let agents = jan_klod_host::sessions::Agents::new(runtime, factory);
     let surface =
         jan_klod_host::serve::Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     Some((guard, agents, surface))

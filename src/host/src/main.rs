@@ -846,10 +846,7 @@ fn serve(args: &[String]) -> ExitCode {
     // One agent per session, built on first use (#229). Nothing is built
     // here: a gateway that boots with no clients has nothing to serve
     // yet, and the first request pays 3.5 ms for the session it names.
-    let agents = std::sync::Arc::new(jan_klod_host::sessions::Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = jan_klod_host::sessions::Agents::new(runtime, std::sync::Arc::new(factory));
 
     let surface = match jan_klod_host::serve::Surface::bind(&bind) {
         Ok(surface) => surface,

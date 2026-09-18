@@ -110,8 +110,11 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
 /// A runtime whose `ext/` holds the provider and the selector, with a
 /// signed `tool-hello` waiting *outside* it. Returns the temp root, the
 /// config and the offer.
-fn fixture() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("jk-install-call-{}", std::process::id()));
+fn fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    // Keyed by the test, not only by the process: two tests in one
+    // binary run at once, and a shared `ext/` means each install lands
+    // in the other's runtime. Found when a second test started using it.
+    let dir = std::env::temp_dir().join(format!("jk-install-call-{tag}-{}", std::process::id()));
     let ext = dir.join("ext");
     let incoming = dir.join("incoming");
     std::fs::create_dir_all(&ext).expect("creates the ext dir");
@@ -171,7 +174,7 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
     if !common::guests_staged(&NEEDED) {
         return;
     }
-    let (dir, config, source) = fixture();
+    let (dir, config, source) = fixture("one-session");
     let _guard = common::TempDir(dir.clone());
     let ext = dir.join("ext");
 
@@ -190,40 +193,28 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
         calls_seen: AtomicU32::new(0),
     });
 
-    let mut runtime = Runtime::boot(&config, &ext).expect("the runtime boots");
+    let runtime = Runtime::boot(&config, &ext).expect("the runtime boots");
     let factory = provider(&script);
-    let mut agent = runtime.build_agent(&factory).expect("the agent boots");
+    let agents = jan_klod_host::sessions::Agents::new(runtime, Arc::new(factory));
 
-    // Turn one: install.
-    agent.run("s1", "install the hello tool");
+    // The seam is no longer this test's to drive (#231). It runs inside
+    // the session's thread, between one turn and the next, for every
+    // transport — so what is asserted here is the *promise*: install in
+    // one turn, call in the next, same session, no restart.
+    let one = agents.of("s1");
+    one.run(|agent: &mut jan_klod_core::AgentSession| {
+        agent.run("s1", "install the hello tool");
+    })
+    .expect("turn one ran");
 
-    // Between turns — the seam. This is what a host surface does.
-    let installed = agent.take_installed();
-    assert_eq!(
-        installed,
-        vec!["tool-hello".to_string()],
-        "the install left no note, so nothing downstream can know to load it"
-    );
-    let mut outcomes = Vec::new();
-    for stem in &installed {
-        let outcome = runtime.adopt_installed(stem);
-        // The load is recorded on the session: the install already said
-        // "callable from the next turn", and that promise can fail.
-        match &outcome {
-            Ok(id) => agent.record_load("s1", stem, Ok(id.as_str())),
-            Err(err) => agent.record_load("s1", stem, Err(&err.to_string())),
-        }
-        outcomes.push(outcome);
-    }
-    assert!(
-        outcomes.iter().all(Result::is_ok),
-        "adoption failed: {outcomes:?}"
-    );
-    drop(agent);
-    let mut agent = runtime.build_agent(&factory).expect("the agent rebuilds");
-
-    // Turn two: call it. Same session id, same process, no restart.
-    agent.run("s1", "now greet the world");
+    // Same session id; a fresh agent underneath, because the adoption
+    // made the old one out of date.
+    agents
+        .of("s1")
+        .run(|agent: &mut jan_klod_core::AgentSession| {
+            agent.run("s1", "now greet the world");
+        })
+        .expect("turn two ran");
 
     let named = script.named.lock().expect("not poisoned").clone();
     assert_eq!(
@@ -277,5 +268,86 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
         Some(&true),
         "the tool was installed and adopted but never advertised, so a real \
          model would never have known to call it: {advertised:?}"
+    );
+}
+
+/// A bystander sees it too (#231).
+///
+/// Session A installs; session **B**, which asked for nothing, calls the
+/// new tool on its next turn. This is the case the rule exists for, and
+/// the one that any "only the installing session" implementation gets
+/// quietly wrong — the same shape as #222, where every signal said
+/// success and the tool was absent.
+///
+/// Driven through the registry rather than by hand: the seam runs inside
+/// the session thread now, so this asserts what a *surface* does rather
+/// than what a test remembers to do.
+#[test]
+fn a_session_that_installed_nothing_can_call_what_another_installed() {
+    if !common::guests_staged(&NEEDED) {
+        return;
+    }
+    let (dir, config, source) = fixture("bystander");
+    let _guard = common::TempDir(dir.clone());
+    let ext = dir.join("ext");
+
+    let script = Arc::new(Script {
+        calls: Mutex::new(vec![
+            // Popped from the back: B calls the tool it never installed.
+            "tool-hello|{}".to_string(),
+            format!(
+                "ext-install|{}",
+                serde_json::json!({ "path": source.display().to_string() })
+            ),
+        ]),
+        named: Mutex::new(Vec::new()),
+        results: Mutex::new(Vec::new()),
+        advertised_hello: Mutex::new(Vec::new()),
+        calls_seen: AtomicU32::new(0),
+    });
+
+    let runtime = Runtime::boot(&config, &ext).expect("the runtime boots");
+    let factory = provider(&script);
+    let agents = jan_klod_host::sessions::Agents::new(runtime, Arc::new(factory));
+
+    // A installs. The adoption happens inside A's session thread, after
+    // its turn, with no help from this test.
+    agents
+        .of("installer")
+        .run(|agent: &mut jan_klod_core::AgentSession| {
+            agent.run("installer", "install the hello tool");
+        })
+        .expect("A's turn ran");
+
+    // B has never been mentioned before now.
+    agents
+        .of("bystander")
+        .run(|agent: &mut jan_klod_core::AgentSession| {
+            agent.run("bystander", "now greet the world");
+        })
+        .expect("B's turn ran");
+
+    let named = script.named.lock().expect("not poisoned").clone();
+    assert_eq!(
+        named,
+        vec!["ext-install".to_string(), "tool-hello".to_string()],
+        "the two sessions did not call what the script said"
+    );
+    let results = script.results.lock().expect("not poisoned").clone();
+    let last = results.last().cloned().unwrap_or_default();
+    assert!(
+        !last.contains("no tool named"),
+        "the bystander could not see what another session installed: {last}"
+    );
+    // And the advertisement was rebuilt for B, not just the dispatch:
+    // a tool the selector does not offer is a tool a model cannot use.
+    let advertised = script
+        .advertised_hello
+        .lock()
+        .expect("not poisoned")
+        .clone();
+    assert!(
+        advertised.last() == Some(&true),
+        "the new tool was dispatchable but never advertised to the bystander: {advertised:?}"
     );
 }

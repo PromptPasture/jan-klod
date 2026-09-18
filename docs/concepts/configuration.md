@@ -71,6 +71,11 @@ Off by default because inspectable components are what manifests enforce. `make 
 | `registry.trusted-keys` | Minisign public keys that may vouch for an installed component. **Top-level**, and distinct from `extensions.registry`, which is the category holding the `skills` and `mcp` catalogues — they share a word and nothing else | `[]` |
 | `registry.install-tool` | Whether the **model** may install a component, through the `ext-install` and `ext-search` tools. Off by default: `jan-klod-gateway ext install` is the operator's route and needs no grant, and a fleet that can extend itself is a different posture from one that cannot. Every check above still applies — a manifest beside the component, its imports cross-checked, a digest for anything unsigned, and the operator answering the prompt | `false` |
 
+**When a newly installed extension becomes callable, and for whom.** At the *next turn of every session*, not only the one that installed it. Adoption happens between turns, inside the session that asked; every other session's agent is then out of date and is rebuilt when that session next does anything — about 3.5 ms, paid by whoever asks next. A turn already running finishes on the fleet it started with, because changing a fleet under a running turn would be a worse surprise than a short wait.
+
+Until that adoption happens the component is on disk and not loaded, which is why `ext-install` says "callable from the next turn" rather than "installed".
+
+
 **Empty list means nothing is trusted, not "skip the check"** — the same default-deny rule: named no keys = granted nothing, every install refused until configured. Empty meaning unsigned-is-fine would disappear the check for exactly the person who never configured it.
 
 A signature covers **both** component and manifest. Manifests carry no provenance; the host trusts them at boot purely for sitting beside the component. A signature over the `.wasm` alone would verify the artefact while trusting someone else's description of what it may ask for.

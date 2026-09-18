@@ -101,10 +101,7 @@ fn a_disconnected_client_does_not_hold_the_turn_open() {
     let runtime = jan_klod_core::Runtime::boot(&config, common::repo_root().join("ext"))
         .expect("runtime boots");
     let factory = tool_then_answer_http;
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 

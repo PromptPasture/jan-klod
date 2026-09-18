@@ -213,14 +213,12 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
     // This one both inspects an agent and serves: the fleet is asserted
     // directly, then the turn goes through the surface. So it builds one
     // to look at and hands the registry the same runtime.
-    let runtime = std::sync::Arc::new(runtime);
+    // Built first, from a borrow: the registry takes the runtime by
+    // value afterwards, and a probe only needs to look at the fleet.
     let mut probe = runtime
         .build_agent(&factory)
         .expect("the shipped config builds an agent");
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::clone(&runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
 
     // Default tools must reach the model (or the "no tools" defect hides).
     let advertised = probe.tool_names();
@@ -293,10 +291,7 @@ fn a_refused_confirmation_leaves_the_workspace_untouched() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("the shipped config boots");
     let factory = write_then_answer_http;
-    let agents = std::sync::Arc::new(Agents::new(
-        std::sync::Arc::new(runtime),
-        std::sync::Arc::new(factory),
-    ));
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
 
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
