@@ -39,6 +39,7 @@ mod lazy_tool_fleet;
 mod local_model;
 mod manifest;
 mod mcp;
+mod permission_scope;
 mod persistence;
 mod plan_tool;
 mod polyglot;
