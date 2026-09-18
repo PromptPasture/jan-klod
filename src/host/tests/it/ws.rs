@@ -127,6 +127,54 @@ fn talk_mixed(port: u16, frames: Vec<Message>) -> Result<Vec<String>, String> {
         })
 }
 
+/// Send `frames` and read until the socket closes, so a turn's
+/// notifications are collected as well as its answers.
+///
+/// Unlike [`talk`], which reads one answer per frame: a turn emits
+/// notifications *while* it runs, and counting them one-to-one against
+/// what was sent would deadlock on the first one.
+fn talk_until(port: u16, frames: Vec<String>, gap: std::time::Duration, done: &str) -> Vec<String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+        .block_on(async move {
+            let url = format!("ws://127.0.0.1:{port}/ws");
+            let (mut socket, _) = tokio_tungstenite::connect_async(url)
+                .await
+                .expect("connects");
+            for frame in frames {
+                socket.send(Message::text(frame)).await.expect("sends");
+                // Let the previous frame take effect: a `turn/cancel`
+                // sent before the turn has started would arrive as an
+                // ordinary command and be answered, not act on a turn.
+                tokio::time::sleep(gap).await;
+            }
+            let mut seen = Vec::new();
+            // Stops at `done` rather than on a drain timeout, so the time
+            // this takes is the turn's and not the reader's — which is
+            // what lets a caller assert on elapsed.
+            while let Ok(Some(Ok(message))) =
+                tokio::time::timeout(std::time::Duration::from_secs(30), socket.next()).await
+            {
+                match message {
+                    Message::Text(text) => {
+                        let text = text.to_string();
+                        let finished = text.contains(done);
+                        seen.push(text);
+                        if finished {
+                            break;
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+            let _ = socket.close(None).await;
+            seen
+        })
+}
+
 fn hello() -> String {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -290,5 +338,173 @@ fn a_bad_frame_is_answered_and_the_connection_survives_it() {
         !answers[4].contains("\"error\"") && answers[4].contains("sessions"),
         "the connection did not survive three bad frames: {}",
         answers[4]
+    );
+}
+
+/// An agent whose first completion calls a gated tool, so a turn parks on
+/// an `ask` — and whose second finishes.
+fn booted_asking(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+    let needed = [
+        "provider-openai.wasm",
+        "interceptor-tool-selector.wasm",
+        "interceptor-permission.wasm",
+    ];
+    if !common::guests_staged(&needed) {
+        return None;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-ws-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("creates the temp dir");
+    let guard = common::TempDir(dir.clone());
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "
+storage:
+  path: {db}
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    tool-selector:
+      enabled: true
+    permission:
+      enabled: true
+",
+            db = dir.join("jan-klod.db").display()
+        ),
+    )
+    .expect("writes the config");
+
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let factory = move || -> jan_klod_core::route::HttpFn {
+        let calls = std::sync::Arc::clone(&calls);
+        Box::new(move |_m, _u, _h, _b, _t| {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let body = if n == 0 {
+                serde_json::json!({"choices":[{"message":{"role":"assistant","tool_calls":[
+                    {"id":"c1","function":{"name":"bash","arguments":"{}"}}]},
+                    "finish_reason":"tool_calls"}]})
+            } else {
+                serde_json::json!({"choices":[{"message":{"role":"assistant",
+                    "content":"all done"},"finish_reason":"stop"}]})
+            };
+            Ok(jan_klod_core::http::WireResponse {
+                status: 200,
+                headers: vec![],
+                body: serde_json::to_vec(&body).expect("serialises"),
+            })
+        })
+    };
+    let runtime =
+        Runtime::boot(&config, common::repo_root().join("ext")).expect("the runtime boots");
+    let agent = runtime.build_agent(&factory).expect("the agent boots");
+    Some((guard, agent))
+}
+
+/// A turn over the socket: it streams, it asks in band, and the answer
+/// arrives on the same connection.
+///
+/// This is what a WebSocket buys over SSE plus POST — #43 said so in its
+/// own correction, and until now nothing demonstrated it. The answer goes
+/// down the *same socket* the question came up, which over REST needs a
+/// second connection and a route.
+#[test]
+fn a_turn_streams_and_its_ask_is_answered_in_band() {
+    // Long on purpose: if the in-band answer works the turn finishes in
+    // about a second, and if it does not this test takes the whole
+    // timeout. The elapsed assertion below is what tells them apart —
+    // "all done" alone cannot, since the mock provider says it either
+    // way.
+    std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");
+    let started = std::time::Instant::now();
+    let Some((_guard, mut agent)) = booted_asking("turn") else {
+        return;
+    };
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let seen = surface.serve_while(&mut agent, None, |port| {
+        talk_until(
+            port,
+            vec![
+                hello(),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"method":"session/message",
+                    "params":{"session":"w-1","message":"use bash to clean up"}})
+                .to_string(),
+                serde_json::json!({"jsonrpc":"2.0","id":3,"method":"turn/answer",
+                    "params":{"session":"w-1","answer":"yes"}})
+                .to_string(),
+            ],
+            std::time::Duration::from_millis(400),
+            "all done",
+        )
+    });
+
+    let elapsed = started.elapsed();
+    let all = seen.join("\n");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "the turn took {elapsed:?}, which is the answer timeout rather than an \
+         answer: the in-band reply never reached the parked ask"
+    );
+    assert!(
+        all.contains("notification/ask") || all.contains("\"ask\""),
+        "the turn asked over the socket: {all}"
+    );
+    assert!(
+        all.contains("all done"),
+        "the turn finished after being answered in band: {all}"
+    );
+}
+
+/// A `turn/cancel` is read **while the turn runs**, which is the other
+/// thing a WebSocket buys over SSE plus POST.
+///
+/// Two assertions, and the second is the control. The cancel being
+/// *accepted* (`cancelling: true`) proves the frame was read mid-turn
+/// rather than queued behind it — a socket that only dispatched between
+/// turns would answer this after the turn had already finished. And the
+/// turn's own answer proves the cancel *did* something: it ends stopped,
+/// not with the "all done" the mock provider would have produced if the
+/// turn had run to completion.
+#[test]
+fn a_turn_is_cancelled_over_the_same_socket_while_it_runs() {
+    std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");
+    let Some((_guard, mut agent)) = booted_asking("cancel") else {
+        return;
+    };
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let seen = surface.serve_while(&mut agent, None, |port| {
+        talk_until(
+            port,
+            vec![
+                hello(),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"method":"session/message",
+                    "params":{"session":"c-1","message":"use bash to clean up"}})
+                .to_string(),
+                serde_json::json!({"jsonrpc":"2.0","id":3,"method":"turn/cancel",
+                    "params":{"session":"c-1"}})
+                .to_string(),
+            ],
+            std::time::Duration::from_millis(400),
+            "\"method\":\"done\"",
+        )
+    });
+
+    let all = seen.join("\n");
+    assert!(
+        all.contains("\"cancelling\":true"),
+        "the cancel was not read while the turn ran: {all}"
+    );
+    assert!(
+        all.contains("stopped before the turn finished"),
+        "the turn ran to completion anyway: {all}"
+    );
+    assert!(
+        !all.contains("all done"),
+        "the turn finished normally, so the cancel changed nothing: {all}"
     );
 }

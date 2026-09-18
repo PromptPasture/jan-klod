@@ -17,22 +17,34 @@
 //! would let one socket client stall every REST caller for as long as it
 //! stayed connected.
 //!
-//! # Sequential, for now
+//! # Three tasks, and one owner of the queue at a time
 //!
-//! One frame in, its answers out, then the next. That is enough for every
-//! command that is not a turn, and it keeps the socket free of a second
-//! writer. A turn streams notifications *while* running and must be
-//! cancellable mid-flight, which needs a reader and a writer at once —
-//! that is the next slice's problem, and the reason this module does not
-//! split the socket yet.
+//! A turn streams notifications *while* it runs and must be cancellable
+//! mid-flight, so the socket is split: a reader task hands frames over, a
+//! writer task drains lines onto the wire, and a blocking connection loop
+//! dispatches.
+//!
+//! The receiver of incoming frames is **moved into each job and returned**
+//! rather than shared. That is the whole concurrency argument: between
+//! frames the connection loop owns it; while a turn runs, the turn owns
+//! it, and `rpc::serve_queued` drains `turn/cancel` and an in-band
+//! `turn/answer` out of it exactly as it does over stdio. Two consumers
+//! never exist, so nothing has to be locked and no frame can be taken by
+//! the wrong reader.
+//!
+//! This is the same division `rpc::serve` gets for free by being
+//! single-threaded — there, the loop is simply blocked inside `command`
+//! while the turn reads. Here the loop is blocked on the job instead.
 
 use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket};
+use futures_util::{SinkExt as _, StreamExt as _};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use jan_klod_core::AgentSession;
 
@@ -45,7 +57,7 @@ use crate::session_thread::Jobs;
 /// boundary — this splits on it rather than sending partial JSON, which a
 /// client would have no way to reassemble.
 struct Frames {
-    lines: Sender<String>,
+    lines: UnboundedSender<String>,
     partial: Vec<u8>,
 }
 
@@ -73,76 +85,105 @@ impl Write for Frames {
 }
 
 /// Serve one client until it hangs up or the handshake is refused.
-pub async fn serve_socket(mut socket: WebSocket, jobs: Arc<Jobs<AgentSession>>) {
-    // Carried across frames: the protocol is negotiated once per
-    // connection, and `rpc` keeps the same flag for the same reason.
+pub async fn serve_socket(socket: WebSocket, jobs: Arc<Jobs<AgentSession>>) {
+    let (mut sink, mut stream) = socket.split();
+    let (outbox, mut outgoing) = unbounded_channel::<String>();
+    let writing = tokio::spawn(async move {
+        while let Some(line) = outgoing.recv().await {
+            if sink.send(Message::text(line)).await.is_err() {
+                return;
+            }
+        }
+        let _ = sink.send(Message::Close(None)).await;
+    });
+
+    // Hands frames over and holds nothing else — the same division
+    // `rpc::serve` makes for its pipe, and for the same reason: while a
+    // turn runs, something other than the turn has to be reading.
+    let (handover, incoming) = channel::<Incoming>();
+    let reading = tokio::spawn(async move {
+        while let Some(Ok(message)) = stream.next().await {
+            let handed = match message {
+                Message::Text(text) => handover.send(Incoming::Line(text.to_string())),
+                // Not this protocol. Handed on as such rather than
+                // dropped, because silence looks like a lost message.
+                Message::Binary(_) => handover.send(Incoming::NotUtf8),
+                Message::Close(_) => break,
+                // The transport's own; `axum` answers pings itself.
+                Message::Ping(_) | Message::Pong(_) => Ok(()),
+            };
+            if handed.is_err() {
+                break;
+            }
+        }
+    });
+
+    let _ = tokio::task::spawn_blocking(move || connection(incoming, &outbox, &jobs)).await;
+    // The connection is over: the reader has nothing left to hand to, and
+    // the writer stops when the outbox drops with `connection`.
+    reading.abort();
+    let _ = writing.await;
+}
+
+/// Dispatch frames until the client leaves or the handshake is refused.
+///
+/// Blocking, and deliberately: it owns the frame queue between frames and
+/// lends it to each job, which is what keeps a running turn the only
+/// reader while it runs.
+fn connection(
+    mut incoming: Receiver<Incoming>,
+    outbox: &UnboundedSender<String>,
+    jobs: &Jobs<AgentSession>,
+) {
     let mut negotiated = false;
-    while let Some(Ok(message)) = socket.recv().await {
-        let line = match message {
-            Message::Text(text) => text.to_string(),
-            // A binary frame is not this protocol. Said rather than
-            // ignored, because silence looks like a lost message.
-            Message::Binary(_) => {
-                let refusal = rpc::not_text();
-                let _ = socket.send(Message::text(refusal)).await;
+    while let Ok(frame) = incoming.recv() {
+        let line = match frame {
+            Incoming::Line(line) => line,
+            Incoming::NotUtf8 => {
+                if outbox.send(rpc::not_text()).is_err() {
+                    return;
+                }
                 continue;
             }
-            Message::Close(_) => break,
-            // Ping and pong are the transport's own; `axum` answers pings.
-            Message::Ping(_) | Message::Pong(_) => continue,
         };
         if line.trim().is_empty() {
             continue;
         }
 
-        let jobs = Arc::clone(&jobs);
+        let lines = outbox.clone();
         let was = negotiated;
-        let served = tokio::task::spawn_blocking(move || {
-            let (lines, written) = channel();
+        let served = jobs.run(move |agent: &mut AgentSession| {
+            let wire = Wire::new(
+                Rc::new(RefCell::new(Frames {
+                    lines,
+                    partial: Vec::new(),
+                })),
+                &incoming,
+            );
             let mut negotiated = was;
-            let closing = jobs.run(move |agent: &mut AgentSession| {
-                // Both live only for this frame: the wire's writer is the
-                // channel above, and nothing polls `incoming` until a turn
-                // does (the next slice).
-                let (_unused, incoming) = channel::<Incoming>();
-                let wire = Wire::new(
-                    Rc::new(RefCell::new(Frames {
-                        lines,
-                        partial: Vec::new(),
-                    })),
-                    &incoming,
-                );
-                let served = match rpc::parse(&line) {
-                    Ok(request) => {
-                        rpc::command(request.command, request.id, &mut negotiated, agent, &wire)
-                    }
-                    Err(refusal) => Served::Answer(refusal),
-                };
-                let closing = matches!(served, Served::Close(_));
-                let answer = match served {
-                    Served::Answer(answer) | Served::Close(answer) => answer,
-                };
-                let _ = wire.write(&answer);
-                (closing, negotiated)
-            });
-            (closing, written.into_iter().collect::<Vec<String>>())
-        })
-        .await;
-
-        let Ok((closing, answers)) = served else {
-            break;
-        };
-        for answer in answers {
-            if socket.send(Message::text(answer)).await.is_err() {
-                return;
+            let served = match rpc::parse(&line) {
+                Ok(request) => {
+                    rpc::command(request.command, request.id, &mut negotiated, agent, &wire)
+                }
+                Err(refusal) => Served::Answer(refusal),
+            };
+            let closing = matches!(served, Served::Close(_));
+            let (Served::Answer(answer) | Served::Close(answer)) = served;
+            let _ = wire.write(&answer);
+            // Handed back so the loop owns it again: exactly one reader of
+            // this queue exists at any moment.
+            (incoming, negotiated, closing)
+        });
+        match served {
+            Ok((returned, flag, closing)) => {
+                incoming = returned;
+                negotiated = flag;
+                if closing {
+                    return;
+                }
             }
-        }
-        // A refused handshake hangs up, and so does a session that has
-        // gone: in both cases nothing more can be answered on this socket.
-        match closing {
-            Ok((false, flag)) => negotiated = flag,
-            Ok((true, _)) | Err(_) => break,
+            // The session is gone; nothing more can be answered here.
+            Err(_) => return,
         }
     }
-    let _ = socket.send(Message::Close(None)).await;
 }

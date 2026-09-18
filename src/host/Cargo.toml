@@ -25,6 +25,7 @@ jan-klod-protocol = { path = "../protocol" }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "sync", "time"] }
 futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 # Examples and integration tests drive the guests over the Component Model:
 # spike_gate (Slice 1a gate), provider_probe (live single provider leg),
