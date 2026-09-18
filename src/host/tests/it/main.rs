@@ -16,6 +16,7 @@ mod api_rest;
 mod auth;
 mod bundle_distributions;
 mod classifier;
+mod client_surface;
 mod component_harness;
 mod docs_match_config;
 mod egress_boundary;

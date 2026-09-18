@@ -420,7 +420,7 @@ supply-chain: deny audit sbom web-supply-chain supervisor-supply-chain
 # --test name filter. A typo'd filter can still match other modules and exit 0,
 # so each name is checked against the filesystem before the run.
 HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegram \
-                   host_fs host_process tool_fleet tool_wiring guardrails
+                   host_fs host_process tool_fleet tool_wiring guardrails client_surface
 harness: export JK_REQUIRE_GUESTS = 1
 harness: check-spike-deps extensions
 	@for m in $(HARNESS_MODULES); do \
