@@ -529,9 +529,14 @@ toolkit was rejected; #97 records the measurement.
   needs a second, explicit confirmation. `/new`, `/sessions` and `/help` moved
   from `Pending` to `Ready` in `commands.rs`, and `exactly_the_commands_that_act_are_ready`
   was updated deliberately. Out of scope, same as the issue: session
-  delete/rename (no protocol command) and fork (`session/get`'s `seq` field
-  cannot be turned into a client-chosen `at-seq` for a UI that has no way to
-  show a log position, whatever #106 later did to the schema).
+  delete/rename (no protocol command) and fork — which is out of scope for a
+  different reason than this line used to give. `session/get` returns a `seq`
+  per message and it *is* `session/fork`'s `at-seq` (#106), so the protocol
+  expresses fork-from-a-point and has since before 19h shipped. What is
+  missing is a way for a person to choose the point, and forking mid-session
+  is rare enough that nobody has wanted one; if that changes it is a small
+  slice against a protocol that already supports it, not a protocol change
+  ([#170](https://github.com/PromptPasture/jan-klod/issues/170)).
 
 19a gated the rest; after it, 19b→19c and 19d→19e→19f are two chains that can
 run in parallel, and 19g/19h close over both.
