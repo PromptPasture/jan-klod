@@ -94,6 +94,26 @@ pub trait ToolInvoker {
     /// conductor reports as failed result, doesn't abort the turn.
     fn invoke(&mut self, call: &ToolCall) -> Option<ToolInvocation>;
 
+    /// Invoke `call`, letting the tool ask the user first if it can (#216).
+    ///
+    /// Default: ignore the driver and behave like [`Self::invoke`]. Only a
+    /// fleet holding components that export `tool-askable` has anything to
+    /// do with it, and the default means adding this broke no
+    /// implementation.
+    ///
+    /// The driver is **passed, not stored**, which is the whole reason this
+    /// is a separate method rather than state like
+    /// [`Self::bind_session`]. A fleet that held a driver across a turn
+    /// would be holding a second mutable borrow of it, and a tool would be
+    /// able to ask outside a tool call.
+    fn invoke_asking(
+        &mut self,
+        call: &ToolCall,
+        _driver: &mut dyn Driver,
+    ) -> Option<ToolInvocation> {
+        self.invoke(call)
+    }
+
     /// Tell the fleet which session the calls in this turn belong to.
     ///
     /// Default: ignore it. Only a fleet whose guests keep session-scoped
@@ -475,10 +495,12 @@ fn run_tool_calls(
                 if sink.emit(&Event::ToolInvoked(effective.clone())) == Flow::Stop {
                     stop = ToolPass::Cancelled;
                 }
-                tools.invoke(&effective).unwrap_or_else(|| ToolInvocation {
-                    content: format!("no tool named `{}`", effective.name),
-                    failed: true,
-                })
+                tools
+                    .invoke_asking(&effective, driver)
+                    .unwrap_or_else(|| ToolInvocation {
+                        content: format!("no tool named `{}`", effective.name),
+                        failed: true,
+                    })
             }
         };
 

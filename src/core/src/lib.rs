@@ -1396,6 +1396,20 @@ impl conductor::ToolInvoker for CombinedFleet {
             .or_else(|| self.registry.invoke(call))
             .or_else(|| self.native.invoke(call))
     }
+    fn invoke_asking(
+        &mut self,
+        call: &intercept::ToolCall,
+        driver: &mut dyn intercept::Driver,
+    ) -> Option<conductor::ToolInvocation> {
+        // Tools may ask; registries and the host's own tools do not, so they
+        // keep the default. Order matches `invoke`, or a name would resolve
+        // differently depending on whether a driver was in play.
+        self.tools
+            .invoke_asking(call, driver)
+            .or_else(|| self.registry.invoke(call))
+            .or_else(|| self.native.invoke(call))
+    }
+
     fn bind_session(&mut self, session: &str) {
         self.tools.bind_session(session);
         self.registry.bind_session(session);

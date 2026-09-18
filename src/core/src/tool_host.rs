@@ -21,6 +21,27 @@ mod bind {
     });
 }
 
+/// How many times one tool call may ask before the host stops it.
+///
+/// Generous for a real question-and-answer exchange and far below
+/// "forever". The number matters less than where it lives: in the host, so
+/// a guest cannot raise it.
+const MAX_ASKS: usize = 8;
+
+/// The host's *view* of a tool that can also put a question to the user.
+///
+/// A separate `bindgen!` rather than a wider world, because no tool is
+/// required to ask: constructing this only looks up exports, so a component
+/// without `tool-askable` fails here and nowhere else. That is the probe
+/// `wit/tool-askable.wit` describes, and the same one `client-surface` uses
+/// (#175, #216).
+mod ask_bind {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "tool-askable-view",
+    });
+}
+
 use bind::jan_klod::interfaces::host_config as g_config;
 use bind::jan_klod::interfaces::host_fs as g_fs;
 use bind::jan_klod::interfaces::host_http as g_http;
@@ -320,6 +341,9 @@ pub struct ToolExtension {
     id: String,
     store: Store<ToolHost>,
     world: bind::ToolWorld,
+    /// Present only when the component also exports `tool-askable` (#216).
+    /// `None` is the ordinary case and not a degraded one.
+    asking: Option<ask_bind::ToolAskableView>,
 }
 
 impl ToolExtension {
@@ -410,8 +434,14 @@ impl ToolExtension {
             children: crate::host_process::Children::default(),
         };
         let mut store = Store::new(engine, host);
-        let world = bind::ToolWorld::instantiate(&mut store, component, &linker)
+        // Instantiated once and viewed twice, as `interceptor_host` views a
+        // component that also contributes a client surface.
+        let instance = linker
+            .instantiate(&mut store, component)
             .map_err(|source| CoreError::instantiate(id, source))?;
+        let world = bind::ToolWorld::new(&mut store, &instance)
+            .map_err(|source| CoreError::instantiate(id, source))?;
+        let asking = ask_bind::ToolAskableView::new(&mut store, &instance).ok();
 
         let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
         let ctx = bind::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext {
@@ -425,7 +455,56 @@ impl ToolExtension {
             id: id.to_string(),
             store,
             world,
+            asking,
         })
+    }
+
+    /// Invoke, letting the tool ask the user first (#216).
+    ///
+    /// `None` when this component does not export `tool-askable`, so the
+    /// caller falls back to the ordinary `invoke` rather than treating an
+    /// ordinary tool as broken.
+    ///
+    /// # The loop is bounded, and the bound lives here
+    ///
+    /// A tool is re-invoked with each answer until it is done. A guest that
+    /// returned `asking` forever would suspend the turn forever, and a
+    /// person answering the same question repeatedly is the worst possible
+    /// way to discover that. `MAX_ASKS` is the host's limit, not the
+    /// guest's promise — a bound that depended on a component behaving is
+    /// not a bound.
+    fn invoke_asking(
+        &mut self,
+        arguments: &str,
+        driver: &mut dyn crate::intercept::Driver,
+    ) -> Option<Result<String, String>> {
+        let asking = self.asking.as_ref()?.jan_klod_interfaces_tool_askable();
+        let mut answer: Option<String> = None;
+        for _ in 0..MAX_ASKS {
+            let step =
+                match asking.call_invoke_asking(&mut self.store, arguments, answer.as_deref()) {
+                    Ok(Ok(step)) => step,
+                    Ok(Err(err)) => return Some(Err(format!("tool error: {err:?}"))),
+                    Err(err) => return Some(Err(format!("tool trapped: {err}"))),
+                };
+            match step {
+                ask_bind::exports::jan_klod::interfaces::tool_askable::Step::Done(result) => {
+                    return Some(Ok(result));
+                }
+                ask_bind::exports::jan_klod::interfaces::tool_askable::Step::Asking(ask) => {
+                    answer = Some(driver.ask(&crate::intercept::UserPrompt {
+                        question: ask.question,
+                        options: ask.options,
+                        default_answer: ask.default_answer,
+                    }));
+                }
+            }
+        }
+        Some(Err(format!(
+            "tool `{}` asked more than {MAX_ASKS} times without answering; \
+             the turn was not left waiting on it",
+            self.id
+        )))
     }
 
     /// This extension's instance id.
@@ -534,6 +613,34 @@ impl ToolFleet {
 }
 
 impl crate::conductor::ToolInvoker for ToolFleet {
+    fn invoke_asking(
+        &mut self,
+        call: &crate::intercept::ToolCall,
+        driver: &mut dyn crate::intercept::Driver,
+    ) -> Option<crate::conductor::ToolInvocation> {
+        let entry = self
+            .tools
+            .iter_mut()
+            .find(|(meta, _)| meta.name == call.name)?;
+        // `None` means this tool cannot ask, which is every tool today. Fall
+        // through to the ordinary path: returning `None` here would tell the
+        // conductor no such tool exists, and every existing tool would stop
+        // working the moment this method was added.
+        let Some(outcome) = entry.1.invoke_asking(&call.arguments, driver) else {
+            return self.invoke(call);
+        };
+        Some(match outcome {
+            Ok(content) => crate::conductor::ToolInvocation {
+                content,
+                failed: false,
+            },
+            Err(content) => crate::conductor::ToolInvocation {
+                content,
+                failed: true,
+            },
+        })
+    }
+
     fn invoke(
         &mut self,
         call: &crate::intercept::ToolCall,
@@ -694,6 +801,14 @@ impl LazyToolFleet {
 }
 
 impl crate::conductor::ToolInvoker for LazyToolFleet {
+    fn invoke_asking(
+        &mut self,
+        call: &crate::intercept::ToolCall,
+        driver: &mut dyn crate::intercept::Driver,
+    ) -> Option<crate::conductor::ToolInvocation> {
+        self.ensure().ok()?.invoke_asking(call, driver)
+    }
+
     fn invoke(
         &mut self,
         call: &crate::intercept::ToolCall,
