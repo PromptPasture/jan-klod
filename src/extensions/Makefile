@@ -18,7 +18,7 @@ include $(ROOT)/versions.mk
 # Rust guests, by directory name (= staged ext/<name>.wasm). Add a guest here and
 # it gets `make <name>` + a slot in `all`/`clean` for free.
 # The cargo artifact swaps '-' for '_' (e.g. tool-fs -> tool_fs.wasm).
-GUESTS := provider-openai provider-anthropic registry-skills registry-mcp interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router interceptor-system tool-proc-probe tool-escape-probe tool-fs tool-shell tool-edit tool-find tool-git tool-fetch tool-hello tool-ask-probe tool-plan
+GUESTS := provider-openai provider-anthropic registry-skills registry-mcp interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router interceptor-system tool-proc-probe tool-escape-probe tool-fs tool-shell tool-edit tool-find tool-git tool-fetch tool-hello tool-ask-probe tool-plan tool-proc
 
 # Shared cargo-deny policy (repo root) — the same file the host workspace uses.
 DENY_CONFIG := $(ROOT)/deny.toml

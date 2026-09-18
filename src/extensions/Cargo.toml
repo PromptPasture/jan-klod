@@ -25,6 +25,7 @@ members = [
     "tool-ask-probe",
     "tool-hello",
     "tool-plan",
+    "tool-proc",
 ]
 
 [workspace.package]
