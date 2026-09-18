@@ -1,17 +1,20 @@
 ---
 type: guide
 title: Development Environment Setup
-description: Install and verify the toolchain needed to build the Rust core and TinyGo guest extensions for Phase 1.
-tags: [setup, toolchain, rust, tinygo, wasmtime, wit, component-model, phase-1]
+description: Install and verify the toolchain needed to build the Rust core, Rust guest extensions (the default), and WIT tooling. TinyGo is an optional polyglot canary.
+tags: [setup, toolchain, rust, tinygo, wasmtime, wit, component-model]
 created: 2026-06-29
-updated: 2026-09-11
+updated: 2026-09-18
 ---
 
 # Development Environment Setup
 
 Install the toolchain to build Jan-Klod from source: **Rust core** (Wasmtime host),
-**TinyGo guest extensions**, and **WIT** tooling. This is what the
-[Phase 1 plan](../decisions/2026-06-29-extension-technologies/PLAN.md) assumes.
+**Rust guest extensions** (the default for first-party extensions), **WIT** tooling,
+and, optionally, **TinyGo** — kept as a polyglot canary (`make gate` exercises it),
+not required for a day-to-day build. See
+[Extension Technologies](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md)
+for the language policy.
 
 > Commands target **macOS** with inline Linux notes. This guide expands as later phases add tools.
 
@@ -19,15 +22,14 @@ Install the toolchain to build Jan-Klod from source: **Rust core** (Wasmtime hos
 
 | Tool | Purpose | Required for | Install via |
 |---|---|---|---|
-| **Rust** (`rustc`, `cargo`) ≥ 1.83 | builds `core`; embeds the Wasmtime crate | always | `rustup` |
-| **Go** ≥ 1.23 | toolchain TinyGo builds on | TinyGo guests | `brew` |
-| **TinyGo** ≥ 0.34 | compiles Go guests to **components** (`wasip2`) | guest extensions | `brew` |
+| **Rust** (`rustc`, `cargo`) ≥ 1.83 | builds `core`; embeds the Wasmtime crate; `wasm32-wasip2` target emits guest components directly | always | `rustup` |
 | **wkg** ≥ 0.15 | resolves/fetches WIT package dependencies | building guests against `wit/` | `cargo install` |
 | **wasm-tools** | inspect/validate components; `make extensions` reads a component's imports through it to generate each guest's capability manifest | **required to build guests** | `cargo install` |
 | `wasmtime` CLI ≥ 46 | run a component standalone | optional (debug only) | `brew` / installer |
-| `cargo-component` | build **Rust** guests as components | optional (Rust extensions) | `cargo install` |
+| **Go** ≥ 1.23 | toolchain TinyGo builds on | optional — TinyGo polyglot canary only | `brew` |
+| **TinyGo** ≥ 0.34 | compiles the `spike` guest to a **component** (`wasip2`); `make gate` rebuilds it from source when installed | optional — polyglot canary, not a first-party extension path | `brew` |
 
-The core embeds Wasmtime as a library, so the CLI is optional — it's only useful for inspecting `.wasm` files.
+The core embeds Wasmtime as a library, so the CLI is optional — it's only useful for inspecting `.wasm` files. `cargo-component` is **not needed**: since Rust 1.82, `wasm32-wasip2` emits components directly (`src/extensions/Makefile:194`).
 
 ## Install
 
@@ -40,21 +42,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup component add clippy rustfmt
 ```
 
-### 2. Go + TinyGo (guest extensions)
-
-TinyGo (not standard Go) is the guest compiler — standard Go lacks Component Model
-support. TinyGo **0.34+** emits components for `wasip2`.
-
-```shell
-brew install go
-brew tap tinygo-org/tools
-brew install tinygo
-```
-
-On Linux, download the release archive from
-<https://github.com/tinygo-org/tinygo/releases> (or use the `.deb`).
-
-### 3. wkg (WIT dependency resolution)
+### 2. wkg (WIT dependency resolution)
 
 Guests build against `wit/` contracts. Cross-package imports (e.g. `wasi:*`)
 are fetched by `wkg`:
@@ -67,7 +55,7 @@ cargo install wkg
 `make harness`, `make clippy`). Skip it and you get a clear message about the
 missing directory, not a cryptic `bindgen!` error.
 
-### 4. wasm-tools (inspect / validate)
+### 3. wasm-tools (inspect / validate)
 
 ```shell
 cargo install wasm-tools
@@ -75,30 +63,41 @@ cargo install wasm-tools
 
 Inspects components and validates output; the `wit:` Makefile target uses it.
 
-### 5. Optional
+### 4. Optional
 
 ```shell
-brew install wasmtime          # run a component by hand: wasmtime run foo.wasm
-cargo install cargo-component  # only if authoring a guest in Rust
+brew install wasmtime  # run a component by hand: wasmtime run foo.wasm
 ```
+
+Only install Go + TinyGo if you want `make gate`'s polyglot canary to rebuild
+`spike.wasm` from source instead of testing the committed one:
+
+```shell
+brew install go
+brew tap tinygo-org/tools
+brew install tinygo
+```
+
+On Linux, download the release archive from
+<https://github.com/tinygo-org/tinygo/releases> (or use the `.deb`).
 
 ## Verify
 
-Confirm versions after install (Phase 1 minimums):
+Confirm versions after install:
 
 ```shell
 rustc --version        # ≥ 1.83  (verified: 1.96.0)
 cargo --version
-go version             # ≥ 1.23  (verified: 1.26.4)
-tinygo version         # ≥ 0.34  (verified: 0.41.1)
 wkg --version          #         (verified: 0.15.1)
 wasm-tools --version   #         (verified: 1.252.0)
 wasmtime --version     # optional (verified: 46.0.1)
+go version             # optional, TinyGo canary  (verified: 1.26.4)
+tinygo version         # optional, TinyGo canary  (verified: 0.41.1)
 ```
 
-A green run of all six means the Slice 1a toolchain is ready. Then build per the
-project [Makefile](../../Makefile) (`cargo build` for core; `tinygo build` per
-guest — targets land in Slice 1b).
+A green run of the required four means the toolchain is ready to build first-party
+(Rust) extensions. Then build per the project [Makefile](../../Makefile) (`cargo
+build` for core; `make -C src/extensions` for guests).
 
 ## What a green local gate does not cover
 

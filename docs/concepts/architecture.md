@@ -4,10 +4,10 @@ title: Architecture
 description: High-level architecture of the Jan-Klod agent runtime
 tags: [architecture, core, extensions, rust, wasm, wasmtime]
 created: 2026-06-28T00:00:00Z
-updated: 2026-09-09T00:00:00Z
+updated: 2026-09-18T00:00:00Z
 ---
 
-> **Foundation:** **Rust + Wasmtime** host running WebAssembly Components (WIT contracts) as a standalone, user-privilege process — see [decisions/2026-06-29-component-model-rust](../decisions/2026-06-29-component-model-rust/Handoff.md). Taxonomy and contracts unchanged from Go + Wazero; host language/runtime and extension sandboxing differ. Because **nothing is trusted**, native extensions are gone; `api-*`/`chat-*` and UIs are now sandboxed WASM or separate clients. The **agent loop** (re-architected 2026-07-01) has thin *mechanism* in **core** and all *decisions* in **interceptor** extensions — see [Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md). All implementation choices resolved as of v0.1.0.
+> **Foundation:** **Rust + Wasmtime** host running WebAssembly Components (WIT contracts) as a standalone, user-privilege process — see [decisions/2026-06-29-component-model-rust](../decisions/2026-06-29-component-model-rust/Handoff.md). Taxonomy and contracts unchanged from Go + Wazero; host language/runtime and extension sandboxing differ. Because **nothing is trusted**, native extensions are gone; the inbound network surface (REST + SSE, stdio JSON-RPC) is host-side code in `jan-klod-host`, not a WASM extension — the planned `api-*`/`chat-*`/`host-serve`/`host-socket` design was superseded before anything shipped against it. The **agent loop** (re-architected 2026-07-01) has thin *mechanism* in **core** and all *decisions* in **interceptor** extensions — see [Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md). All implementation choices resolved as of v0.1.0.
 >
 > **Post-v0.1 (2026-09-08):** jan-klod is an **agent runtime** (kernel + distributions + clients) — [Vision — Harness as a Platform](../decisions/2026-09-08-harness-platform-vision/Vision.md), Phases 13–18: versioned client protocol, event-sourced session log, OS-level effect sandbox for `host-process`, manifest-declared capability grants, web client + Tauri shell, MCP + ACP bidirectional. Items marked *(planned, Phase N)* come from there; others describe what is built.
 
@@ -80,10 +80,13 @@ an installed extension.
 ### What the host grants extensions
 
 - Outbound HTTP requests (to call LLM APIs, web search, etc.) — `host-http`
-- **Inbound network listeners** (so `api-*` can serve REST/gRPC) — `host-serve` *(planned)*
-- **Long-lived sockets** (so `chat-*` can hold a Telegram/Slack connection) — `host-socket` *(planned)*
+- Path-jailed workspace read/write — `host-fs`
+- Bounded child processes, run-to-completion or long-lived and named in config — `host-process`
 - Storage read/write via `host-storage` — **granted, not ambient** (`persist: true`), and namespaced to the calling component. A tool may add `scope: session` to key its namespaces by session as well, so two sessions do not share one tool's state; the default is run-scoped, which is what a permission gate's standing grants need (#215)
 - Logging, config read (own section only), event bus publish/subscribe
+- Driving a session from inside the sandbox (create/list/read/fork, send a message, answer a prompt) — `host-agent` *(Phase 22, contract drafted, host implementation open)*
+
+There is no inbound-listener or long-lived-socket capability: the built inbound surface (REST + SSE, stdio JSON-RPC) is host-side `axum`/stdio code in `jan-klod-host`, and Telegram is host-side kernel code today — `host-agent` above is what would let a sandboxed guest do that instead.
 
 ### What extensions cannot do
 
@@ -104,16 +107,16 @@ Asserted by `host/tests/it/sandbox_boundary.rs`, which drives `tool-escape-probe
 | `registry-*` | Capability catalogues | WASM | `registry-skills`, `registry-mcp` |
 | `tool-*` | Discrete callable tools | WASM | `tool-web-search` |
 | `agent-*` | AI agent delegation via ACP | WASM | `agent-claude-code`, `agent-opencode`, `agent-codex` |
-| `api-*` | Network API surfaces | WASM (`host-serve`) | `api-rest`, `api-grpc`, `api-graphql` |
-| `chat-*` | Chat platform integrations | WASM (`host-socket`) | `chat-slack`, `chat-telegram`, `chat-whatsapp`, `chat-mattermost` |
 
-**Every extension is a sandboxed, language-agnostic WASM component — nothing trusted, nothing compiled into core.** (Only loop *mechanism* is in core; it carries no policy — see [Agent loop architecture](#agent-loop-architecture).) Extensions needing network (`provider-*`, `tool-*`, `api-*`, `chat-*`) get it only through host-granted capabilities, never raw OS access. `api-*` and `chat-*` are ordinary plugins: users enable whichever surfaces/integrations they want (or none).
+There is no `api-*`/`chat-*` category. That design (network-facing extensions behind a planned `host-serve`/`host-socket` pair) was superseded before anything shipped against it: the built inbound surface (REST + SSE, stdio JSON-RPC) is host-side code in `jan-klod-host`, and Telegram is host-side kernel code — see [What the host grants extensions](#what-the-host-grants-extensions) and [`host-agent.wit`](contracts.md#host-provided-interfaces) for the Phase 22 path to making a chat driver an ordinary sandboxed guest.
+
+**Every extension is a sandboxed, language-agnostic WASM component — nothing trusted, nothing compiled into core.** (Only loop *mechanism* is in core; it carries no policy — see [Agent loop architecture](#agent-loop-architecture).) Extensions needing network (`provider-*`, `tool-*`) get it only through host-granted capabilities, never raw OS access.
 
 **`interceptor-*` extensions** are decision hooks. Each exports the generic `interceptor` interface (`intercept` + `subscribed-phases`); core invokes them **natively** at fixed, ordered **phases** and acts on returned `decision` (`proceed | replace | block | ask`) — synchronous, ordered dispatch, distinct from the observation-only event bus, with no `host-hook` import. New lifecycle points are `phase` enum cases, never new functions, so **many narrow phases** over few broad ones, making ordering *structural* (phase order) rather than config-fragile. **Ordering is not configurable** — across phases it follows the enum, within a phase it follows deterministic load order; `config.yaml` only enables/disables interceptors. The old monolithic `manager-agent-loop` (intent routing, task classification, tool selection, context compression) is now separate, independently enabled interceptors. **Agent lifecycle hooks**: `onStart` → `session-start`, `onFinish` → `finalize`, `onToolCall` → `tool-call`/`tool-result`, `onError` → `on-error`. Any external lifecycle event is a phase — write an interceptor for it. (**Provider fallback is core loop mechanism**, not an interceptor — it re-issues the same failed request on another provider; see [Provider fallback](#provider-fallback).)
 
-An interceptor may return **`ask`** — a question routed through the loop to the attached driver (TUI, chat, `api-*`), which surfaces it in its idiom; the loop suspends and re-invokes the same interceptor with the answer. This lets rule-based permission gates confirm with the user even though the UI is separate — the interceptor never touches a UI.
+An interceptor may return **`ask`** — a question routed through the loop to the attached driver (TUI, Telegram, a REST/SSE client), which surfaces it in its idiom; the loop suspends and re-invokes the same interceptor with the answer. This lets rule-based permission gates confirm with the user even though the UI is separate — the interceptor never touches a UI.
 
-**UIs are not extensions** — TUI/GUI/web are optional separate client processes connecting over `api-*` HTTP+SSE (LSP model: core is server, UI is thin client). See [User interfaces](#user-interfaces-separate-clients).
+**UIs are not extensions** — TUI/GUI/web are optional separate client processes connecting over the host-side REST + SSE / stdio JSON-RPC surface (LSP model: core is server, UI is thin client). See [User interfaces](#user-interfaces-separate-clients).
 
 Jan-Klod speaks ACP bidirectionally — as a client (`agent-*` extensions call other agents) and as a server (callable by other ACP orchestrators).
 
@@ -146,15 +149,14 @@ tool-web-search       implements tool-callable; offered to the loop via intercep
 agent-claude-code     implements agent-delegate (delegates tasks via ACP)
 agent-opencode        implements agent-delegate
 
-api-rest              drives the core loop; uses host-serve (exposes core over HTTP + SSE)
-api-grpc              drives the core loop; uses host-serve
-api-graphql           drives the core loop; uses host-serve
+# there is no api-*/chat-* family: that design (host-serve/host-socket) was
+# superseded before anything shipped against it. The inbound surface is
+# host-side code in jan-klod-host — axum REST + SSE, stdio JSON-RPC — and
+# Telegram is host-side kernel code, not a guest. See host-agent.wit (Phase 22)
+# for the path to a sandboxed chat/API driver.
 
-chat-slack            drives the core loop; uses host-socket
-chat-telegram         drives the core loop; uses host-socket
-chat-whatsapp         drives the core loop; uses host-socket
-
-# UIs are NOT extensions — separate client processes that connect over api-rest (HTTP+SSE)
+# UIs are NOT extensions — separate client processes that connect over
+# REST + SSE or stdio JSON-RPC, both served by jan-klod-host
 ```
 
 ### User interfaces (separate clients)
@@ -232,7 +234,7 @@ Session opens
 [phase: select-model]   interceptor-system — set the standing instructions
     │
     ▼
-User query (from an api-*/chat-* driver)
+User query (from a client — TUI, REST/SSE, stdio JSON-RPC, Telegram)
     │
     ▼
 [phase: before-loop]  interceptor-intent-router ──→ direct answer (skip agentic loop)
@@ -407,12 +409,12 @@ Required, not optional: with log-based read surfaces, unconverted databases have
 | Layer | Technology |
 |---|---|
 | Core language | Rust |
-| Process model | `core` = standalone process under the user's privileges, hosting the WASM sandbox; UI clients connect over an `api-*` HTTP+SSE surface |
+| Process model | `core` = standalone process under the user's privileges, hosting the WASM sandbox; UI clients connect over host-side REST + SSE or stdio JSON-RPC |
 | WASM host | Wasmtime (Rust-native, no CGo) |
-| Extension format | WASM Component Model + WIT interfaces (`wit-bindgen`) — every extension, incl. `api-*`/`chat-*` |
+| Extension format | WASM Component Model + WIT interfaces (`wit-bindgen`) — every extension |
 | HTTP surface | host-side `axum`; REST + SSE + `GET /ws`; `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`, `GET /ws`. The session stays on one thread and is reached by job |
 | SQL (host-side) | `rusqlite` bundled; host-side store (not SQLite-in-wasm) |
-| UI clients (separate, optional) | `jan-klod-ui`: TUI (`ratatui`); GUI via Tauri *(planned)*; web via browser |
+| UI clients (separate, optional) | TUI (`ratatui`, `jan-klod`); native window via Tauri (`jan-klod --gui`); web via browser |
 | Build | Cargo (native binary; no CGo in the core) |
 | Linting | Clippy (Rust core); `golangci-lint` for any Go-language tooling/guests |
 | Observability | Structured logging + Prometheus + OpenTelemetry |
@@ -550,7 +552,7 @@ Extensions pick up `config.yaml` changes without restart. Core watches the confi
 | Target | Notes |
 |---|---|
 | Desktop (macOS, Windows, Linux) | Primary; all UI modes |
-| ARM home server / NAS | Low memory (Rust + WASM); headless core, no UI — e.g., `chat-telegram` for access, optionally `api-rest` |
+| ARM home server / NAS | Low memory (Rust + WASM); headless core, no UI — Telegram (host-side) for access, optionally REST + SSE |
 | Docker | Single container; config via env vars or mounted `config.yaml` |
 | Kubernetes | Enterprise; stateless API scaling needs shared Postgres (not built) |
 

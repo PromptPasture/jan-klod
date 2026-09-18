@@ -4,14 +4,14 @@ title: Configuration
 description: The config.yaml format and how the core loads it into extension instances
 tags: [config, yaml, extensions, host-config, loader]
 created: 2026-06-29T00:00:00Z
-updated: 2026-09-09T00:00:00Z
+updated: 2026-09-18T00:00:00Z
 ---
 
 `config.yaml` declares which extensions run and how. The **core** loads it and turns it into **extension instances**; everything domain-specific is opaque and handed to the instance through [`host-config`](contracts.md#host-provided-interfaces).
 
 ## File shape
 
-Extensions are grouped by **category** (`provider`, `store`, `interceptor`, `registry`, `tool`, `agent`, `api`, `chat`). Each *named* entry is one **instance**:
+Extensions are grouped by **category** (`provider`, `interceptor`, `registry`, `tool`). `agent` is accepted structurally but currently **inert** — `Runtime::build_agent` never instantiates it and no `agent-*` component is built, so an enabled entry resolves to a `.wasm` that doesn't exist. There is no `store` category — persistence is host-side, configured by the top-level `storage:` block, not an extension. There is no `api`/`chat` category either — the inbound REST surface and Telegram are host-side, started with `jan-klod-gateway serve`/`jan-klod-gateway telegram`, not extensions. Each *named* entry is one **instance**:
 
 ```yaml
 extensions:
@@ -163,7 +163,7 @@ Every key except `enabled`/`type` is the instance's private config section. The 
 
 The loader enforces core-level rules only; domain rules live in consuming extensions.
 
-- **At most one `store.*` enabled** — core proxies `host-storage` to one active store.
+- **Persistence has one store, host-side, not an extension** — the top-level `storage:` block (`storage.path`) names the SQLite file; `host-storage` is core's own proxy in front of it, granted to components rather than backed by one of several store extensions.
 
 `providers` and `routing` (fallback chain and task→model routing) are **top-level, not under `extensions`**. Core preserves them for `interceptor-task-router` (via `host-config`) without validating references — routing is interceptor domain logic. See [Architecture → Provider fallback](architecture.md#provider-fallback) and [Task routing](architecture.md#task-routing).
 

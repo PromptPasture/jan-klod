@@ -4,7 +4,7 @@ title: Contracts
 description: Stable WIT interfaces that form the boundary between core and extensions
 tags: [contracts, wit, interfaces, extensions, wasm]
 created: 2026-06-28T00:00:00Z
-updated: 2026-09-09T00:00:00Z
+updated: 2026-09-18T00:00:00Z
 ---
 
 Contracts are stable interfaces the core exposes and extensions consume or implement. A breaking change breaks all extensions.
@@ -36,6 +36,8 @@ Extensions implement these and the host routes calls between them.
 | `mcp-registry.wit` | `mcp-registry` | MCP server management + tool catalog | `registry-mcp` |
 | `agent-delegate.wit` | `agent-delegate` | ACP agent delegation (streaming) | `agent-*` |
 | `tool-callable.wit` | `tool-callable` | Discrete callable tool | `tool-*` |
+| `tool-askable.wit` | `tool-askable` | Return-then-reinvoke: a tool suspends to ask the user before it answers | `tool-*` |
+| `client-surface.wit` | `client-surface` | Optional: declares slash commands / status items a client renders without seeing the extension. The host probes for the export; no world requires it | any category that opts in (e.g. `interceptor-system`) |
 
 **Interceptor dispatch is core-native.** The core loop invokes enabled `interceptor-*` components directly and acts on their returned `decision` (`proceed`/`replace`/`block`/`ask`). One generic function over a `phase` enum (`session-start`, `before-loop`, `select-model`, `select-context`, `select-tools`, `after-response`, `tool-call`, `tool-result`, `on-error`, `finalize`, `prepare-next-turn`) — new lifecycle points are new enum cases, never new functions. **Ordering is structural:** across phases it follows the enum; within a phase it's deterministic extension load order. `config.yaml` **only enables/disables** — interceptors declare phases via `subscribed-phases()`. `intercept` returns `result<decision, interceptor-error>`; errors/traps fail closed at `tool-call`, open-with-log elsewhere.
 
@@ -45,19 +47,18 @@ Core grants these capabilities to every extension.
 
 | File | Interface | Purpose |
 |---|---|---|
-| `host-http.wit` | `host-http` | Outbound HTTP **requests** (outbound-request access) |
-| `host-serve.wit` | `host-serve` | **Inbound** listener — lets `api-*` bind a port and serve REST/gRPC *(planned)* |
-| `host-socket.wit` | `host-socket` | Long-lived bidirectional socket — lets `chat-*` hold a Telegram/Slack connection *(planned)* |
+| `host-http.wit` | `host-http` | Outbound HTTP **requests** (outbound-request access). Inbound REST/SSE is host-side `axum`, not a capability any extension holds |
+| `host-fs.wit` | `host-fs` | Path-jailed read/write against a configured workspace root; default-deny with no workspace configured |
+| `host-process.wit` | `host-process` | Bounded child processes — `exec` (run-to-completion, timeout + output cap) and `spawn` (long-lived, named in `execution.long-lived`) |
 | `host-log.wit` | `host-log` | Structured logging forwarded to core pipeline |
 | `host-config.wit` | `host-config` | Read own section of `config.yaml` |
 | `host-event.wit` | `host-event` | Event bus publish/subscribe — **observation-only** (fire-and-forget); cannot shape the loop |
 | `host-storage.wit` | `host-storage` | Namespaced view of the core's own store. **Granted** (`persist: true`), never ambient; namespaces are prefixed with the calling component's id |
+| `host-agent.wit` | `host-agent` | Drive a session from inside the sandbox — the inward twin of `jan-klod-protocol` (create/list/read/fork a session, send a message, answer a prompt). Default-deny, manifest-declared *(Phase 22, drafted ahead of a host implementation)* |
 
 Interceptor dispatch isn't in this table: it's a core-native call of `interceptor` (above), not a capability.
 
-`host-serve` and `host-socket` are **planned** — they keep `api-*` and `chat-*` sandboxed instead of needing raw OS access. `host-http` today is outbound-only.
-
-**Not yet scoped**: `host-fs` (file tools) and `host-process` (long-lived children). Both needed because the sandbox denies raw access. See [file-workspace tier](roadmap.md#file-workspace-tier-not-yet-scoped).
+There is no `host-serve`/`host-socket` pair and no `api-*`/`chat-*` extension family — that design was superseded. The built inbound surface (REST + SSE, stdio JSON-RPC, WebSocket) is host-side code in `jan-klod-host`, not something a sandboxed guest holds; Telegram is likewise kernel code today, which is exactly the gap `host-agent` (Phase 22) is meant to close.
 
 ## Streaming
 
@@ -204,28 +205,6 @@ REST + SSE is a **projection** of this, not a second contract, and it keeps its 
 **Declared results**: `protocol/hello` answers `HelloResult`; `session/get` answers `SessionGetResult` — `{ id, messages }`, each message `{ seq, role, content, tool-call-id? }`.
 
 `seq` is the log position and `session/fork`'s `at-seq` parameter — inclusive, so forking at a message's seq yields a session whose transcript ends with that message. **It is not an index**: events that project to no message (an ask, an answer, a text delta) still consume a position, so the numbers are sparse and the gaps are not loss.
-
-**Notifications** (core → client). The first five are `conductor::Event` one for
-one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable
-command, `session/updated` a transcript that moved:
-
-| Notification | Params | SSE frame today |
-|---|---|---|
-| `text-delta` | `text` | `delta` |
-| `tool-invoked` | `id`, `name`, `arguments` | `tool` (drops `arguments`) |
-| `tool-result` | `id`, `content` | `tool-result` |
-| `warning` | `message` | `warning` |
-| `done` | `answer`, `agentic` | `done` |
-| `ask` | `session`, `question`, `options`, `default` | `prompt` |
-| `error` | `message` | `error` (payload key `error`) |
-| `session/updated` | `session`, `preview` | — |
-| `surface/contributions` | `extensions` | — |
-
-REST + SSE is a **projection** of this, not a second contract, and it keeps its
-own older spellings — `delta`, `tool`, `prompt` — deliberately. Neither side is
-being renamed to match: `core/tests/protocol_events.rs` asserts every key an SSE
-frame carries reaches the notification with an equal value, which is what holds
-the two together. The projection may lose nothing; it may lag in naming.
 
 **Version rule.** `PROTOCOL_VERSION` is semver: remove/rename command or field → **major**; add command/optional field → **minor**. Clients send built-against version in `protocol/hello`, core answers, mismatch surfaces at connect. Schema export carries version too; bumps need schema regeneration.
 
