@@ -11,6 +11,7 @@
 
 pub mod acp;
 pub mod mcp;
+pub mod pending;
 pub mod rpc;
 pub mod serve;
 pub mod session_thread;
