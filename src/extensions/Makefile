@@ -35,7 +35,7 @@ LIBS := guest-fs
 # behind `#[cfg(target_arch = "wasm32")]`, so a host `cargo test` compiles only
 # the pure logic modules (e.g. the intent router) + their `#[cfg(test)]` tests —
 # no wasm target required. Add a guest here once it carries such tests.
-TESTABLE_GUESTS := tool-plan interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router interceptor-system tool-fs tool-shell tool-edit tool-find tool-git tool-fetch
+TESTABLE_GUESTS := tool-plan interceptor-tool-selector interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router interceptor-system tool-fs tool-shell tool-edit tool-find tool-git tool-fetch
 
 .PHONY: all stage manifests clean test clippy audit deny go-supply-chain spike-deps spike-guest ts-guest py-guest $(GUESTS)
 

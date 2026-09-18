@@ -3,6 +3,10 @@
 //! Fills `pending-request.tools` from `host-config` (`tools` JSON array).
 //! Component-Model glue only; compiles for `wasm32`; empty on host.
 
+/// Ranking tool descriptions against what the user asked, pure and
+/// host-testable.
+pub mod rank;
+
 #[cfg(target_arch = "wasm32")]
 mod component {
     #[allow(
