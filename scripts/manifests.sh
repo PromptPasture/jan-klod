@@ -64,8 +64,17 @@ for guest in "$@"; do
         jaq -r --arg n "$guest" '.packages[] | select(.name == $n) | .version')"
     description="$(printf '%s' "$METADATA" |
         jaq -r --arg n "$guest" '.packages[] | select(.name == $n) | .description // ""')"
+    # A guest need not be a cargo package: a non-Rust one carries its own
+    # manifest instead, and the name, version and description come from there.
+    # Read rather than defaulted — a component whose manifest said "0.0.0"
+    # because nobody could find its version is worse than no manifest.
+    if [ -z "$version" ] && [ -f "$EXT_SRC/$guest/package.json" ]; then
+        version="$(jaq -r '.version // ""' "$EXT_SRC/$guest/package.json")"
+        description="$(jaq -r '.description // ""' "$EXT_SRC/$guest/package.json")"
+    fi
     [ -n "$version" ] || {
-        echo "manifests.sh: $guest is not a package in $EXT_SRC/Cargo.toml" >&2
+        echo "manifests.sh: $guest is neither a package in $EXT_SRC/Cargo.toml" >&2
+        echo "  nor a directory with a package.json carrying a version" >&2
         exit 1
     }
 

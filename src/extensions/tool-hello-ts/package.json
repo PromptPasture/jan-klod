@@ -1,0 +1,7 @@
+{
+  "name": "tool-hello-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "tool extension in TypeScript: the polyglot twin of tool-hello, componentized with jco against the same wit/.",
+  "type": "module"
+}

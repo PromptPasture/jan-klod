@@ -74,6 +74,39 @@ test:
 	@echo "== ext-new template =="
 	sh $(ROOT)/scripts/ext-new-selftest.sh
 
+# The TypeScript guest (#187). Built only where the toolchain is, and silent
+# about it otherwise — the same shape `check-spike-deps` uses for TinyGo, and
+# for the same reason: a build that quietly produced nothing would look exactly
+# like one that worked.
+#
+# Two tools, one of them already here. `esbuild` is `src/web`'s pinned
+# devDependency and is reused rather than installed again; `jco` is the new
+# one, and is expected on PATH rather than vendored, because 326 MB of
+# `node_modules` per clone is not a cost this repository imposes by default.
+TS_GUEST := tool-hello-ts
+ESBUILD := $(ROOT)/src/web/node_modules/.bin/esbuild
+
+.PHONY: ts-guest
+# One shell block, not four recipe lines: a guard that `exit 0`s only ends its
+# own line, and make would run the build anyway — which is how a skip becomes
+# a failure two lines later.
+ts-guest:
+	@if ! command -v jco >/dev/null 2>&1; then \
+	  echo "skipping $(TS_GUEST): jco is not on PATH"; \
+	  echo "  install it with: npm install -g @bytecodealliance/jco@$(JCO_VERSION)"; \
+	elif [ ! -x $(ESBUILD) ]; then \
+	  echo "skipping $(TS_GUEST): src/web's esbuild is not installed"; \
+	  echo "  install it with: cd src/web && npm ci"; \
+	else \
+	  set -e; \
+	  mkdir -p $(TS_GUEST)/build $(EXT_DIR); \
+	  $(ESBUILD) $(TS_GUEST)/src/guest.ts --bundle --format=esm \
+	    --target=es2022 --outfile=$(TS_GUEST)/build/guest.js; \
+	  jco componentize $(TS_GUEST)/build/guest.js --wit $(WIT_DIR) \
+	    --world-name tool-world -o $(EXT_DIR)/$(TS_GUEST).wasm; \
+	  sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(WIT_DIR) $(TS_GUEST); \
+	fi
+
 # Lint every guest, twice, because each run sees a different half of one.
 #
 # The native run lints the pure logic — the same half `test` above covers,

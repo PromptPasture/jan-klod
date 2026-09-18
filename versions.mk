@@ -61,3 +61,12 @@ WKG_VERSION := 0.15.1
 # jq's. Verified against all four filter sites before the swap, which the
 # toolchain survey (#167) specifically warned not to skip.
 JAQ_VERSION := 2.3.0
+
+# jco componentizes the TypeScript guest against the same `wit/` the Rust ones
+# build from (#187). Pinned for the usual reason — `make extensions` stages
+# what it emits and `manifests.sh` reads that artifact's imports — and, unlike
+# every other tool here, **not installed by `make setup`**: it brings 326 MB of
+# `node_modules` and produces a 12.7 MB component, because every JavaScript
+# component carries an engine. A developer who wants the TypeScript guest asks
+# for it; everyone else gets a build that says it skipped.
+JCO_VERSION := 1.34.0
