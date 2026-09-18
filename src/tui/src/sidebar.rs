@@ -74,6 +74,25 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
         }
     }
 
+    // Only when something contributes: an empty section would teach a reader
+    // to expect one, and every session without extensions would carry a row
+    // saying so. `THIS TURN` shows "(nothing yet)" because a turn always
+    // exists; an extension that contributes nothing has nothing to report.
+    let contributed = app.contributed_status();
+    if !contributed.is_empty() {
+        lines.push(Line::default());
+        heading(&mut lines, "EXTENSIONS", theme);
+        for item in contributed {
+            // Cut to the pane here, where the cell is known. The text was
+            // already made inert when it arrived; this only fits it.
+            row(
+                &mut lines,
+                crate::untrusted::inert_within(&format!("{} {}", item.extension, item.text), width),
+                theme,
+            );
+        }
+    }
+
     lines.push(Line::default());
     heading(&mut lines, "CHANGED", theme);
     let changed = changed_files(app);
@@ -219,6 +238,89 @@ mod tests {
             via: "jan-klod-gateway over stdio",
             cwd,
         }
+    }
+
+    /// One extension reporting one status item, as the notification delivers it.
+    fn reporting(text: &str) -> Vec<jan_klod_protocol::Contributions> {
+        vec![jan_klod_protocol::Contributions {
+            extension: "interceptor.system".to_owned(),
+            commands: vec![],
+            status_items: vec![jan_klod_protocol::StatusItem {
+                name: "prompt-source".to_owned(),
+                text: text.to_owned(),
+                detail: "why".to_owned(),
+            }],
+            forms: vec![],
+        }]
+    }
+
+    #[test]
+    fn a_contributed_status_item_gets_a_section_naming_who_said_it() {
+        let mut app = App::default();
+        app.set_contributions(&reporting("built-in"));
+        let cwd = std::path::PathBuf::from("/repo");
+        let text = plain(&view(&app, info(&cwd), 40, theme()));
+        assert!(text.contains("EXTENSIONS"), "{text}");
+        assert!(
+            text.contains("interceptor.system built-in"),
+            "the row says who is claiming it: {text}"
+        );
+    }
+
+    /// An empty section would teach a reader to expect one, so every session
+    /// without extensions would carry a row saying there are none.
+    #[test]
+    fn no_contributions_means_no_section_at_all() {
+        let app = App::default();
+        let cwd = std::path::PathBuf::from("/repo");
+        let text = plain(&view(&app, info(&cwd), 40, theme()));
+        assert!(!text.contains("EXTENSIONS"), "{text}");
+    }
+
+    /// The second half of the escaping rule: cleaned at the door, and still
+    /// inert after a frame has laid it out.
+    #[test]
+    fn a_hostile_status_item_is_inert_in_the_rendered_line() {
+        let mut app = App::default();
+        app.set_contributions(&reporting("safe\x1b[2J"));
+        let cwd = std::path::PathBuf::from("/repo");
+        let text = plain(&view(&app, info(&cwd), 40, theme()));
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+    }
+
+    /// A long claim cannot push the pane wider; it is cut to the cell, and
+    /// says it was cut rather than reading as a shorter claim.
+    ///
+    /// Only the contributed rows are checked. The fixed rows above them —
+    /// `id`, `via` — are the client's own words and are left to the frame's
+    /// clipping, which is a pre-existing choice this slice does not change.
+    #[test]
+    fn a_long_status_item_is_cut_to_the_pane() {
+        let mut app = App::default();
+        app.set_contributions(&reporting(&"wide".repeat(40)));
+        let cwd = std::path::PathBuf::from("/repo");
+        let rows = view(&app, info(&cwd), 20, theme());
+        let contributed = rows
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("interceptor.system"))
+            })
+            .expect("the contributed row is drawn");
+        let width: usize = contributed
+            .spans
+            .iter()
+            .map(|span| crate::wrap::width(span.content.as_ref()))
+            .sum();
+        assert_eq!(width, 20, "it fills exactly the pane");
+        assert!(
+            contributed
+                .spans
+                .iter()
+                .any(|span| span.content.ends_with('…')),
+            "a cut row has to say it was cut"
+        );
     }
 
     /// Acceptance: CHANGED shows a path with no counts when the result could

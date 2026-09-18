@@ -182,6 +182,8 @@ pub struct App {
     /// What extensions contribute, newest notification wins. Already made
     /// inert; see [`Self::set_contributions`].
     contributed: Vec<crate::commands::Contributed>,
+    /// The status items from the same notification, likewise inert.
+    contributed_status: Vec<ContributedStatus>,
     /// A contributed command the user chose, waiting to be sent as
     /// `surface/invoke`. Model records intent, caller performs it — the same
     /// contract as [`Self::cancel_requested`].
@@ -220,6 +222,21 @@ pub enum ToastKind {
 }
 
 /// Session entry from `session/list`: id and preview. Shown in switcher
+/// A status item an extension contributed, as this client holds it.
+///
+/// Stored already made inert ([`crate::untrusted::inert`]), like the commands
+/// beside it — the sidebar only fits it to a width.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContributedStatus {
+    /// The declaring extension's instance id, shown so a reader can tell who
+    /// is claiming something rather than reading it as the client's own word.
+    pub extension: String,
+    /// The short text to show.
+    pub text: String,
+    /// One line of detail, for a pane with room for it.
+    pub detail: String,
+}
+
 /// (#105), populated fresh per open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionEntry {
@@ -435,29 +452,51 @@ impl App {
     /// means no renderer has to remember, and a label cannot be safe in the
     /// menu and hostile in the help overlay. Width is still a frame's
     /// business, since only it knows the cell.
-    pub fn set_contributions(&mut self, sets: Vec<(String, Vec<(String, String)>)>) {
+    /// Forms are not read. Nothing contributes one yet and no renderer here
+    /// draws one, so storing them would be state this client cannot show.
+    pub fn set_contributions(&mut self, sets: &[jan_klod_protocol::Contributions]) {
         self.contributed = sets
-            .into_iter()
-            .flat_map(|(extension, commands)| {
-                let extension = crate::untrusted::inert(&extension);
-                commands
-                    .into_iter()
-                    .map(move |(name, summary)| crate::commands::Contributed {
+            .iter()
+            .flat_map(|set| {
+                let extension = crate::untrusted::inert(&set.extension);
+                set.commands
+                    .iter()
+                    .map(move |command| crate::commands::Contributed {
                         extension: extension.clone(),
-                        name: crate::untrusted::inert(&name),
-                        summary: crate::untrusted::inert(&summary),
+                        name: crate::untrusted::inert(&command.name),
+                        summary: crate::untrusted::inert(&command.description),
                     })
             })
             // A contribution whose name cleaned away to nothing cannot be
             // typed, matched or invoked, so it is not offered.
             .filter(|c| !c.name.is_empty())
             .collect();
+        self.contributed_status = sets
+            .iter()
+            .flat_map(|set| {
+                let extension = crate::untrusted::inert(&set.extension);
+                set.status_items.iter().map(move |item| ContributedStatus {
+                    extension: extension.clone(),
+                    text: crate::untrusted::inert(&item.text),
+                    detail: crate::untrusted::inert(&item.detail),
+                })
+            })
+            // Nothing left to show is a blank row, which reads as a rendering
+            // fault rather than as an extension with nothing to say.
+            .filter(|item| !item.text.is_empty())
+            .collect();
     }
 
-    /// What extensions contribute, in the order the host reported them.
+    /// What extensions contribute as commands, in the order the host reported.
     #[must_use]
     pub fn contributions(&self) -> &[crate::commands::Contributed] {
         &self.contributed
+    }
+
+    /// What extensions contribute as status, in the order the host reported.
+    #[must_use]
+    pub fn contributed_status(&self) -> &[ContributedStatus] {
+        &self.contributed_status
     }
 
     /// Which entry is highlighted, clamped to what is on offer.
@@ -1420,17 +1459,56 @@ mod tests {
     use super::{App, Entry, Prompt, ToastKind, ToolStatus, Turn, Who};
 
     /// One extension contributing one command, as the notification delivers it.
-    fn contributing(name: &str, summary: &str) -> Vec<(String, Vec<(String, String)>)> {
-        vec![(
-            "interceptor.system".to_owned(),
-            vec![(name.to_owned(), summary.to_owned())],
-        )]
+    fn contributing(name: &str, summary: &str) -> Vec<jan_klod_protocol::Contributions> {
+        vec![jan_klod_protocol::Contributions {
+            extension: "interceptor.system".to_owned(),
+            commands: vec![jan_klod_protocol::SurfaceCommand {
+                name: name.to_owned(),
+                title: name.to_owned(),
+                description: summary.to_owned(),
+                arguments: vec![],
+            }],
+            status_items: vec![],
+            forms: vec![],
+        }]
+    }
+
+    /// The same, contributing one status item instead.
+    fn reporting(text: &str, detail: &str) -> Vec<jan_klod_protocol::Contributions> {
+        vec![jan_klod_protocol::Contributions {
+            extension: "interceptor.system".to_owned(),
+            commands: vec![],
+            status_items: vec![jan_klod_protocol::StatusItem {
+                name: "prompt-source".to_owned(),
+                text: text.to_owned(),
+                detail: detail.to_owned(),
+            }],
+            forms: vec![],
+        }]
+    }
+
+    #[test]
+    fn a_contributed_status_item_is_stored_inert() {
+        let mut app = App::default();
+        app.set_contributions(&reporting("built\x1b[2Jin", "why\x07"));
+        let item = app.contributed_status().first().expect("one item");
+        assert_eq!(item.text, "built[2Jin");
+        assert!(!item.detail.contains('\u{7}'), "{:?}", item.detail);
+    }
+
+    /// A blank row reads as a rendering fault rather than as an extension
+    /// with nothing to say, so an item that cleans away is not kept.
+    #[test]
+    fn a_status_item_that_cleans_away_is_dropped() {
+        let mut app = App::default();
+        app.set_contributions(&reporting("\x1b\x1b", "gone"));
+        assert!(app.contributed_status().is_empty());
     }
 
     #[test]
     fn a_contributed_command_appears_in_the_menu() {
         let mut app = App::default();
-        app.set_contributions(contributing("prompt", "show the standing instructions"));
+        app.set_contributions(&contributing("prompt", "show the standing instructions"));
         app.push_char('/');
         assert!(
             app.menu_entries()
@@ -1445,7 +1523,7 @@ mod tests {
     #[test]
     fn a_hostile_label_is_inert_before_it_is_ever_stored() {
         let mut app = App::default();
-        app.set_contributions(contributing("pr\x1b[2Jompt", "clear\x1b]0;pwned\x07"));
+        app.set_contributions(&contributing("pr\x1b[2Jompt", "clear\x1b]0;pwned\x07"));
         let stored = app.contributions().first().expect("one contribution");
         assert!(!stored.name.contains('\u{1b}'), "{:?}", stored.name);
         assert!(!stored.summary.contains('\u{1b}'), "{:?}", stored.summary);
@@ -1456,7 +1534,7 @@ mod tests {
     #[test]
     fn a_contribution_whose_name_is_only_escapes_is_dropped() {
         let mut app = App::default();
-        app.set_contributions(contributing("\x1b\x1b", "invisible"));
+        app.set_contributions(&contributing("\x1b\x1b", "invisible"));
         assert!(app.contributions().is_empty());
     }
 
@@ -1465,7 +1543,7 @@ mod tests {
     #[test]
     fn choosing_a_contributed_command_asks_for_an_invocation() {
         let mut app = App::default();
-        app.set_contributions(contributing("prompt", "show it"));
+        app.set_contributions(&contributing("prompt", "show it"));
         app.push_char('/');
         for c in "prompt".chars() {
             app.push_char(c);
@@ -1483,7 +1561,7 @@ mod tests {
     #[test]
     fn choosing_a_built_in_asks_for_no_invocation() {
         let mut app = App::default();
-        app.set_contributions(contributing("prompt", "show it"));
+        app.set_contributions(&contributing("prompt", "show it"));
         app.push_char('/');
         for c in "help".chars() {
             app.push_char(c);
