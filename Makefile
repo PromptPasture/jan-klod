@@ -73,7 +73,7 @@ help:
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
 	@echo "  gate-commit the pre-commit gate: fmt + stage guests + core check + test"
-	@echo "  gate-push   the pre-push gate: stage guests + test-guests + both clippys + gate"
+	@echo "  gate-push   the pre-push gate: stage guests + test-guests + all three clippys + gate"
 	@echo "              + registry-index-drift + lockfile + supply-chain, in that order"
 	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go + web)"
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
@@ -554,6 +554,19 @@ gate-commit:
 # `test`, runs here: `gate` below is a strict superset of the host workspace's
 # unit tests once --features jan-klod-host/integration is added, so running
 # `test-core` a second time here would just repeat it for no extra coverage.
+#
+# All three clippys run here and none of them runs in `gate`, which stays
+# inside the host workspace. `clippy-guests` came with #205 and `clippy-gui`
+# with #207, both filed for the same reason: a strict lint policy that only
+# CI runs is a policy a developer meets after pushing. `clippy-gui` compiles
+# the Tauri workspace, which is 329 packages nothing else here needs — that
+# cost belongs on a push and not on a commit.
+#
+# **This does not make a green push imply a green CI**, and it is worth
+# knowing why. `src/host/tests/it/sandbox_landlock.rs` is
+# `#![cfg(target_os = "linux")]`, so on macOS clippy never compiles it and
+# never reads it; CI runs Linux and does. No target added here closes that,
+# because the gap is the platform rather than the target list (#207).
 gate-push: export JK_REQUIRE_GUESTS = 1
 gate-push:
 	$(MAKE) -C $(EXT) spike-deps
@@ -562,6 +575,7 @@ gate-push:
 	$(MAKE) test-guests
 	$(MAKE) clippy
 	$(MAKE) clippy-guests
+	$(MAKE) clippy-gui
 	$(MAKE) gate
 	$(MAKE) registry-index-drift
 	$(MAKE) lockfile
