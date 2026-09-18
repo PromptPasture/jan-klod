@@ -243,6 +243,48 @@ fn inspect(
     })
 }
 
+/// The categories this runtime dispatches, and so the only ones a component
+/// stem may name.
+///
+/// Stated here because it was stated nowhere: `start_instance` matches them
+/// one arm at a time with a fall-through, and the only enumeration in the
+/// tree was in a test. A list whose single copy lives in a test is how a
+/// component could be installed under a category nothing dispatches and be
+/// reported as loaded (#222).
+pub const CATEGORIES: [&str; 4] = ["provider", "interceptor", "registry", "tool"];
+
+/// Split a component stem into the category it names and the rest.
+///
+/// `tool-greet` → `("tool", "greet")`. A stem naming a category this runtime
+/// does not dispatch is an error rather than a category nobody reads: the
+/// component would install, adopt, report success, and never be callable —
+/// with the failure surfacing a turn later as "no tool named …", which points
+/// at the model rather than at the name.
+///
+/// The error is a sentence rather than a type because both callers —
+/// [`Runtime::adopt_installed`] and the install tool — wrap it in their own,
+/// and a shared rule with two spellings is the thing this exists to prevent.
+///
+/// # Errors
+/// A stem with no `-`, or one whose prefix is not in [`CATEGORIES`].
+pub fn categorise(stem: &str) -> Result<(&str, &str), String> {
+    let (category, kind) = stem.split_once('-').ok_or_else(|| {
+        format!("a component stem is `<category>-<kind>`, e.g. `tool-greet`; `{stem}` has no `-`")
+    })?;
+    if !CATEGORIES.contains(&category) {
+        return Err(format!(
+            "`{stem}` names the category `{category}`, which this runtime does not \
+             dispatch — a component under it would load and never be callable. \
+             The categories are: {}",
+            CATEGORIES.join(", ")
+        ));
+    }
+    if kind.is_empty() {
+        return Err(format!("`{stem}` names no kind after `{category}-`"));
+    }
+    Ok((category, kind))
+}
+
 /// A booted core: the engine, the capability linker, and every enabled instance
 /// resolved against `ext/`. Holds compiled components ready to instantiate.
 pub struct Runtime {
@@ -687,9 +729,9 @@ impl Runtime {
     /// failing case**: the instance is loaded before it is recorded, so a
     /// refused adoption leaves the runtime exactly as it was.
     pub fn adopt_installed(&mut self, stem: &str) -> Result<String, CoreError> {
-        let (category, kind) = stem.split_once('-').ok_or_else(|| CoreError::Adopt {
+        let (category, kind) = categorise(stem).map_err(|reason| CoreError::Adopt {
             stem: stem.to_owned(),
-            reason: "a component stem is `<category>-<kind>`, e.g. `tool-greet`".to_owned(),
+            reason,
         })?;
         let id = format!("{category}.{kind}");
         if self.extensions.iter().any(|ext| ext.instance.id == id) {
@@ -2225,6 +2267,48 @@ impl CoreError {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A stem naming a category nothing dispatches is refused, and the
+    /// refusal says which ones exist (#222).
+    ///
+    /// The name is the *agent's* choice on the self-extension path, and
+    /// `self-built` is the kind of name a person would pick. Before this it
+    /// parsed as category `self`, adopted into nothing, and reported
+    /// success — the failure arriving a turn later as "no tool named …",
+    /// which reads as the model's mistake.
+    #[test]
+    fn a_stem_naming_no_category_is_refused_and_the_refusal_names_the_ones_that_exist() {
+        let err = categorise("self-built").expect_err("`self` is not a category");
+        for category in CATEGORIES {
+            assert!(
+                err.contains(category),
+                "the refusal must name `{category}`, or the agent cannot correct itself: {err}"
+            );
+        }
+        assert!(err.contains("self-built"), "and name what was asked: {err}");
+    }
+
+    /// Its control: the categories the runtime does dispatch still split.
+    /// Without this, refusing everything would satisfy the test above.
+    #[test]
+    fn every_dispatched_category_splits_from_a_stem() {
+        for category in CATEGORIES {
+            let stem = format!("{category}-thing");
+            assert_eq!(
+                categorise(&stem),
+                Ok((category, "thing")),
+                "`{stem}` must categorise"
+            );
+        }
+    }
+
+    /// The two shapes that are not a category error but are still not a
+    /// stem: nothing to split on, and nothing after the category.
+    #[test]
+    fn a_stem_needs_both_halves() {
+        assert!(categorise("toolgreet").is_err(), "no separator");
+        assert!(categorise("tool-").is_err(), "no kind");
+    }
 
     #[test]
     fn config_section_resolves_dot_paths() {

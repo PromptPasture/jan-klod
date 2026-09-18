@@ -314,7 +314,10 @@ fn every_config_key_is_one_the_runtime_reads() {
     //   interceptor — build_agent, pass 2
     //   registry    — build_agent, pass 1 (skills / mcp)
     //   tool        — build_agent, pass 1
-    const CONSUMED_CATEGORIES: [&str; 4] = ["provider", "interceptor", "registry", "tool"];
+    // The runtime's own list, not a copy of it: this was the only
+    // enumeration in the tree until #222, and a component could be filed
+    // under a category nothing dispatches because nothing built against it.
+    const CONSUMED_CATEGORIES: [&str; 4] = jan_klod_core::CATEGORIES;
     // Top-level keys, and what reads each.
     //   extensions — Config::from_path
     //   workspace  — Runtime::open_workspace

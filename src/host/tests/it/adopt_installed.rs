@@ -106,6 +106,28 @@ fn a_stem_without_a_category_is_refused() {
     assert!(err.to_string().contains("<category>-<kind>"), "{err}");
 }
 
+/// A stem naming a category the runtime does not dispatch is refused too,
+/// and the refusal is the one a model can act on (#222).
+///
+/// The separator test above passed while this did not: `self-built` splits
+/// cleanly, so it was adopted as category `self`, reported `Ok`, and was
+/// never callable. The name is the agent's own choice on the
+/// self-extension path, which is what made a silent success expensive.
+#[test]
+fn a_stem_naming_a_category_nothing_dispatches_is_refused() {
+    let Some((_guard, mut runtime)) = runtime_over("category", &["provider-openai"]) else {
+        return;
+    };
+    let err = runtime
+        .adopt_installed("self-built")
+        .expect_err("`self` is not a category this runtime dispatches");
+    let text = err.to_string();
+    assert!(
+        text.contains("tool") && text.contains("provider"),
+        "the refusal must name the categories that exist: {text}"
+    );
+}
+
 /// Adopting something already loaded is refused rather than duplicated.
 ///
 /// Two instances of one id would each be dispatched, and which one answered
