@@ -296,6 +296,7 @@ fn router(app: App) -> Router {
         .route("/session/{id}/message", post(message))
         .route("/session/{id}/answer", post(answer))
         .route("/session/{id}/fork", post(fork_session))
+        .route("/ws", get(socket))
         .fallback(not_found)
         .layer(axum::middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
@@ -388,6 +389,15 @@ async fn answer(State(app): State<App>, Path(id): Path<String>, body: String) ->
             }
         }
     }
+}
+
+/// `GET /ws` — the client protocol over one connection (#226).
+///
+/// The upgrade happens after `guard`, so the token rule is the same rule
+/// the REST routes get, in the same place.
+async fn socket(State(app): State<App>, upgrade: axum::extract::ws::WebSocketUpgrade) -> Response {
+    let jobs = Arc::clone(&app.jobs);
+    upgrade.on_upgrade(move |socket| crate::ws::serve_socket(socket, jobs))
 }
 
 /// `POST /session/{id}/message` — JSON, or a stream when asked for one.

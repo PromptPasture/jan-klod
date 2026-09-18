@@ -22,7 +22,7 @@ serde_json.workspace = true
 # depending on this crate would drag wasmtime into every client that reads a
 # frame. Was a dev-dependency here while the surfaces lived in the kernel.
 jan-klod-protocol = { path = "../protocol" }
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "sync", "time"] }
 futures-core = "0.3"
 
@@ -61,6 +61,8 @@ ring = "0.17.14"
 # `sha2` 0.10 is already a direct dependency of jan-klod-core and shares
 # `digest 0.10` with the `blake2` pin above.
 sha2 = "0.10"
+tokio-tungstenite = { version = "0.29", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 # The examples are opt-in, because cargo builds every example during `cargo test`
 # and `cargo nextest run` just to check they compile. Each of these links

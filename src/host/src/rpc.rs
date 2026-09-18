@@ -122,7 +122,7 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
 }
 
 /// From the reader thread.
-enum Incoming {
+pub(crate) enum Incoming {
     /// Text line.
     Line(String),
     /// Non-UTF-8 bytes.
@@ -130,33 +130,59 @@ enum Incoming {
 }
 
 /// Connection ends: where answers go and frames arrive.
-struct Wire<'a, W: Write> {
+pub(crate) struct Wire<'a, W: Write> {
     /// Shared by turn's sink and driver. `Rc<RefCell<_>>` not a lock—single
     /// thread writes.
     writer: Rc<RefCell<W>>,
     incoming: &'a Receiver<Incoming>,
 }
 
+impl<'a, W: Write> Wire<'a, W> {
+    /// A wire over `writer`, reading frames from `incoming`.
+    ///
+    /// Public to the crate since #226: the WebSocket surface dispatches
+    /// through [`command`] rather than re-implementing the protocol, and
+    /// that needs the same wire — one writer for answers and notifications,
+    /// one receiver a running turn can poll for `turn/cancel`.
+    pub(crate) const fn new(writer: Rc<RefCell<W>>, incoming: &'a Receiver<Incoming>) -> Self {
+        Self { writer, incoming }
+    }
+}
+
 impl<W: Write> Wire<'_, W> {
     /// Answer one request.
-    fn write(&self, response: &jsonrpc::Response) -> std::io::Result<()> {
+    pub(crate) fn write(&self, response: &jsonrpc::Response) -> std::io::Result<()> {
         write_frame(&mut *self.writer.borrow_mut(), response)
     }
 }
 
 /// What serving one frame decided.
-enum Served {
+pub(crate) enum Served {
     /// Answer it and read the next frame.
     Answer(jsonrpc::Response),
     /// Answer it and hang up. Only a refused handshake does this.
     Close(jsonrpc::Response),
 }
 
+/// The refusal for a frame that is not text (#226).
+///
+/// Beside `parse`'s refusals rather than in the socket, so every "this is
+/// not a frame of this protocol" answer is shaped the same way.
+#[must_use]
+pub(crate) fn not_text() -> String {
+    let response = refuse(
+        jsonrpc::Id::Null,
+        jsonrpc::PARSE_ERROR,
+        "a frame must be text, one JSON object".to_owned(),
+    );
+    serde_json::to_string(&response).unwrap_or_else(|_| String::from("{}"))
+}
+
 /// Parse a line to a request or refusal.
 ///
 /// Separate from serving so frame rules can be tested without an `AgentSession`,
 /// booted runtime, staged `ext/`, or model.
-fn parse(line: &str) -> Result<jsonrpc::Request, jsonrpc::Response> {
+pub(crate) fn parse(line: &str) -> Result<jsonrpc::Request, jsonrpc::Response> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return Err(refuse(
             jsonrpc::Id::Null,
@@ -255,7 +281,7 @@ fn diagnose(value: &serde_json::Value, err: &serde_json::Error) -> jsonrpc::Resp
 /// (no wildcard), so new protocol commands fail to compile until the transport
 /// handles them. Guarded arms don't count as exhaustive, letting the handshake
 /// gate sit mid-match instead of repeating as an early return.
-fn command<W: Write>(
+pub(crate) fn command<W: Write>(
     command: Command,
     id: jsonrpc::Id,
     negotiated: &mut bool,
