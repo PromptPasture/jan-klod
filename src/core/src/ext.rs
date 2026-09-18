@@ -364,6 +364,17 @@ pub enum ExtError {
         #[source]
         source: std::io::Error,
     },
+    /// The file stem names no category this runtime dispatches (#222).
+    ///
+    /// Refused here rather than at adoption, because the stem is known
+    /// before a byte moves: a component that could never be called should
+    /// not reach `ext/` at all, and the person or model that chose the name
+    /// is still holding it.
+    #[error("{reason}")]
+    UncategorisedStem {
+        /// What `categorise` said, which names the categories that exist.
+        reason: String,
+    },
     /// Nothing by that name is staged.
     #[error("no component named {name} in {dir}")]
     NotInstalled {
@@ -734,6 +745,12 @@ pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, 
             path: source.display().to_string(),
         });
     };
+    // The same rule `Runtime::adopt_installed` applies, called rather than
+    // restated: a stem naming no category installs, adopts, reports success
+    // and is never callable (#222). Checked before the digest and the
+    // signature, because none of that work is worth doing for bytes that
+    // cannot be dispatched.
+    crate::categorise(&name).map_err(|reason| ExtError::UncategorisedStem { reason })?;
 
     let landing = dir.join(format!("{name}.{COMPONENT_EXT}"));
     if landing.exists() {

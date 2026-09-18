@@ -214,6 +214,54 @@ fn a_manifest_that_under_declares_is_refused_and_nothing_lands() {
     );
 }
 
+/// A stem naming no category is refused before a byte moves (#222).
+///
+/// Its control is `a_valid_component_lands_with_its_manifest_and_is_then_loadable`
+/// above: the same bytes under a `tool-` stem install and load, so this is
+/// about the name and not about the component.
+///
+/// Refused here rather than only at adoption because the stem is known
+/// before anything is copied. Left to adoption, the component lands in
+/// `ext/`, reports success, and is discovered to be uncallable a turn
+/// later — and on the self-extension path the name was the agent's own
+/// choice, so nothing upstream would have questioned it.
+#[test]
+fn a_component_whose_stem_names_no_category_is_refused_and_nothing_lands() {
+    if !common::guests_staged(&["tool-fs.wasm"]) {
+        return;
+    }
+    let scratch = scratch("uncategorised");
+    let signer = Signer::new();
+    // The same real component, renamed the way an agent might name what it
+    // just built.
+    let staged = common::repo_root().join("ext");
+    let source = scratch.incoming.join("self-built.wasm");
+    std::fs::copy(staged.join("tool-fs.wasm"), &source).expect("copies the component");
+    std::fs::copy(
+        staged.join("tool-fs.manifest.toml"),
+        scratch.incoming.join("self-built.manifest.toml"),
+    )
+    .expect("copies the manifest");
+    sign_pair(&scratch, "self-built", &signer);
+
+    let err = ext::install(&scratch.ext, &source, &signed_checks(&signer))
+        .expect_err("`self` is not a category");
+    let ExtError::UncategorisedStem { reason } = &err else {
+        panic!("an uncategorised stem is refused as such: {err:?}")
+    };
+    for category in jan_klod_core::CATEGORIES {
+        assert!(
+            reason.contains(category),
+            "the refusal must name `{category}`: {reason}"
+        );
+    }
+    assert_eq!(
+        names(&scratch.ext),
+        Vec::<String>::new(),
+        "an uncallable component reached ext/ anyway"
+    );
+}
+
 /// The digest check, against a real component: the right digest installs, and
 /// one tampered byte is refused with **both** digests named.
 ///

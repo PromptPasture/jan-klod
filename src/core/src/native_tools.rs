@@ -459,6 +459,37 @@ mod tests {
         assert!(out.content.starts_with("refused"), "{}", out.content);
     }
 
+    /// The name a model gives what it built is checked, and the refusal
+    /// tells it what the names may be (#222).
+    ///
+    /// Reaches the model as text rather than as a failed call with no
+    /// reason, which is the difference between "rename it" and "give up".
+    /// The component is empty on purpose: the stem is read before a byte of
+    /// it is, so this refuses for the name and not for the contents.
+    #[test]
+    fn a_stem_naming_no_category_is_refused_through_the_tool() {
+        let dir = std::env::temp_dir().join(format!("jk-native-cat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("creates the dir");
+        let source = dir.join("self-built.wasm");
+        std::fs::write(&source, b"").expect("writes the offer");
+        let mut tools = NativeTools::installing_into(dir.clone(), vec![], None);
+        let out = tools
+            .invoke(&call(&format!(
+                r#"{{"path":"{}","allow-unsigned":true,"sha256":"00"}}"#,
+                source.display()
+            )))
+            .expect("ours");
+        assert!(out.failed, "{}", out.content);
+        for category in crate::CATEGORIES {
+            assert!(
+                out.content.contains(category),
+                "the model is told `{category}` is available: {}",
+                out.content
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Self-authored is not a trust exemption: the refusal comes from
     /// `ext::install`, unchanged, and reaches the model as text it can act
     /// on rather than an opaque failure.
