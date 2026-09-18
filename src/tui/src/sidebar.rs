@@ -369,6 +369,55 @@ mod tests {
         assert!(!text.contains('+'), "a count was invented: {text:?}");
     }
 
+    /// Every line, not just the contributed one (#206).
+    ///
+    /// This is the assertion that found the bug and could not be made: when
+    /// the EXTENSIONS section arrived it was narrowed to contributed rows,
+    /// because `via jan-klod-gateway over stdio` is 33 cells and failed it at
+    /// 20. Every row is cut now, so it can say what it meant to.
+    ///
+    /// Both glyph sets, because the marker's width differs between them —
+    /// `…` is one cell and `...` is three, and the budget has to come out of
+    /// the pane either way. A version of this that tested only Unicode would
+    /// pass while the ASCII theme overflowed by two columns.
+    #[test]
+    fn every_line_fits_the_pane_it_was_given() {
+        for glyphs in [GlyphSet::Unicode, GlyphSet::Ascii] {
+            let theme = Theme::new(Mode::Dark, Depth::TrueColor, glyphs);
+            let mut app = App::default();
+            // One of each kind of row that can be long: a contributed item, a
+            // tool call, and a changed path.
+            app.set_contributions(&reporting(&"wide".repeat(40)));
+            app.record_tool_invoked(
+                "c1".into(),
+                "a-tool-with-a-very-long-name-indeed".into(),
+                Some(r#"{"path":"src/some/deeply/nested/module/file.rs"}"#.into()),
+            );
+            app.record_tool_result(
+                "c1",
+                "replace applied to src/some/deeply/nested/module/file.rs (1 line(s)).".into(),
+                false,
+            );
+            let cwd = std::path::PathBuf::from("/a/deep/path/that/will/not/fit/in/the/pane");
+
+            for width in [20, 12, 6] {
+                for line in view(&app, info(&cwd), width, theme) {
+                    let cells: usize = line
+                        .spans
+                        .iter()
+                        .map(|span| crate::wrap::width(span.content.as_ref()))
+                        .sum();
+                    assert!(
+                        cells <= width,
+                        "a {cells}-cell line overflows a {width}-cell pane \
+                         with {glyphs:?} glyphs: {:?}",
+                        plain(&[line])
+                    );
+                }
+            }
+        }
+    }
+
     /// A parsed diff's counts do show, and by the same path `blocks` uses.
     #[test]
     fn changed_shows_real_counts_when_the_result_parses_as_a_diff() {
