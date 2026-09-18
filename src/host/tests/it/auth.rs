@@ -11,7 +11,7 @@ use std::net::TcpStream;
 use std::thread;
 
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::{serve_once_authed, serve_requests};
+use jan_klod_host::serve::{serve_once_authed, serve_while};
 use tiny_http::Server;
 
 use crate::common;
@@ -153,6 +153,44 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
 /// The one endpoint that must never be open: while a turn is parked on a
 /// confirmation, the waiting driver serves the socket itself, bypassing the
 /// router, so it needs its own token check.
+/// Drive one confirmation: open the stream, let an outsider try to answer,
+/// then answer properly. Returns the outsider's reply, the real one, and
+/// the stream text.
+///
+/// The assertions stayed in the test; this is the plumbing. A surface that
+/// serves while a closure runs (#224) puts the client's whole conversation
+/// in the test body, and this is what takes it back out.
+fn drive_confirmation(port: u16) -> (String, String, String) {
+    use std::io::{BufRead, BufReader};
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
+    let body = r#"{"message":"use bash to clean up"}"#;
+    let raw = format!(
+        "POST /session/p/message HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+         Accept: text/event-stream\r\nAuthorization: Bearer {TOKEN}\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(raw.as_bytes()).unwrap();
+
+    let mut refused = String::new();
+    let mut accepted = String::new();
+    let mut collected = String::new();
+    let reader = BufReader::new(stream);
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        collected.push_str(&line);
+        collected.push('\n');
+        if line.starts_with("event: prompt") && refused.is_empty() {
+            // Outsider tries first…
+            refused = request(port, "/session/p/answer", None);
+            // …then the legitimate client answers. Keep the reply to confirm
+            // it wasn't lost to the timeout.
+            accepted = request(port, "/session/p/answer", Some(TOKEN));
+        }
+    }
+    (refused, accepted, collected)
+}
+
 #[test]
 fn an_unauthenticated_caller_cannot_answer_a_permission_prompt() {
     short_answer_timeout();
@@ -216,41 +254,10 @@ extensions:
     let server = Server::http("127.0.0.1:0").expect("binds");
     let port = server.server_addr().to_ip().expect("ip").port();
 
-    let client = thread::spawn(move || {
-        use std::io::{BufRead, BufReader};
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
-        let body = r#"{"message":"use bash to clean up"}"#;
-        let raw = format!(
-            "POST /session/p/message HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
-             Accept: text/event-stream\r\nAuthorization: Bearer {TOKEN}\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(raw.as_bytes()).unwrap();
-
-        let mut refused = String::new();
-        let mut accepted = String::new();
-        let mut collected = String::new();
-        let reader = BufReader::new(stream);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            collected.push_str(&line);
-            collected.push('\n');
-            if line.starts_with("event: prompt") && refused.is_empty() {
-                // Outsider tries first…
-                refused = request(port, "/session/p/answer", None);
-                // …then the legitimate client answers. Keep the reply to confirm
-                // it wasn't lost to the timeout.
-                accepted = request(port, "/session/p/answer", Some(TOKEN));
-            }
-        }
-        (refused, accepted, collected)
-    });
-
-    // Three: the turn, the outsider's refused answer, and the real one.
-    // One sufficed while the parked driver served the socket itself (#225).
-    serve_requests(&server, &mut agent, Some(TOKEN), 3).expect("serves the turn");
-    let (refused, accepted, stream_text) = client.join().expect("client thread");
+    let (refused, accepted, stream_text) =
+        serve_while(&server, &mut agent, Some(TOKEN), move |_| {
+            drive_confirmation(port)
+        });
 
     assert!(
         refused.contains("401"),

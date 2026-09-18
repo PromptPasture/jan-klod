@@ -90,23 +90,78 @@ pub fn serve_once_authed(
     serve_requests(server, agent, token, 1)
 }
 
+/// Serve while `client` runs, then stop.
+///
+/// The surface starts, hands `client` the port it is on, and keeps serving
+/// until that closure returns — at which point the accept loop is unblocked
+/// and everything winds down. The session stays on **this** thread, because
+/// it cannot leave it.
+///
+/// This is what tests drive, and it replaced a bounded
+/// `serve_requests(n)` whose `n` was a count of requests. A count is only
+/// meaningful while the loop is bounded, and it made every test state a
+/// number that had nothing to do with what it was asserting — the four that
+/// carried one had to change it when the confirmation path did (#225).
+///
+/// # Panics
+/// Propagates a panic from `client`, which is a test's own failure and must
+/// not be swallowed into a hang.
+pub fn serve_while<F, R>(
+    server: &Server,
+    agent: &mut AgentSession,
+    token: Option<&str>,
+    client: F,
+) -> R
+where
+    F: FnOnce(u16) -> R + Send,
+    R: Send,
+{
+    let port = server.server_addr().to_ip().map_or(0, |addr| addr.port());
+    let pending = Arc::new(Pending::new());
+    let token = token.map(str::to_owned);
+    let (jobs, queued) = session_thread::queue::<AgentSession>();
+
+    std::thread::scope(|scope| {
+        {
+            let pending = Arc::clone(&pending);
+            let token = token.clone();
+            scope.spawn(move || {
+                // Ends on the error `unblock` produces, which is the
+                // ordinary way out rather than a failure.
+                while let Ok(request) = server.recv() {
+                    dispatch(scope, request, &jobs, &pending, token.as_deref());
+                }
+            });
+        }
+        let running = scope.spawn(move || {
+            let out = client(port);
+            // Stops the accept loop above; the session loop follows once
+            // the last handle goes.
+            server.unblock();
+            out
+        });
+        session_thread::serve(agent, &queued);
+        match running.join() {
+            Ok(out) => out,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    })
+}
+
 /// Serve exactly `requests` requests, then return.
 ///
-/// The bounded form exists for tests, and it is not a second code path: the
-/// production loop below is this with no bound. A confirmation needs **two**
-/// — the turn and the answer — which is the shape that stopped being
-/// expressible in one when the parked driver gave up the socket (#225).
+/// The single-request form is what most of the REST tests want: send one,
+/// serve it, assert on the answer. [`serve_while`] is for the ones that
+/// need a conversation.
 ///
 /// # Errors
 /// Returns the underlying I/O error if a request cannot be received.
-pub fn serve_requests(
+fn serve_requests(
     server: &Server,
     agent: &mut AgentSession,
     token: Option<&str>,
     requests: usize,
 ) -> std::io::Result<()> {
-    // Owned once, shared with every worker: a job cannot borrow from this
-    // frame, and a second registry would mean an answer that reaches nobody.
     let pending = Arc::new(Pending::new());
     let token = token.map(str::to_owned);
     let (jobs, queued) = session_thread::queue::<AgentSession>();
@@ -120,11 +175,9 @@ pub fn serve_requests(
                     let request = server.recv()?;
                     dispatch(scope, request, &jobs, &pending, token.as_deref());
                 }
-                // Dropping the last handle is what ends the loop below.
                 Ok(())
             })
         };
-        // This thread owns the session for as long as anything can ask.
         session_thread::serve(agent, &queued);
         accepting
             .join()

@@ -12,13 +12,12 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use std::thread;
 
 use jan_klod_client::{stream_turn, StreamEvent};
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::serve_requests;
+use jan_klod_host::serve::serve_while;
 use tiny_http::Server;
 
 use crate::common;
@@ -229,7 +228,7 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
     let addr = format!("127.0.0.1:{port}");
 
     // Real UI library (same as TUI).
-    let client = thread::spawn(move || {
+    let (result, asked, answer) = serve_while(&server, &mut agent, None, move |_| {
         let mut asked = None;
         let mut answer = String::new();
         let result = stream_turn(
@@ -249,11 +248,6 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
         );
         (result, asked, answer)
     });
-
-    // The turn, then the answer that arrives while it is parked: two
-    // requests since #225 took the socket away from the parked driver.
-    serve_requests(&server, &mut agent, None, 2).expect("serves the turn and its answer");
-    let (result, asked, answer) = client.join().expect("client thread");
 
     assert!(result.is_ok(), "the streamed turn completed: {result:?}");
     let (question, options) = asked.expect("the user was asked before the write happened");
@@ -297,17 +291,13 @@ fn a_refused_confirmation_leaves_the_workspace_untouched() {
     let port = server.server_addr().to_ip().expect("ip addr").port();
     let addr = format!("127.0.0.1:{port}");
 
-    let client = thread::spawn(move || {
+    let _ = serve_while(&server, &mut agent, None, move |_| {
         stream_turn(&addr, "shipped-2", "create hello.txt", &mut |event| {
             if matches!(event, StreamEvent::Prompt { .. }) {
                 let _ = post_answer(port, "shipped-2", "no");
             }
         })
     });
-    // The turn, then the answer that arrives while it is parked: two
-    // requests since #225 took the socket away from the parked driver.
-    serve_requests(&server, &mut agent, None, 2).expect("serves the turn and its answer");
-    let _ = client.join().expect("client thread");
 
     assert!(
         !dir.join("hello.txt").exists(),

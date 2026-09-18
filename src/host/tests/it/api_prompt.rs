@@ -10,7 +10,7 @@ use std::thread;
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::{serve_once, serve_requests};
+use jan_klod_host::serve::{serve_once, serve_while};
 use tiny_http::Server;
 
 use crate::common;
@@ -134,7 +134,7 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
 
     // Client A: read frames. On `prompt` frame, client B answers on second
     // connection while stream stays open.
-    let turn = thread::spawn(move || {
+    let (stream_text, answered) = serve_while(&server, &mut agent, None, move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
         let request = format!(
@@ -165,13 +165,6 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
         (collected, answered)
     });
 
-    // Two requests: the turn, and the answer that arrives while it is
-    // parked. They used to be one, because the parked driver served the
-    // socket itself — #225 took that away, and the count is what the
-    // difference looks like from a test.
-    serve_requests(&server, &mut agent, None, 2).expect("serves the turn and its answer");
-
-    let (stream_text, answered) = turn.join().expect("turn client thread");
     assert!(answered, "the turn asked for a confirmation: {stream_text}");
     assert!(
         stream_text.contains("event: prompt"),
@@ -255,7 +248,7 @@ fn a_bystander_is_served_while_another_session_is_confirming() {
     let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
     let port = server.server_addr().to_ip().expect("ip addr").port();
 
-    let client = thread::spawn(move || {
+    let bystander = serve_while(&server, &mut agent, None, move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
         let request = format!(
@@ -278,10 +271,6 @@ fn a_bystander_is_served_while_another_session_is_confirming() {
         }
         bystander
     });
-
-    // The turn, the bystander's request, and the answer.
-    serve_requests(&server, &mut agent, None, 3).expect("serves all three");
-    let bystander = client.join().expect("client thread");
 
     assert!(
         bystander.contains("200 OK"),
@@ -322,7 +311,7 @@ fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
     let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
     let port = server.server_addr().to_ip().expect("ip addr").port();
 
-    let client = thread::spawn(move || {
+    let queued = serve_while(&server, &mut agent, None, move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
         let request = format!(
@@ -350,9 +339,6 @@ fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
             .join()
             .expect("bystander thread")
     });
-
-    serve_requests(&server, &mut agent, None, 3).expect("serves all three");
-    let queued = client.join().expect("client thread");
 
     assert!(
         !queued.contains("409"),
