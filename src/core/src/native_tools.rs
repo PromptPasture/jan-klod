@@ -69,7 +69,8 @@ const SCHEMA: &str = r#"{"type":"object","properties":{
 "name":{"type":"string","description":"a component from the registry, as `ext-search` lists it"},
 "path":{"type":"string","description":"a local .wasm; use `name` for anything from the registry"},
 "allow-unsigned":{"type":"boolean","description":"local `path` only: waive the signature; requires sha256"},
-"sha256":{"type":"string","description":"expected digest, for a local unsigned component"}}}"#;
+"sha256":{"type":"string","description":"expected digest, for a local unsigned component"},
+"reason":{"type":"string","description":"why you want it, shown to the operator when they are asked; required with `name`"}}}"#;
 
 /// The host's own tools. Empty unless the operator asked for them.
 pub struct NativeTools {
@@ -78,6 +79,11 @@ pub struct NativeTools {
     /// Minisign keys from `registry.trusted-keys`. Empty means nothing is
     /// trusted, which is default-deny rather than "skip the check".
     trusted_keys: Vec<String>,
+    /// How registry fetches are made. `None` uses
+    /// [`crate::ext::policy_bound_http`], which is production; a test
+    /// injects a canned client so the registry path can be exercised
+    /// without opening a socket, the way `ext_registry.rs` already does.
+    http: Option<crate::route::HttpFn>,
     /// Where the registry index lives, from `registry.url`. `None` when the
     /// deployment configured none, which makes `ext-search` say so rather
     /// than search nothing and report no matches.
@@ -98,6 +104,7 @@ impl NativeTools {
         Self {
             ext_dir: None,
             trusted_keys: Vec::new(),
+            http: None,
             index_source: None,
             installed: Arc::new(Mutex::new(Vec::new())),
         }
@@ -113,8 +120,29 @@ impl NativeTools {
         Self {
             ext_dir: Some(ext_dir),
             trusted_keys,
+            http: None,
             index_source,
             installed: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Fetch registry artefacts with `http` instead of the policy-bound
+    /// client. Test seam only — production has no caller.
+    #[must_use]
+    pub fn with_http(mut self, http: crate::route::HttpFn) -> Self {
+        self.http = Some(http);
+        self
+    }
+
+    /// Run `f` with the client registry fetches go through.
+    ///
+    /// Lent rather than returned: `HttpFn` is a boxed closure and is not
+    /// `Clone`, and both `ext_index::load` and `ext::install_from_url` take
+    /// it by reference anyway.
+    fn with_client<T>(&self, f: impl FnOnce(&crate::route::HttpFn) -> T) -> T {
+        match &self.http {
+            Some(http) => f(http),
+            None => f(&crate::ext::policy_bound_http()),
         }
     }
 
@@ -178,8 +206,7 @@ impl NativeTools {
                     .map(str::to_owned)
             })
             .unwrap_or_default();
-        let http = crate::ext::policy_bound_http();
-        let entries = match crate::ext_index::load(source, &http) {
+        let entries = match self.with_client(|http| crate::ext_index::load(source, http)) {
             Ok(entries) => entries,
             Err(err) => return (format!("refused: {err}"), true),
         };
@@ -242,40 +269,62 @@ impl NativeTools {
                 true,
             );
         }
+        // A `reason` is required here and not on the local path, and the
+        // asymmetry is deliberate: a path at least names a file the operator
+        // can open and read before answering. A registry name is a claim
+        // about something remote, and an approval prompt that cannot say
+        // *why* is one that gets accepted blindly.
+        //
+        // It is enforced rather than encouraged, because the prompt is built
+        // from the arguments — an absent reason is silently no reason, and
+        // the operator would never know one was expected.
+        let reason = call
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if reason.is_empty() {
+            return (
+                "refused: `reason` is required with `name` — the operator is asked to \
+                 approve this and needs to know what it is for"
+                    .to_string(),
+                true,
+            );
+        }
         let Some(index) = self.index_source.as_deref() else {
             return (
                 "refused: no registry is configured (`registry.url`)".to_string(),
                 true,
             );
         };
-        let http = crate::ext::policy_bound_http();
-        let entries = match crate::ext_index::load(index, &http) {
+        let entries = match self.with_client(|http| crate::ext_index::load(index, http)) {
             Ok(entries) => entries,
             Err(err) => return (format!("refused: {err}"), true),
         };
-        // Named, not matched: `ext-search` is how a model finds a name, and
-        // a near-miss resolved for it would install something it did not
-        // choose.
-        let Some(entry) = entries.iter().find(|entry| entry.name == name) else {
-            return (
-                format!("refused: no component named `{name}` in the index at {index}"),
-                true,
-            );
-        };
         let checks = Checks {
-            sha256: Some(entry.sha256.clone()),
+            // No digest of our own: the index carries one and
+            // `ext_index::install` refuses a disagreement rather than
+            // preferring either. Supplying one here would be inventing a
+            // second opinion the model has no way to hold.
+            sha256: None,
             trusted_keys: self.trusted_keys.clone(),
             allow_unsigned: false,
         };
-        match crate::ext::install_from_url(dir, &entry.url, &checks, &http) {
+        // `ext_index::install`, not a hand-rolled find-and-fetch: it already
+        // resolves the name, refuses an unknown one naming the index it
+        // searched, and refuses a digest that disagrees with the entry.
+        // Reimplementing it here is how those refusals quietly diverge.
+        match self.with_client(|http| {
+            crate::ext_index::install(dir, &entries, name, index, &checks, http)
+        }) {
             Ok(installed) => {
                 if let Ok(mut queued) = self.installed.lock() {
                     queued.push(installed.name.clone());
                 }
                 (
                     format!(
-                        "installed {} {} from the registry; it is callable from the next turn",
-                        installed.name, entry.version
+                        "installed {} from the registry; it is callable from the next turn",
+                        installed.name
                     ),
                     false,
                 )
