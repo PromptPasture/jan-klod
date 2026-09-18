@@ -58,15 +58,18 @@ const SEARCH_SCHEMA: &str = r#"{"type":"object","properties":{
 
 /// What the model is told this does.
 const DESCRIPTION: &str = "Install a WebAssembly extension into the runtime's \
-    extension directory. The operator is asked before it happens. An unsigned \
-    component requires its sha256; a signed one is verified against the \
-    configured trusted keys. The extension is callable from the next turn.";
+    extension directory, either by `name` from the registry or from a local \
+    `path`. The operator is asked before it happens. From the registry the \
+    component must be signed, and no waiver is available here. From a local \
+    path an unsigned component requires its sha256. The extension is callable \
+    from the next turn.";
 
 /// The argument schema, matching [`Checks`] rather than inventing a shape.
-const SCHEMA: &str = r#"{"type":"object","required":["path"],"properties":{
-"path":{"type":"string","description":"the .wasm to install"},
-"allow-unsigned":{"type":"boolean","description":"waive the signature; requires sha256"},
-"sha256":{"type":"string","description":"expected digest of the component"}}}"#;
+const SCHEMA: &str = r#"{"type":"object","properties":{
+"name":{"type":"string","description":"a component from the registry, as `ext-search` lists it"},
+"path":{"type":"string","description":"a local .wasm; use `name` for anything from the registry"},
+"allow-unsigned":{"type":"boolean","description":"local `path` only: waive the signature; requires sha256"},
+"sha256":{"type":"string","description":"expected digest, for a local unsigned component"}}}"#;
 
 /// The host's own tools. Empty unless the operator asked for them.
 pub struct NativeTools {
@@ -191,6 +194,12 @@ impl NativeTools {
                     // The line the index format exists for: what it asks of
                     // the host, before anybody downloads it.
                     "capabilities": entry.capabilities,
+                    // An index entry is *not* necessarily signed — `signature`
+                    // is empty when nothing vouches for the bytes. Surfaced
+                    // because an unsigned entry cannot be installed through
+                    // this tool at all, and a model that proposed one would
+                    // be refused for a reason it could have seen here.
+                    "signed": !entry.signature.is_empty(),
                 })
             })
             .collect();
@@ -198,6 +207,81 @@ impl NativeTools {
             serde_json::json!({ "source": source, "matches": hits }).to_string(),
             false,
         )
+    }
+
+    /// Install a component the registry lists, by name.
+    ///
+    /// # No waiver, and what that means
+    ///
+    /// An index entry is **not** necessarily signed — `Entry::signature` is
+    /// empty when nothing vouches for the bytes. This path passes
+    /// `allow_unsigned: false` always, so such an entry is refused rather
+    /// than installed on the strength of a digest the same index supplied.
+    /// A digest from the party serving the artefact answers "did I get what
+    /// you sent", not "should I trust the sender".
+    ///
+    /// So the model has no escape here, by construction: the flag is not
+    /// read on this path, and passing it is an error rather than a no-op —
+    /// a silently ignored waiver would read, to whoever wrote the call, as
+    /// a waiver that worked.
+    fn install_from_index(
+        &self,
+        dir: &Path,
+        name: &str,
+        call: &serde_json::Value,
+    ) -> (String, bool) {
+        if call
+            .get("allow-unsigned")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            return (
+                "refused: `allow-unsigned` is for a local `path`; a registry component \
+                 is installed on its signature or not at all"
+                    .to_string(),
+                true,
+            );
+        }
+        let Some(index) = self.index_source.as_deref() else {
+            return (
+                "refused: no registry is configured (`registry.url`)".to_string(),
+                true,
+            );
+        };
+        let http = crate::ext::policy_bound_http();
+        let entries = match crate::ext_index::load(index, &http) {
+            Ok(entries) => entries,
+            Err(err) => return (format!("refused: {err}"), true),
+        };
+        // Named, not matched: `ext-search` is how a model finds a name, and
+        // a near-miss resolved for it would install something it did not
+        // choose.
+        let Some(entry) = entries.iter().find(|entry| entry.name == name) else {
+            return (
+                format!("refused: no component named `{name}` in the index at {index}"),
+                true,
+            );
+        };
+        let checks = Checks {
+            sha256: Some(entry.sha256.clone()),
+            trusted_keys: self.trusted_keys.clone(),
+            allow_unsigned: false,
+        };
+        match crate::ext::install_from_url(dir, &entry.url, &checks, &http) {
+            Ok(installed) => {
+                if let Ok(mut queued) = self.installed.lock() {
+                    queued.push(installed.name.clone());
+                }
+                (
+                    format!(
+                        "installed {} {} from the registry; it is callable from the next turn",
+                        installed.name, entry.version
+                    ),
+                    false,
+                )
+            }
+            Err(err) => (format!("refused: {err}"), true),
+        }
     }
 
     /// Run the install, or say why not.
@@ -214,12 +298,32 @@ impl NativeTools {
             Ok(value) => value,
             Err(err) => return (format!("refused: arguments are not JSON ({err})"), true),
         };
-        let Some(source) = call.get("path").and_then(serde_json::Value::as_str) else {
-            return (
-                "refused: `path` is required and must be a string".to_string(),
-                true,
-            );
+        let named = call.get("name").and_then(serde_json::Value::as_str);
+        let path = call.get("path").and_then(serde_json::Value::as_str);
+        // Exactly one. A call carrying both is two different requests, and
+        // picking one silently is how a typo in `name` becomes an arbitrary
+        // fetch from whatever `path` happened to say.
+        let Some(source) = (match (named, path) {
+            (Some(_), Some(_)) => {
+                return (
+                    "refused: give `name` (from the registry) or `path` (local), not both"
+                        .to_string(),
+                    true,
+                )
+            }
+            (None, None) => {
+                return (
+                    "refused: `name` (from the registry) or `path` (local) is required".to_string(),
+                    true,
+                )
+            }
+            (named, path) => named.or(path),
+        }) else {
+            unreachable!("the match above returns in both empty cases")
         };
+        if let Some(name) = named {
+            return self.install_from_index(dir, name, &call);
+        }
         let checks = Checks {
             sha256: call
                 .get("sha256")
@@ -353,6 +457,51 @@ mod tests {
             "{}",
             out.content
         );
+    }
+
+    /// The waiver is refused on the registry path, not ignored.
+    ///
+    /// Silently ignoring it would read, to whoever wrote the call, as a
+    /// waiver that worked — and the next thing they write will rely on it.
+    #[test]
+    fn allow_unsigned_is_refused_for_a_registry_install() {
+        let mut tools = NativeTools::installing_into(
+            std::env::temp_dir(),
+            vec![],
+            Some("/nonexistent/index.json".to_string()),
+        );
+        let out = tools
+            .invoke(&call(r#"{"name":"tool-x","allow-unsigned":true}"#))
+            .expect("ours");
+        assert!(out.failed);
+        assert!(
+            out.content.contains("on its signature or not at all"),
+            "{}",
+            out.content
+        );
+    }
+
+    /// `name` and `path` are two different requests, so both together is an
+    /// error rather than a preference.
+    #[test]
+    fn naming_both_a_registry_component_and_a_path_is_refused() {
+        let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
+        let out = tools
+            .invoke(&call(r#"{"name":"tool-x","path":"/tmp/x.wasm"}"#))
+            .expect("ours");
+        assert!(out.failed);
+        assert!(out.content.contains("not both"), "{}", out.content);
+    }
+
+    /// Neither is also an error, and it names both ways in rather than
+    /// only the one it happened to check first.
+    #[test]
+    fn naming_neither_says_what_is_missing() {
+        let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
+        let out = tools.invoke(&call("{}")).expect("ours");
+        assert!(out.failed);
+        assert!(out.content.contains("`name`"), "{}", out.content);
+        assert!(out.content.contains("`path`"), "{}", out.content);
     }
 
     /// Bad arguments are answered, not dropped.
