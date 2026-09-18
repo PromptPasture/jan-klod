@@ -184,3 +184,43 @@ fn with_no_token_the_page_finds_nothing_rather_than_an_empty_string() {
         "storage should hold no key at all, got: {seen}"
     );
 }
+
+/// The window renders nothing of its own, which is why #191 delivers it by
+/// delivering the browser client.
+///
+/// The two tests above show it *fetches* the served page. This one shows there
+/// is no second renderer behind it: the shell builds a webview over an
+/// external URL and adds a token, and that is all. If contributions — or any
+/// other part of the interface — were ever drawn here as well, the browser and
+/// the window would drift, and a rule written once in
+/// `wit/client-surface.wit` would need enforcing twice.
+///
+/// Grep-style, like `src/tui/tests/sidebar_projection.rs`, and outside the
+/// file it checks for the same reason. Comments are stripped first: `main.rs`
+/// explains its own boundaries in prose, and a scan that read the explanation
+/// would fail on a correct file.
+#[test]
+fn the_shell_draws_nothing_of_its_own() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs");
+    let source = std::fs::read_to_string(&path).expect("src/main.rs exists");
+
+    let mut checked = 0usize;
+    for line in source.lines() {
+        // Everything from the first `//` is a comment; a `//` inside a string
+        // would only make this miss something, never invent one.
+        let code = line.split("//").next().unwrap_or_default();
+        checked += 1;
+        for drawn in ["contribution", "innerHTML", "createElement", "document."] {
+            assert!(
+                !code.to_lowercase().contains(drawn),
+                "src/main.rs mentions `{drawn}` — the shell holds a webview over \
+                 the served page and draws nothing itself:\n  {}",
+                line.trim()
+            );
+        }
+    }
+    assert!(
+        checked > 20,
+        "src/main.rs looks empty — this test found nothing to check"
+    );
+}
