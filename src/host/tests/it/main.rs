@@ -64,6 +64,7 @@ mod tool_fetch;
 mod tool_find;
 mod tool_fleet;
 mod tool_git;
+mod tool_proc;
 mod tool_selection;
 mod tool_wiring;
 mod wasm_cache;

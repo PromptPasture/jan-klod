@@ -743,7 +743,7 @@ fn a_long_lived_child_does_not_outlive_the_runtime() {
 
 /// Whether a pid is still there, asked of the OS rather than of our own
 /// bookkeeping — the distinction acceptance line 2 turns on.
-fn pid_alive(pid: u32) -> bool {
+pub fn pid_alive(pid: u32) -> bool {
     std::process::Command::new("ps")
         .arg("-p")
         .arg(pid.to_string())
