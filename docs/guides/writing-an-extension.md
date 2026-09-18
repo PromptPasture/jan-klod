@@ -1,8 +1,8 @@
 ---
 type: guide
 title: Writing an extension
-description: From nothing to a working guest — generate a crate, build it, test it, and install it — in Rust or TypeScript, and the one refusal that will otherwise stop you.
-tags: [extensions, pdk, wit, component-model, wasm, typescript, guide]
+description: From nothing to a working guest — generate a crate, build it, test it, and install it — in Rust, TypeScript or Python, and the one refusal that will otherwise stop you.
+tags: [extensions, pdk, wit, component-model, wasm, typescript, python, guide]
 created: 2026-09-12
 updated: 2026-09-18
 ---
@@ -16,10 +16,11 @@ generating, building, testing, and installing a guest.
 The first three steps are straightforward. The fourth — installing — has a catch
 explained in the final section.
 
-The steps below are Rust, which every first-party extension uses. TypeScript
-works against the same WIT; read [In TypeScript](#in-typescript) **before** you
-pick it, because the choice costs 12.7 MB per component, 326 MB of toolchain,
-and about a minute in the gate test that exercises it.
+The steps below are Rust, which every first-party extension uses.
+[TypeScript](#in-typescript) and [Python](#in-python) work against the same
+WIT — read the language's section **before** you pick it, because both cost
+megabytes per component and a toolchain this repository does not install for
+you. The numbers are in [Meet the cost first](#meet-the-cost-first).
 
 ## 1. Generate the crate
 
@@ -44,8 +45,8 @@ has no agent world and the runtime has no handler — it would never load.
 
 `ext-new` registers the crate in the workspace and Makefile. The next step is build, not setup.
 
-`LANG=ts` generates the same kinds in TypeScript instead — see
-[In TypeScript](#in-typescript).
+`LANG=ts` and `LANG=py` generate the same kinds in TypeScript or Python
+instead — see [In TypeScript](#in-typescript) and [In Python](#in-python).
 
 ## 2. Build it
 
@@ -133,6 +134,38 @@ $ jan-klod-gateway ext remove <name>
 
 Remote sources must be public; URLs are validated before download and on every redirect.
 
+## Meet the cost first
+
+All three languages, measured on one machine, back to back:
+
+| | Rust (`tool-hello`) | TypeScript | Python |
+|---|---|---|---|
+| component | 54,633 bytes | **12.7 MB** | **18.5 MB** |
+| toolchain | the cargo toolchain you already have | **326 MB** of `node_modules` (`jco`) | **50 MB** (`componentize-py`) |
+| its gate test, run alone | under 4 s | **21.0 s, 23.8 s** | **23.9 s, 25.4 s** |
+
+Neither non-Rust component is large because of anything in it. The 12.7 MB is
+the StarlingMonkey JavaScript engine and the 18.5 MB is CPython; both are the
+price of the language. For scale, all twenty Rust components together are
+3.5 MB. Note the two costs run opposite ways: Python ships the bigger
+artefact from the far smaller toolchain.
+
+**Where the time goes, and where it does not.** Not staging: `Runtime::boot`
+loads the instances `config.yaml` enables, not the contents of `ext/`
+(`src/core/src/lib.rs:324`), so a staged component nothing enables costs
+nothing. The cost is Cranelift compiling the component at boot in the one
+test that *does* enable it, against a compile cache that is cold because each
+test boots into a fresh temp config directory.
+
+Read those two timing columns as "about the same". Two runs each, alternating,
+is enough to say Python is a little slower and not enough to say how much.
+Inside a full `make gate` the same test reports roughly **59 s**, because
+nextest runs it alongside 800 others — that number measures contention, not
+your guest.
+
+That is why neither toolchain is in `make setup`, why each build skips itself
+where its toolchain is absent, and why nothing in `ext/` is committed.
+
 ## In TypeScript
 
 The Component Model is language-neutral and this repository proves it rather
@@ -140,32 +173,6 @@ than asserting it: `src/extensions/tool-hello-ts` is the TypeScript twin of
 `tool-hello`, built against the same `wit/`, dispatched by the same fleet, with
 no host-side special case. If you want the proof rather than the instructions,
 `src/host/tests/it/polyglot_ts.rs` runs a turn through it.
-
-### Meet the cost first
-
-| | TypeScript | Rust (`tool-hello`) |
-|---|---|---|
-| component | **12,725,895 bytes** | 54,633 bytes |
-| toolchain | **326 MB** of `node_modules` | the cargo toolchain you already have |
-| the test that runs it | **58.8 s** of a 116 s gate | under 4 s |
-
-The 12.7 MB is the StarlingMonkey JavaScript engine, which every JS component
-carries; it is the price of the language, not of your extension. For scale,
-all twenty Rust components together are 3.5 MB.
-
-The gate cost follows from the size, but **not from staging it**. `Runtime::boot`
-loads the instances `config.yaml` enables, not the contents of `ext/`
-(`src/core/src/lib.rs:324`), so a staged component nothing enables costs
-nothing. What costs is the one test that *does* enable it: Cranelift compiles
-12.7 MB at boot, and because each test boots against a fresh temp config
-directory, Wasmtime's compile cache is cold every run. `polyglot_ts` took
-**58.8 s of a 116 s gate**.
-
-So the bill arrives once per test that enables your guest, and it arrives in
-full every time.
-
-That is why the toolchain is **not** in `make setup`, why the build skips
-itself where the toolchain is absent, and why nothing in `ext/` is committed.
 
 ### 1. Install the toolchain
 
@@ -268,6 +275,95 @@ Test it with the same host suite, enable it with the same `config.yaml` key
 (`tool: greet-ts:` resolves to `ext/tool-greet-ts.wasm` by the same naming
 rule), and install it with the same signature requirement. The host does not
 know which language your component was written in, which is the whole point.
+
+## In Python
+
+`src/extensions/tool-hello-py` is the third twin of `tool-hello`, built with
+`componentize-py` against the same `wit/`. `src/host/tests/it/polyglot_py.rs`
+runs a turn through it. The costs are in [the table above](#meet-the-cost-first) —
+the largest component of the three, from the smallest toolchain.
+
+### 1. Install the toolchain
+
+```console
+$ pipx install componentize-py==0.25.1
+```
+
+One tool, not two: `componentize-py` generates its own bindings, so there is
+no bundler step. Pinned in `versions.mk`, and not in `make setup` for the same
+reason `jco` is not.
+
+### 2. Generate it
+
+```console
+$ make ext-new NAME=tool-greet-py KIND=tool LANG=py
+```
+
+`LANG=py` supports `tool` and `interceptor`, the same two as TypeScript and
+for the same reason.
+
+You get exactly two hand-written files: `app.py` and `pyproject.toml`
+(which exists so the manifest generator can read a version and description,
+the way it reads `Cargo.toml` and `package.json`).
+
+### 3. Build it
+
+```console
+$ make -C src/extensions py-guest
+```
+
+`make extensions` runs this too, and skips with what to install when
+`componentize-py` is absent. The world comes from the name prefix, as with
+TypeScript — `tool-*` builds against `tool-world`.
+
+### Unlike TypeScript, there are bindings
+
+`componentize-py bindings` writes a `wit_world` package beside your guest, and
+your classes implement its `Protocol`s:
+
+```python
+from wit_world.exports import ToolCallable as ToolCallableProtocol
+from wit_world.exports.tool_callable import ToolMeta
+
+
+class ToolCallable(ToolCallableProtocol):
+    def meta(self) -> ToolMeta: ...
+```
+
+That is closer to `wit-bindgen` than to `jco`: the generated classes *are* the
+contract rather than a transcription of it, so a shape mismatch is caught
+against generated code instead of at componentize time.
+
+Two consequences worth knowing before you start:
+
+- **`wit_world` does not exist until you build.** It is gitignored, regenerated
+  every run so it cannot go stale against `wit/`, and your editor will not
+  resolve those imports until `make -C src/extensions py-guest` has run once.
+- **Names are snake_case, not lowerCamelCase.** `componentize-py` lowers
+  `arguments-schema` to `arguments_schema` where `jco` gives
+  `argumentsSchema`, and a variant case becomes `Decision_Proceed`. Each
+  toolchain picks its own convention; the generated package is the authority.
+
+### It imports raw WASI, and that is fine
+
+CPython's standard library needs `wasi:filesystem`, `wasi:sockets` and
+`wasi:cli` to initialise, so every Python component imports them — and unlike
+the TypeScript guest's `wasi:http`, there is no flag to drop them.
+
+Nothing is reachable through them. Those interfaces are linked for every
+guest and refused at the context: no preopens are configured and every socket
+address is denied. `docs/concepts/security-model.md` carries a row per
+refusal naming the `sandbox_boundary.rs` test that proves it, against
+`tool-escape-probe`, which reaches for them deliberately.
+
+What this does mean is that your manifest is a weaker signal here than in
+Rust — see [the manifest note above](#its-manifest-is-its-world-not-its-need),
+which applies to `componentize-py` exactly as it does to ComponentizeJS.
+
+### Testing, enabling and installing are unchanged
+
+Same host suite, same `config.yaml` key (`tool: greet-py:` resolves to
+`ext/tool-greet-py.wasm`), same signature requirement on install.
 
 ## Where to look next
 
