@@ -328,13 +328,21 @@ impl WasmInterceptor {
             streams: HashMap::new(),
             next_handle: 1,
             storage: storage.map_or_else(
-                || crate::guest_storage::GuestStorage::Ephemeral {
-                    entries: HashMap::new(),
-                    clock: 0,
+                || {
+                    crate::guest_storage::GuestStorage::shared(
+                        crate::guest_storage::Backing::Ephemeral {
+                            entries: HashMap::new(),
+                            clock: 0,
+                        },
+                    )
                 },
-                |store| crate::guest_storage::GuestStorage::Durable {
-                    store,
-                    owner: id.to_string(),
+                |store| {
+                    crate::guest_storage::GuestStorage::shared(
+                        crate::guest_storage::Backing::Durable {
+                            store,
+                            owner: id.to_string(),
+                        },
+                    )
                 },
             ),
         };

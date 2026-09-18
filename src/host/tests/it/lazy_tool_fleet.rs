@@ -53,6 +53,7 @@ fn a_pending_tool_is_not_instantiated_until_metadata_is_asked_for() {
         ProcessRunner::disabled(),
         None,
         None,
+        false,
     );
 
     // Compiled (by the caller, above) is not instantiated: pushing a pending
@@ -90,6 +91,7 @@ fn a_pending_tool_is_not_instantiated_until_invoked() {
         ProcessRunner::disabled(),
         None,
         None,
+        false,
     );
     assert!(!fleet.is_instantiated());
 

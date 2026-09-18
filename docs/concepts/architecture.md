@@ -60,7 +60,7 @@ Three languages are proven rather than claimed, each by a guest the gate runs a 
 - Outbound HTTP requests (to call LLM APIs, web search, etc.) — `host-http`
 - **Inbound network listeners** (so `api-*` can serve REST/gRPC) — `host-serve` *(planned)*
 - **Long-lived sockets** (so `chat-*` can hold a Telegram/Slack connection) — `host-socket` *(planned)*
-- Storage read/write via `host-storage` — **granted, not ambient** (`persist: true`), and namespaced to the calling component
+- Storage read/write via `host-storage` — **granted, not ambient** (`persist: true`), and namespaced to the calling component. A tool may add `scope: session` to key its namespaces by session as well, so two sessions do not share one tool's state; the default is run-scoped, which is what a permission gate's standing grants need (#215)
 - Logging, config read (own section only), event bus publish/subscribe
 
 ### What extensions cannot do

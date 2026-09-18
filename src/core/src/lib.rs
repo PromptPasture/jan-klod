@@ -770,6 +770,16 @@ impl Runtime {
                         .get("persist")
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
+                    // `scope: session` keys a tool's namespaces by session as
+                    // well as by component, so two sessions do not share one
+                    // tool's state (#215). Opt-in: the default is run-scoped,
+                    // which is what a permission gate's standing grants need.
+                    let per_session = ext
+                        .instance
+                        .config
+                        .get("scope")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("session");
                     tool_fleet.push(
                         &ext.instance.id,
                         component.clone(),
@@ -777,6 +787,7 @@ impl Runtime {
                         process.clone(),
                         network.then(|| http_factory()),
                         persist.then(|| Arc::clone(store)),
+                        per_session,
                     );
                 }
                 "registry" if ext.instance.kind == "skills" => {
@@ -1238,6 +1249,10 @@ impl conductor::ToolInvoker for CombinedFleet {
         self.tools
             .invoke(call)
             .or_else(|| self.registry.invoke(call))
+    }
+    fn bind_session(&mut self, session: &str) {
+        self.tools.bind_session(session);
+        self.registry.bind_session(session);
     }
 }
 

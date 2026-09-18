@@ -93,6 +93,18 @@ pub trait ToolInvoker {
     /// Invoke `call`. `None` means no tool matched (skip-if-absent);
     /// conductor reports as failed result, doesn't abort the turn.
     fn invoke(&mut self, call: &ToolCall) -> Option<ToolInvocation>;
+
+    /// Tell the fleet which session the calls in this turn belong to.
+    ///
+    /// Default: ignore it. Only a fleet whose guests keep session-scoped
+    /// state needs this, and a no-op default means adding it broke no
+    /// implementation (#215).
+    ///
+    /// Called once per turn by [`run_turn`], which is the only place a tool
+    /// is dispatched from. A fleet that needs a session and is not given one
+    /// **refuses** rather than falling back to shared state, so forgetting
+    /// this is an error rather than a silent leak between sessions.
+    fn bind_session(&mut self, _session: &str) {}
 }
 
 /// A [`ToolInvoker`] with no tools — every call is absent. Used for turns that
@@ -188,6 +200,11 @@ pub fn run_turn(
     limits: Limits,
     on_effective_message: &mut dyn FnMut(&str),
 ) -> RunResult {
+    // Before anything dispatches: a fleet with session-scoped state needs to
+    // know which session it is in, and this is the only place a tool is
+    // dispatched from.
+    tools.bind_session(session);
+
     let (agentic, mut request) = build_initial_request(
         dispatcher,
         driver,

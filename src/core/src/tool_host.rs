@@ -318,6 +318,17 @@ pub struct ToolExtension {
 }
 
 impl ToolExtension {
+    /// Tell this instance's `host-storage` which session it is serving.
+    ///
+    /// A tool instance outlives a session — the fleet is built once per agent
+    /// and a single agent runs many sessions — so this cannot be decided at
+    /// instantiation. It is set per turn instead (#215).
+    pub fn bind_session(&mut self, session: &str) {
+        self.store.data_mut().storage.bind_session(session);
+    }
+}
+
+impl ToolExtension {
     /// Instantiate `component` as a tool, satisfying its imports. `workspace` backs
     /// `host-fs` (`None` = default-deny).
     ///
@@ -330,7 +341,7 @@ impl ToolExtension {
         workspace: Option<Workspace>,
         process: ProcessRunner,
     ) -> Result<Self, CoreError> {
-        Self::instantiate_with_http(engine, id, component, workspace, process, None, None)
+        Self::instantiate_with_http(engine, id, component, workspace, process, None, None, false)
     }
 
     /// Instantiate a tool with outbound HTTP granted (`http = Some(client)`).
@@ -348,6 +359,7 @@ impl ToolExtension {
         process: ProcessRunner,
         http: Option<crate::route::HttpFn>,
         storage: Option<std::sync::Arc<std::sync::Mutex<crate::store::Store>>>,
+        per_session: bool,
     ) -> Result<Self, CoreError> {
         let mut linker: Linker<ToolHost> = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
@@ -367,16 +379,23 @@ impl ToolExtension {
             workspace,
             process,
             http,
-            storage: storage.map_or_else(
-                || crate::guest_storage::GuestStorage::Ephemeral {
-                    entries: std::collections::HashMap::new(),
-                    clock: 0,
-                },
-                |store| crate::guest_storage::GuestStorage::Durable {
-                    store,
-                    owner: id.to_string(),
-                },
-            ),
+            storage: {
+                let backing = storage.map_or_else(
+                    || crate::guest_storage::Backing::Ephemeral {
+                        entries: std::collections::HashMap::new(),
+                        clock: 0,
+                    },
+                    |store| crate::guest_storage::Backing::Durable {
+                        store,
+                        owner: id.to_string(),
+                    },
+                );
+                if per_session {
+                    crate::guest_storage::GuestStorage::per_session(backing)
+                } else {
+                    crate::guest_storage::GuestStorage::shared(backing)
+                }
+            },
             children: crate::host_process::Children::default(),
         };
         let mut store = Store::new(engine, host);
@@ -455,6 +474,15 @@ pub struct ToolFleet {
 }
 
 impl ToolFleet {
+    /// Bind `session` on every instance in the fleet.
+    pub fn bind_session(&mut self, session: &str) {
+        for (_, tool) in &mut self.tools {
+            tool.bind_session(session);
+        }
+    }
+}
+
+impl ToolFleet {
     /// Build fleet from extensions, resolving each tool's metadata (fallback to id).
     #[must_use]
     pub fn new(extensions: Vec<ToolExtension>) -> Self {
@@ -530,6 +558,7 @@ struct PendingTool {
     process: ProcessRunner,
     http: Option<crate::route::HttpFn>,
     storage: Option<std::sync::Arc<std::sync::Mutex<crate::store::Store>>>,
+    per_session: bool,
 }
 
 /// Tool fleet with guests compiled but not yet instantiated (#59).
@@ -548,6 +577,11 @@ pub struct LazyToolFleet {
     engine: Engine,
     pending: Vec<PendingTool>,
     live: Option<ToolFleet>,
+    /// The session bound before the fleet was instantiated, replayed onto
+    /// each instance when it is. Without this a tool created lazily *after*
+    /// `bind_session` — which is every tool, since the fleet resolves on
+    /// first use — would never learn its session (#215).
+    session: Option<String>,
 }
 
 impl LazyToolFleet {
@@ -558,6 +592,7 @@ impl LazyToolFleet {
             engine,
             pending: Vec::new(),
             live: None,
+            session: None,
         }
     }
 
@@ -570,6 +605,7 @@ impl LazyToolFleet {
         process: ProcessRunner,
         http: Option<crate::route::HttpFn>,
         storage: Option<std::sync::Arc<std::sync::Mutex<crate::store::Store>>>,
+        per_session: bool,
     ) {
         self.pending.push(PendingTool {
             id: id.into(),
@@ -578,6 +614,7 @@ impl LazyToolFleet {
             process,
             http,
             storage,
+            per_session,
         });
     }
 
@@ -596,7 +633,13 @@ impl LazyToolFleet {
             for pending in self.pending.drain(..) {
                 extensions.push(Self::instantiate_pending(&self.engine, pending)?);
             }
-            self.live = Some(ToolFleet::new(extensions));
+            let mut fleet = ToolFleet::new(extensions);
+            // Replay the bound session: the fleet resolves on first *use*,
+            // which is after the conductor bound it (#215).
+            if let Some(session) = &self.session {
+                fleet.bind_session(session);
+            }
+            self.live = Some(fleet);
         }
         // `if` above guarantees this; borrow checker cannot see through `is_none()`.
         Ok(self.live.as_mut().expect("just set above"))
@@ -614,6 +657,7 @@ impl LazyToolFleet {
             pending.process,
             pending.http,
             pending.storage,
+            pending.per_session,
         )
     }
 
@@ -647,6 +691,12 @@ impl crate::conductor::ToolInvoker for LazyToolFleet {
                 content: format!("tool fleet failed to instantiate: {err}"),
                 failed: true,
             }),
+        }
+    }
+    fn bind_session(&mut self, session: &str) {
+        self.session = Some(session.to_string());
+        if let Some(live) = self.live.as_mut() {
+            live.bind_session(session);
         }
     }
 }
