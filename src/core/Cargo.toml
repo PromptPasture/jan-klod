@@ -12,15 +12,15 @@ jan-klod-config = { path = "../config" }
 # name them without depending on the loop. No new package in the tree — the
 # workspace already builds it, and it depends on nothing but serde.
 jan-klod-protocol = { path = "../protocol" }
+# The session store (#180). This crate no longer defines the log, the
+# projections or the SQLite connection; it composes them with a loop.
+jk-session = { path = "../session" }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 serde_json.workspace = true
 toml = "0.9"
 thiserror.workspace = true
 ureq = "3"
-# Host-side persistent store (Phase 3 Slice 3a). `bundled` compiles SQLite from
-# source so there is no system-lib dependency; host-side, so no wasm constraint.
-rusqlite = { version = "0.32", features = ["bundled"] }
 # SHA-256 for `ext install --sha256` (Slice 16c-1). **Zero new packages**:
 # `sha2` 0.10 is already in Cargo.lock, pulled in by wasmtime-wasi via wiggle,
 # so this only makes a transitive crate a direct one. Measured before adding,
@@ -41,6 +41,10 @@ url = "2"
 # the frame shapes that did left with the surfaces (#179).
 [dev-dependencies]
 serde.workspace = true
+# `tests/migration.rs` builds its fixture with SQLite directly, so it is the
+# pre-log schema holding the old rows rather than a simulation of them. A
+# dev-dependency, so the shipped crate still links no database (#180).
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 
 # Landlock, for the Linux command sandbox (Slice 15c). Target-gated, so it never

@@ -1544,6 +1544,7 @@ version = "0.1.0"
 dependencies = [
  "jan-klod-config",
  "jan-klod-protocol",
+ "jk-session",
  "landlock",
  "minisign-verify",
  "rusqlite",
@@ -1586,6 +1587,16 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "jk-session"
+version = "0.1.0"
+dependencies = [
+ "jan-klod-protocol",
+ "rusqlite",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

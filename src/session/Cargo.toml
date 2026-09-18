@@ -1,0 +1,24 @@
+[package]
+name = "jk-session"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The only crate that knows SQLite (#180). Three dependencies, and the shape of
+# the list is the point: no `wasmtime`, so a client that wants to read a
+# transcript does not link a component runtime to do it.
+[dependencies]
+# The shared turn vocabulary. This crate encodes an `Event` and rebuilds a
+# transcript out of `Message`s, and naming them from the loop's crate instead
+# would be the dependency cycle this slice exists to avoid.
+jan-klod-protocol = { path = "../protocol" }
+serde_json.workspace = true
+thiserror.workspace = true
+# `bundled` compiles SQLite from source so there is no system-lib dependency;
+# host-side, so no wasm constraint. Moved here from `jan-klod-core` with the
+# store itself.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[lints]
+workspace = true

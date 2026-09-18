@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "config", "host", "protocol", "tui"]
+members = ["core", "config", "host", "protocol", "session", "tui"]
 # Both are cargo workspaces in their own right, sitting under this one's
 # directory. Each declares its own `[workspace]`, so cargo's upward search stops
 # there and neither is silently adopted as a member — naming them here says so

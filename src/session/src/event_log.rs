@@ -35,9 +35,8 @@ use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
-use crate::conductor::{Event, EventSink, Flow};
-use crate::intercept::{Driver, ToolCall, ToolOutcome, UserPrompt};
 use crate::store::{Store, StoreError};
+use jan_klod_protocol::turn::{Driver, Event, EventSink, Flow, ToolCall, ToolOutcome, UserPrompt};
 
 /// The envelope format this build writes, and the highest it can read.
 ///

@@ -14,10 +14,16 @@
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bindings;
 pub mod conductor;
+
+// The session store is its own crate now (#180): an append-only log, its
+// projections, and the only place that links SQLite. Re-exported under the
+// names it had here, so every `jan_klod_core::store::Store` still resolves
+// while the call sites are repointed.
+pub use jk_session::{event_log, projection, store};
+
 pub mod contributions;
 pub mod delegate;
 pub mod egress;
-pub mod event_log;
 pub mod ext;
 pub mod ext_index;
 pub(crate) mod guest_storage;
@@ -29,14 +35,12 @@ pub mod intercept;
 pub mod interceptor_host;
 pub mod manifest;
 pub mod native_tools;
-pub mod projection;
 pub mod registry_host;
 pub mod route;
 pub mod sandbox;
 pub mod sandbox_landlock;
 pub mod sandbox_seatbelt;
 pub mod session;
-pub mod store;
 pub mod tool_host;
 mod wasm_cache;
 
