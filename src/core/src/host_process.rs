@@ -27,7 +27,10 @@ use crate::sandbox::{SandboxBackend, SandboxPolicy};
 /// - `PATH` — command resolution.
 /// - `HOME` — git/cargo config.
 /// - `CARGO_HOME`, `RUSTUP_HOME` — toolchain installed elsewhere.
-/// - `TMPDIR` — tools assume one exists.
+/// - `TMPDIR` — tools assume one exists. Listed here for completeness and
+///   then **overridden**: the host points it inside the workspace so a
+///   confined command can actually write to it. See
+///   [`ProcessRunner::scratch_dir`].
 /// - `LANG`, `LC_ALL`, `LC_CTYPE` — text encoding, so output isn't mojibake.
 ///
 /// `TERM` is deliberately excluded: ANSI color escapes in tool output cost
@@ -193,6 +196,9 @@ impl ProcessRunner {
 
     /// The environment a child gets: [`BASE_ENV`] plus whatever the operator
     /// granted, and nothing else.
+    ///
+    /// `TMPDIR` is the exception, and is **overridden rather than inherited**
+    /// — see [`Self::scratch_dir`].
     fn environment(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = BASE_ENV
             .iter()
@@ -207,11 +213,54 @@ impl ProcessRunner {
                 out.push((name.clone(), value));
             }
         }
+        if let Some(scratch) = self.scratch_dir() {
+            out.retain(|(name, _)| name != "TMPDIR");
+            out.push(("TMPDIR".to_string(), scratch));
+        }
         // Deliberately set, not inherited: without `TERM` most tools drop color
         // anyway, this makes it explicit. ANSI escapes cost the model tokens
         // it cannot use.
         out.push(("NO_COLOR".to_string(), "1".to_string()));
         out
+    }
+
+    /// The temp directory a child is told to use: `.jan-klod/tmp` inside the
+    /// workspace, created on demand. `None` when no workspace is configured,
+    /// since then nothing runs anyway.
+    ///
+    /// # Why the host picks this rather than passing the operator's through
+    ///
+    /// A confined command may write only under `writable`, which cannot name
+    /// anything outside the workspace ([`crate::sandbox::SandboxPolicy`]
+    /// refuses that, deliberately). Inheriting the host's `TMPDIR` therefore
+    /// told a command where its temp directory was and then denied writing to
+    /// it — and toolchains do not degrade gracefully when they cannot write a
+    /// cache. `cargo build` failed this way with an error blaming a missing
+    /// `clang` (#212, and the probe on #192).
+    ///
+    /// The other fix was granting the host's per-user temp directory in both
+    /// sandbox backends. This one was chosen because it grants **nothing
+    /// outside the workspace at all** — the jail stays exactly the jail, and
+    /// the scratch space is already inside it. Measured rather than assumed:
+    /// with `TMPDIR` pointed here, a `cargo build --target wasm32-wasip2`
+    /// completes under a profile whose only grants are the workspace and
+    /// `/dev/null`, and `xcrun`'s cache file lands here.
+    ///
+    /// The cost, and it is real: a command's temp files live under the
+    /// operator's project rather than on system scratch. That is visible, it
+    /// is inside a dot-directory, and `clean` targets do not know about it.
+    fn scratch_dir(&self) -> Option<String> {
+        let root = self
+            .workspace
+            .as_ref()?
+            .root()
+            .join(".jan-klod")
+            .join("tmp");
+        // Best effort: a failure here leaves the command with no `TMPDIR`,
+        // which is what it had before this existed. Refusing to run over a
+        // temp directory would be a worse trade than running without one.
+        std::fs::create_dir_all(&root).ok()?;
+        root.to_str().map(str::to_owned)
     }
 
     /// A `Command` confined and configured, ready to spawn.
@@ -963,6 +1012,62 @@ mod tests {
         let ws = Workspace::open(&dir).unwrap();
         let runner = ProcessRunner::new(ws.clone(), Duration::from_secs(5), 64 * 1024);
         (ws, runner)
+    }
+
+    /// A command's `TMPDIR` is inside the workspace, not the host's (#212).
+    ///
+    /// The point is not the path, it is that a *confined* command can write
+    /// there: `writable` cannot name anything outside the workspace, so an
+    /// inherited `TMPDIR` is a directory the command is told to use and then
+    /// refused.
+    #[test]
+    fn a_commands_temp_directory_is_inside_the_workspace() {
+        // No sentinel `TMPDIR` set here on purpose: `runner()` builds its
+        // workspace under `env::temp_dir()`, which reads `TMPDIR`, so
+        // poisoning it first sends the workspace to the filesystem root. The
+        // host's real `TMPDIR` is outside the workspace anyway, which is all
+        // this needs to distinguish.
+        let (ws, runner) = runner();
+        std::env::set_var("TMPDIR", "/host-tmpdir-must-not-be-used");
+        let exit = runner
+            .exec(
+                "/bin/sh",
+                &["-c".into(), "printf %s \"$TMPDIR\"".into()],
+                None,
+                None,
+            )
+            .expect("sh runs");
+        let seen = std::path::Path::new(exit.stdout.trim());
+        assert!(
+            seen.starts_with(ws.root()),
+            "TMPDIR {} is not under the workspace {}",
+            seen.display(),
+            ws.root().display()
+        );
+        assert!(seen.exists(), "and it was created: {}", seen.display());
+    }
+
+    /// The same, from the other side: a command that actually writes a temp
+    /// file leaves it in the workspace. Asserting the variable alone would
+    /// pass if something later re-inherited the host's.
+    #[test]
+    fn a_command_writing_to_its_temp_directory_stays_in_the_workspace() {
+        let (ws, runner) = runner();
+        let exit = runner
+            .exec(
+                "/bin/sh",
+                &["-c".into(), "echo marker > \"$TMPDIR/probe\"".into()],
+                None,
+                None,
+            )
+            .expect("sh runs");
+        assert_eq!(exit.code, 0, "the write succeeded: {}", exit.stderr);
+        let written = ws.root().join(".jan-klod").join("tmp").join("probe");
+        assert!(
+            written.exists(),
+            "the temp file is in the workspace: {}",
+            written.display()
+        );
     }
 
     /// The environment is a credential store, and this used to hand all of it to

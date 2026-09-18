@@ -686,3 +686,7 @@ src/extensions/*/componentize_py_types.py
 src/extensions/*/componentize_py_runtime.pyi
 src/extensions/*/poll_loop.py
 src/extensions/*/__pycache__/
+
+# Scratch a confined command is pointed at (`TMPDIR`), created under whatever
+# directory is the workspace — and this repository can be one.
+.jan-klod/
