@@ -850,7 +850,15 @@ impl Runtime {
                     .collect()
             })
             .unwrap_or_default();
-        native_tools::NativeTools::installing_into(self.ext_dir.clone(), trusted_keys)
+        // The index the CLI's `ext search` reads, resolved the same way:
+        // `registry.url`, which may be a path and so may need no network at
+        // all. `None` makes `ext-search` say a registry is not configured
+        // rather than report no matches from nowhere.
+        let index_source = registry
+            .and_then(|r| r.get("url"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        native_tools::NativeTools::installing_into(self.ext_dir.clone(), trusted_keys, index_source)
     }
 
     fn instantiate_providers_and_tools(

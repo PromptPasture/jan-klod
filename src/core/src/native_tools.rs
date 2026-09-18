@@ -40,8 +40,21 @@ use crate::conductor::{ToolInvocation, ToolInvoker};
 use crate::ext::{install, Checks};
 use crate::intercept::ToolCall;
 
-/// The name the model calls.
+/// The name the model calls to install.
 const INSTALL: &str = "ext-install";
+
+/// The name the model calls to see what the registry offers (#218).
+const SEARCH: &str = "ext-search";
+
+/// What the model is told `ext-search` does.
+const SEARCH_DESCRIPTION: &str = "Search the configured extension registry. \
+    Returns each match with the host capabilities it declares, so you can see \
+    what a component asks for before proposing it. Read-only: it installs \
+    nothing.";
+
+/// `ext-search`'s arguments.
+const SEARCH_SCHEMA: &str = r#"{"type":"object","properties":{
+"term":{"type":"string","description":"match against name, kind or description; omit for everything"}}}"#;
 
 /// What the model is told this does.
 const DESCRIPTION: &str = "Install a WebAssembly extension into the runtime's \
@@ -62,6 +75,10 @@ pub struct NativeTools {
     /// Minisign keys from `registry.trusted-keys`. Empty means nothing is
     /// trusted, which is default-deny rather than "skip the check".
     trusted_keys: Vec<String>,
+    /// Where the registry index lives, from `registry.url`. `None` when the
+    /// deployment configured none, which makes `ext-search` say so rather
+    /// than search nothing and report no matches.
+    index_source: Option<String>,
     /// Stems installed during this session, waiting to be adopted (#214).
     ///
     /// Shared rather than returned, because an install happens *inside* a
@@ -78,16 +95,22 @@ impl NativeTools {
         Self {
             ext_dir: None,
             trusted_keys: Vec::new(),
+            index_source: None,
             installed: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     /// The install tool, writing into `ext_dir`.
     #[must_use]
-    pub fn installing_into(ext_dir: PathBuf, trusted_keys: Vec<String>) -> Self {
+    pub fn installing_into(
+        ext_dir: PathBuf,
+        trusted_keys: Vec<String>,
+        index_source: Option<String>,
+    ) -> Self {
         Self {
             ext_dir: Some(ext_dir),
             trusted_keys,
+            index_source,
             installed: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -112,11 +135,69 @@ impl NativeTools {
         if self.ext_dir.is_none() {
             return Vec::new();
         }
-        vec![serde_json::json!({
-            "name": INSTALL,
-            "description": DESCRIPTION,
-            "parameters-schema": SCHEMA,
-        })]
+        vec![
+            serde_json::json!({
+                "name": INSTALL,
+                "description": DESCRIPTION,
+                "parameters-schema": SCHEMA,
+            }),
+            serde_json::json!({
+                "name": SEARCH,
+                "description": SEARCH_DESCRIPTION,
+                "parameters-schema": SEARCH_SCHEMA,
+            }),
+        ]
+    }
+
+    /// Search the configured registry index.
+    ///
+    /// # Not on the read-only allowlist, deliberately
+    ///
+    /// Reading is not an action, so this looks like an obvious candidate for
+    /// `interceptor-permission`'s `safe-calls`. It is not one: the index is
+    /// usually remote, and that list says of `fetch` that "it's egress, and
+    /// a coding agent reaching the network is worth one question". A search
+    /// is the same egress wearing a read-only label, so it is confirmed like
+    /// any other call. Cheaper to ask once than to find out later that the
+    /// allowlist quietly grew a network hole.
+    fn run_search(&self, arguments: &str) -> (String, bool) {
+        let Some(source) = self.index_source.as_deref() else {
+            return (
+                "refused: no registry is configured (`registry.url`)".to_string(),
+                true,
+            );
+        };
+        let term = serde_json::from_str::<serde_json::Value>(arguments)
+            .ok()
+            .and_then(|v| {
+                v.get("term")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        let http = crate::ext::policy_bound_http();
+        let entries = match crate::ext_index::load(source, &http) {
+            Ok(entries) => entries,
+            Err(err) => return (format!("refused: {err}"), true),
+        };
+        let hits: Vec<serde_json::Value> = crate::ext_index::search(&entries, &term)
+            .into_iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "name": entry.name,
+                    "version": entry.version,
+                    "kind": entry.kind,
+                    "description": entry.description,
+                    // The line the index format exists for: what it asks of
+                    // the host, before anybody downloads it.
+                    "capabilities": entry.capabilities,
+                })
+            })
+            .collect();
+        (
+            serde_json::json!({ "source": source, "matches": hits }).to_string(),
+            false,
+        )
     }
 
     /// Run the install, or say why not.
@@ -174,10 +255,11 @@ impl ToolInvoker for NativeTools {
         // Absent rather than refused when the name is not ours: the fleet
         // chains, and claiming a call we do not serve would stop a guest
         // tool of the same name from ever being reached.
-        if call.name != INSTALL {
-            return None;
-        }
-        let (content, failed) = self.run_install(&call.arguments);
+        let (content, failed) = match call.name.as_str() {
+            INSTALL => self.run_install(&call.arguments),
+            SEARCH => self.run_search(&call.arguments),
+            _ => return None,
+        };
         Some(ToolInvocation { content, failed })
     }
 }
@@ -207,7 +289,7 @@ mod tests {
     /// stop the fleet's next link from ever seeing it.
     #[test]
     fn another_tools_call_is_passed_on_rather_than_claimed() {
-        let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![]);
+        let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
         let mut other = call("{}");
         other.name = "fs".to_string();
         assert!(tools.invoke(&other).is_none());
@@ -231,7 +313,7 @@ mod tests {
     fn unsigned_without_a_digest_is_refused_through_the_tool() {
         let dir = std::env::temp_dir().join(format!("jk-native-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("creates the dir");
-        let mut tools = NativeTools::installing_into(dir.clone(), vec![]);
+        let mut tools = NativeTools::installing_into(dir.clone(), vec![], None);
         let out = tools
             .invoke(&call(
                 r#"{"path":"/nonexistent.wasm","allow-unsigned":true}"#,
@@ -245,10 +327,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Both tools are offered when enabled, and neither when not.
+    #[test]
+    fn enabling_offers_search_as_well_as_install() {
+        let names: Vec<String> = NativeTools::installing_into(std::env::temp_dir(), vec![], None)
+            .metas()
+            .iter()
+            .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(str::to_owned))
+            .collect();
+        assert_eq!(names, vec!["ext-install", "ext-search"]);
+    }
+
+    /// Searching with no registry configured says so, rather than reporting
+    /// no matches — "nothing found" and "nowhere to look" are different
+    /// facts and a model cannot act on the wrong one.
+    #[test]
+    fn searching_with_no_registry_configured_says_so() {
+        let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
+        let mut search = call("{}");
+        search.name = "ext-search".to_string();
+        let out = tools.invoke(&search).expect("ours");
+        assert!(out.failed);
+        assert!(
+            out.content.contains("no registry is configured"),
+            "{}",
+            out.content
+        );
+    }
+
     /// Bad arguments are answered, not dropped.
     #[test]
     fn arguments_that_are_not_an_install_say_what_is_wrong() {
-        let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![]);
+        let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
         assert!(tools
             .invoke(&call("not json"))
             .expect("ours")
