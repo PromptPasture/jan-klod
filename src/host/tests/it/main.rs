@@ -10,6 +10,7 @@
 mod common;
 
 mod acp;
+mod adopt_installed;
 mod agent_loop;
 mod api_prompt;
 mod api_rest;

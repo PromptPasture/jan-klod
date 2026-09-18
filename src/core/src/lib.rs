@@ -280,6 +280,70 @@ struct ProvidersAndTools {
     registry_fleet: registry_host::LazyRegistryFleet,
 }
 
+/// Compile one instance's component and cross-check what it declares.
+///
+/// Lifted out of [`Runtime::boot`]'s loop so a component adopted *after*
+/// boot goes through the identical path (#214). Adoption that skipped the
+/// manifest cross-check would make "installed at runtime" a weaker class of
+/// component than "present at boot", which is the one difference this
+/// runtime must not have.
+fn load_instance(
+    engine: &Engine,
+    ext_dir: &Path,
+    instance: &ExtensionInstance,
+    allow_unmanifested: bool,
+) -> Result<(LoadState, Option<Vec<String>>), CoreError> {
+    let path = ext_dir.join(instance.component_file());
+    if !path.exists() {
+        return Ok((LoadState::Missing(path), None));
+    }
+    let component = Component::from_file(engine, &path).map_err(|source| CoreError::Load {
+        id: instance.id.clone(),
+        path: path.display().to_string(),
+        source: source.into(),
+    })?;
+    // Cross-check the component against what it declares, through the same
+    // `inspect` that `ext install` uses.
+    let inspected = inspect(&component, engine, &path).map_err(|source| CoreError::Manifest {
+        id: instance.id.clone(),
+        source,
+    })?;
+    match inspected.verdict {
+        Verdict::ApiMismatch { theirs } => {
+            return Err(CoreError::ApiVersion {
+                id: instance.id.clone(),
+                component: instance.component_file(),
+                theirs,
+                ours: manifest::API_VERSION.to_owned(),
+            });
+        }
+        // A component needing more than it admits to is either mislabelled
+        // or lying.
+        Verdict::UnderDeclared { interfaces } => {
+            return Err(CoreError::Undeclared {
+                id: instance.id.clone(),
+                component: instance.component_file(),
+                interfaces: interfaces.join(", "),
+            });
+        }
+        // No manifest at all: refused, because an undeclared component is
+        // one nobody can inspect before running it, and the whole point of a
+        // declaration is to be checkable ahead of time. `allow-unmanifested`
+        // is the named widening for local development.
+        Verdict::NoManifest if !allow_unmanifested => {
+            return Err(CoreError::NoManifest {
+                id: instance.id.clone(),
+                component: instance.component_file(),
+            });
+        }
+        // Consistent, or unmanifested where that is allowed. The guarded arm
+        // above is what makes the second case a deliberate widening rather
+        // than a gap.
+        Verdict::Consistent | Verdict::NoManifest => {}
+    }
+    Ok((LoadState::Compiled(component), Some(inspected.capabilities)))
+}
+
 impl Runtime {
     /// Load `config.yaml`, wire host capabilities, and resolve every enabled
     /// instance against `ext_dir`. Compiles present components; missing ones are
@@ -327,59 +391,8 @@ impl Runtime {
             .unwrap_or(false);
         let mut extensions = Vec::with_capacity(order.len());
         for instance in order {
-            let path = ext_dir.join(instance.component_file());
-            let (state, capabilities) = if path.exists() {
-                let component =
-                    Component::from_file(&engine, &path).map_err(|source| CoreError::Load {
-                        id: instance.id.clone(),
-                        path: path.display().to_string(),
-                        source: source.into(),
-                    })?;
-                // Cross-check the component against what it declares, through
-                // the same `inspect` that `ext install` uses.
-                let inspected =
-                    inspect(&component, &engine, &path).map_err(|source| CoreError::Manifest {
-                        id: instance.id.clone(),
-                        source,
-                    })?;
-                match inspected.verdict {
-                    Verdict::ApiMismatch { theirs } => {
-                        return Err(CoreError::ApiVersion {
-                            id: instance.id.clone(),
-                            component: instance.component_file(),
-                            theirs,
-                            ours: manifest::API_VERSION.to_owned(),
-                        });
-                    }
-                    // A component needing more than it admits to is either
-                    // mislabelled or lying.
-                    Verdict::UnderDeclared { interfaces } => {
-                        return Err(CoreError::Undeclared {
-                            id: instance.id.clone(),
-                            component: instance.component_file(),
-                            interfaces: interfaces.join(", "),
-                        });
-                    }
-                    // No manifest at all: refused, because an undeclared
-                    // component is one nobody can inspect before running it,
-                    // and the whole point of a declaration is to be checkable
-                    // ahead of time. `allow-unmanifested` is the named
-                    // widening for local development.
-                    Verdict::NoManifest if !allow_unmanifested => {
-                        return Err(CoreError::NoManifest {
-                            id: instance.id.clone(),
-                            component: instance.component_file(),
-                        });
-                    }
-                    // Consistent, or unmanifested where that is allowed. The
-                    // guarded arm above is what makes the second case a
-                    // deliberate widening rather than a gap.
-                    Verdict::Consistent | Verdict::NoManifest => {}
-                }
-                (LoadState::Compiled(component), Some(inspected.capabilities))
-            } else {
-                (LoadState::Missing(path), None)
-            };
+            let (state, capabilities) =
+                load_instance(&engine, ext_dir, instance, allow_unmanifested)?;
             extensions.push(LoadedExtension {
                 instance: instance.clone(),
                 state,
@@ -627,6 +640,94 @@ impl Runtime {
     #[must_use]
     pub const fn report(&self) -> BootReport<'_> {
         BootReport(self)
+    }
+
+    /// Every loaded instance's id, for tests and for reporting what a
+    /// runtime holds.
+    #[must_use]
+    pub fn extension_ids(&self) -> Vec<String> {
+        self.extensions
+            .iter()
+            .map(|ext| ext.instance.id.clone())
+            .collect()
+    }
+
+    /// Adopt a component that was installed after boot, so the next
+    /// [`Self::build_agent`] can serve it (#214).
+    ///
+    /// `stem` is the component's file stem, which is also the naming rule
+    /// every other instance uses: `tool-greet` becomes instance
+    /// `tool.greet`, served from `ext/tool-greet.wasm`.
+    ///
+    /// # It goes through the boot path, deliberately
+    ///
+    /// [`load_instance`] is the same function `boot` uses: compiled, then
+    /// cross-checked against its manifest, with the same refusals for an API
+    /// mismatch, an under-declaration, or no manifest at all. A component
+    /// adopted at runtime is not a weaker class of component than one
+    /// present at boot, and the way to keep that true is to have one path.
+    ///
+    /// # What it does not do
+    ///
+    /// **It does not write `config.yaml`.** Installing enables the component
+    /// for *this process*; the file on disk is the operator's, and a model
+    /// action that silently made itself permanent would be a worse surprise
+    /// than one that has to be repeated. A restart drops it unless the
+    /// operator wrote the entry themselves — which is the honest default,
+    /// since the approval that admitted it was for one install and not for
+    /// every boot from here on.
+    ///
+    /// It also does not touch any running [`AgentSession`]. Sessions are
+    /// rebuilt from a `Runtime`, not mutated, so the caller decides when —
+    /// at a turn boundary, never mid-turn.
+    ///
+    /// # Errors
+    /// [`CoreError`] when the component is absent, is not a component, or
+    /// fails the manifest cross-check. **`self` is unchanged in every
+    /// failing case**: the instance is loaded before it is recorded, so a
+    /// refused adoption leaves the runtime exactly as it was.
+    pub fn adopt_installed(&mut self, stem: &str) -> Result<String, CoreError> {
+        let (category, kind) = stem.split_once('-').ok_or_else(|| CoreError::Adopt {
+            stem: stem.to_owned(),
+            reason: "a component stem is `<category>-<kind>`, e.g. `tool-greet`".to_owned(),
+        })?;
+        let id = format!("{category}.{kind}");
+        if self.extensions.iter().any(|ext| ext.instance.id == id) {
+            return Err(CoreError::Adopt {
+                stem: stem.to_owned(),
+                reason: format!("`{id}` is already loaded; nothing to adopt"),
+            });
+        }
+        let instance = ExtensionInstance {
+            id: id.clone(),
+            category: category.to_owned(),
+            name: kind.to_owned(),
+            kind: kind.to_owned(),
+            component: stem.to_owned(),
+            enabled: true,
+            config: serde_json::Value::Object(serde_json::Map::new()),
+        };
+        let allow_unmanifested = self
+            .agent
+            .get("allow-unmanifested")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        // Loaded first, recorded second: everything above can fail, and a
+        // half-adopted runtime would be worse than a refused adoption.
+        let (state, capabilities) =
+            load_instance(&self.engine, &self.ext_dir, &instance, allow_unmanifested)?;
+        if let LoadState::Missing(path) = &state {
+            return Err(CoreError::Adopt {
+                stem: stem.to_owned(),
+                reason: format!("nothing at {}", path.display()),
+            });
+        }
+        self.extensions.push(LoadedExtension {
+            instance,
+            state,
+            capabilities,
+        });
+        Ok(id)
     }
 
     /// Boot the thin-loop agent from config: instantiate every enabled+compiled
@@ -1897,6 +1998,14 @@ pub enum CoreError {
     /// Loading or parsing `config.yaml` failed.
     #[error(transparent)]
     Config(#[from] jan_klod_config::ConfigError),
+    /// A component installed after boot could not be adopted (#214).
+    #[error("cannot adopt `{stem}`: {reason}")]
+    Adopt {
+        /// The component stem the caller named.
+        stem: String,
+        /// Why it was refused, in terms the caller can act on.
+        reason: String,
+    },
     /// Wiring a host capability into the linker failed.
     #[error("wiring host capabilities into the linker")]
     Linker {
