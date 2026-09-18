@@ -8,8 +8,8 @@
 #
 # `capabilities` is read from the component itself rather than from anything a
 # guest author writes, which is the point: a declaration derived from the
-# artifact cannot drift from it. Two traps in that reading, both easy to get
-# wrong and both silent:
+# artifact cannot drift from it. Three traps in that reading, all easy to get
+# wrong and all silent:
 #
 #   * The WIT output lists a world's *exports* too — `extension-lifecycle` and
 #     `tool-callable` are what a guest implements, not what it needs. Only the
@@ -18,6 +18,14 @@
 #     are shapes; nothing is granted by importing one. Listing them would tell
 #     an operator to grant `llm-types`, which means nothing and reads like
 #     something. Only `host-*` interfaces are capabilities.
+#   * **The reading is only as tight as the toolchain that produced the
+#     imports.** `wit-bindgen` emits an import for what a guest's code uses,
+#     so a Rust manifest is a statement of need. ComponentizeJS emits one for
+#     every interface in the world, so a JavaScript guest's manifest is its
+#     *world* — the most it could ask for, not what it asks for. `tool-hello`
+#     declares `host-log`; `tool-hello-ts` does the same work and declares all
+#     five. Still true that neither can claim more than its artifact; not true
+#     that both can be read as need (#210).
 #
 # Usage: manifests.sh <extensions-dir> <ext-out-dir> <wit-dir> <guest>...
 set -eu

@@ -233,6 +233,34 @@ That refusal is correct and must stay. A guest reaches the network through
 `wasi:http` would hand every guest a way around it. If you need outbound
 requests, import `host-http` and be granted it — do not re-enable `fetch`.
 
+### Its manifest is its world, not its need
+
+Step 2 above says a fresh Rust tool declares only `host-log`, because
+`wit-bindgen` emits an import for what your code uses. **ComponentizeJS emits
+an import for every interface in the world**, whether you call it or not. Two
+manifests, both generated from the artifact, both for a guest that does
+nothing but return a greeting:
+
+```toml
+# ext/tool-hello.manifest.toml    # ext/tool-hello-ts.manifest.toml
+capabilities = [                  capabilities = [
+    "host-log",                       "host-config",
+]                                     "host-fs",
+                                      "host-http",
+                                      "host-log",
+                                      "host-process",
+                                  ]
+```
+
+The TypeScript twin claims filesystem access, process execution and outbound
+HTTP. It uses none of them.
+
+This is not a hole — the host grants capabilities from `config.yaml`, and the
+manifest is checked *against* the grant rather than being one, so a guest that
+declares `host-fs` and is granted nothing still gets nothing. What it costs is
+the signal: **do not read a JavaScript guest's `capabilities` as a statement
+of need**, yours or anyone's. Narrowing it is [#210](https://github.com/PromptPasture/jan-klod/issues/210).
+
 ### Testing, enabling and installing are unchanged
 
 Test it with the same host suite, enable it with the same `config.yaml` key
