@@ -85,83 +85,9 @@ struct InterceptorHost {
     streams: HashMap<u32, VecDeque<g_llm::CompletionChunk>>,
     next_handle: u32,
     /// Where this guest's `host-storage` calls land — the core's durable store
-    /// when one is open, an ephemeral map otherwise. See [`Storage`].
-    storage: Storage,
-}
-
-/// The backing for one interceptor's `host-storage`.
-///
-/// Durable only for instances whose config sets `persist: true` — ephemeral
-/// default is load-bearing, since permission gates' standing grants are
-/// documented as dying with the process; making every interceptor durable
-/// would quietly turn "always allow" into "allow forever".
-///
-/// Every namespace is prefixed with the component's id, so sharing one
-/// database doesn't let a guest name `session-abc` and read the transcript, or
-/// name a peer's namespace and read its decisions. The core's namespaces
-/// contain no `/`, so nothing a guest can ask for collides with them.
-enum Storage {
-    /// A private map, for when no store is open (unit tests, offline harnesses).
-    Ephemeral {
-        /// (namespace, key) -> (value, created, updated).
-        entries: HashMap<(String, String), (String, u64, u64)>,
-        /// Monotonic clock, so timestamps order without a real clock.
-        clock: u64,
-    },
-    /// The core's store, namespaced to the owning component.
-    Durable {
-        /// Shared with the [`AgentSession`](crate::AgentSession) that opened it.
-        store: Arc<Mutex<PersistentStore>>,
-        /// The component id every namespace is prefixed with.
-        owner: String,
-    },
-}
-
-impl Storage {
-    /// The namespace a guest request actually reaches.
-    fn scope(&self, namespace: &str) -> String {
-        match self {
-            Self::Ephemeral { .. } => namespace.to_string(),
-            Self::Durable { owner, .. } => format!("ext/{owner}/{namespace}"),
-        }
-    }
-
-    /// Undo [`Self::scope`], so returned entries name the namespace the guest
-    /// asked for rather than what the host stored under.
-    fn unscope(&self, namespace: &str) -> String {
-        match self {
-            Self::Ephemeral { .. } => namespace.to_string(),
-            Self::Durable { owner, .. } => namespace
-                .strip_prefix(&format!("ext/{owner}/"))
-                .unwrap_or(namespace)
-                .to_string(),
-        }
-    }
-}
-
-/// Present an entry to the guest under the namespace it asked for.
-fn present(storage: &Storage, entry: crate::store::Entry) -> g_storage::Entry {
-    let namespace = storage.unscope(&entry.namespace);
-    g_storage::Entry {
-        id: format!("{namespace}/{}", entry.key),
-        namespace,
-        key: entry.key,
-        value: entry.value,
-        created_at: entry.created_at,
-        updated_at: entry.updated_at,
-    }
-}
-
-/// Map a store failure onto the contract's error.
-fn as_store_error(err: &crate::store::StoreError) -> g_storage::StoreError {
-    match err {
-        crate::store::StoreError::NotFound => g_storage::StoreError::NotFound,
-        crate::store::StoreError::Backend { detail } => {
-            // The contract's error carries no detail, so log it rather than drop it.
-            eprintln!("WARN [core] host-storage backend error: {detail}");
-            g_storage::StoreError::Backend
-        }
-    }
+    /// when one is open, an ephemeral map otherwise. See
+    /// [`GuestStorage`](crate::guest_storage::GuestStorage).
+    storage: crate::guest_storage::GuestStorage,
 }
 
 impl WasiView for InterceptorHost {
@@ -221,33 +147,10 @@ impl g_storage::Host for InterceptorHost {
         key: String,
         value: String,
     ) -> Result<g_storage::Entry, g_storage::StoreError> {
-        let scoped = self.storage.scope(&namespace);
-        match &mut self.storage {
-            Storage::Ephemeral { entries, clock } => {
-                *clock += 1;
-                let now = *clock;
-                let created = entries
-                    .get(&(scoped.clone(), key.clone()))
-                    .map_or(now, |(_, created, _)| *created);
-                entries.insert((scoped, key.clone()), (value.clone(), created, now));
-                Ok(g_storage::Entry {
-                    id: format!("{namespace}/{key}"),
-                    namespace,
-                    key,
-                    value,
-                    created_at: created,
-                    updated_at: now,
-                })
-            }
-            Storage::Durable { store, .. } => {
-                let entry = store
-                    .lock()
-                    .map_err(|_| g_storage::StoreError::Backend)?
-                    .set(&scoped, &key, &value)
-                    .map_err(|err| as_store_error(&err))?;
-                Ok(present(&self.storage, entry))
-            }
-        }
+        self.storage
+            .set(namespace, key, value)
+            .map(entry)
+            .map_err(fault)
     }
 
     fn get(
@@ -255,50 +158,21 @@ impl g_storage::Host for InterceptorHost {
         namespace: String,
         key: String,
     ) -> Result<g_storage::Entry, g_storage::StoreError> {
-        let scoped = self.storage.scope(&namespace);
-        match &self.storage {
-            Storage::Ephemeral { entries, .. } => entries
-                .get(&(scoped, key.clone()))
-                .map(|(value, created, updated)| g_storage::Entry {
-                    id: format!("{namespace}/{key}"),
-                    namespace: namespace.clone(),
-                    key: key.clone(),
-                    value: value.clone(),
-                    created_at: *created,
-                    updated_at: *updated,
-                })
-                .ok_or(g_storage::StoreError::NotFound),
-            Storage::Durable { store, .. } => {
-                let entry = store
-                    .lock()
-                    .map_err(|_| g_storage::StoreError::Backend)?
-                    .get(&scoped, &key)
-                    .map_err(|err| as_store_error(&err))?;
-                Ok(present(&self.storage, entry))
-            }
-        }
+        self.storage.get(&namespace, &key).map(entry).map_err(fault)
     }
 
     fn delete(&mut self, namespace: String, key: String) -> Result<(), g_storage::StoreError> {
-        let scoped = self.storage.scope(&namespace);
-        match &mut self.storage {
-            Storage::Ephemeral { entries, .. } => entries
-                .remove(&(scoped, key))
-                .map(|_| ())
-                .ok_or(g_storage::StoreError::NotFound),
-            Storage::Durable { store, .. } => store
-                .lock()
-                .map_err(|_| g_storage::StoreError::Backend)?
-                .delete(&scoped, &key)
-                .map_err(|err| as_store_error(&err)),
-        }
+        self.storage.delete(&namespace, &key).map_err(fault)
     }
 
     fn list_keys(
         &mut self,
         namespace: String,
     ) -> Result<Vec<g_storage::Entry>, g_storage::StoreError> {
-        self.entries_in(&namespace)
+        self.storage
+            .entries_in(&namespace)
+            .map(|rows| rows.into_iter().map(entry).collect())
+            .map_err(fault)
     }
 
     fn recent(
@@ -306,42 +180,30 @@ impl g_storage::Host for InterceptorHost {
         namespace: String,
         limit: u32,
     ) -> Result<Vec<g_storage::Entry>, g_storage::StoreError> {
-        let mut entries = self.entries_in(&namespace)?;
-        entries.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
-        entries.truncate(limit as usize);
-        Ok(entries)
+        self.storage
+            .recent(&namespace, limit)
+            .map(|rows| rows.into_iter().map(entry).collect())
+            .map_err(fault)
     }
 }
 
-impl InterceptorHost {
-    /// All stored entries in `namespace` as generated `entry` records.
-    fn entries_in(&self, namespace: &str) -> Result<Vec<g_storage::Entry>, g_storage::StoreError> {
-        let scoped = self.storage.scope(namespace);
-        match &self.storage {
-            Storage::Ephemeral { entries, .. } => Ok(entries
-                .iter()
-                .filter(|((ns, _), _)| *ns == scoped)
-                .map(|((_, key), (value, created, updated))| g_storage::Entry {
-                    id: format!("{namespace}/{key}"),
-                    namespace: namespace.to_string(),
-                    key: key.clone(),
-                    value: value.clone(),
-                    created_at: *created,
-                    updated_at: *updated,
-                })
-                .collect()),
-            Storage::Durable { store, .. } => {
-                let rows = store
-                    .lock()
-                    .map_err(|_| g_storage::StoreError::Backend)?
-                    .recent(&scoped, u32::MAX)
-                    .map_err(|err| as_store_error(&err))?;
-                Ok(rows
-                    .into_iter()
-                    .map(|row| present(&self.storage, row))
-                    .collect())
-            }
-        }
+/// This world's `entry`, from the world-neutral one.
+fn entry(stored: crate::guest_storage::StoredEntry) -> g_storage::Entry {
+    g_storage::Entry {
+        id: stored.id,
+        namespace: stored.namespace,
+        key: stored.key,
+        value: stored.value,
+        created_at: stored.created_at,
+        updated_at: stored.updated_at,
+    }
+}
+
+/// This world's `store-error`, from the world-neutral one.
+fn fault(err: crate::guest_storage::StorageFault) -> g_storage::StoreError {
+    match err {
+        crate::guest_storage::StorageFault::NotFound => g_storage::StoreError::NotFound,
+        crate::guest_storage::StorageFault::Backend => g_storage::StoreError::Backend,
     }
 }
 
@@ -466,11 +328,11 @@ impl WasmInterceptor {
             streams: HashMap::new(),
             next_handle: 1,
             storage: storage.map_or_else(
-                || Storage::Ephemeral {
+                || crate::guest_storage::GuestStorage::Ephemeral {
                     entries: HashMap::new(),
                     clock: 0,
                 },
-                |store| Storage::Durable {
+                |store| crate::guest_storage::GuestStorage::Durable {
                     store,
                     owner: id.to_string(),
                 },

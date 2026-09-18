@@ -26,6 +26,7 @@ use bind::jan_klod::interfaces::host_fs as g_fs;
 use bind::jan_klod::interfaces::host_http as g_http;
 use bind::jan_klod::interfaces::host_log as g_log;
 use bind::jan_klod::interfaces::host_process as g_proc;
+use bind::jan_klod::interfaces::host_storage as g_storage;
 
 /// Host state for a tool guest.
 struct ToolHost {
@@ -40,6 +41,10 @@ struct ToolHost {
     /// Interface imported ≠ egress granted; sandbox guards against file tools
     /// making network calls.
     http: Option<crate::route::HttpFn>,
+    /// Session working memory (`host-storage`), shared with the interceptor
+    /// host's implementation — the namespace scoping that keeps one guest out
+    /// of another's data is the same scoping (#215).
+    storage: crate::guest_storage::GuestStorage,
     /// Long-lived children this instance started (#109). **Owned here (not
     /// `ProcessRunner`) because `ToolHost` per-instance dies with its children.**
     /// `LiveChild::Drop` runs on clean stop, error, or runtime crash. Runner is
@@ -166,6 +171,73 @@ const fn to_gen_fs_error(err: FsError) -> g_fs::FsError {
     }
 }
 
+impl g_storage::Host for ToolHost {
+    fn set(
+        &mut self,
+        namespace: String,
+        key: String,
+        value: String,
+    ) -> Result<g_storage::Entry, g_storage::StoreError> {
+        self.storage
+            .set(namespace, key, value)
+            .map(entry)
+            .map_err(fault)
+    }
+
+    fn get(
+        &mut self,
+        namespace: String,
+        key: String,
+    ) -> Result<g_storage::Entry, g_storage::StoreError> {
+        self.storage.get(&namespace, &key).map(entry).map_err(fault)
+    }
+
+    fn delete(&mut self, namespace: String, key: String) -> Result<(), g_storage::StoreError> {
+        self.storage.delete(&namespace, &key).map_err(fault)
+    }
+
+    fn list_keys(
+        &mut self,
+        namespace: String,
+    ) -> Result<Vec<g_storage::Entry>, g_storage::StoreError> {
+        self.storage
+            .entries_in(&namespace)
+            .map(|rows| rows.into_iter().map(entry).collect())
+            .map_err(fault)
+    }
+
+    fn recent(
+        &mut self,
+        namespace: String,
+        limit: u32,
+    ) -> Result<Vec<g_storage::Entry>, g_storage::StoreError> {
+        self.storage
+            .recent(&namespace, limit)
+            .map(|rows| rows.into_iter().map(entry).collect())
+            .map_err(fault)
+    }
+}
+
+/// This world's `entry`, from the world-neutral one.
+fn entry(stored: crate::guest_storage::StoredEntry) -> g_storage::Entry {
+    g_storage::Entry {
+        id: stored.id,
+        namespace: stored.namespace,
+        key: stored.key,
+        value: stored.value,
+        created_at: stored.created_at,
+        updated_at: stored.updated_at,
+    }
+}
+
+/// This world's `store-error`, from the world-neutral one.
+fn fault(err: crate::guest_storage::StorageFault) -> g_storage::StoreError {
+    match err {
+        crate::guest_storage::StorageFault::NotFound => g_storage::StoreError::NotFound,
+        crate::guest_storage::StorageFault::Backend => g_storage::StoreError::Backend,
+    }
+}
+
 impl g_proc::Host for ToolHost {
     fn exec(
         &mut self,
@@ -258,7 +330,7 @@ impl ToolExtension {
         workspace: Option<Workspace>,
         process: ProcessRunner,
     ) -> Result<Self, CoreError> {
-        Self::instantiate_with_http(engine, id, component, workspace, process, None)
+        Self::instantiate_with_http(engine, id, component, workspace, process, None, None)
     }
 
     /// Instantiate a tool with outbound HTTP granted (`http = Some(client)`).
@@ -275,6 +347,7 @@ impl ToolExtension {
         workspace: Option<Workspace>,
         process: ProcessRunner,
         http: Option<crate::route::HttpFn>,
+        storage: Option<std::sync::Arc<std::sync::Mutex<crate::store::Store>>>,
     ) -> Result<Self, CoreError> {
         let mut linker: Linker<ToolHost> = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
@@ -283,6 +356,7 @@ impl ToolExtension {
         g_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
         g_fs::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
         g_proc::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
+        g_storage::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = ToolHost {
             // `inherit_stderr` (not stdio): stdin would let guests read terminal,
@@ -293,6 +367,16 @@ impl ToolExtension {
             workspace,
             process,
             http,
+            storage: storage.map_or_else(
+                || crate::guest_storage::GuestStorage::Ephemeral {
+                    entries: std::collections::HashMap::new(),
+                    clock: 0,
+                },
+                |store| crate::guest_storage::GuestStorage::Durable {
+                    store,
+                    owner: id.to_string(),
+                },
+            ),
             children: crate::host_process::Children::default(),
         };
         let mut store = Store::new(engine, host);
@@ -445,6 +529,7 @@ struct PendingTool {
     workspace: Option<Workspace>,
     process: ProcessRunner,
     http: Option<crate::route::HttpFn>,
+    storage: Option<std::sync::Arc<std::sync::Mutex<crate::store::Store>>>,
 }
 
 /// Tool fleet with guests compiled but not yet instantiated (#59).
@@ -484,6 +569,7 @@ impl LazyToolFleet {
         workspace: Option<Workspace>,
         process: ProcessRunner,
         http: Option<crate::route::HttpFn>,
+        storage: Option<std::sync::Arc<std::sync::Mutex<crate::store::Store>>>,
     ) {
         self.pending.push(PendingTool {
             id: id.into(),
@@ -491,6 +577,7 @@ impl LazyToolFleet {
             workspace,
             process,
             http,
+            storage,
         });
     }
 
@@ -526,6 +613,7 @@ impl LazyToolFleet {
             pending.workspace,
             pending.process,
             pending.http,
+            pending.storage,
         )
     }
 

@@ -47,6 +47,7 @@ fn load(engine: &Engine, calls: &Arc<AtomicU32>) -> Option<ToolExtension> {
             Some(workspace),
             ProcessRunner::disabled(),
             Some(counting_http(calls)),
+            None,
         )
         .expect("tool instantiates"),
     )

@@ -20,6 +20,7 @@ pub mod egress;
 pub mod event_log;
 pub mod ext;
 pub mod ext_index;
+mod guest_storage;
 mod host;
 pub mod host_fs;
 pub mod host_process;
@@ -647,12 +648,20 @@ impl Runtime {
         // Pass 1: providers (instantiated now — eager, not negotiable) +
         // tools + registries (compiled, held pending; before interceptors so
         // tool-selector gets combined advertised metadata when asked).
+        // Opened before the fleets rather than after: a tool's `host-storage`
+        // needs the same handle an interceptor's does (#215).
+        let store = self.open_store()?;
         let ProvidersAndTools {
             providers,
             provider_ids,
             tool_fleet,
             registry_fleet,
-        } = self.instantiate_providers_and_tools(http_factory, workspace.as_ref(), &process)?;
+        } = self.instantiate_providers_and_tools(
+            http_factory,
+            workspace.as_ref(),
+            &process,
+            &store,
+        )?;
         let mut tools = CombinedFleet {
             tools: tool_fleet,
             registry: registry_fleet,
@@ -682,7 +691,6 @@ impl Runtime {
 
         // Opened before the interceptors, because they share it: an interceptor's
         // `host-storage` writes land here, namespaced to the component.
-        let store = self.open_store()?;
 
         // Pass 2: interceptors, each served the tool set at `select-tools`.
         let interceptors = self.instantiate_interceptors(
@@ -716,6 +724,7 @@ impl Runtime {
         http_factory: &dyn Fn() -> route::HttpFn,
         workspace: Option<&host_fs::Workspace>,
         process: &host_process::ProcessRunner,
+        store: &Arc<Mutex<store::Store>>,
     ) -> Result<ProvidersAndTools, CoreError> {
         let mut providers: Vec<Box<dyn conductor::Completer>> = Vec::new();
         // Instance ids, parallel to `providers`, so the configured chain can be
@@ -752,12 +761,22 @@ impl Runtime {
                         .get("network")
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
+                    // `persist` is read the same way an interceptor's is:
+                    // durability is opt-in per instance, and the default
+                    // matters — see `guest_storage::GuestStorage`.
+                    let persist = ext
+                        .instance
+                        .config
+                        .get("persist")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
                     tool_fleet.push(
                         &ext.instance.id,
                         component.clone(),
                         workspace.cloned(),
                         process.clone(),
                         network.then(|| http_factory()),
+                        persist.then(|| Arc::clone(store)),
                     );
                 }
                 "registry" if ext.instance.kind == "skills" => {

@@ -82,6 +82,7 @@ fn probe(engine: &Engine) -> Option<ToolExtension> {
             None,
             ProcessRunner::disabled(),
             None,
+            None,
         )
         .expect("the probe instantiates"),
     )

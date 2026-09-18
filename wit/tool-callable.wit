@@ -33,6 +33,10 @@ world tool-world {
     // execution tools run commands through the bounded host-process substrate.
     import host-fs;
     import host-process;
+    // Session-scoped working memory (#215). A tool that has to keep a plan
+    // across calls had nowhere to put it: only `interceptor-world` imported
+    // this, so the model-facing half of the fleet was the half without state.
+    import host-storage;
 
     export extension-lifecycle;
     export tool-callable;
