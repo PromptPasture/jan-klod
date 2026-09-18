@@ -57,6 +57,7 @@ mod shipped_defaults;
 mod storage_scope;
 mod telegram;
 mod test_layout;
+mod tool_asking;
 mod tool_edit;
 mod tool_fetch;
 mod tool_find;

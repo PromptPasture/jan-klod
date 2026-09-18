@@ -22,6 +22,7 @@ members = [
     "tool-find",
     "tool-git",
     "tool-fetch",
+    "tool-ask-probe",
     "tool-hello",
     "tool-plan",
 ]
