@@ -197,6 +197,12 @@ jobs:
 
       - run: make clippy
 
+      # The guests are their own workspace, so `make clippy` above does not
+      # reach them; they are staged in this job already, and the wasm target
+      # their second lint run needs is installed for that. Nothing else in CI
+      # would see a guest's lints (#205).
+      - run: make clippy-guests
+
   harness:
     name: Component harness (exit gate)
     runs-on: ubuntu-latest

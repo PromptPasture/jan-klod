@@ -73,7 +73,7 @@ help:
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
 	@echo "  gate-commit the pre-commit gate: fmt + stage guests + core check + test"
-	@echo "  gate-push   the pre-push gate: stage guests + test-guests + clippy + gate"
+	@echo "  gate-push   the pre-push gate: stage guests + test-guests + both clippys + gate"
 	@echo "              + registry-index-drift + lockfile + supply-chain, in that order"
 	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go + web)"
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
@@ -547,6 +547,7 @@ gate-push:
 	$(MAKE) -C $(EXT) all
 	$(MAKE) test-guests
 	$(MAKE) clippy
+	$(MAKE) clippy-guests
 	$(MAKE) gate
 	$(MAKE) registry-index-drift
 	$(MAKE) lockfile
