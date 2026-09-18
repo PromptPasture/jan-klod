@@ -3,6 +3,23 @@
 //! `JK_ANSWER_TIMEOUT_SECS` is process-global; this test needs it long
 //! (heartbeat ends the wait, not the deadline) while `api_prompt.rs` needs it short.
 //! nextest's per-test isolation lets both set it independently.
+//!
+//! # What ends the wait, twice over
+//!
+//! The heartbeat used to be a *write to the socket*: a client that had
+//! gone looked fine until a write failed. Two slices moved that ground
+//! without moving this test. #225 took the socket away from the parked
+//! driver, and #224 replaced it with a channel — so the heartbeat is now
+//! a `send` that fails once `axum` drops the response stream, which it
+//! does when the connection closes.
+//!
+//! Same property, different mechanism, and the timing says which one is
+//! running: measured at **10.4 s against its own 120 s timeout**, which
+//! is about two heartbeats — the first still succeeds because the close
+//! has not been noticed yet, the second does not. A run that took 120 s
+//! would mean nothing noticed and the deadline did all the work, which
+//! is the failure this test exists to catch and the reason its bound is
+//! well under the timeout rather than just under it.
 
 use jan_klod_core::route::HttpFn;
 
