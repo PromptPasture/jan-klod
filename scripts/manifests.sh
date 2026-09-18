@@ -80,9 +80,22 @@ for guest in "$@"; do
         version="$(jaq -r '.version // ""' "$EXT_SRC/$guest/package.json")"
         description="$(jaq -r '.description // ""' "$EXT_SRC/$guest/package.json")"
     fi
+    # Same rule, `pyproject.toml`'s spelling of it. Read with `tomllib` rather
+    # than a regex: `version` appears under more than one table in a real
+    # pyproject, and a grep that picked the wrong one would be silently wrong
+    # in the file whose whole job is to not be.
+    if [ -z "$version" ] && [ -f "$EXT_SRC/$guest/pyproject.toml" ]; then
+        version="$(python3 -c 'import sys,tomllib
+p = tomllib.load(open(sys.argv[1], "rb")).get("project", {})
+print(p.get("version", ""))' "$EXT_SRC/$guest/pyproject.toml")"
+        description="$(python3 -c 'import sys,tomllib
+p = tomllib.load(open(sys.argv[1], "rb")).get("project", {})
+print(p.get("description", ""))' "$EXT_SRC/$guest/pyproject.toml")"
+    fi
     [ -n "$version" ] || {
         echo "manifests.sh: $guest is neither a package in $EXT_SRC/Cargo.toml" >&2
-        echo "  nor a directory with a package.json carrying a version" >&2
+        echo "  nor a directory with a package.json or pyproject.toml" >&2
+        echo "  carrying a version" >&2
         exit 1
     }
 

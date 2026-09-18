@@ -19,7 +19,7 @@ explained in the final section.
 The steps below are Rust, which every first-party extension uses. TypeScript
 works against the same WIT; read [In TypeScript](#in-typescript) **before** you
 pick it, because the choice costs 12.7 MB per component, 326 MB of toolchain,
-and ~25 s on every `make gate`.
+and about a minute in the gate test that exercises it.
 
 ## 1. Generate the crate
 
@@ -147,21 +147,22 @@ no host-side special case. If you want the proof rather than the instructions,
 |---|---|---|
 | component | **12,725,895 bytes** | 54,633 bytes |
 | toolchain | **326 MB** of `node_modules` | the cargo toolchain you already have |
-| `make gate` | **+20–30 s** | — |
+| the test that runs it | **58.8 s** of a 116 s gate | under 4 s |
 
 The 12.7 MB is the StarlingMonkey JavaScript engine, which every JS component
 carries; it is the price of the language, not of your extension. For scale,
 all twenty Rust components together are 3.5 MB.
 
-The gate cost follows from the size: Cranelift compiles every staged component
-at boot. Measured back to back on one machine, `make gate` was **129.5 s with
-the component staged and 106.3 s without** — and an earlier pair on the same
-machine was 120 s against 90 s, so treat the ~25 s delta as the number and the
-absolutes as machine noise.
+The gate cost follows from the size, but **not from staging it**. `Runtime::boot`
+loads the instances `config.yaml` enables, not the contents of `ext/`
+(`src/core/src/lib.rs:324`), so a staged component nothing enables costs
+nothing. What costs is the one test that *does* enable it: Cranelift compiles
+12.7 MB at boot, and because each test boots against a fresh temp config
+directory, Wasmtime's compile cache is cold every run. `polyglot_ts` took
+**58.8 s of a 116 s gate**.
 
-**That cost is paid for a staged component, not a built one.** Removing `jco`
-stops the build, not the load — a machine that built it once keeps paying
-every gate run until `make clean`.
+So the bill arrives once per test that enables your guest, and it arrives in
+full every time.
 
 That is why the toolchain is **not** in `make setup`, why the build skips
 itself where the toolchain is absent, and why nothing in `ext/` is committed.

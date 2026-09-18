@@ -37,7 +37,7 @@ LIBS := guest-fs
 # no wasm target required. Add a guest here once it carries such tests.
 TESTABLE_GUESTS := interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router interceptor-system tool-fs tool-shell tool-edit tool-find tool-git tool-fetch
 
-.PHONY: all stage manifests clean test clippy audit deny go-supply-chain spike-deps spike-guest ts-guest $(GUESTS)
+.PHONY: all stage manifests clean test clippy audit deny go-supply-chain spike-deps spike-guest ts-guest py-guest $(GUESTS)
 
 # Build every Rust guest in one cargo invocation, not 13 serial `make` recipes —
 # cargo's own scheduler compiles independent guests in parallel across cores. The
@@ -48,7 +48,7 @@ TESTABLE_GUESTS := interceptor-guardrails interceptor-intent-router interceptor-
 # the gate then runs a turn through it — a polyglot claim nothing exercises is
 # the failure #130 named, and opting in should mean "and it is tested", not
 # "and there is a target you could run".
-all: manifests ts-guest
+all: manifests ts-guest py-guest
 
 # Staged components, then their manifests. `manifests` depends on this same
 # recipe's output, so it is ordered after it rather than beside it.
@@ -127,6 +127,50 @@ ts-guest:
 	    jco componentize $$g/build/guest.js --wit $(WIT_DIR) \
 	      --world-name $$world --disable http --disable fetch-event \
 	      -o $(EXT_DIR)/$$g.wasm; \
+	    sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(WIT_DIR) $$g; \
+	  done; \
+	fi
+
+# The Python guest (#188), same shape as `ts-guest` above and skipped the same
+# way. One tool, not two: `componentize-py` generates its own bindings, so
+# there is no bundler step.
+#
+# Expected on PATH rather than vendored, like `jco` — but it is 50 MB against
+# jco's 326 MB, small enough that `make setup` is arguable and large enough
+# that it is still not there by default.
+#
+# Two differences from the TypeScript path, both worth knowing before editing:
+#
+#   * `bindings` first, then `componentize`. The generated `wit_world` package
+#     is build output beside the guest, regenerated every run so it cannot go
+#     stale against `wit/`. It is removed first because `componentize-py
+#     bindings` refuses to overwrite and fails with a bare `AssertionError:
+#     File exists`, which makes the second build of any day the broken one.
+#   * There is no `--disable` flag to reach for. CPython's standard library
+#     imports `wasi:filesystem`, `wasi:sockets` and `wasi:cli` to initialise,
+#     and componentize-py offers no way to drop them. They are inert here —
+#     `WasiCtxBuilder::new()` gives no preopens and denies every socket
+#     address — but they are invisible to the manifest, which is #211.
+PY_GUESTS := tool-hello-py
+
+.PHONY: py-guest
+py-guest:
+	@if ! command -v componentize-py >/dev/null 2>&1; then \
+	  echo "skipping $(PY_GUESTS): componentize-py is not on PATH"; \
+	  echo "  install it with: pipx install componentize-py==$(COMPONENTIZE_PY_VERSION)"; \
+	else \
+	  set -e; \
+	  mkdir -p $(EXT_DIR); \
+	  for g in $(PY_GUESTS); do \
+	    case $$g in \
+	      tool-*) world=tool-world ;; \
+	      interceptor-*) world=interceptor-world ;; \
+	      *) echo "py-guest: $$g has no world for its prefix" >&2; exit 1 ;; \
+	    esac; \
+	    rm -rf $$g/wit_world $$g/componentize_py_async_support; \
+	    componentize-py --wit-path $(WIT_DIR) --world $$world bindings $$g; \
+	    (cd $$g && componentize-py --wit-path $(WIT_DIR) --world $$world \
+	      componentize app -o $(EXT_DIR)/$$g.wasm); \
 	    sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(WIT_DIR) $$g; \
 	  done; \
 	fi

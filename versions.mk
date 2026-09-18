@@ -70,3 +70,11 @@ JAQ_VERSION := 2.3.0
 # component carries an engine. A developer who wants the TypeScript guest asks
 # for it; everyone else gets a build that says it skipped.
 JCO_VERSION := 1.34.0
+
+# componentize-py — the Python guest's toolchain (#188). Same posture as
+# `JCO_VERSION` above and for the same reason, at a different scale: 50 MB of
+# toolchain producing an 18.4 MB component, because every Python component
+# carries CPython. Not installed by `make setup`; a developer who wants the
+# Python guest asks for it, and everyone else gets a build that says it
+# skipped.
+COMPONENTIZE_PY_VERSION := 0.25.1

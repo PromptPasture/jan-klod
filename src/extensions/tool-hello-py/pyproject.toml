@@ -1,0 +1,9 @@
+# Read by scripts/manifests.sh for the generated manifest's version and
+# description, the way a Rust guest's Cargo.toml and a TypeScript guest's
+# package.json are. Not installed and not published — componentize-py takes
+# the module directly.
+[project]
+name = "tool-hello-py"
+version = "0.1.0"
+description = "tool extension in Python: the polyglot twin of tool-hello, componentized with componentize-py against the same wit/."
+requires-python = ">=3.11"
