@@ -38,6 +38,8 @@ fn terms(text: &str) -> Vec<String> {
 
 /// One tool as this module sees it.
 pub struct Doc {
+    /// Lowercased, for [`Doc::named_in`].
+    name: String,
     /// Its terms, from name and description together — a tool called
     /// `git` with a terse description is still findable by its name.
     terms: Vec<String>,
@@ -49,12 +51,33 @@ impl Doc {
     pub fn new(name: &str, description: &str) -> Self {
         let mut terms = terms(name);
         terms.extend(self::terms(description));
-        Self { terms }
+        Self {
+            name: name.to_lowercase(),
+            terms,
+        }
     }
 
     /// How many times `term` appears.
     fn count(&self, term: &str) -> usize {
         self.terms.iter().filter(|t| *t == term).count()
+    }
+
+    /// Whether `lowered` — already-lowercased conversation text — names this
+    /// tool.
+    ///
+    /// A bounded substring rather than a term match, because the names are
+    /// `ext-install` and `tool-fs`: [`terms`] would have split those into
+    /// words that any sentence about installing an extension matches. The
+    /// boundaries are what stop `fs` from being found inside `offset`.
+    fn named_in(&self, lowered: &str) -> bool {
+        if self.name.is_empty() {
+            return false;
+        }
+        lowered.match_indices(&self.name).any(|(at, _)| {
+            let before = lowered[..at].chars().next_back();
+            let after = lowered[at + self.name.len()..].chars().next();
+            !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+        })
     }
 }
 
@@ -115,9 +138,72 @@ pub fn rank(docs: &[Doc], query: &str) -> Vec<usize> {
     scored.into_iter().map(|(index, _)| index).collect()
 }
 
+/// How many tools to advertise, at most and at least.
+#[derive(Clone, Copy)]
+pub struct Cut {
+    /// The bound. **`0` means no bound**: advertise the whole fleet.
+    ///
+    /// The default, because the right number is a property of the fleet and
+    /// the model rather than of this code, and a bound this module invented
+    /// would hide a tool the operator never agreed to hide. Same shape as
+    /// every other lossy behaviour here — `execution`, `persist`, `host-fs`
+    /// — off until someone asks for it.
+    pub most: usize,
+    /// The floor: how many to advertise when the ranking is thin or empty.
+    ///
+    /// This is what makes a bad ranking survivable. The tools it tops up
+    /// with are the fleet's first, in the order the operator configured
+    /// them, which is the only signal available when nothing matched.
+    pub least: usize,
+}
+
+/// Which tools to advertise, as indices in the fleet's own order.
+///
+/// Order is the input's, not the ranking's: a model whose tool list
+/// reshuffled every turn would re-read it every turn, which is the cost
+/// this exists to remove. The cut is where the saving comes from.
+///
+/// Two rules outrank `most`, and both are deliberate:
+///
+/// * a tool named anywhere in the conversation is always advertised —
+///   withdrawing a tool the model is mid-way through using would strand it,
+///   and #217 established it cannot ask for the tool back;
+/// * `least` is topped up even past `most`, because the floor exists to
+///   bound the damage and an operator who set them in conflict meant the
+///   safer one.
+#[must_use]
+pub fn select(docs: &[Doc], asked: &str, conversation: &str, cut: Cut) -> Vec<usize> {
+    if cut.most == 0 || cut.most >= docs.len() {
+        return (0..docs.len()).collect();
+    }
+    let lowered = conversation.to_lowercase();
+    let mut keep: Vec<usize> = (0..docs.len())
+        .filter(|&index| docs[index].named_in(&lowered))
+        .collect();
+    for index in rank(docs, asked) {
+        if keep.len() >= cut.most {
+            break;
+        }
+        if !keep.contains(&index) {
+            keep.push(index);
+        }
+    }
+    let floor = cut.least.min(docs.len());
+    for index in 0..docs.len() {
+        if keep.len() >= floor {
+            break;
+        }
+        if !keep.contains(&index) {
+            keep.push(index);
+        }
+    }
+    keep.sort_unstable();
+    keep
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{rank, terms, Doc};
+    use super::{rank, select, terms, Cut, Doc};
 
     fn fleet() -> Vec<Doc> {
         vec![
@@ -194,5 +280,117 @@ mod tests {
     #[test]
     fn an_empty_fleet_ranks_nothing_rather_than_panicking() {
         assert!(rank(&[], "anything").is_empty());
+    }
+
+    /// A fleet with hyphenated names, as the real ones are.
+    fn named_fleet() -> Vec<Doc> {
+        vec![
+            Doc::new("tool-fs", "read and write files in the workspace"),
+            Doc::new("tool-git", "status, diff and log of the repository"),
+            Doc::new("tool-fetch", "make an outbound HTTP request to a URL"),
+            Doc::new("ext-install", "add an extension to this agent"),
+        ]
+    }
+
+    fn cut(most: usize, least: usize) -> Cut {
+        Cut { most, least }
+    }
+
+    /// The acceptance: the relevant tool is advertised and the unrelated one
+    /// is not.
+    #[test]
+    fn an_unrelated_tool_is_not_advertised_and_a_relevant_one_is() {
+        let docs = named_fleet();
+        let asked = "show me the diff of the repository";
+        let kept = select(&docs, asked, asked, cut(2, 1));
+        assert!(kept.contains(&1), "git was dropped: {kept:?}");
+        assert!(!kept.contains(&2), "fetch was advertised: {kept:?}");
+    }
+
+    /// A tool the model is mid-way through using outranks the ranking: with
+    /// room for one, the named tool takes it and the better match does not.
+    #[test]
+    fn a_tool_named_in_the_conversation_is_kept_ahead_of_a_better_match() {
+        let docs = named_fleet();
+        let asked = "show me the diff of the repository";
+        let conversation = format!("{asked}\ncalling tool-fetch with a URL");
+        assert_eq!(
+            rank(&docs, asked).first(),
+            Some(&1),
+            "the premise: git is the better match"
+        );
+        assert_eq!(
+            select(&docs, asked, &conversation, cut(1, 1)),
+            vec![2],
+            "a tool in mid-use was withdrawn in favour of a better match"
+        );
+    }
+
+    /// And it survives the bound outright: more tools in mid-use than the
+    /// bound allows means the bound yields, not the tools. Withdrawing one
+    /// would strand the model, which cannot ask for it back.
+    #[test]
+    fn tools_in_mid_use_are_kept_even_past_the_bound() {
+        let docs = named_fleet();
+        let conversation = "I ran tool-fetch and then ext-install";
+        assert_eq!(select(&docs, "", conversation, cut(1, 1)), vec![2, 3]);
+    }
+
+    /// The name has to be the whole word: `tool-fs` must not be found
+    /// inside `offset`, or every tool would be permanently in mid-use.
+    #[test]
+    fn a_name_inside_a_longer_word_is_not_a_mention() {
+        let doc = Doc::new("fs", "unrelated wording");
+        assert!(
+            !doc.named_in("the offset was wrong"),
+            "matched inside a word"
+        );
+        assert!(doc.named_in("run fs, please"));
+    }
+
+    /// Nothing matched is the dangerous case, and the floor is the answer:
+    /// something is advertised rather than nothing.
+    #[test]
+    fn a_request_matching_nothing_still_advertises_the_floor() {
+        let docs = named_fleet();
+        assert_eq!(
+            select(&docs, "xylophone", "xylophone", cut(2, 2)),
+            vec![0, 1]
+        );
+        assert_eq!(select(&docs, "", "", cut(2, 1)), vec![0]);
+    }
+
+    /// Unbounded is the default, and the default changes nothing.
+    #[test]
+    fn with_no_bound_the_whole_fleet_is_advertised() {
+        let docs = named_fleet();
+        assert_eq!(select(&docs, "diff", "diff", cut(0, 2)), vec![0, 1, 2, 3]);
+        assert_eq!(
+            select(&docs, "diff", "diff", cut(99, 2)),
+            vec![0, 1, 2, 3],
+            "a bound above the fleet size is no bound"
+        );
+    }
+
+    /// Set in conflict, the floor wins: it is the rule that bounds the
+    /// damage, and the bound is only an economy.
+    #[test]
+    fn the_floor_outranks_the_bound() {
+        let docs = named_fleet();
+        assert_eq!(select(&docs, "diff", "diff", cut(1, 3)).len(), 3);
+    }
+
+    /// Advertised in the fleet's order, never the ranking's.
+    #[test]
+    fn the_advertised_set_keeps_the_fleets_order() {
+        let docs = named_fleet();
+        let asked = "url request outbound, and the log";
+        assert_eq!(
+            rank(&docs, asked),
+            vec![2, 1, 0],
+            "the premise: fetch outranks git for this text"
+        );
+        let kept = select(&docs, asked, asked, cut(2, 1));
+        assert_eq!(kept, vec![1, 2], "reordered by score: {kept:?}");
     }
 }
