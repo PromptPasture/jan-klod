@@ -87,7 +87,7 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 21 — Seven `jk-*` crates | `open` | [#172](https://github.com/PromptPasture/jan-klod/issues/172). `jan-klod-core` is **21,170 lines** holding kernel, session store and every surface at once, which makes two claims in [Architecture](architecture.md) false (`:29` "never built in"; `:31` "~200 lines"). Split into `jk-protocol`/`jk-config`/`jk-wasm`/`jk-session`/`jk-agent`/`jk-host`/`jk-tui`; package names become `jk-*`, **binaries keep `jan-klod`/`jan-klod-gateway`**. Slices [#179](https://github.com/PromptPasture/jan-klod/issues/179)–[#183](https://github.com/PromptPasture/jan-klod/issues/183). Gate: no upward dependency, `jk-tui` pulls no `wasmtime`, `jk-agent` holds no surface. |
 | 22 — `host-agent` capability | `open` | [#173](https://github.com/PromptPasture/jan-klod/issues/173). A guest cannot drive a session today, which is why Telegram is kernel code and session export cannot exist. New WIT mirroring `jan-klod-protocol` inward, default-deny + manifest-declared. Slices [#184](https://github.com/PromptPasture/jan-klod/issues/184)–[#186](https://github.com/PromptPasture/jan-klod/issues/186). Gate: a chat turn with an `ask`, and no Telegram code in any Rust crate. |
 | 23 — Polyglot, proven | `open` | [#174](https://github.com/PromptPasture/jan-klod/issues/174). [Architecture `:54`](architecture.md) promises any `wit-bindgen` language; the evidence is one TinyGo spike and five Rust `ext-new` templates. TS ([#187](https://github.com/PromptPasture/jan-klod/issues/187)) and Python ([#188](https://github.com/PromptPasture/jan-klod/issues/188)) guests + `ext-new LANG=`. Gate: both built by `make gate` and called in a turn, no host special case. |
-| 24 — Client-surface contract | `open` | [#175](https://github.com/PromptPasture/jan-klod/issues/175). An extension's only channel to the user is `ask`; commands, status and forms have no expression. Declarations travel over `jan-klod-protocol`, each client renders them. Slices [#189](https://github.com/PromptPasture/jan-klod/issues/189)–[#191](https://github.com/PromptPasture/jan-klod/issues/191). Gate: one extension's command and status item render and invoke in TUI **and** web, with contributed text treated as hostile. |
+| 24 — Client-surface contract | `done` | [#175](https://github.com/PromptPasture/jan-klod/issues/175), slices [#189](https://github.com/PromptPasture/jan-klod/issues/189)–[#191](https://github.com/PromptPasture/jan-klod/issues/191). **Exit gate passed:** `interceptor-system` contributes a `prompt` command and a `prompt-source` status item; the TUI and the browser both render and invoke them with no knowledge of that extension, and the window inherits the browser's. `wit/client-surface.wit` holds the two rules both renderers follow — contributed text is data, and a client that renders none of it runs turns unchanged. The host **probes** each component for the export rather than any world requiring it, so nineteen existing guests were untouched. |
 | 25 — Self-extension | `open` | [#176](https://github.com/PromptPasture/jan-klod/issues/176). `ext-new` and the guide exist, but the agent cannot walk that path: shell off, toolchain outside the jail, `ext/` read at boot. Toolchain distribution ([#192](https://github.com/PromptPasture/jan-klod/issues/192)) + in-session scaffold/build/install/load ([#193](https://github.com/PromptPasture/jan-klod/issues/193)); defaults and signing rules unchanged. Gate: "write me a tool that does X" ends with it callable in the same session, no restart. |
 
 Outside the phases: [#177](https://github.com/PromptPasture/jan-klod/issues/177) (`interceptor-guardrails` — content policy, no contract change needed) and
@@ -98,124 +98,64 @@ Built-extension language assignments and their own status live in the
 
 ---
 
+A completed phase that has a decision record keeps its goal and a link; the
+record holds the plan and the tracker row above holds what shipped. That is not
+only pruning — several of those sections describe a design the build then
+changed, and a reader met the plan before the outcome. Phase 3's `host-serve`
+capability and `api-rest` guest are the clearest case: what exists is a
+host-side REST surface, which the tracker row says and the section did not.
+
+Completed phases with **no** record keep their detail in full. For those the
+section is the only account there is, and pruning it would delete rather than
+compress.
+
 ## Phase 1 — Walking skeleton + foundation gate
 
-**Goal:** prove the foundation on *real* code (no throwaway spike) and then reach the
-Go MVP's parity on it. The risky foundation check is front-loaded as the first slice.
+**Goal:** prove the foundation on *real* code (no throwaway spike) and then reach the Go MVP's parity on it. The risky foundation check is front-loaded as the first slice.
 
-**Slice 1a — the gate (front-load the risk).** Thinnest slice: Rust + Wasmtime `core` loads
-**one Go (TinyGo) component** across CM boundary, plus **async model** decision (`tokio` vs sync).
-Trivial stub (`provider` echoing one `complete`) surfaces toolchain friction on ~10 lines.
-Go (TinyGo) validates at gate ([Extension Technologies](../decisions/2026-06-29-extension-technologies/BRAINSTORM.md));
-proves CM toolchain (`wkg` deps, `wasi:cli` quirk), stays polyglot canary (own extensions now Rust).
-Checked by `host/tests/it/polyglot.rs`: committed component loads/called on `make gate`, rebuilt from source
-where `tinygo` + `wkg` installed.
-
-- **Go/no-go checkpoint:** if CM-in-Rust is clean and the non-Rust guest works
-  end-to-end → continue to 1b. If friction outweighs the payoff → fall back to
-  Go + wazero + JSON-ABI with eyes open. *No build-out happens until this passes.*
-
-**Slice 1b — build out to MVP parity.**
-
-- Rust `core`: config loader (`config.yaml`), extension registry +
-  dependency-graph boot ordering, lifecycle (`init → start → stop`/health),
-  the Wasmtime **component** host.
-- Port host capabilities to the Component Model: `host-log`, `host-config`, `host-http`.
-- Re-author `provider-openai` and `store-memory` as real `wit-bindgen` components
-  in **Rust** (`wasm32-wasip2` target + `wit-bindgen`; no `cargo-component` needed) — the default for our first-party extensions.
-- Replace the broken Go build targets with Cargo (+ a guest build path per language).
-
-**Exit gate:** config-driven load → lifecycle → an OpenAI-compatible completion
-through a sandboxed component, with an in-memory store, all over the Component Model.
+Planned in [Slice 1a gate](../decisions/2026-06-29-extension-technologies/SLICE-1A-GATE.md) · [PLAN](../decisions/2026-06-29-extension-technologies/PLAN.md). What shipped is the tracker row above.
 
 ## Phase 2 — First real value: the agent loop
 
-**Goal:** the runtime does something useful end-to-end. **Re-architected 2026-07-01**
-([Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)).
+**Goal:** the runtime does something useful end-to-end. **Re-architected 2026-07-01** ([Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md)).
 
-- **Thin loop mechanism in core (Rust):** `stream → tools → loop`; core-native interceptor dispatch;
-  grammar, parse/validate/retry, **provider fallback** (on-error re-issue), streaming, cancel,
-  steering/follow-up, tool-result `terminate`. Zero policy. Retires `manager-agent-loop`.
-- **Interceptor framework + v1 set:** sandboxed Rust `interceptor-*`: `intent-router` (before-loop),
-  `task-router` (task classification + routing), `context` (history/compression), `tool-selector`, `permission`.
-- **Core mechanism tunable via seams:** grammar + retry/validate fixed; construction/policy via
-  `host-config` + shaping phases — see [Small-Model Harness](small-model-harness.md).
-
-**Exit gate:** a query runs the full loop (intent hook → shaped request → ReAct cycle
-→ fallback on a simulated provider failure) against one provider and returns a grounded
-answer, driven end-to-end through the core-exposed loop entry.
+Planned in [PLAN](../decisions/2026-07-01-phase2-agent-loop/PLAN.md). What shipped is the tracker row above.
 
 ## Phase 3 — Persistence + inbound network
 
 **Goal:** durable state and outside reach to core.
 
-- Storage: **host-side SQLite** (`rusqlite`, bundled), not component; see [contracts](contracts.md).
-- **`host-serve`** capability (listener) + `api-rest` (REST + SSE).
-- **UI ↔ core:** client via `api-rest`.
-
-**Exit gate:** state persists across restart; HTTP client drives core via `api-rest`.
+Planned in [PLAN](../decisions/2026-07-02-phase3-persistence-network/PLAN.md). What shipped is the tracker row above.
 
 ## Phase 4 — Clients & integrations
 
 **Goal:** human and agent surfaces.
 
-- `jan-klod-ui` TUI, then GUI by flag.
-- **`host-socket`** + `chat-telegram`—unlocks headless Pi/container (chat-only, no UI).
-- `agent-*` ACP delegation both ways.
+Planned in [PLAN](../decisions/2026-07-02-phase4-clients-integrations/PLAN.md). What shipped is the tracker row above.
 
 ## Phase 5 — Distribution & ops
 
 **Goal:** ship and keep updatable.
 
-- **Go launcher/updater**: blue/green → flip → health-check → rollback.
-- [Configurator](configurator.md) (web ZIP) + bundles.
+Planned in [PLAN](../decisions/2026-07-02-phase5-distribution-ops/PLAN.md). What shipped is the tracker row above.
 
 ## Phase 6 — Streaming & steering
 
 **Goal:** loop streams incrementally; driver interrupts/steers (Phase 2 carry-forward).
 
-- **Run-handle:** `run(session, message)` → handle; `next-event` streams `text-delta`/`tool-invoked`/`tool-result`/`warning`/`done`; `cancel`/`close`;
-  `pending-prompt` + `provide-answer` resuming `ask`; steering + follow-up queue. Preview-vs-authoritative streaming ([`wit/interceptor.wit`](../../wit/interceptor.wit) `finalize`).
-- **SSE on REST:** `serve` streams events; UI + Telegram consume live.
-- **Driver-capability WIT:** promote loop-entry to guest shape.
-
-**Exit gate:** driver runs multi-step turn, receives events over SSE, answers mid-turn, cancels—offline.
+Planned in [PLAN](../decisions/2026-07-02-phase6-streaming-steering/PLAN.md). What shipped is the tracker row above.
 
 ## Phase 7 — File-workspace substrate
 
 **Goal:** mediated file and process access (core capabilities for all file/execution tools; sandbox grants none by design).
 
-- **`host-fs`:** path-jailed read/write workspace view. File tools (read/write/edit/grep/find) need it. COW/overlay isolation + checkpoint/restore candidate.
-- **`host-process`:** spawn long-lived child (co-equal substrate). Code execution (`bash`/`eval`), `ssh`, jobs, language-server/debugger/browser bridges depend on it.
-- **Open:** one or two capabilities; isolation model (path jail, resource limits, COW)—resolve and record.
-
-**Exit gate:** sandboxed extension reads/writes file through `host-fs` (jailed) and runs command through `host-process`, core-mediated—offline.
+Planned in [PLAN](../decisions/2026-07-02-phase7-file-workspace-substrate/PLAN.md). What shipped is the tracker row above.
 
 ## Phase 8 — Tool fleet
 
-**Goal:** the ordinary sandboxed `tool-*` components — cheap to add once Phase 7
-lands — grouped by the capability they route through. The only shared design work is
-routed I/O: file/exec tools go through `host-fs`/`host-process`, never raw OS.
+**Goal:** the ordinary sandboxed `tool-*` components — cheap to add once Phase 7 lands — grouped by the capability they route through. The only shared design work is routed I/O: file/exec tools go through `host-fs`/`host-process`, never raw OS.
 
-| Routes through | `tool-*` |
-|---|---|
-| `host-fs` | read *(built)*, write *(built)*, grep *(built, tree-wide)*, **edit** *(built)*, **find/glob** *(built)*, ast-edit, ast-grep, checkpoint |
-| `host-process` | **bash/shell** *(built)*, **git** *(built, read-only)*, **eval (code exec)**, ssh, job, lsp, debug (dap), browser |
-| `host-http` (have it) | **fetch** *(built)*, web-search |
-| none / local | bm25 local search |
-
-Tools are advertised to the loop at `select-tools` (`interceptor-tool-selector`),
-gated at `tool-call` (`interceptor-permission`), and dispatched through the
-conductor's `ToolInvoker`. **Deferred / out of tier:** curated-memory tools (the
-[open memory question](#curated-memory--open-question-not-a-phase)) and multimodal
-(image/tts — need capable providers, off-target for small text models). **Not
-tools:** `ask` (interceptor decision), subagent dispatch (`agent-*` delegation),
-skills (`registry-skills`), a per-turn watcher/critic and code-review-with-verdict
-(`interceptor-*`).
-
-**Exit gate:** the loop completes a multi-step task using at least one `host-fs` tool
-(e.g. read + edit a file) and one `host-process` tool (e.g. run a command),
-end-to-end.
+Planned in [PLAN](../decisions/2026-07-02-phase8-tool-fleet/PLAN.md). What shipped is the tracker row above.
 
 ## Phase 9 — Anthropic provider
 
