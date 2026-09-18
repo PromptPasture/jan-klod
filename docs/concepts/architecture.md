@@ -51,7 +51,9 @@ L0 Kernel         lifecycle | capability broker | loop conductor | SQLite store 
 
 ## Extension model
 
-Extensions are **WASM components** (`.wasm` files) in `ext/`, loaded at runtime by Wasmtime and sandboxed — they can only do what WIT explicitly grants. Each can be authored in **any `wit-bindgen` language** (Rust, JS, Python, Go, …) and all are interchangeable against the same WIT contract. See [Contracts](contracts.md) for interface definitions.
+Extensions are **WASM components** (`.wasm` files) in `ext/`, loaded at runtime by Wasmtime and sandboxed — they can only do what WIT explicitly grants. Each can be authored in **any language with a Component Model toolchain**, and all are interchangeable against the same WIT contract. See [Contracts](contracts.md) for interface definitions.
+
+Three languages are proven rather than claimed, each by a guest the gate runs a turn through: **Rust** (`wit-bindgen`, every first-party extension), **TypeScript** (`jco`, `tool-hello-ts`) and **Python** (`componentize-py`, `tool-hello-py`), plus a TinyGo spike. Note that only Rust uses `wit-bindgen` — the other two toolchains generate or embed their own bindings, which is why the claim is about the Component Model and not about one binding generator. [Writing an extension](../guides/writing-an-extension.md#meet-the-cost-first) has what each language costs; the non-Rust components are 12.7 MB and 18.5 MB against Rust's 55 KB, so this is a real choice rather than a free one.
 
 ### What the host grants extensions
 
