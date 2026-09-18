@@ -53,6 +53,7 @@ mod sandbox_boundary;
 mod sandbox_landlock;
 mod sandbox_seatbelt;
 mod self_extend;
+mod self_extend_chain;
 mod session_memory;
 mod shipped_defaults;
 mod storage_scope;

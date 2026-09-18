@@ -92,7 +92,7 @@ pub fn shipped_fleet() -> Option<(common::TempDir, serde_json::Value)> {
 /// is the whole of it. Guarded rather than trusted: if the file is reordered
 /// this returns something that is not an execution block, and the assertion
 /// below says so instead of silently testing a config nobody ships.
-fn shipped_execution_block(distribution: &str) -> String {
+pub fn shipped_execution_block(distribution: &str) -> String {
     let path = common::repo_root()
         .join("scripts/distributions")
         .join(distribution)
