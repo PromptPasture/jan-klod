@@ -1,11 +1,11 @@
 ---
 type: concept
 title: Roadmap
-description: Phased plan from foundation (Rust + Wasmtime + Component Model) to v0.1.0 runtime (Phases 1–12), then Harness-as-a-Platform (Phases 13–18): client protocol, event log, OS sandbox, signed registry, web/GUI, MCP/ACP ports.
+description: Phased plan from foundation (Rust + Wasmtime + Component Model) to v0.1.0 runtime (Phases 1–12), then Harness-as-a-Platform (Phases 13–18): client protocol, event log, OS sandbox, signed registry, web/GUI, MCP/ACP ports; then the Enterprise Box (Phases 26–31): trusted delivery, secrets, identity, audit, batteries, distribution.
 tags: [roadmap, planning, rust, wasmtime, component-model, phases, vision]
 created: 2026-06-29
 updated: 2026-09-18
-status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Harness as a Platform under way — Phases 13, 14, 15, 16, 17 and 18 done (13c **superseded by Phase 20**, 15d deferred to a Windows environment, 18c standing alone), 19 done (19a–19h), 20, 24 and 25 done, 21 in progress, 22 and 23 open
+status: v0.1.0 complete (Phases 1–12 done, nothing tagged or released yet); Harness as a Platform under way — Phases 13, 14, 15, 16, 17 and 18 done (13c **superseded by Phase 20**, 15d deferred to a Windows environment, 18c standing alone), 19 done (19a–19h), 20, 24 and 25 done, 21 in progress, 22 and 23 open; the Enterprise Box is phased as 26–31, none started
 ---
 
 # Roadmap
@@ -89,6 +89,12 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 | 23 — Polyglot, proven | `open` | [#174](https://github.com/PromptPasture/jan-klod/issues/174). [Architecture `:54`](architecture.md) promises any `wit-bindgen` language; the evidence is one TinyGo spike and five Rust `ext-new` templates. TS ([#187](https://github.com/PromptPasture/jan-klod/issues/187)) and Python ([#188](https://github.com/PromptPasture/jan-klod/issues/188)) guests + `ext-new LANG=`. Gate: both built by `make gate` and called in a turn, no host special case. |
 | 24 — Client-surface contract | `done` | [#175](https://github.com/PromptPasture/jan-klod/issues/175), slices [#189](https://github.com/PromptPasture/jan-klod/issues/189)–[#191](https://github.com/PromptPasture/jan-klod/issues/191). **Exit gate passed:** `interceptor-system` contributes a `prompt` command and a `prompt-source` status item; the TUI and the browser both render and invoke them with no knowledge of that extension, and the window inherits the browser's. `wit/client-surface.wit` holds the two rules both renderers follow — contributed text is data, and a client that renders none of it runs turns unchanged. The host **probes** each component for the export rather than any world requiring it, so nineteen existing guests were untouched. |
 | 25 — Self-extension | `done` | [#176](https://github.com/PromptPasture/jan-klod/issues/176), slices [#192](https://github.com/PromptPasture/jan-klod/issues/192), [#213](https://github.com/PromptPasture/jan-klod/issues/213), [#214](https://github.com/PromptPasture/jan-klod/issues/214), [#218](https://github.com/PromptPasture/jan-klod/issues/218), [#221](https://github.com/PromptPasture/jan-klod/issues/221). **Exit gate passed:** one session compiles a component in the jail, writes its manifest, hashes it, installs it unsigned with that digest, adopts it between turns and calls it — no gateway restart, no operator command (`host/tests/it/self_extend_chain.rs`). The posture is the one shipped: `writable: ["."]`, `network: false`, `require: true`, and the install grant is the local `path` form only — `registry.trusted-keys` stays empty, so the registry half still refuses every name. Two things the plan did not predict. **The agent must author the component's manifest**, because the installer refuses one nobody can inspect and cross-checks the declared capabilities against the artefact's real imports — a harder step than the digest, which is one `shasum` away. And **offline dependency resolution needs preparing**: a lock plus the shared cargo cache (~1 MB) rather than the 34 MB vendor tree [#192](https://github.com/PromptPasture/jan-klod/issues/192) measured, since the jail allows reads wholesale and `CARGO_HOME` is already in `BASE_ENV`. Left open: [#222](https://github.com/PromptPasture/jan-klod/issues/222), a stem naming no category adopts into nothing and reports success. |
+| 26 — Trusted delivery | `not-started` | [Vision — The Enterprise Box](../decisions/2026-09-18-enterprise-box/Vision.md), decision 3. Phase 16 built signing and a registry index and shipped both inert: `registry.trusted-keys` is empty, no default `registry.url` exists, and `git tag` returns nothing, so `ext install` refuses by construction and `install.sh` has nothing to fetch ([#93](https://github.com/PromptPasture/jan-klod/issues/93)). Slices: keypair and CI secret, SBOM plus signatures on the release, `v0.1.0` tagged, shipped config trusting the published key, offline install proven. Blocked on a human — the key has to be generated before any of it runs. Gate: an operator on a network reaching nothing but a self-hosted model verifies the archive against the published key, installs an extension by name from the bundled index, runs a turn; a tampered archive is refused with the reason named. |
+| 27 — Secrets, and one place redaction happens | `not-started` | [Vision](../decisions/2026-09-18-enterprise-box/Vision.md), decision 5. Keys are `${VAR}` expansion into a config string (`src/config/src/lib.rs`) and nothing keeps one out of the event log, an SSE frame or a rebuilt transcript. New `wit/host-secrets.wit` (`get(name) -> result<string, error>`, manifest-gated like every other capability), backends for macOS Keychain and Linux libsecret with the environment as fallback, and redaction at `PersistingSink` — the one point every persisted and streamed string passes — with patterns read from the `interceptor-guardrails` rule set that is already data. Independent of 26 and of 21. Gate: a provider reads its key through `host-secrets`, the model echoes it verbatim, and neither log nor live client nor restarted transcript contains it, while an extension that did not declare the capability cannot read it at all. |
+| 28 — Identity at the boundary | `not-started` | [Vision](../decisions/2026-09-18-enterprise-box/Vision.md), decision 4. `authorised()` in `src/host/src/serve.rs` compares one shared secret; it establishes no principal, and every caller sees every session. The credential resolves to a principal at the guard, `jk-session` scopes sessions to it, the principal reaches `user-turn` in `wit/interceptor.wit` as an optional field, and `interceptor-rbac` is a reference guest with roles as data, off by default. **Phase 21 is not a prerequisite** — transport already lives in `jan-klod-host`; 21e ([#183](https://github.com/PromptPasture/jan-klod/issues/183)) changes the package name, which is a merge-order concern. Identity asserted by a client or by a guest is declined. Gate: two principals each run a turn, each sees only their own sessions, and the RBAC guest stops one at `before-loop` rather than at the tool, naming the principal in the record. |
+| 29 — An audit trail that survives a review | `not-started` | [Vision](../decisions/2026-09-18-enterprise-box/Vision.md), decisions 6 and 8. The log records everything and nothing reads it out ([#186](https://github.com/PromptPasture/jan-klod/issues/186)). Each event row carries the previous row's digest; session export is an extension over `host-agent` emitting JSONL and respecting 27d's redaction; `architecture.md:27` stops promising Prometheus and OpenTelemetry in the same change that adds a `tracing` subscriber emitting structured JSON. The export slice waits on **Phase 22**; the chain and the logging slices do not. The hash chain detects edits by anything that is not the writer — the host owns the database, and the security-model row has to say so. Gate: a ten-turn session exports to JSONL and re-imports to the identical transcript, the chain verifies, one altered row breaks it, and no document claims observability the binary lacks. |
+| 30 — The batteries | `not-started` | [Vision](../decisions/2026-09-18-enterprise-box/Vision.md), decision 7. Measured against [`pi-onboard`](https://github.com/PromptPasture/pi-onboard)'s capability groups, three are absent: persistent memory, scheduled tasks and sub-agents. `src/core/src/delegate.rs` is written, unit-tested and never instantiated, because `CATEGORIES` at [`src/core/src/lib.rs:259`](../../src/core/src/lib.rs) has no `agent`. Order is cheapest-useful-first: `tool-memory` over `host-storage` (no new contract), `tool-web-search`, `interceptor-persona`, then sub-agents and scheduling (both wait on **Phase 22**), then Bedrock and Vertex as their own guests — SigV4 and Google OAuth are not a base-URL change, while self-hosted OpenAI-compatible endpoints already work through `provider-openai` and need documentation, not code. **This closes the curated-memory open question below:** episodic recall ships, curation does not. Gate: one session stores a fact, recalls it a turn later, searches the web, delegates to a sub-agent and answers under a named persona, with nothing installed by hand. |
+| 31 — The enterprise distribution and the guided first run | `not-started` | [Vision](../decisions/2026-09-18-enterprise-box/Vision.md), decision 2. Four distributions exist and none is enterprise-shaped, and they disagree on the count: `scripts/install.sh:35` knows four, the landing page's table (`pages/index.md:44`) lists three and omits `self-extend` — the drift [#178](https://github.com/PromptPasture/jan-klod/issues/178) tracks. `scripts/distributions/enterprise/` is one more guest-list-and-config pair held to the existing agreement test, and `jan-klod-gateway setup` audits before it writes, offers capability groups, previews, then applies atomically — the shape [`pi-onboard`](https://github.com/PromptPasture/pi-onboard) proved, with its three configuration strategies. Consumes 26–30. Gate: a fresh machine reaches a running, signed, audited install without opening `config.yaml` once, and a second `setup` with the same answers writes nothing. |
 
 Outside the phases: [#177](https://github.com/PromptPasture/jan-klod/issues/177) (`interceptor-guardrails` — content policy) **shipped**, in three slices and with no contract change, as predicted. The guest reviews four phases (`tool-call`, `after-response`, `finalize`, `select-context`) against rules that are **data** — pattern sets with a decision each, read through `host-config`, matched by the `regex` crate in linear time because matching sits on the path of every tool call. Off by default and off even when enabled until rules exist; on in the `coding` distribution for redaction, and in `self-extend` for `deny-tool-arguments` too, since that is the distribution where a shell is reachable. A malformed rule set invalidates the whole set and the host fails closed at `tool-call` — a typo stops tool calls rather than leaving a guardrail silently absent. `docs/concepts/security-model.md` carries the row and names the two tests.
 [#178](https://github.com/PromptPasture/jan-klod/issues/178) (retire stale doc claims and superseded records) is `blocked` on two calls: whether to write decision records for the ten record-less completed phases, and whether `make lint-docs` should exist.
@@ -505,6 +511,24 @@ message, streamed answer, two tool calls one of which edits a file, an `ask`
 answered, a follow-up sent mid-turn, and a cancel — renders correctly, and the
 same run with `NO_COLOR=1` in a 16-colour terminal loses no information.
 
+## Post-v0.1: The Enterprise Box (Phases 26–31)
+
+[Vision — The Enterprise Box](../decisions/2026-09-18-enterprise-box/Vision.md) (2026-09-18) phases
+the half of the product Phases 13–25 did not build: the turnkey install for someone who will not
+configure anything. Two pillars — *it passes review* (authn/RBAC, audit and export, secrets, policy,
+egress, air-gap, signed delivery) and *batteries are included* (providers, memory, skills, MCP
+servers, tools).
+
+The rule that shapes all six phases: **enterprise capability ships as an extension**, and the host
+gains only the four things it is structurally the only place for — principal extraction, secrets
+backends, event-log integrity, and the logging subscriber. RBAC is therefore an interceptor, session
+export an extension over `host-agent`, memory a guest over `host-storage`.
+
+Order is by dependency: 26 and 27 are independent of everything and of each other; 28 follows
+because it touches the files Phase 21's rename will move; 29 and 30 each hold one slice that waits on
+Phase 22's `host-agent`; 31 consumes all of them. Each phase's goal, slices and gate are in the
+record; the tracker rows above hold the state. Umbrella and slice issues are unfiled.
+
 ## Cross-cutting (continuous, not a phase)
 
 Resource-budget and developer-experience items from the vision, tracked as
@@ -633,17 +657,17 @@ baseline, `tokio` at `host-http`), host-side SQLite library (Phase 3), and
 carry-over agent-loop tunables (retry limit, context compression, ACP delegation
 timeout — Phase 2).
 
-## Curated memory — open question (not a phase)
+## Curated memory — answered by Phase 30
 
-The file-workspace tier (files, processes, and the `tool-*` fleet) is now scoped as
-**Phases 7–8**. One item from that original scope stays **out** of the roadmap as a
-deliberate open question: **long-term / curated memory.**
+The file-workspace tier (files, processes, and the `tool-*` fleet) was scoped as **Phases 7–8**, and
+one item from that original scope stayed out as a deliberate open question: **long-term / curated
+memory.** The standard it was parked under was *decide if before how* — do not add a
+memory-curation interface speculatively.
 
-Beyond the host-side store (durable KV/history persistence, delivered in Phase 3), a
-coding agent benefits from *curated* memory — working vs episodic recall, semantic
-search, consolidation. It is **unresolved whether jan-klod should ship this at all**:
-it may belong in a third-party `store-*`/`tool-*` extension, an MCP server via
-`registry-mcp`, or an external service, rather than a first-party contract. Decide
-*if* before *how*; do not add a memory-curation interface speculatively (YAGNI).
-Persistence is done; curation is deliberately parked as a question, and the
-memory-tool row is excluded from the Phase 8 fleet accordingly.
+**Answered 2026-09-18** in [Vision — The Enterprise Box](../decisions/2026-09-18-enterprise-box/Vision.md),
+decision 7, and split rather than answered whole. The **episodic half ships**: a thin `tool-memory`
+guest that stores and recalls facts over the `host-storage` namespace Phase 3 already delivered,
+needing no new contract — Phase 30a. The **curation half does not**: semantic search, consolidation
+and working/episodic tiering stay out, because they belong to an MCP server or a third party and
+`registry-mcp` already reaches both. That is what the parked question was protecting against, and it
+still holds — no memory-curation interface is added, then or now.

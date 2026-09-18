@@ -76,7 +76,7 @@ L0 Kernel         lifecycle | capability broker | loop conductor | session event
 ```
 
 - **L0 Kernel stays boring.** Mechanism, no policy. Two additions: protocol server and session event log (everything smart lives in L2).
-- **L1 Capabilities are syscalls—default-deny, granted per-extension.** `secrets` and `clock` (not yet present) complete the picture but are not scheduled.
+- **L1 Capabilities are syscalls—default-deny, granted per-extension.** `secrets` and `clock` (not yet present) complete the picture but are not scheduled. *(Updated 2026-09-18: `secrets` is scheduled as Phase 27 in [The Enterprise Box](../2026-09-18-enterprise-box/Vision.md); `clock` is still unscheduled and is an open question there.)*
 - **L2 Extensions** retain existing taxonomy; `channel-*` covers `chat-*` + e-mail/webhook.
 - **L3 Protocol** is the *ABI for clients* (see decision 1).
 - **L4 Clients** are event-log projections; none hold core state.
