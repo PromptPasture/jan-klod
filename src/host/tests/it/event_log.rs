@@ -285,3 +285,115 @@ fn forking_nothing_is_refused() {
         "so no fork was created"
     );
 }
+
+/// An install is in the session log, without an event type of its own.
+///
+/// #213 requires that "an install is an event, and it belongs in the session
+/// log". It already is one: `ext-install` is dispatched as a tool, and every
+/// tool call writes `tool-invoked` — carrying the **name and the arguments**
+/// — followed by `tool-result`. Together that is who asked, for what, and
+/// what happened, keyed by call id.
+///
+/// So this slice adds a test rather than an event kind. A second record for
+/// the same action would be two entries for one decision, and an operator
+/// auditing installs would then have to know which of them is authoritative.
+///
+/// The install is *refused* here, deliberately: the point is that the
+/// attempt is recorded. An install that fails and leaves no trace is the
+/// hole, not one that succeeds.
+#[test]
+fn an_attempted_install_is_recorded_in_the_session_log() {
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-tool-selector.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-install-log-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "
+storage:
+  path: {}
+registry:
+  install-tool: true
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    tool-selector:
+      enabled: true
+",
+            dir.join("jan-klod.db").display()
+        ),
+    )
+    .unwrap();
+
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let factory = move || -> jan_klod_core::route::HttpFn {
+        let calls = std::sync::Arc::clone(&calls);
+        Box::new(move |_m, _u, _h, _b, _t| {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let body = if n == 0 {
+                serde_json::json!({"choices":[{"message":{"role":"assistant","tool_calls":[
+                    {"id":"c1","function":{"name":"ext-install",
+                     "arguments":"{\"path\":\"/nonexistent-probe.wasm\"}"}}]},
+                    "finish_reason":"tool_calls"}]})
+            } else {
+                serde_json::json!({"choices":[{"message":{"role":"assistant",
+                    "content":"done"},"finish_reason":"stop"}]})
+            };
+            Ok(jan_klod_core::http::WireResponse {
+                status: 200,
+                headers: vec![],
+                body: serde_json::to_vec(&body).unwrap(),
+            })
+        })
+    };
+
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    agent.run("s1", "install it");
+    drop(agent);
+    drop(runtime);
+
+    let store = Store::open(dir.join("jan-klod.db")).expect("the log is readable");
+    let log = store.session_events("s1").expect("the session has a log");
+    let decoded: Vec<Event> = log
+        .iter()
+        .filter_map(|row| decode(&row.kind, &row.payload).ok())
+        .collect();
+
+    let invoked = decoded.iter().any(|event| {
+        matches!(event, Event::ToolInvoked(call)
+            if call.name == "ext-install" && call.arguments.contains("nonexistent-probe"))
+    });
+    assert!(
+        invoked,
+        "the install attempt is not in the log, so nothing records that it \
+         happened: {decoded:?}"
+    );
+    // Specifically the *install tool's* refusal, which names the source it
+    // could not find. Asserting only `failed` would pass with the tool
+    // disabled — the conductor answers an unknown name with "no tool named
+    // `ext-install`", which is also a failure and records nothing about an
+    // install. Checked by flipping `install-tool` to false and watching this
+    // line fail.
+    let refusal = decoded.iter().find_map(|event| match event {
+        Event::ToolResult(outcome) if outcome.failed => Some(outcome.content.clone()),
+        _ => None,
+    });
+    let refusal = refusal.unwrap_or_else(|| panic!("no failed tool result: {decoded:?}"));
+    assert!(
+        refusal.contains("nonexistent-probe"),
+        "the log records a failure that says nothing about the install — the \
+         tool was probably not enabled, and the attempt is unrecorded: \
+         {refusal}"
+    );
+}
