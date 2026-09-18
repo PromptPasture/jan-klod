@@ -37,12 +37,18 @@ LIBS := guest-fs
 # no wasm target required. Add a guest here once it carries such tests.
 TESTABLE_GUESTS := interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router interceptor-system tool-fs tool-shell tool-edit tool-find tool-git tool-fetch
 
-.PHONY: all stage manifests clean test clippy audit deny go-supply-chain spike-deps spike-guest $(GUESTS)
+.PHONY: all stage manifests clean test clippy audit deny go-supply-chain spike-deps spike-guest ts-guest $(GUESTS)
 
 # Build every Rust guest in one cargo invocation, not 13 serial `make` recipes —
 # cargo's own scheduler compiles independent guests in parallel across cores. The
 # polyglot TinyGo spike stays opt-in: `make spike-guest`.
-all: manifests
+#
+# `ts-guest` is here rather than opt-in because it skips itself when `jco` is
+# absent, which is every machine that has not asked for it. On one that has,
+# the gate then runs a turn through it — a polyglot claim nothing exercises is
+# the failure #130 named, and opting in should mean "and it is tested", not
+# "and there is a target you could run".
+all: manifests ts-guest
 
 # Staged components, then their manifests. `manifests` depends on this same
 # recipe's output, so it is ordered after it rather than beside it.
@@ -83,6 +89,12 @@ test:
 # devDependency and is reused rather than installed again; `jco` is the new
 # one, and is expected on PATH rather than vendored, because 326 MB of
 # `node_modules` per clone is not a cost this repository imposes by default.
+#
+# `--disable http --disable fetch-event` is not a size optimisation. Without
+# it StarlingMonkey provides `fetch`, so the component imports `wasi:http`,
+# and the host refuses to instantiate it — deliberately: a guest reaches the
+# network through `host-http`, where the egress policy is, and a linker that
+# also offered `wasi:http` would hand every guest a way around it.
 TS_GUEST := tool-hello-ts
 ESBUILD := $(ROOT)/src/web/node_modules/.bin/esbuild
 
@@ -103,7 +115,8 @@ ts-guest:
 	  $(ESBUILD) $(TS_GUEST)/src/guest.ts --bundle --format=esm \
 	    --target=es2022 --outfile=$(TS_GUEST)/build/guest.js; \
 	  jco componentize $(TS_GUEST)/build/guest.js --wit $(WIT_DIR) \
-	    --world-name tool-world -o $(EXT_DIR)/$(TS_GUEST).wasm; \
+	    --world-name tool-world --disable http --disable fetch-event \
+	    -o $(EXT_DIR)/$(TS_GUEST).wasm; \
 	  sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(WIT_DIR) $(TS_GUEST); \
 	fi
 
