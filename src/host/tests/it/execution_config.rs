@@ -18,16 +18,16 @@ const GUESTS: [&str; 2] = ["provider-openai.wasm", "tool-proc-probe.wasm"];
 /// What a turn's command did as the *model* saw it. `tool_result` pulled from
 /// completion body following tool call — the only external visibility point.
 /// `AgentSession` exposes `run`, not fleet. Wire sourcing = real path.
-pub(crate) struct ProbeTurn {
+pub struct ProbeTurn {
     /// Follow-up request body carrying tool's output.
-    pub(crate) tool_result: String,
+    pub tool_result: String,
     /// Completions the turn asked for. One = no tool call, turn gave up.
-    pub(crate) completions: u32,
+    pub completions: u32,
 }
 
 impl ProbeTurn {
     /// Command ran and output reached model.
-    pub(crate) fn produced(&self, needle: &str) -> bool {
+    pub fn produced(&self, needle: &str) -> bool {
         self.tool_result.contains(needle)
     }
 }
@@ -43,7 +43,7 @@ fn run_command(execution: &str, command: &str, args: &[&str]) -> ProbeTurn {
 /// workspace. `Some(root)` = forced path, only way to reach "enabled but no
 /// workspace" denial: [`Runtime::open_workspace`] falls back to `$PWD` absent,
 /// so omitting key adopts `$PWD` rather than withholding.
-pub(crate) fn run_command_in(
+pub fn run_command_in(
     root: Option<&str>,
     execution: &str,
     command: &str,

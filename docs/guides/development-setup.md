@@ -100,6 +100,29 @@ A green run of all six means the Slice 1a toolchain is ready. Then build per the
 project [Makefile](../../Makefile) (`cargo build` for core; `tinygo build` per
 guest — targets land in Slice 1b).
 
+## What a green local gate does not cover
+
+`make clippy` lints what *this* platform compiles. A module behind
+`#![cfg(target_os = "...")]` for another OS is never compiled, so clippy
+never reads it — not its code and not its doc comments. `main` went red once
+on a `doc_markdown` error in a Linux-only test file while every local gate
+stayed green ([#207]).
+
+`make clippy` prints what it skipped for that reason, so the gap is visible
+rather than inferred:
+
+```console
+clippy: not linted on macos — gated to another platform, covered by CI:
+  src/host/tests/it/sandbox_landlock.rs
+```
+
+Cross-linting instead would need a C cross-toolchain for a transitive build
+script, which is a large install to catch a class of error CI already
+catches. So: **CI is the check for those files**, and a green push gate is
+green for the code your machine builds.
+
+[#207]: https://github.com/PromptPasture/jan-klod/issues/207
+
 ## One-time setup
 
 Once per clone, from the repo root:

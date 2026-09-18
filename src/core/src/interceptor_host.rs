@@ -150,7 +150,7 @@ impl g_storage::Host for InterceptorHost {
         self.storage
             .set(namespace, key, value)
             .map(entry)
-            .map_err(fault)
+            .map_err(|err| fault(&err))
     }
 
     fn get(
@@ -158,11 +158,16 @@ impl g_storage::Host for InterceptorHost {
         namespace: String,
         key: String,
     ) -> Result<g_storage::Entry, g_storage::StoreError> {
-        self.storage.get(&namespace, &key).map(entry).map_err(fault)
+        self.storage
+            .get(&namespace, &key)
+            .map(entry)
+            .map_err(|err| fault(&err))
     }
 
     fn delete(&mut self, namespace: String, key: String) -> Result<(), g_storage::StoreError> {
-        self.storage.delete(&namespace, &key).map_err(fault)
+        self.storage
+            .delete(&namespace, &key)
+            .map_err(|err| fault(&err))
     }
 
     fn list_keys(
@@ -172,7 +177,7 @@ impl g_storage::Host for InterceptorHost {
         self.storage
             .entries_in(&namespace)
             .map(|rows| rows.into_iter().map(entry).collect())
-            .map_err(fault)
+            .map_err(|err| fault(&err))
     }
 
     fn recent(
@@ -183,7 +188,7 @@ impl g_storage::Host for InterceptorHost {
         self.storage
             .recent(&namespace, limit)
             .map(|rows| rows.into_iter().map(entry).collect())
-            .map_err(fault)
+            .map_err(|err| fault(&err))
     }
 }
 
@@ -200,7 +205,7 @@ fn entry(stored: crate::guest_storage::StoredEntry) -> g_storage::Entry {
 }
 
 /// This world's `store-error`, from the world-neutral one.
-fn fault(err: crate::guest_storage::StorageFault) -> g_storage::StoreError {
+const fn fault(err: &crate::guest_storage::StorageFault) -> g_storage::StoreError {
     match err {
         crate::guest_storage::StorageFault::NotFound => g_storage::StoreError::NotFound,
         crate::guest_storage::StorageFault::Backend => g_storage::StoreError::Backend,

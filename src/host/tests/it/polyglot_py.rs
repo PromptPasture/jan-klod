@@ -6,7 +6,7 @@
 //!
 //! # Why the imports matter here and did not there
 //!
-//! CPython's standard library needs `wasi:filesystem`, `wasi:sockets` and
+//! `CPython`'s standard library needs `wasi:filesystem`, `wasi:sockets` and
 //! `wasi:cli` to initialise, and `componentize-py` has no flag to drop them —
 //! where the `TypeScript` guest's `wasi:http` could be disabled and had to be,
 //! since the host refuses to link it. These the host *does* link, through
@@ -19,7 +19,7 @@
 //! # Why it skips rather than committing a fixture
 //!
 //! The component is **18.5 MB** — larger than the `TypeScript` guest's 12.7 MB,
-//! because it carries CPython — so it is built where the toolchain exists and
+//! because it carries `CPython` — so it is built where the toolchain exists and
 //! skipped where it does not (#188). The toolchain itself is the cheap half at
 //! 50 MB, against 326 MB for `jco`.
 //!

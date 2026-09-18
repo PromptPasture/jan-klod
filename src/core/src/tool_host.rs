@@ -181,7 +181,7 @@ impl g_storage::Host for ToolHost {
         self.storage
             .set(namespace, key, value)
             .map(entry)
-            .map_err(fault)
+            .map_err(|err| fault(&err))
     }
 
     fn get(
@@ -189,11 +189,16 @@ impl g_storage::Host for ToolHost {
         namespace: String,
         key: String,
     ) -> Result<g_storage::Entry, g_storage::StoreError> {
-        self.storage.get(&namespace, &key).map(entry).map_err(fault)
+        self.storage
+            .get(&namespace, &key)
+            .map(entry)
+            .map_err(|err| fault(&err))
     }
 
     fn delete(&mut self, namespace: String, key: String) -> Result<(), g_storage::StoreError> {
-        self.storage.delete(&namespace, &key).map_err(fault)
+        self.storage
+            .delete(&namespace, &key)
+            .map_err(|err| fault(&err))
     }
 
     fn list_keys(
@@ -203,7 +208,7 @@ impl g_storage::Host for ToolHost {
         self.storage
             .entries_in(&namespace)
             .map(|rows| rows.into_iter().map(entry).collect())
-            .map_err(fault)
+            .map_err(|err| fault(&err))
     }
 
     fn recent(
@@ -214,7 +219,7 @@ impl g_storage::Host for ToolHost {
         self.storage
             .recent(&namespace, limit)
             .map(|rows| rows.into_iter().map(entry).collect())
-            .map_err(fault)
+            .map_err(|err| fault(&err))
     }
 }
 
@@ -231,7 +236,7 @@ fn entry(stored: crate::guest_storage::StoredEntry) -> g_storage::Entry {
 }
 
 /// This world's `store-error`, from the world-neutral one.
-fn fault(err: crate::guest_storage::StorageFault) -> g_storage::StoreError {
+const fn fault(err: &crate::guest_storage::StorageFault) -> g_storage::StoreError {
     match err {
         crate::guest_storage::StorageFault::NotFound => g_storage::StoreError::NotFound,
         crate::guest_storage::StorageFault::Backend => g_storage::StoreError::Backend,
@@ -351,6 +356,12 @@ impl ToolExtension {
     ///
     /// # Errors
     /// Returns a [`CoreError`] if wiring, instantiation, or lifecycle fails.
+    // Eight, because a tool's bounds are eight separate operator decisions:
+    // workspace, process runner, egress, storage handle and session scoping
+    // are each granted or withheld on their own. A struct would make the
+    // count read as seven and hide which of them a call site forgot — the
+    // same trade `conductor::run_turn` records above its own list.
+    #[allow(clippy::too_many_arguments)]
     pub fn instantiate_with_http(
         engine: &Engine,
         id: &str,
@@ -597,6 +608,10 @@ impl LazyToolFleet {
     }
 
     /// Register a compiled tool to be instantiated on first use.
+    // Mirrors `instantiate_with_http`'s list exactly, and deliberately: this
+    // is the deferred form of that call, so the two diverging would be the
+    // bug. See the reason on it.
+    #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
         id: impl Into<String>,

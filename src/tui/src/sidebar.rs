@@ -44,11 +44,11 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
     let mut lines = Vec::new();
 
     heading(&mut lines, "SESSION", width, theme);
-    row(&mut lines, format!("id    {}", session.id), width, theme);
-    row(&mut lines, format!("via   {}", session.via), width, theme);
+    row(&mut lines, &format!("id    {}", session.id), width, theme);
+    row(&mut lines, &format!("via   {}", session.via), width, theme);
     row(
         &mut lines,
-        format!("state {}", app.connection_state()),
+        &format!("state {}", app.connection_state()),
         width,
         theme,
     );
@@ -56,7 +56,7 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
     let budget = width.saturating_sub("cwd   ".len());
     row(
         &mut lines,
-        format!("cwd   {}", truncate_from_left(theme, &cwd, budget)),
+        &format!("cwd   {}", truncate_from_left(theme, &cwd, budget)),
         width,
         theme,
     );
@@ -65,12 +65,12 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
     heading(&mut lines, "THIS TURN", width, theme);
     let turn_tools = this_turn_tools(app);
     if turn_tools.is_empty() {
-        row(&mut lines, "(nothing yet)".to_string(), width, theme);
+        row(&mut lines, "(nothing yet)", width, theme);
     } else {
         for tool in turn_tools {
             row(
                 &mut lines,
-                format!("{} {}", tool_glyph(tool, theme), tool.name),
+                &format!("{} {}", tool_glyph(tool, theme), tool.name),
                 width,
                 theme,
             );
@@ -91,7 +91,7 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
             row(
                 &mut lines,
                 // `row` cuts and marks this like every other line now (#206).
-                format!("{} {}", item.extension, item.text),
+                &format!("{} {}", item.extension, item.text),
                 width,
                 theme,
             );
@@ -102,14 +102,14 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
     heading(&mut lines, "CHANGED", width, theme);
     let changed = changed_files(app);
     if changed.is_empty() {
-        row(&mut lines, "(nothing yet)".to_string(), width, theme);
+        row(&mut lines, "(nothing yet)", width, theme);
     } else {
         for (path, counts) in changed {
             let text = counts.map_or_else(
                 || path.clone(),
                 |(added, removed)| format!("{path} +{added} -{removed}"),
             );
-            row(&mut lines, text, width, theme);
+            row(&mut lines, &text, width, theme);
         }
     }
 
@@ -123,9 +123,9 @@ fn heading(lines: &mut Vec<Line<'static>>, text: &str, width: usize, theme: Them
     )));
 }
 
-fn row(lines: &mut Vec<Line<'static>>, text: String, width: usize, theme: Theme) {
+fn row(lines: &mut Vec<Line<'static>>, text: &str, width: usize, theme: Theme) {
     lines.push(Line::from(Span::styled(
-        cut(&text, width, theme),
+        cut(text, width, theme),
         Style::default().fg(theme.secondary()),
     )));
 }

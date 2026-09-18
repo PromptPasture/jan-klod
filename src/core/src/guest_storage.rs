@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use crate::store::Store as PersistentStore;
 
 /// An entry as a guest sees it, before a world's own `Entry` is built from it.
-pub(crate) struct StoredEntry {
+pub struct StoredEntry {
     /// `<namespace>/<key>`, in the guest's own namespace.
     pub id: String,
     /// The namespace the guest asked for, not the one the host stored under.
@@ -35,7 +35,7 @@ pub(crate) struct StoredEntry {
 
 /// Why a storage call failed, in the two shapes the contract has.
 #[derive(Debug)]
-pub(crate) enum StorageFault {
+pub enum StorageFault {
     /// No entry at that namespace and key.
     NotFound,
     /// The backing store refused or could not be reached.
@@ -68,7 +68,7 @@ impl StorageFault {
 /// or name a peer's namespace and read its decisions. The core's own
 /// namespaces contain no `/`, so nothing a guest can ask for collides with
 /// them.
-pub(crate) struct GuestStorage {
+pub struct GuestStorage {
     /// Where the entries live.
     backing: Backing,
     /// Whether namespaces are additionally keyed by session (#215).
@@ -85,7 +85,7 @@ pub(crate) struct GuestStorage {
 
 impl GuestStorage {
     /// Not session-scoped: one namespace per component, for the whole run.
-    pub(crate) const fn shared(backing: Backing) -> Self {
+    pub const fn shared(backing: Backing) -> Self {
         Self {
             backing,
             by_session: false,
@@ -94,7 +94,7 @@ impl GuestStorage {
     }
 
     /// Session-scoped: a namespace per component *and* session.
-    pub(crate) const fn per_session(backing: Backing) -> Self {
+    pub const fn per_session(backing: Backing) -> Self {
         Self {
             backing,
             by_session: true,
@@ -103,13 +103,13 @@ impl GuestStorage {
     }
 
     /// Tell this storage which session subsequent calls belong to.
-    pub(crate) fn bind_session(&mut self, session: &str) {
+    pub fn bind_session(&mut self, session: &str) {
         self.session = Some(session.to_string());
     }
 }
 
 /// Where a guest's entries actually live.
-pub(crate) enum Backing {
+pub enum Backing {
     /// A private map, for when no store is open (unit tests, offline
     /// harnesses).
     Ephemeral {
@@ -187,7 +187,7 @@ impl GuestStorage {
     }
 
     /// Upsert `value`, returning the entry as stored.
-    pub(crate) fn set(
+    pub fn set(
         &mut self,
         namespace: String,
         key: String,
@@ -223,7 +223,7 @@ impl GuestStorage {
     }
 
     /// Fetch one entry.
-    pub(crate) fn get(&self, namespace: &str, key: &str) -> Result<StoredEntry, StorageFault> {
+    pub fn get(&self, namespace: &str, key: &str) -> Result<StoredEntry, StorageFault> {
         let scoped = self.scope(namespace)?;
         match &self.backing {
             Backing::Ephemeral { entries, .. } => entries
@@ -249,7 +249,7 @@ impl GuestStorage {
     }
 
     /// Remove one entry.
-    pub(crate) fn delete(&mut self, namespace: &str, key: &str) -> Result<(), StorageFault> {
+    pub fn delete(&mut self, namespace: &str, key: &str) -> Result<(), StorageFault> {
         let scoped = self.scope(namespace)?;
         match &mut self.backing {
             Backing::Ephemeral { entries, .. } => entries
@@ -265,7 +265,7 @@ impl GuestStorage {
     }
 
     /// Every entry in a namespace, unordered.
-    pub(crate) fn entries_in(&self, namespace: &str) -> Result<Vec<StoredEntry>, StorageFault> {
+    pub fn entries_in(&self, namespace: &str) -> Result<Vec<StoredEntry>, StorageFault> {
         let scoped = self.scope(namespace)?;
         match &self.backing {
             Backing::Ephemeral { entries, .. } => Ok(entries
@@ -292,11 +292,7 @@ impl GuestStorage {
     }
 
     /// The most recently written entries in a namespace, newest first.
-    pub(crate) fn recent(
-        &self,
-        namespace: &str,
-        limit: u32,
-    ) -> Result<Vec<StoredEntry>, StorageFault> {
+    pub fn recent(&self, namespace: &str, limit: u32) -> Result<Vec<StoredEntry>, StorageFault> {
         let mut entries = self.entries_in(namespace)?;
         entries.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
         entries.truncate(limit as usize);

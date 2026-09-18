@@ -305,8 +305,23 @@ bundle: extensions
 	@if [ -n "$(GUI)" ]; then $(MAKE) -C $(GUI_DIR) release; fi
 	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT); 	else 	  JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
 
+# Lint the host workspace, then say what this platform could not lint.
+#
+# **A green `clippy` here is not a green clippy in CI, and the difference is
+# invisible without saying so.** A module behind `#![cfg(target_os = "...")]`
+# for another platform is never compiled, so clippy never reads it — not its
+# code and not its doc comments. That is how `main` went red on a
+# `doc_markdown` error in `sandbox_landlock.rs` while every local gate stayed
+# green (#207).
+#
+# It is printed rather than commented because a comment in a Makefile is read
+# once, by whoever edits the Makefile. Cross-linting instead would need a C
+# cross-toolchain for a transitive build script (#212 measured that), which
+# is a large install to catch a class of error CI catches for free — so the
+# answer is "CI covers these", said out loud on every run.
 clippy: check-spike-deps
 	$(MAKE) -C $(HOST_WS) clippy
+	@sh scripts/unlinted-elsewhere.sh $(HOST_WS)
 
 # --- Supply-chain gates (CI enforces all of these) ---
 

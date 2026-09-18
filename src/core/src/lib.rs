@@ -20,7 +20,7 @@ pub mod egress;
 pub mod event_log;
 pub mod ext;
 pub mod ext_index;
-mod guest_storage;
+pub(crate) mod guest_storage;
 mod host;
 pub mod host_fs;
 pub mod host_process;
