@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use crate::commands::{Availability, Command};
+use crate::commands::Availability;
 use crate::composer::Composer;
 use crate::paths;
 
@@ -179,6 +179,13 @@ pub struct App {
     /// Set when `Ctrl+S`/`/sessions` asked but not sent yet. Like
     /// [`Self::cancel_requested`]: model records intent, caller performs it.
     sessions_requested: bool,
+    /// What extensions contribute, newest notification wins. Already made
+    /// inert; see [`Self::set_contributions`].
+    contributed: Vec<crate::commands::Contributed>,
+    /// A contributed command the user chose, waiting to be sent as
+    /// `surface/invoke`. Model records intent, caller performs it — the same
+    /// contract as [`Self::cancel_requested`].
+    invoke_requested: Option<(String, String)>,
     /// Set when `/new` asked but not sent to core yet. Caller sends
     /// `session/create` and calls [`Self::load_session`].
     new_session_requested: bool,
@@ -412,12 +419,45 @@ impl App {
         (text.starts_with('/') && !text.contains(char::is_whitespace)).then_some(text)
     }
 
-    /// The menu entries. Empty = empty state, not closed.
+    /// The menu entries — built-ins and what extensions contributed. Empty =
+    /// empty state, not closed.
     #[must_use]
-    pub fn menu_entries(&self) -> Vec<&'static Command> {
+    pub fn menu_entries(&self) -> Vec<crate::commands::Entry<'_>> {
         self.menu_query()
-            .map(crate::commands::matching)
+            .map(|typed| crate::commands::matching_with(typed, &self.contributed))
             .unwrap_or_default()
+    }
+
+    /// Replace what extensions contribute, from a `surface/contributions`
+    /// notification.
+    ///
+    /// Text is made inert here rather than at each frame: cleaning at the door
+    /// means no renderer has to remember, and a label cannot be safe in the
+    /// menu and hostile in the help overlay. Width is still a frame's
+    /// business, since only it knows the cell.
+    pub fn set_contributions(&mut self, sets: Vec<(String, Vec<(String, String)>)>) {
+        self.contributed = sets
+            .into_iter()
+            .flat_map(|(extension, commands)| {
+                let extension = crate::untrusted::inert(&extension);
+                commands
+                    .into_iter()
+                    .map(move |(name, summary)| crate::commands::Contributed {
+                        extension: extension.clone(),
+                        name: crate::untrusted::inert(&name),
+                        summary: crate::untrusted::inert(&summary),
+                    })
+            })
+            // A contribution whose name cleaned away to nothing cannot be
+            // typed, matched or invoked, so it is not offered.
+            .filter(|c| !c.name.is_empty())
+            .collect();
+    }
+
+    /// What extensions contribute, in the order the host reported them.
+    #[must_use]
+    pub fn contributions(&self) -> &[crate::commands::Contributed] {
+        &self.contributed
     }
 
     /// Which entry is highlighted, clamped to what is on offer.
@@ -463,13 +503,32 @@ impl App {
     /// Returns whether anything was accepted. `false` on empty means `Enter`
     /// still submits.
     pub fn menu_accept(&mut self) -> bool {
-        let Some(command) = self.menu_entries().get(self.menu_selected()).copied() else {
+        // Copied out before anything is mutated: an entry borrows the
+        // contributed list, which lives in `self`.
+        let Some((name, availability, extension)) =
+            self.menu_entries().get(self.menu_selected()).map(|entry| {
+                (
+                    entry.name.to_owned(),
+                    entry.availability,
+                    match entry.source {
+                        crate::commands::Source::BuiltIn => None,
+                        crate::commands::Source::Extension(id) => Some(id.to_owned()),
+                    },
+                )
+            })
+        else {
             return false;
         };
         self.menu = None;
         self.composer.set("");
-        match command.availability {
-            Availability::Ready => match command.name {
+        // A contribution is not dispatched by name here: two extensions may
+        // contribute the same one, and only the pair identifies it.
+        if let Some(extension) = extension {
+            self.invoke_requested = Some((extension, name));
+            return true;
+        }
+        match availability {
+            Availability::Ready => match name.as_str() {
                 "/newline" => self.composer.push('\n'),
                 // Ask before leaving rather than quitting outright. Same
                 // confirming path `Ctrl+D` and `Ctrl+C` (idle, empty) use (#105).
@@ -491,7 +550,7 @@ impl App {
                 other => self.record(Who::Status, format!("{other} is not wired up")),
             },
             Availability::Pending(reason) => {
-                self.record(Who::Status, format!("{} — {reason}", command.name));
+                self.record(Who::Status, format!("{name} — {reason}"));
             }
         }
         true
@@ -1035,6 +1094,12 @@ impl App {
         asked
     }
 
+    /// Take the contributed command the user chose, if any. Drains; same
+    /// contract as [`Self::take_sessions_request`].
+    pub const fn take_invoke_request(&mut self) -> Option<(String, String)> {
+        self.invoke_requested.take()
+    }
+
     /// `session/list` answered: show the switcher with what it returned.
     pub fn open_sessions(&mut self, entries: Vec<SessionEntry>) {
         self.sessions = Some(Sessions {
@@ -1353,6 +1418,79 @@ fn session_message_entry(message: SessionMessage) -> Option<Entry> {
 #[cfg(test)]
 mod tests {
     use super::{App, Entry, Prompt, ToastKind, ToolStatus, Turn, Who};
+
+    /// One extension contributing one command, as the notification delivers it.
+    fn contributing(name: &str, summary: &str) -> Vec<(String, Vec<(String, String)>)> {
+        vec![(
+            "interceptor.system".to_owned(),
+            vec![(name.to_owned(), summary.to_owned())],
+        )]
+    }
+
+    #[test]
+    fn a_contributed_command_appears_in_the_menu() {
+        let mut app = App::default();
+        app.set_contributions(contributing("prompt", "show the standing instructions"));
+        app.push_char('/');
+        assert!(
+            app.menu_entries()
+                .iter()
+                .any(|entry| entry.name == "prompt"),
+            "the menu offers what the extension contributed"
+        );
+    }
+
+    /// Cleaned at the door, so no renderer has to remember — and a label
+    /// cannot be safe in the menu and hostile in the help overlay.
+    #[test]
+    fn a_hostile_label_is_inert_before_it_is_ever_stored() {
+        let mut app = App::default();
+        app.set_contributions(contributing("pr\x1b[2Jompt", "clear\x1b]0;pwned\x07"));
+        let stored = app.contributions().first().expect("one contribution");
+        assert!(!stored.name.contains('\u{1b}'), "{:?}", stored.name);
+        assert!(!stored.summary.contains('\u{1b}'), "{:?}", stored.summary);
+    }
+
+    /// A name that cleans away to nothing cannot be typed, matched or
+    /// invoked, so it is not offered at all.
+    #[test]
+    fn a_contribution_whose_name_is_only_escapes_is_dropped() {
+        let mut app = App::default();
+        app.set_contributions(contributing("\x1b\x1b", "invisible"));
+        assert!(app.contributions().is_empty());
+    }
+
+    /// Choosing one records intent for the caller to send, the way `/cancel`
+    /// and `/sessions` do — this type never holds a transport.
+    #[test]
+    fn choosing_a_contributed_command_asks_for_an_invocation() {
+        let mut app = App::default();
+        app.set_contributions(contributing("prompt", "show it"));
+        app.push_char('/');
+        for c in "prompt".chars() {
+            app.push_char(c);
+        }
+        assert!(app.menu_accept(), "the menu accepted the entry");
+        assert_eq!(
+            app.take_invoke_request(),
+            Some(("interceptor.system".to_owned(), "prompt".to_owned())),
+            "the extension and the name together identify it"
+        );
+        assert_eq!(app.take_invoke_request(), None, "draining is once only");
+    }
+
+    /// A built-in must still act rather than be sent to an extension.
+    #[test]
+    fn choosing_a_built_in_asks_for_no_invocation() {
+        let mut app = App::default();
+        app.set_contributions(contributing("prompt", "show it"));
+        app.push_char('/');
+        for c in "help".chars() {
+            app.push_char(c);
+        }
+        assert!(app.menu_accept());
+        assert_eq!(app.take_invoke_request(), None);
+    }
 
     /// Acceptance: a dead transport moves the status word to `disconnected`
     /// and stops the spinner. `connection_state` only reports the stored turn,
