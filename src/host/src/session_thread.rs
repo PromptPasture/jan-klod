@@ -35,6 +35,21 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 /// Work for the thread that owns a `T`.
 type Job<T> = Box<dyn FnOnce(&mut T) + Send>;
 
+/// What arrives on the queue: work, or the end of it.
+///
+/// A loop that ended only when its last handle dropped could not be
+/// stopped by whoever owns it — an outstanding clone, held by a caller
+/// that has not finished, keeps the thread alive and makes a shutdown
+/// that waits for it hang. So stopping is a message rather than a
+/// refcount: the owner says when, and late callers learn from the closed
+/// channel afterwards (#229).
+pub enum Task<T> {
+    /// Run this against the owned value.
+    Work(Job<T>),
+    /// Return from the loop.
+    Stop,
+}
+
 /// Why a job produced no answer.
 ///
 /// Distinguished rather than merged into one error, because they call for
@@ -72,7 +87,7 @@ impl std::error::Error for NoAnswer {}
 /// or a handle that has to be cloned before it can be shared. The lock is
 /// smaller, and a `send` onto an unbounded channel does not block.
 pub struct Jobs<T> {
-    hand: std::sync::Mutex<Sender<Job<T>>>,
+    hand: std::sync::Mutex<Sender<Task<T>>>,
 }
 
 impl<T> Clone for Jobs<T> {
@@ -88,7 +103,7 @@ impl<T> Clone for Jobs<T> {
 /// A handle and the queue its loop reads. The `T` is supplied later, by
 /// whichever thread owns it, so that a `!Send` value never has to move.
 #[must_use]
-pub fn queue<T>() -> (Jobs<T>, Receiver<Job<T>>) {
+pub fn queue<T>() -> (Jobs<T>, Receiver<Task<T>>) {
     let (hand, jobs) = channel();
     (
         Jobs {
@@ -104,7 +119,7 @@ impl<T> Jobs<T> {
     /// Poisoning here means a panic while cloning a `Sender`, which leaves
     /// nothing half-built; refusing every later job over it would turn one
     /// panicked request into a dead surface.
-    fn sender(&self) -> Sender<Job<T>> {
+    fn sender(&self) -> Sender<Task<T>> {
         self.hand
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -142,7 +157,9 @@ impl<T> Jobs<T> {
             // done either way.
             let _ = answer.send(outcome.map_err(|_| NoAnswer::Panicked));
         });
-        self.sender().send(boxed).map_err(|_| NoAnswer::Stopped)?;
+        self.sender()
+            .send(Task::Work(boxed))
+            .map_err(|_| NoAnswer::Stopped)?;
         // A closed channel here means the job never sent: the loop died
         // between accepting the job and running it.
         wait.recv().unwrap_or(Err(NoAnswer::Stopped))
@@ -163,19 +180,35 @@ impl<T> Jobs<T> {
         let boxed: Job<T> = Box::new(move |owned| {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || job(owned)));
         });
-        self.sender().send(boxed).map_err(|_| NoAnswer::Stopped)
+        self.sender()
+            .send(Task::Work(boxed))
+            .map_err(|_| NoAnswer::Stopped)
+    }
+
+    /// Tell the loop to return once it reaches this point in the queue.
+    ///
+    /// Work already queued still runs — a stop that discarded it would
+    /// lose answers callers are waiting for. Afterwards the loop's thread
+    /// ends and the channel closes, so later callers get
+    /// [`NoAnswer::Stopped`] without anyone having to tell them.
+    pub fn stop(&self) {
+        let _ = self.sender().send(Task::Stop);
     }
 }
 
-/// Serve jobs against `owned` until every handle is dropped.
+/// Serve jobs against `owned` until told to stop, or until every handle
+/// is dropped.
 ///
 /// The caller owns the `T` and never gives it up — which is the whole
-/// reason this works for a `!Send` session. Returns when the last [`Jobs`]
-/// handle is gone, so a surface shuts down by dropping its handles rather
-/// than by a flag nobody checks.
-pub fn serve<T>(owned: &mut T, jobs: &Receiver<Job<T>>) {
-    while let Ok(job) = jobs.recv() {
-        job(owned);
+/// reason this works for a `!Send` session. Two ways out: [`Jobs::stop`],
+/// for an owner shutting down while callers still hold handles, and the
+/// last handle dropping, which is what a short-lived surface does.
+pub fn serve<T>(owned: &mut T, jobs: &Receiver<Task<T>>) {
+    while let Ok(task) = jobs.recv() {
+        match task {
+            Task::Work(job) => job(owned),
+            Task::Stop => return,
+        }
     }
 }
 

@@ -56,6 +56,7 @@ mod self_extend;
 mod self_extend_chain;
 mod session_memory;
 mod session_thread;
+mod sessions;
 mod shipped_defaults;
 mod storage_scope;
 mod telegram;
