@@ -843,13 +843,13 @@ fn serve(args: &[String]) -> ExitCode {
             jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
-    let mut agent = match runtime.build_agent(&factory) {
-        Ok(agent) => agent,
-        Err(err) => {
-            eprintln!("jan-klod: agent boot failed: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
+    // One agent per session, built on first use (#229). Nothing is built
+    // here: a gateway that boots with no clients has nothing to serve
+    // yet, and the first request pays 3.5 ms for the session it names.
+    let agents = std::sync::Arc::new(jan_klod_host::sessions::Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
 
     let surface = match jan_klod_host::serve::Surface::bind(&bind) {
         Ok(surface) => surface,
@@ -870,7 +870,7 @@ fn serve(args: &[String]) -> ExitCode {
     }
     println!("jan-klod: serving on http://{bind} — POST {{\"session\":\"…\",\"message\":\"…\"}}");
 
-    if let Err(err) = surface.serve_forever(&mut agent, token.as_deref()) {
+    if let Err(err) = surface.serve_forever(&agents, token.as_deref()) {
         eprintln!("jan-klod: serve loop failed: {err}");
         return ExitCode::FAILURE;
     }

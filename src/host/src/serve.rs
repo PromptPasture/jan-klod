@@ -52,7 +52,7 @@ use jan_klod_core::session::{
 use jan_klod_core::AgentSession;
 
 use crate::pending::Pending;
-use crate::session_thread::{self, Jobs};
+use crate::sessions::Agents;
 
 /// How often the wait pokes the event stream while parked. A vanished client
 /// (post-write) looks fine until FIN is processed; each tick writes an SSE
@@ -82,12 +82,12 @@ pub struct Surface {
 
 /// What every handler shares.
 ///
-/// `Jobs` is in here rather than cloned per route because `axum` wants
-/// state it can hand to each request by reference; that is what made
-/// `Jobs` `Sync` (`session_thread`).
+/// The registry rather than one queue since #229: which agent serves a
+/// request is a property of the request's session, so the routing
+/// happens per request and not once at startup.
 #[derive(Clone)]
 struct App {
-    jobs: Arc<Jobs<AgentSession>>,
+    agents: Arc<Agents>,
     pending: Arc<Pending>,
     token: Option<Arc<str>>,
     /// Responses completed so far, against `limit`.
@@ -107,11 +107,18 @@ impl App {
     /// blocking a runtime worker for the length of a turn would stall every
     /// other request on that worker. This is the one thing about the port
     /// that is not visible in a test until the surface is under load.
-    async fn on_session<F>(&self, handler: F) -> Response
+    async fn on_session<F>(&self, session: Option<&str>, handler: F) -> Response
     where
         F: FnOnce(&mut AgentSession) -> Reply + Send + 'static,
     {
-        let jobs = Arc::clone(&self.jobs);
+        // `None` is work that belongs to no session — reading the store,
+        // listing what the extensions contribute. It goes to the
+        // housekeeping agent rather than to whichever session happened to
+        // be live.
+        let jobs = session.map_or_else(
+            || self.agents.housekeeping(),
+            |session| self.agents.of(session),
+        );
         let reply = tokio::task::spawn_blocking(move || jobs.run(handler)).await;
         match reply {
             Ok(Ok(reply)) => reply.into_response(),
@@ -158,8 +165,8 @@ impl Surface {
     ///
     /// # Errors
     /// Whatever the server failed with.
-    pub fn serve_once(&self, agent: &mut AgentSession) -> std::io::Result<()> {
-        self.run(agent, None, 1, None::<fn(u16)>)
+    pub fn serve_once(&self, agents: &Arc<Agents>) -> std::io::Result<()> {
+        self.run(agents, None, 1, None::<fn(u16)>)
     }
 
     /// Serve one request, requiring `Bearer <token>` when one is set.
@@ -168,24 +175,24 @@ impl Surface {
     /// Whatever the server failed with.
     pub fn serve_once_authed(
         &self,
-        agent: &mut AgentSession,
+        agents: &Arc<Agents>,
         token: Option<&str>,
     ) -> std::io::Result<()> {
-        self.run(agent, token, 1, None::<fn(u16)>)
+        self.run(agents, token, 1, None::<fn(u16)>)
     }
 
     /// Serve while `client` runs, then stop, returning what it returned.
     ///
     /// # Panics
     /// Propagates a panic from `client` rather than hanging on it.
-    pub fn serve_while<F, R>(&self, agent: &mut AgentSession, token: Option<&str>, client: F) -> R
+    pub fn serve_while<F, R>(&self, agents: &Arc<Agents>, token: Option<&str>, client: F) -> R
     where
         F: FnOnce(u16) -> R + Send,
         R: Send,
     {
         let answer = std::sync::Mutex::new(None);
         let _ = self.run(
-            agent,
+            agents,
             token,
             usize::MAX,
             Some(|port| {
@@ -209,15 +216,11 @@ impl Surface {
     ///
     /// # Errors
     /// Whatever the server failed with.
-    pub fn serve_forever(
-        &self,
-        agent: &mut AgentSession,
-        token: Option<&str>,
-    ) -> std::io::Result<()> {
+    pub fn serve_forever(&self, agents: &Arc<Agents>, token: Option<&str>) -> std::io::Result<()> {
         // No closure: nothing should ever ask this one to stop, and a
         // thread parked to represent "forever" would be a thread nothing
         // can wake if the server fails.
-        self.run(agent, token, usize::MAX, None::<fn(u16)>)
+        self.run(agents, token, usize::MAX, None::<fn(u16)>)
     }
 
     /// The one loop all four entry points are.
@@ -227,7 +230,7 @@ impl Surface {
     /// wants doing while it serves.
     fn run<F>(
         &self,
-        agent: &mut AgentSession,
+        agents: &Arc<Agents>,
         token: Option<&str>,
         limit: usize,
         alongside: Option<F>,
@@ -235,9 +238,8 @@ impl Surface {
     where
         F: FnOnce(u16) + Send,
     {
-        let (jobs, queued) = session_thread::queue::<AgentSession>();
         let app = App {
-            jobs: Arc::new(jobs),
+            agents: Arc::clone(agents),
             pending: Arc::new(Pending::new()),
             token: token.map(Arc::from),
             served: Arc::new(AtomicUsize::new(0)),
@@ -249,9 +251,12 @@ impl Surface {
         let port = self.port();
         let stop = Arc::clone(&app.stop);
 
+        // No session loop here any more. Agents live on the registry's
+        // threads (#229), so this thread has nothing to own and only
+        // waits — which is also why a surface can now be started from a
+        // thread that is not the one holding a session.
         let outcome = std::thread::scope(|scope| {
             let serving = {
-                let app = app.clone();
                 let stopping = Arc::clone(&app.stop);
                 scope.spawn(move || -> std::io::Result<()> {
                     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -266,17 +271,11 @@ impl Surface {
                 })
             };
             if let Some(alongside) = alongside {
-                scope.spawn(move || {
-                    alongside(port);
-                    // Done means stop. Without a closure — the production
-                    // loop — nothing here ever asks it to.
-                    stop.notify_waiters();
-                });
+                alongside(port);
+                // Done means stop. Without a closure — the production
+                // loop — nothing here ever asks it to.
+                stop.notify_waiters();
             }
-            // Everything the surface holds is dropped when the runtime
-            // thread ends, which is what closes the queue below.
-            drop(app);
-            session_thread::serve(agent, &queued);
             serving.join()
         });
         outcome.unwrap_or_else(|_| Err(std::io::Error::other("the serving thread panicked")))
@@ -344,26 +343,33 @@ async fn create_session() -> Response {
 }
 
 async fn list_sessions(State(app): State<App>) -> Response {
-    app.on_session(|agent: &mut AgentSession| handle_list_sessions(agent))
+    // The store is shared, so any agent can read it; none of them owns
+    // the answer.
+    app.on_session(None, |agent: &mut AgentSession| handle_list_sessions(agent))
         .await
 }
 
 async fn contributions(State(app): State<App>) -> Response {
-    app.on_session(handle_contributions).await
+    app.on_session(None, handle_contributions).await
 }
 
 async fn invoke(State(app): State<App>, body: String) -> Response {
-    app.on_session(move |agent| handle_invoke(agent, &body))
+    // On the housekeeping agent's instances, which is a question #231
+    // has to answer for adoption as well.
+    app.on_session(None, move |agent| handle_invoke(agent, &body))
         .await
 }
 
 async fn get_session(State(app): State<App>, Path(id): Path<String>) -> Response {
-    app.on_session(move |agent| handle_get_session(agent, &id))
+    // Reading one session's transcript is a store read; it does not
+    // need that session's agent, and routing it there would queue it
+    // behind that session's running turn.
+    app.on_session(None, move |agent| handle_get_session(agent, &id))
         .await
 }
 
 async fn fork_session(State(app): State<App>, Path(id): Path<String>, body: String) -> Response {
-    app.on_session(move |agent| handle_fork_session(agent, &id, &body))
+    app.on_session(None, move |agent| handle_fork_session(agent, &id, &body))
         .await
 }
 
@@ -396,8 +402,8 @@ async fn answer(State(app): State<App>, Path(id): Path<String>, body: String) ->
 /// The upgrade happens after `guard`, so the token rule is the same rule
 /// the REST routes get, in the same place.
 async fn socket(State(app): State<App>, upgrade: axum::extract::ws::WebSocketUpgrade) -> Response {
-    let jobs = Arc::clone(&app.jobs);
-    upgrade.on_upgrade(move |socket| crate::ws::serve_socket(socket, jobs))
+    let agents = Arc::clone(&app.agents);
+    upgrade.on_upgrade(move |socket| crate::ws::serve_socket(socket, agents))
 }
 
 /// `POST /session/{id}/message` — JSON, or a stream when asked for one.
@@ -409,7 +415,9 @@ async fn message(
 ) -> Response {
     if !accepts_event_stream(&headers) {
         return app
-            .on_session(move |agent| handle_message(agent, &id, &body))
+            .on_session(Some(&id.clone()), move |agent| {
+                handle_message(agent, &id, &body)
+            })
             .await;
     }
     // The turn runs on the session's thread and sends frames here. Queued,
@@ -417,7 +425,7 @@ async fn message(
     // the surface has to keep serving meanwhile.
     let (frames, stream) = unbounded_channel::<Frame>();
     let pending = Arc::clone(&app.pending);
-    let queued = app.jobs.send(move |agent: &mut AgentSession| {
+    let queued = app.agents.of(&id).send(move |agent: &mut AgentSession| {
         run_turn_streaming(agent, &frames, &id, &body, &pending);
     });
     if queued.is_err() {

@@ -7,6 +7,7 @@ use std::thread;
 
 use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
+use jan_klod_host::sessions::Agents;
 
 use crate::common;
 
@@ -39,7 +40,10 @@ extensions:
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
 
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
@@ -61,7 +65,7 @@ extensions:
     });
 
     // Server: handle one request on session thread.
-    surface.serve_once(&mut agent).expect("serves one request");
+    surface.serve_once(&agents).expect("serves one request");
 
     let response = client.join().expect("client thread");
     assert!(
@@ -84,7 +88,7 @@ extensions:
         response
     });
     surface
-        .serve_once(&mut agent)
+        .serve_once(&agents)
         .expect("serves the health request");
     let health = health_client.join().expect("health client thread");
     assert!(health.contains("200 OK"), "health status line: {health}");
@@ -108,9 +112,7 @@ extensions:
         stream.read_to_string(&mut response).unwrap();
         response
     });
-    surface
-        .serve_once(&mut agent)
-        .expect("serves the SSE request");
+    surface.serve_once(&agents).expect("serves the SSE request");
     let sse = sse_client.join().expect("sse client thread");
     // Case-insensitive because the header name's casing is the server's
     // choice, not the protocol's: `hyper` writes it lowercase where

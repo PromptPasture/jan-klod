@@ -11,6 +11,7 @@ use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
+use jan_klod_host::sessions::Agents;
 
 use crate::common;
 
@@ -126,14 +127,17 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = tool_then_answer_http;
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
 
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
     // Client A: read frames. On `prompt` frame, client B answers on second
     // connection while stream stays open.
-    let (stream_text, answered) = surface.serve_while(&mut agent, None, move |_| {
+    let (stream_text, answered) = surface.serve_while(&agents, None, move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
         let request = format!(
@@ -202,14 +206,17 @@ fn an_answer_with_nothing_pending_is_refused() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = tool_then_answer_http;
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
 
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
     let client = thread::spawn(move || post_answer(port, "p-1", "yes"));
     surface
-        .serve_once(&mut agent)
+        .serve_once(&agents)
         .expect("serves the stray answer");
     let response = client.join().expect("client thread");
 
@@ -245,11 +252,14 @@ fn a_bystander_is_served_while_another_session_is_confirming() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = tool_then_answer_http;
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
-    let bystander = surface.serve_while(&mut agent, None, move |_| {
+    let bystander = surface.serve_while(&agents, None, move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
         let request = format!(
@@ -308,11 +318,14 @@ fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = tool_then_answer_http;
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
-    let queued = surface.serve_while(&mut agent, None, move |_| {
+    let queued = surface.serve_while(&agents, None, move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
         let request = format!(

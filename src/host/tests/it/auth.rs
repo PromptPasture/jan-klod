@@ -12,6 +12,7 @@ use std::thread;
 
 use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
+use jan_klod_host::sessions::Agents;
 
 use crate::common;
 
@@ -86,7 +87,10 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
     let config = write_config(&dir);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
@@ -100,7 +104,7 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
 
     for _ in 0..4 {
         surface
-            .serve_once_authed(&mut agent, Some(TOKEN))
+            .serve_once_authed(&agents, Some(TOKEN))
             .expect("serves");
     }
     let (none, wrong, right, health) = client.join().expect("client thread");
@@ -134,12 +138,15 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     let config = write_config(&dir);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
     let client = thread::spawn(move || request(port, "/session/a/message", None));
-    surface.serve_once_authed(&mut agent, None).expect("serves");
+    surface.serve_once_authed(&agents, None).expect("serves");
     let response = client.join().expect("client thread");
 
     // Requiring a secret to talk to your own loopback is friction without a
@@ -251,12 +258,15 @@ extensions:
 
     let ext_dir = common::repo_root().join("ext");
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
     let (refused, accepted, stream_text) =
-        surface.serve_while(&mut agent, Some(TOKEN), move |_| drive_confirmation(port));
+        surface.serve_while(&agents, Some(TOKEN), move |_| drive_confirmation(port));
 
     assert!(
         refused.contains("401"),

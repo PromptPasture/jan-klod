@@ -49,7 +49,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use jan_klod_core::AgentSession;
 
 use crate::rpc::{self, Incoming, Served, Wire};
-use crate::session_thread::Jobs;
+use crate::sessions::Agents;
 
 /// Where a wire's bytes go: whole lines, to be sent as text frames.
 ///
@@ -85,7 +85,7 @@ impl Write for Frames {
 }
 
 /// Serve one client until it hangs up or the handshake is refused.
-pub async fn serve_socket(socket: WebSocket, jobs: Arc<Jobs<AgentSession>>) {
+pub async fn serve_socket(socket: WebSocket, agents: Arc<Agents>) {
     let (mut sink, mut stream) = socket.split();
     let (outbox, mut outgoing) = unbounded_channel::<String>();
     let writing = tokio::spawn(async move {
@@ -118,7 +118,7 @@ pub async fn serve_socket(socket: WebSocket, jobs: Arc<Jobs<AgentSession>>) {
         }
     });
 
-    let _ = tokio::task::spawn_blocking(move || connection(incoming, &outbox, &jobs)).await;
+    let _ = tokio::task::spawn_blocking(move || connection(incoming, &outbox, &agents)).await;
     // The connection is over: the reader has nothing left to hand to, and
     // the writer stops when the outbox drops with `connection`.
     reading.abort();
@@ -130,11 +130,7 @@ pub async fn serve_socket(socket: WebSocket, jobs: Arc<Jobs<AgentSession>>) {
 /// Blocking, and deliberately: it owns the frame queue between frames and
 /// lends it to each job, which is what keeps a running turn the only
 /// reader while it runs.
-fn connection(
-    mut incoming: Receiver<Incoming>,
-    outbox: &UnboundedSender<String>,
-    jobs: &Jobs<AgentSession>,
-) {
+fn connection(mut incoming: Receiver<Incoming>, outbox: &UnboundedSender<String>, agents: &Agents) {
     let mut negotiated = false;
     while let Ok(frame) = incoming.recv() {
         let line = match frame {
@@ -150,6 +146,18 @@ fn connection(
             continue;
         }
 
+        // Which agent serves this frame is the frame's own business: a
+        // connection is not bound to a session, and a turn must run on
+        // the agent that owns the session it is for (#229). Parsed twice
+        // — once to route, once inside the job — because the job cannot
+        // borrow the request it was routed by.
+        let jobs = match rpc::parse(&line) {
+            Ok(request) => rpc::session_of(&request.command)
+                .map_or_else(|| agents.housekeeping(), |session| agents.of(session)),
+            // Unparseable frames go to housekeeping, which answers them
+            // with the same refusal any agent would.
+            Err(_) => agents.housekeeping(),
+        };
         let lines = outbox.clone();
         let was = negotiated;
         let served = jobs.run(move |agent: &mut AgentSession| {

@@ -164,6 +164,32 @@ pub(crate) enum Served {
     Close(jsonrpc::Response),
 }
 
+/// Which session a command is about, if any (#229).
+///
+/// A WebSocket connection is not bound to one session — its frames name
+/// them — so the socket has to route each frame to the agent that owns
+/// the session it names. Written here beside the command enum so a new
+/// variant is a compile error in one place rather than a frame silently
+/// served by the wrong agent.
+#[must_use]
+pub(crate) fn session_of(command: &Command) -> Option<&str> {
+    match command {
+        Command::SessionGet { session }
+        | Command::SessionFork { session, .. }
+        | Command::SessionMessage { session, .. }
+        | Command::TurnAnswer { session, .. }
+        | Command::TurnCancel { session }
+        | Command::TurnFollowUp { session, .. } => Some(session),
+        // Negotiation, creation, listing and a surface invocation belong
+        // to no session: the store is shared, so any agent answers them
+        // the same way.
+        Command::Hello { .. }
+        | Command::SessionCreate
+        | Command::SessionList
+        | Command::SurfaceInvoke { .. } => None,
+    }
+}
+
 /// The refusal for a frame that is not text (#226).
 ///
 /// Beside `parse`'s refusals rather than in the socket, so every "this is

@@ -57,6 +57,7 @@ use std::thread;
 
 use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
+use jan_klod_host::sessions::Agents;
 
 use crate::common;
 
@@ -107,7 +108,10 @@ fn the_web_client_is_served_without_a_token() {
     let config = write_config(&dir);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
@@ -120,7 +124,7 @@ fn the_web_client_is_served_without_a_token() {
     // test; with `None`, the test would pass on any surface.
     for _ in 0..2 {
         surface
-            .serve_once_authed(&mut agent, Some(TOKEN))
+            .serve_once_authed(&agents, Some(TOKEN))
             .expect("serves");
     }
     let (page, script) = client.join().expect("client thread");
@@ -232,7 +236,10 @@ fn an_api_route_still_refuses_without_a_token() {
     let config = write_config(&dir);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
-    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
@@ -245,7 +252,7 @@ fn an_api_route_still_refuses_without_a_token() {
     });
     for _ in 0..2 {
         surface
-            .serve_once_authed(&mut agent, Some(TOKEN))
+            .serve_once_authed(&agents, Some(TOKEN))
             .expect("serves");
     }
     let (sessions, near_miss) = client.join().expect("client thread");

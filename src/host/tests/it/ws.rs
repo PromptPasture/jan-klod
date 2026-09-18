@@ -10,6 +10,7 @@
 use futures_util::{SinkExt as _, StreamExt as _};
 use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
+use jan_klod_host::sessions::Agents;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -18,7 +19,7 @@ use crate::common;
 const TOKEN: &str = "ws-token";
 
 /// An agent with nothing but a provider: this is about the socket.
-fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted(tag: &str) -> Option<(common::TempDir, std::sync::Arc<Agents>)> {
     if !common::guests_staged(&["provider-openai.wasm"]) {
         return None;
     }
@@ -46,10 +47,11 @@ extensions:
     .expect("writes the config");
     let runtime =
         Runtime::boot(&config, common::repo_root().join("ext")).expect("the runtime boots");
-    let agent = runtime
-        .build_agent(&|| common::canned_http("pong"))
-        .expect("the agent boots");
-    Some((guard, agent))
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(|| common::canned_http("pong")),
+    ));
+    Some((guard, agents))
 }
 
 /// Connect, send `frames`, and collect what comes back — one runtime per
@@ -192,11 +194,11 @@ fn hello() -> String {
 /// dispatch, and the way back.
 #[test]
 fn a_client_connects_and_negotiates_the_protocol() {
-    let Some((_guard, mut agent)) = booted("hello") else {
+    let Some((_guard, agents)) = booted("hello") else {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let answers = surface.serve_while(&mut agent, None, |port| {
+    let answers = surface.serve_while(&agents, None, |port| {
         talk(port, None, vec![hello()]).expect("the socket answers")
     });
 
@@ -220,11 +222,11 @@ fn a_client_connects_and_negotiates_the_protocol() {
 /// would be indistinguishable from "the socket does not exist".
 #[test]
 fn the_socket_is_refused_without_the_token() {
-    let Some((_guard, mut agent)) = booted("token") else {
+    let Some((_guard, agents)) = booted("token") else {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let (refused, accepted) = surface.serve_while(&mut agent, Some(TOKEN), |port| {
+    let (refused, accepted) = surface.serve_while(&agents, Some(TOKEN), |port| {
         let refused = talk(port, None, vec![hello()]);
         let accepted = talk(port, Some(TOKEN), vec![hello()]);
         (refused, accepted)
@@ -251,11 +253,11 @@ fn the_socket_is_refused_without_the_token() {
 /// exactly what a client would report as "it works once".
 #[test]
 fn a_session_verb_is_answered_and_the_handshake_is_remembered() {
-    let Some((_guard, mut agent)) = booted("verbs") else {
+    let Some((_guard, agents)) = booted("verbs") else {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let answers = surface.serve_while(&mut agent, None, |port| {
+    let answers = surface.serve_while(&agents, None, |port| {
         talk(
             port,
             None,
@@ -286,11 +288,11 @@ fn a_session_verb_is_answered_and_the_handshake_is_remembered() {
 /// the socket's, and it reaches the socket because the dispatch is shared.
 #[test]
 fn a_command_before_the_handshake_is_refused() {
-    let Some((_guard, mut agent)) = booted("premature") else {
+    let Some((_guard, agents)) = booted("premature") else {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let answers = surface.serve_while(&mut agent, None, |port| {
+    let answers = surface.serve_while(&agents, None, |port| {
         talk(port, None, vec![frame(1, "session/list")]).expect("the socket answers")
     });
     assert!(
@@ -309,11 +311,11 @@ fn a_command_before_the_handshake_is_refused() {
 /// answered normally, so none of the three closed the socket.
 #[test]
 fn a_bad_frame_is_answered_and_the_connection_survives_it() {
-    let Some((_guard, mut agent)) = booted("bad-frames") else {
+    let Some((_guard, agents)) = booted("bad-frames") else {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let answers = surface.serve_while(&mut agent, None, |port| {
+    let answers = surface.serve_while(&agents, None, |port| {
         talk_mixed(
             port,
             vec![
@@ -343,7 +345,7 @@ fn a_bad_frame_is_answered_and_the_connection_survives_it() {
 
 /// An agent whose first completion calls a gated tool, so a turn parks on
 /// an `ask` — and whose second finishes.
-fn booted_asking(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted_asking(tag: &str) -> Option<(common::TempDir, std::sync::Arc<Agents>)> {
     let needed = [
         "provider-openai.wasm",
         "interceptor-tool-selector.wasm",
@@ -402,8 +404,11 @@ extensions:
     };
     let runtime =
         Runtime::boot(&config, common::repo_root().join("ext")).expect("the runtime boots");
-    let agent = runtime.build_agent(&factory).expect("the agent boots");
-    Some((guard, agent))
+    let agents = std::sync::Arc::new(Agents::new(
+        std::sync::Arc::new(runtime),
+        std::sync::Arc::new(factory),
+    ));
+    Some((guard, agents))
 }
 
 /// A turn over the socket: it streams, it asks in band, and the answer
@@ -422,11 +427,11 @@ fn a_turn_streams_and_its_ask_is_answered_in_band() {
     // way.
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");
     let started = std::time::Instant::now();
-    let Some((_guard, mut agent)) = booted_asking("turn") else {
+    let Some((_guard, agents)) = booted_asking("turn") else {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let seen = surface.serve_while(&mut agent, None, |port| {
+    let seen = surface.serve_while(&agents, None, |port| {
         talk_until(
             port,
             vec![
@@ -473,11 +478,11 @@ fn a_turn_streams_and_its_ask_is_answered_in_band() {
 #[test]
 fn a_turn_is_cancelled_over_the_same_socket_while_it_runs() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");
-    let Some((_guard, mut agent)) = booted_asking("cancel") else {
+    let Some((_guard, agents)) = booted_asking("cancel") else {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let seen = surface.serve_while(&mut agent, None, |port| {
+    let seen = surface.serve_while(&agents, None, |port| {
         talk_until(
             port,
             vec![
