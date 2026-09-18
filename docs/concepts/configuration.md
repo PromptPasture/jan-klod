@@ -266,6 +266,21 @@ set is closed and read-only; `fs` is listed per op because it can also write.
 `fetch` is deliberately absent — it is network egress, which is worth a question
 even though it does not touch the workspace.
 
+**How long "always" lasts, and how far it reaches.** Answering a confirmation
+with `always` records a standing decision for that kind of action. By default it
+lasts for **the session that gave it**: each session has its own agent and its
+own copy of the interceptor, so a second conversation is asked again, and a
+restart asks everyone again.
+
+`persist: true` on the instance changes both: the decision goes to the store,
+which is one per deployment, so it is shared by every session *and* survives a
+restart. That is the wider scope as well as the longer one — worth knowing before
+granting it, because "always" then means every conversation this gateway will
+ever serve, not the one in front of you.
+
+A scope escape is never remembered either way: "always allow writes" covers
+writing files, not writing outside the workspace.
+
 ### `guardrails`
 
 Where `permission` asks whether an action may happen, `guardrails` looks at what

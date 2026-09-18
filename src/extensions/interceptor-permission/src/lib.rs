@@ -21,8 +21,17 @@
 //! a gate that asks the same question forty times gets switched off.
 //! Three properties keep that from eroding the boundary:
 //!
-//! - **Run-scoped, never persisted.** Decisions live in `host-storage`, owned by
-//!   this instance unless the operator grants `persist: true`. Restart and it asks again.
+//! - **Per session, never persisted by default.** Decisions live in
+//!   `host-storage`, owned by this instance — and since #229 there is an
+//!   instance per session, so `always` lasts for the conversation that
+//!   said it and the next session is asked again. Restart and every one
+//!   of them is asked again.
+//!
+//!   `persist: true` changes both halves: the decisions go to the store,
+//!   which is one per runtime, so they are shared across sessions *and*
+//!   survive a restart. That is what an operator granting it is asking
+//!   for, and it is worth knowing it is the wider of the two scopes
+//!   rather than only the longer one.
 //! - **A scope escape is never remembered** ([`rules::Concern::is_rememberable`]).
 //!   "Always allow writes" covers writing files, not writing `/etc/passwd`.
 //! - **Unreadable state means ask.** A storage error or unrecognised value falls back
