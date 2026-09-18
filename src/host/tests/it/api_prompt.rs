@@ -10,7 +10,7 @@ use std::thread;
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::serve_once;
+use jan_klod_host::serve::{serve_once, serve_requests};
 use tiny_http::Server;
 
 use crate::common;
@@ -155,9 +155,11 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
         (collected, answered)
     });
 
-    // Session thread serves message request; waiter serves answer request
-    // from inside, so one `serve_once` covers both.
-    serve_once(&server, &mut agent).expect("serves the turn");
+    // Two requests: the turn, and the answer that arrives while it is
+    // parked. They used to be one, because the parked driver served the
+    // socket itself — #225 took that away, and the count is what the
+    // difference looks like from a test.
+    serve_requests(&server, &mut agent, None, 2).expect("serves the turn and its answer");
 
     let (stream_text, answered) = turn.join().expect("turn client thread");
     assert!(answered, "the turn asked for a confirmation: {stream_text}");

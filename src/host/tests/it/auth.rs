@@ -11,7 +11,7 @@ use std::net::TcpStream;
 use std::thread;
 
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::serve_once_authed;
+use jan_klod_host::serve::{serve_once_authed, serve_requests};
 use tiny_http::Server;
 
 use crate::common;
@@ -247,7 +247,9 @@ extensions:
         (refused, accepted, collected)
     });
 
-    serve_once_authed(&server, &mut agent, Some(TOKEN)).expect("serves the turn");
+    // Three: the turn, the outsider's refused answer, and the real one.
+    // One sufficed while the parked driver served the socket itself (#225).
+    serve_requests(&server, &mut agent, Some(TOKEN), 3).expect("serves the turn");
     let (refused, accepted, stream_text) = client.join().expect("client thread");
 
     assert!(

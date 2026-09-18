@@ -18,7 +18,7 @@ use jan_klod_client::{stream_turn, StreamEvent};
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::serve_once;
+use jan_klod_host::serve::serve_requests;
 use tiny_http::Server;
 
 use crate::common;
@@ -250,7 +250,9 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
         (result, asked, answer)
     });
 
-    serve_once(&server, &mut agent).expect("serves the turn");
+    // The turn, then the answer that arrives while it is parked: two
+    // requests since #225 took the socket away from the parked driver.
+    serve_requests(&server, &mut agent, None, 2).expect("serves the turn and its answer");
     let (result, asked, answer) = client.join().expect("client thread");
 
     assert!(result.is_ok(), "the streamed turn completed: {result:?}");
@@ -302,7 +304,9 @@ fn a_refused_confirmation_leaves_the_workspace_untouched() {
             }
         })
     });
-    serve_once(&server, &mut agent).expect("serves the turn");
+    // The turn, then the answer that arrives while it is parked: two
+    // requests since #225 took the socket away from the parked driver.
+    serve_requests(&server, &mut agent, None, 2).expect("serves the turn and its answer");
     let _ = client.join().expect("client thread");
 
     assert!(

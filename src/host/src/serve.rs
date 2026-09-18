@@ -2,17 +2,40 @@
 //!
 //! Routes: GET /health, GET /sessions, POST /sessions, GET /session/:id, POST
 //! /session/:id/message (SSE or JSON), answer, fork, GET /contributions and
-//! POST /contributions/invoke. Synchronous/blocking (`tiny_http`): one request
-//! at a time.
+//! POST /contributions/invoke.
 //!
-//! Mid-turn confirmations without threads: interceptors block in `Driver::ask`;
-//! the waiting driver serves the socket itself via `recv_timeout` loop until
-//! `POST /session/:id/answer` arrives (409 to others). Unanswered prompts timeout
-//! at [`DEFAULT_ANSWER_TIMEOUT`], taking the prompt's default.
+//! # Who runs on which thread (#225)
+//!
+//! One thread accepts. The session lives on another and is reached by job
+//! (`session_thread`), because `AgentSession` is `!Send` and cannot be
+//! handed to whoever happens to have accepted a request.
+//!
+//! * Anything that needs no session — the assets, `/health`, and **the
+//!   answer route** — is served on the accepting thread.
+//! * Anything that does is handed to a short-lived worker, which blocks on
+//!   the session's queue. Blocking there is correct: the session is busy.
+//!   Blocking the *accepting* thread would not be, which is why these are
+//!   not served inline.
+//! * A streaming turn is queued and not waited for. Its writer moves to the
+//!   session's thread (`Request::into_writer` is `Send`) and the turn
+//!   streams from there.
+//!
+//! # Mid-turn confirmations
+//!
+//! An interceptor blocks in `Driver::ask`, which registers a one-shot in
+//! [`crate::pending`] and waits on it. The answer arrives as an ordinary
+//! request, is completed by the accepting thread, and never becomes a job —
+//! queued behind the parked turn it would wait for the turn waiting for it.
+//!
+//! This replaces a driver that **served the socket itself** while parked and
+//! refused every other caller with `409`. `409` now means only what it says:
+//! nothing is pending for that session. Unanswered prompts still time out at
+//! [`answer_timeout`], taking the prompt's default.
 
 use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tiny_http::{Header, Method, Request, Response, Server};
@@ -23,6 +46,9 @@ use jan_klod_core::session::{
     answer_timeout, fork, new_session_id, session_payload, sessions_payload, Forked,
 };
 use jan_klod_core::AgentSession;
+
+use crate::pending::Pending;
+use crate::session_thread::{self, Jobs};
 
 /// How often the wait pokes the event stream while parked. A vanished client
 /// (post-write) looks fine until FIN is processed; each tick writes an SSE
@@ -47,120 +73,271 @@ pub struct Reply {
 /// Serve one request from `server` through `agent`, then respond.
 ///
 /// # Errors
-/// Returns the underlying I/O error if the request cannot be received, read, or
-/// answered.
+/// Returns the underlying I/O error if the request cannot be received.
 pub fn serve_once(server: &Server, agent: &mut AgentSession) -> std::io::Result<()> {
-    serve_once_authed(server, agent, None)
+    serve_requests(server, agent, None, 1)
 }
 
 /// Serve one request, requiring `Bearer <token>` when `token` is `Some`.
 ///
 /// # Errors
-/// Returns the underlying I/O error if the request cannot be received, read, or
-/// answered.
+/// Returns the underlying I/O error if the request cannot be received.
 pub fn serve_once_authed(
     server: &Server,
     agent: &mut AgentSession,
     token: Option<&str>,
 ) -> std::io::Result<()> {
-    let mut request = server.recv()?;
+    serve_requests(server, agent, token, 1)
+}
+
+/// Serve exactly `requests` requests, then return.
+///
+/// The bounded form exists for tests, and it is not a second code path: the
+/// production loop below is this with no bound. A confirmation needs **two**
+/// — the turn and the answer — which is the shape that stopped being
+/// expressible in one when the parked driver gave up the socket (#225).
+///
+/// # Errors
+/// Returns the underlying I/O error if a request cannot be received.
+pub fn serve_requests(
+    server: &Server,
+    agent: &mut AgentSession,
+    token: Option<&str>,
+    requests: usize,
+) -> std::io::Result<()> {
+    // Owned once, shared with every worker: a job cannot borrow from this
+    // frame, and a second registry would mean an answer that reaches nobody.
+    let pending = Arc::new(Pending::new());
+    let token = token.map(str::to_owned);
+    let (jobs, queued) = session_thread::queue::<AgentSession>();
+
+    std::thread::scope(|scope| {
+        let accepting = {
+            let pending = Arc::clone(&pending);
+            let token = token.clone();
+            scope.spawn(move || -> std::io::Result<()> {
+                for _ in 0..requests {
+                    let request = server.recv()?;
+                    dispatch(scope, request, &jobs, &pending, token.as_deref());
+                }
+                // Dropping the last handle is what ends the loop below.
+                Ok(())
+            })
+        };
+        // This thread owns the session for as long as anything can ask.
+        session_thread::serve(agent, &queued);
+        accepting
+            .join()
+            .unwrap_or_else(|_| Err(std::io::Error::other("the accept thread panicked")))
+    })
+}
+
+/// Route one request: inline when it needs no session, on a worker when it
+/// does, queued when it streams.
+fn dispatch<'scope>(
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    request: Request,
+    jobs: &Jobs<AgentSession>,
+    pending: &Arc<Pending>,
+    token: Option<&str>,
+) {
     let method = request.method().clone();
     let url = request.url().to_string();
     // Strip query string for routing.
-    let path = url.split('?').next().unwrap_or(&url);
+    let path = url.split('?').next().unwrap_or(&url).to_string();
 
     // Auth first. `/health` stays open: no session data, supervisor probes unauthed.
-    if !authorised(&request, token, path) {
-        return respond_json(request, error_reply(401, "missing or invalid bearer token"));
+    if !authorised(&request, token, &path) {
+        let _ = respond_json(request, error_reply(401, "missing or invalid bearer token"));
+        return;
     }
 
-    // GET / and its one asset — the web client, embedded above.
-    // Two exact paths, not a prefix: `starts_with("/")` would match every route
-    // on this surface, and a static-file handler that shadows the API is a
-    // worse bug than no web client at all.
-    if method == Method::Get && path == "/" {
-        return respond_asset(request, WEB_INDEX, "text/html; charset=utf-8");
-    }
-    if method == Method::Get && path == "/app.js" {
-        return respond_asset(request, WEB_APP_JS, "text/javascript; charset=utf-8");
+    // Anything needing no session is answered here and now.
+    let Some(mut request) = without_session(request, &method, &path, pending) else {
+        return;
+    };
+
+    // ── Streaming: queued, never waited for ─────────────────────────────
+    //
+    // Waiting here would hold the accepting thread for the whole turn, and
+    // the answer to its own confirmation would never be accepted.
+    if method == Method::Post {
+        if let Some(session) = strip_prefix(&path, "/session/")
+            .and_then(|rest| rest.strip_suffix("/message"))
+            .filter(|id| !id.contains('/'))
+            .map(str::to_owned)
+        {
+            let wants_sse = accepts_event_stream(&request);
+            let mut body = String::new();
+            if request.as_reader().read_to_string(&mut body).is_err() {
+                let _ = respond_json(request, error_reply(400, "unreadable body"));
+                return;
+            }
+            if wants_sse {
+                let writer = request.into_writer();
+                let pending = Arc::clone(pending);
+                let _ = jobs.send(move |agent: &mut AgentSession| {
+                    run_turn_streaming(agent, writer, &session, &body, &pending);
+                });
+            } else {
+                on_worker(scope, jobs, request, move |agent| {
+                    handle_message(agent, &session, &body)
+                });
+            }
+            return;
+        }
     }
 
-    // GET /health
-    if method == Method::Get && path == "/health" {
-        return respond_json(request, health());
-    }
-
-    // GET /sessions
+    // ── Everything else needs the session, on a worker ──────────────────
     if method == Method::Get && path == "/sessions" {
-        return respond_json(request, handle_list_sessions(agent));
+        on_worker(scope, jobs, request, |agent: &mut AgentSession| {
+            handle_list_sessions(agent)
+        });
+        return;
     }
-
-    // POST /sessions
-    if method == Method::Post && path == "/sessions" {
-        return respond_json(request, handle_create_session());
-    }
-
-    // GET /contributions
     if method == Method::Get && path == "/contributions" {
-        return respond_json(request, handle_contributions(agent));
+        on_worker(scope, jobs, request, handle_contributions);
+        return;
     }
-
-    // POST /contributions/invoke
     if method == Method::Post && path == "/contributions/invoke" {
         let mut body = String::new();
-        request.as_reader().read_to_string(&mut body)?;
-        let reply = handle_invoke(agent, &body);
-        return respond_json(request, reply);
+        if request.as_reader().read_to_string(&mut body).is_err() {
+            let _ = respond_json(request, error_reply(400, "unreadable body"));
+            return;
+        }
+        on_worker(scope, jobs, request, move |agent| {
+            handle_invoke(agent, &body)
+        });
+        return;
     }
-
-    // GET /session/:id
     if method == Method::Get {
-        if let Some(id) = strip_prefix(path, "/session/") {
-            if !id.contains('/') {
-                return respond_json(request, handle_get_session(agent, id));
-            }
+        if let Some(id) = strip_prefix(&path, "/session/")
+            .filter(|id| !id.contains('/'))
+            .map(str::to_owned)
+        {
+            on_worker(scope, jobs, request, move |agent| {
+                handle_get_session(agent, &id)
+            });
+            return;
         }
     }
-
-    // POST /session/:id/answer — intercepted by waiting driver. Reaching here
-    // means no turn is waiting; return 409, not 404.
     if method == Method::Post {
-        if let Some(rest) = strip_prefix(path, "/session/") {
-            if rest.strip_suffix("/answer").is_some() {
-                return respond_json(request, error_reply(409, "no confirmation is pending"));
+        if let Some(id) = strip_prefix(&path, "/session/")
+            .and_then(|rest| rest.strip_suffix("/fork"))
+            .filter(|id| !id.contains('/'))
+            .map(str::to_owned)
+        {
+            let mut body = String::new();
+            if request.as_reader().read_to_string(&mut body).is_err() {
+                let _ = respond_json(request, error_reply(400, "unreadable body"));
+                return;
             }
+            on_worker(scope, jobs, request, move |agent| {
+                handle_fork_session(agent, &id, &body)
+            });
+            return;
         }
     }
 
-    // POST /session/:id/fork
-    if method == Method::Post {
-        if let Some(rest) = strip_prefix(path, "/session/") {
-            if let Some(id) = rest.strip_suffix("/fork") {
-                let mut body = String::new();
-                request.as_reader().read_to_string(&mut body)?;
-                let reply = handle_fork_session(agent, id, &body);
-                return respond_json(request, reply);
+    let _ = respond_json(request, error_reply(404, "not found"));
+}
+
+/// Serve the routes that need no session, on the accepting thread.
+///
+/// `Some(request)` hands it back unanswered for the session-bound routes
+/// below. The answer route is in **this** group deliberately: as a job it
+/// would queue behind the very turn that is parked waiting for it.
+fn without_session(
+    mut request: Request,
+    method: &Method,
+    path: &str,
+    pending: &Pending,
+) -> Option<Request> {
+    if *method == Method::Get {
+        match path {
+            "/" => {
+                let _ = respond_asset(request, WEB_INDEX, "text/html; charset=utf-8");
+                return None;
+            }
+            "/app.js" => {
+                let _ = respond_asset(request, WEB_APP_JS, "text/javascript; charset=utf-8");
+                return None;
+            }
+            "/health" => {
+                let _ = respond_json(request, health());
+                return None;
+            }
+            _ => return Some(request),
+        }
+    }
+    if *method != Method::Post {
+        return Some(request);
+    }
+    if path == "/sessions" {
+        let _ = respond_json(request, handle_create_session());
+        return None;
+    }
+    let answer_for = strip_prefix(path, "/session/").and_then(|rest| {
+        rest.strip_suffix("/answer")
+            .filter(|id| !id.contains('/'))
+            .map(str::to_owned)
+    });
+    if let Some(session) = answer_for {
+        let reply = request_answer(&mut request, &session, pending);
+        let _ = respond_json(request, reply);
+        return None;
+    }
+    Some(request)
+}
+
+/// Run `handler` on the session's thread and answer this request with what
+/// it returns, on a thread of this request's own.
+///
+/// The worker exists so the accepting thread keeps accepting: a request
+/// that needs a busy session waits, and nothing else has to wait with it.
+fn on_worker<'scope, F>(
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    jobs: &Jobs<AgentSession>,
+    request: Request,
+    handler: F,
+) where
+    F: FnOnce(&mut AgentSession) -> Reply + Send + 'static,
+{
+    let jobs = jobs.clone();
+    scope.spawn(move || {
+        let reply = jobs
+            .run(handler)
+            .unwrap_or_else(|why| error_reply(503, &format!("the session is unavailable: {why}")));
+        let _ = respond_json(request, reply);
+    });
+}
+
+/// `POST /session/:id/answer` — hand the answer to the turn parked on it.
+///
+/// Consumes the request's body and answers it here, on the accepting
+/// thread. Returns the request so the caller can respond with the reply
+/// this produced.
+fn request_answer(request: &mut Request, session: &str, pending: &Pending) -> Reply {
+    let mut body = String::new();
+    if request.as_reader().read_to_string(&mut body).is_err() {
+        return error_reply(400, "unreadable body");
+    }
+    match parse_answer_body(&body) {
+        Err(err) => error_reply(400, &err),
+        Ok(answer) => {
+            if pending.answer(session, answer) {
+                Reply {
+                    status: 200,
+                    body: r#"{"accepted":true}"#.to_string(),
+                }
+            } else {
+                // Still a true statement, and the only one `409` makes now:
+                // nothing is parked for this session. What it no longer
+                // means is "someone else is confirming".
+                error_reply(409, "no confirmation is pending")
             }
         }
     }
-
-    // POST /session/:id/message
-    if method == Method::Post {
-        if let Some(rest) = strip_prefix(path, "/session/") {
-            if let Some(id) = rest.strip_suffix("/message") {
-                let wants_sse = accepts_event_stream(&request);
-                let mut body = String::new();
-                request.as_reader().read_to_string(&mut body)?;
-                return if wants_sse {
-                    serve_message_sse(server, request, agent, id, &body, token)
-                } else {
-                    respond_json(request, handle_message(agent, id, &body))
-                };
-            }
-        }
-    }
-
-    respond_json(request, error_reply(404, "not found"))
 }
 
 // ─── Route handlers ──────────────────────────────────────────────────────────
@@ -316,27 +493,38 @@ fn handle_message(agent: &mut AgentSession, session: &str, body: &str) -> Reply 
     }
 }
 
-/// `POST /session/:id/message` (SSE variant) — stream turn events.
-fn serve_message_sse(
-    server: &Server,
-    request: Request,
+/// `POST /session/:id/message` (SSE variant) — stream a turn, on the
+/// session's own thread.
+///
+/// The writer arrives here rather than the request: `Request::into_writer`
+/// hands back a `Box<dyn Write + Send>`, which is the one thing about this
+/// surface that may cross to the session's thread, and the reason a turn
+/// can stream from where the session lives.
+fn run_turn_streaming(
     agent: &mut AgentSession,
+    writer: Box<dyn Write + Send>,
     session: &str,
     body: &str,
-    token: Option<&str>,
-) -> std::io::Result<()> {
-    let writer: SharedWriter = Rc::new(RefCell::new(request.into_writer()));
-    writer.borrow_mut().write_all(
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+    pending: &Pending,
+) {
+    let writer: SharedWriter = Rc::new(RefCell::new(writer));
+    if writer
+        .borrow_mut()
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
           Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
-    )?;
+        )
+        .is_err()
+    {
+        return;
+    }
 
     let message = match parse_message_body(body) {
         Ok(m) => m,
         Err(err) => {
             let (kind, data) = error_frame(&err);
             let _ = write_frame(&mut *writer.borrow_mut(), kind, &data.to_string());
-            return Ok(());
+            return;
         }
     };
 
@@ -345,10 +533,9 @@ fn serve_message_sse(
         live: true,
     };
     let mut driver = PromptDriver {
-        server,
+        pending,
         writer: Rc::clone(&writer),
         session: session.to_string(),
-        token,
     };
     if let RunResult::Failed(reason) =
         agent.run_streaming_with_driver(&mut driver, &mut sink, session, &message)
@@ -356,18 +543,19 @@ fn serve_message_sse(
         let (kind, data) = error_frame(&reason);
         let _ = write_frame(&mut *writer.borrow_mut(), kind, &data.to_string());
     }
-    Ok(())
 }
 
-/// Puts an interceptor's question to the client over the open SSE stream and
-/// waits, on this same thread, for the answer to arrive as its own request.
+/// Puts an interceptor's question to the client over the open SSE stream
+/// and waits for the answer to arrive as its own request.
+///
+/// It no longer reads the socket to get one. The answer is delivered by
+/// whichever thread accepted it, through [`Pending`] — so a parked turn
+/// stops being the server, and the `409` every other caller used to get
+/// stops being a thing that happens.
 struct PromptDriver<'a> {
-    server: &'a Server,
+    pending: &'a Pending,
     writer: SharedWriter,
     session: String,
-    /// The bearer token, checked here explicitly since this driver serves
-    /// the socket while a turn is parked, never passing through `serve_once_authed`.
-    token: Option<&'a str>,
 }
 
 impl Driver for PromptDriver<'_> {
@@ -383,63 +571,34 @@ impl Driver for PromptDriver<'_> {
 }
 
 impl PromptDriver<'_> {
-    /// Serve socket until this session's answer arrives or timeout expires.
-    /// Other requests refused with 409, not queued: agent is mid-turn and
-    /// single-threaded; "busy" clients can retry, hanging ones cannot.
+    /// Wait for this session's answer, writing a heartbeat between slices.
+    ///
+    /// The deadline is here rather than in [`Pending`] because the
+    /// heartbeat is a *write* to this stream: a vanished client looks fine
+    /// until a write fails, so waking every `HEARTBEAT` is how one is
+    /// noticed before the deadline rather than at it. Unchanged from the
+    /// version that owned the socket — only what it waits on has changed.
     fn wait_for_answer(&self) -> Option<String> {
+        let Some(parked) = self.pending.park(&self.session) else {
+            // Something is already parked for this session. Two questions
+            // and one answer route cannot be told apart, so this one takes
+            // its default rather than risk being given the other's answer.
+            return None;
+        };
         let deadline = Instant::now() + answer_timeout();
-        let route = format!("/session/{}/answer", self.session);
         loop {
             let remaining = deadline.checked_duration_since(Instant::now())?;
-            // Wake every HEARTBEAT so vanished clients are noticed quickly, not at timeout end.
             let slice = remaining.min(HEARTBEAT);
-            let Some(mut request) = self.server.recv_timeout(slice).ok().flatten() else {
-                if remaining <= slice {
-                    // The real deadline, not a tick.
-                    return None;
-                }
-                if write_comment(&mut *self.writer.borrow_mut()).is_err() {
-                    // Nobody is listening, so nobody can answer.
-                    return None;
-                }
-                continue;
-            };
-            let path = request.url().split('?').next().unwrap_or("").to_string();
-            if !authorised(&request, self.token, &path) {
-                // Drain before replying: unanswered POST leaves connection mid-message.
-                let mut discard = String::new();
-                let _ = request.as_reader().read_to_string(&mut discard);
-                // Refuse and keep waiting: unauthenticated callers cannot answer
-                // or consume the wait.
-                let _ = respond_json(request, error_reply(401, "missing or invalid bearer token"));
-                continue;
+            if let Some(answer) = parked.wait(slice) {
+                return Some(answer);
             }
-            if *request.method() == Method::Post && path == route {
-                let mut body = String::new();
-                if request.as_reader().read_to_string(&mut body).is_err() {
-                    let _ = respond_json(request, error_reply(400, "unreadable body"));
-                    continue;
-                }
-                match parse_answer_body(&body) {
-                    Ok(answer) => {
-                        let _ = respond_json(
-                            request,
-                            Reply {
-                                status: 200,
-                                body: r#"{"accepted":true}"#.to_string(),
-                            },
-                        );
-                        return Some(answer);
-                    }
-                    Err(err) => {
-                        let _ = respond_json(request, error_reply(400, &err));
-                    }
-                }
-            } else {
-                let _ = respond_json(
-                    request,
-                    error_reply(409, "the agent is waiting for an answer to a confirmation"),
-                );
+            if remaining <= slice {
+                // The real deadline, not a tick.
+                return None;
+            }
+            if write_comment(&mut *self.writer.borrow_mut()).is_err() {
+                // Nobody is listening, so nobody can answer.
+                return None;
             }
         }
     }
