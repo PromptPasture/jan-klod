@@ -13,6 +13,8 @@ export interface View {
   transcript: HTMLElement;
   status: HTMLElement;
   prompt: HTMLElement;
+  /** Where extensions' contributions are drawn (`wit/client-surface.wit`). */
+  contributions: HTMLElement;
 }
 
 export class App {
@@ -168,6 +170,65 @@ export class App {
       box.append(button);
     }
     this.view.prompt.replaceChildren(box);
+  }
+
+  /**
+   * Draw what the extensions contribute: a button per command, a line per
+   * status item.
+   *
+   * **Every string here was written by a sandboxed extension.** Each one is
+   * assigned with `textContent`, so markup is text and a `<script>` in a
+   * label is a label that reads `<script>`. Nothing is built with
+   * `innerHTML`, and no contribution chooses a URL — there is no `href` here
+   * to give one, and if a contribution ever needs a link that is a change to
+   * `wit/client-surface.wit` rather than a decision this client makes.
+   *
+   * The extension's own id leads each row for the same reason the terminal
+   * client leads with it: a claim rendered bare reads as this client's word
+   * for something.
+   */
+  async refreshContributions(): Promise<void> {
+    const sets = await api.contributions();
+    const rows: HTMLElement[] = [];
+    for (const set of sets) {
+      for (const command of set.commands) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = `${command.name} — ${command.description}`;
+        button.title = `${set.extension}: ${command.title}`;
+        button.dataset["extension"] = set.extension;
+        button.dataset["contribution"] = command.name;
+        button.addEventListener("click", () => {
+          void this.invoke(set.extension, command.name);
+        });
+        rows.push(button);
+      }
+      for (const item of set["status-items"]) {
+        const line = document.createElement("div");
+        line.dataset["status-item"] = item.name;
+        line.textContent = `${set.extension} ${item.text}`;
+        line.title = item.detail;
+        rows.push(line);
+      }
+    }
+    this.view.contributions.replaceChildren(...rows);
+  }
+
+  /**
+   * Run a contribution and show what it answered.
+   *
+   * A set that moved is read again before the answer is shown, so a user is
+   * never looking at an outdated menu while reading the result of the thing
+   * that changed it.
+   */
+  private async invoke(extension: string, name: string): Promise<void> {
+    try {
+      const outcome = await api.invokeContribution(extension, name);
+      if (outcome["contributions-changed"]) await this.refreshContributions();
+      this.status(outcome.text || `${name} ran`);
+    } catch (err) {
+      this.status(err instanceof Error ? err.message : String(err));
+    }
   }
 
   private append(role: string, content: string): HTMLElement {

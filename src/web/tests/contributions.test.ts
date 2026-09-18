@@ -10,10 +10,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { installDom } from "./dom.ts";
+import { readFileSync } from "node:fs";
+
+import { installDom, StubElement } from "./dom.ts";
 installDom();
 
 const api = await import("../src/api.ts");
+const { App } = await import("../src/app.ts");
 
 /** One extension contributing a command and a status item. */
 const CONTRIBUTED = {
@@ -131,5 +134,134 @@ test("invoking something the core does not contribute says which name failed", a
     );
   } finally {
     restore();
+  }
+});
+
+function view() {
+  return {
+    sessions: new StubElement(),
+    transcript: new StubElement(),
+    status: new StubElement(),
+    prompt: new StubElement(),
+    contributions: new StubElement(),
+  };
+}
+
+test("a contributed command is a button and a status item is a line", async () => {
+  const { restore } = stubFetch(
+    () => new Response(JSON.stringify(CONTRIBUTED), { status: 200 }),
+  );
+  try {
+    const v = view();
+    await new App(v as never).refreshContributions();
+    const rendered = v.contributions.text();
+    assert.match(rendered, /prompt — show the standing instructions/);
+    assert.match(rendered, /interceptor\.system built-in/);
+  } finally {
+    restore();
+  }
+});
+
+test("clicking a contributed command invokes it by extension and name", async () => {
+  const calls: Call[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: string, init?: RequestInit) => {
+    calls.push({
+      url: input,
+      method: init?.method ?? "GET",
+      body: init?.body as string | undefined,
+    });
+    if (input === "/contributions/invoke") {
+      return new Response(
+        JSON.stringify({ text: "the prompt", "contributions-changed": false }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify(CONTRIBUTED), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const v = view();
+    await new App(v as never).refreshContributions();
+    const button = v.contributions.children[0];
+    assert.ok(button, "the command rendered as something clickable");
+    button.click();
+    // The click handler is async; let its promise settle.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const invoke = calls.find((c) => c.url === "/contributions/invoke");
+    assert.ok(invoke, "clicking it invoked something");
+    const sent = JSON.parse(invoke.body ?? "{}") as Record<string, unknown>;
+    assert.equal(sent["extension"], "interceptor.system");
+    assert.equal(sent["name"], "prompt");
+    assert.equal(v.status.textContent, "the prompt");
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+/**
+ * Markup in a contributed label is text, and the label is shown whole.
+ *
+ * The stub DOM cannot parse HTML, so this alone would not catch an
+ * `innerHTML`; the test below is what does. This one checks the other half —
+ * that nothing strips or mangles a label on the way, so an honest extension
+ * sees what it wrote and a hostile one gains nothing by hiding in markup.
+ */
+test("markup in a label is carried as text, not interpreted or dropped", async () => {
+  const hostile = {
+    extensions: [
+      {
+        extension: "interceptor.system",
+        commands: [
+          {
+            name: "<script>alert(1)</script>",
+            title: "t",
+            description: "<img src=x onerror=alert(1)>",
+            arguments: [],
+          },
+        ],
+        "status-items": [],
+      },
+    ],
+  };
+  const { restore } = stubFetch(
+    () => new Response(JSON.stringify(hostile), { status: 200 }),
+  );
+  try {
+    const v = view();
+    await new App(v as never).refreshContributions();
+    const rendered = v.contributions.text();
+    assert.match(rendered, /<script>alert\(1\)<\/script>/);
+    assert.match(rendered, /<img src=x onerror=alert\(1\)>/);
+  } finally {
+    restore();
+  }
+});
+
+/**
+ * The escaping rule, checked where a stub DOM cannot check it: the client's
+ * own source. Every string it draws goes through `textContent`, so a browser
+ * renders markup as characters. One `innerHTML` would undo that silently and
+ * no assertion over a stub would notice.
+ *
+ * Grep-style, like `src/tui/tests/sidebar_projection.rs`. Comments are
+ * stripped first, for the reason that file gives about living outside the
+ * code it checks: `app.ts` explains in prose *why* it never assigns HTML, and
+ * a scan that read its own explanation would fail on a correct file. It did,
+ * the first time this ran.
+ */
+test("the client never assigns HTML", async () => {
+  const source = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*/g, "");
+  for (const forbidden of [
+    "innerHTML",
+    "outerHTML",
+    "insertAdjacentHTML",
+    "document.write",
+  ]) {
+    assert.ok(
+      !source.includes(forbidden),
+      `app.ts uses ${forbidden}: contributed text would stop being text`,
+    );
   }
 });

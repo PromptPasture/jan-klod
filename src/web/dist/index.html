@@ -10,6 +10,11 @@
       #sidebar { border-right: 1px solid #ddd; padding: .75rem; overflow: auto; }
       #sessions button { display: block; width: 100%; text-align: left;
                          margin-bottom: .25rem; }
+      #contributions { margin-top: .75rem; border-top: 1px solid #ddd;
+                       padding-top: .5rem; }
+      #contributions button { display: block; width: 100%; text-align: left;
+                              margin-bottom: .25rem; }
+      #contributions div { color: #555; font-size: .9em; }
       main { display: flex; flex-direction: column; min-width: 0; }
       #transcript { flex: 1; overflow: auto; padding: .75rem; }
       #transcript div { margin-bottom: .5rem; white-space: pre-wrap; }
@@ -24,6 +29,7 @@
     <div id="sidebar">
       <button type="button" id="new-session">New session</button>
       <div id="sessions"></div>
+      <div id="contributions"></div>
     </div>
     <main>
       <div id="transcript"></div>

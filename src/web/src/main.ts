@@ -32,6 +32,7 @@ export async function start(): Promise<void> {
     transcript: element("transcript"),
     status: element("status"),
     prompt: element("prompt"),
+    contributions: element("contributions"),
   });
 
   element("new-session").addEventListener("click", () => void app.create());
@@ -48,6 +49,9 @@ export async function start(): Promise<void> {
   });
 
   await app.refreshSessions();
+  // Read once at start-up: a browser has no handshake to be told at, and the
+  // set only moves when an invocation says it did.
+  await app.refreshContributions();
 }
 
 if (typeof document !== "undefined" && document.getElementById("app")) {
