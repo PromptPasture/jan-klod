@@ -58,6 +58,22 @@ impl SandboxBackend for SeatbeltBackend {
     }
 }
 
+/// Write access to `/dev/null`, granted to every command rather than
+/// configured by anyone (#212).
+///
+/// `2>/dev/null` is in most shell invocations a model produces, and without
+/// this the *shell* fails on the redirect before the program runs — so the
+/// command never executes and the error names `/dev/null` rather than
+/// anything the operator wrote. The failure cascades badly: `xcode-select`
+/// redirects its probe this way, so a refused `/dev/null` is reported as a
+/// missing `clang`.
+///
+/// This grants nothing. `/dev/null` is a sink: a write to it discloses
+/// nothing, persists nothing and reaches nothing, which makes it the one path
+/// where `file-write*` is definitionally void. It is `literal` rather than
+/// `subpath` so it grants that device and not `/dev`.
+const DEV_NULL_RULE: &str = "(allow file-write* (literal \"/dev/null\"))\n";
+
 /// The Seatbelt profile for `policy`.
 ///
 /// # Errors
@@ -71,6 +87,7 @@ pub fn profile(policy: &SandboxPolicy) -> Result<String, SandboxError> {
     // not narrowed here.
     profile.push_str("(allow process-exec)\n(allow process-fork)\n(allow sysctl-read)\n");
     profile.push_str("(allow file-read*)\n");
+    profile.push_str(DEV_NULL_RULE);
     for path in &policy.writable {
         let resolved = resolve(path)?;
         profile.push_str("(allow file-write* (subpath ");
@@ -180,6 +197,23 @@ mod tests {
         assert!(
             text.contains("(allow file-write* (subpath "),
             "the writable path is granted: {text}"
+        );
+    }
+
+    /// `/dev/null` is granted to every policy, including one that asked for
+    /// nothing — it is substrate, not a grant (#212). `literal`, so it is that
+    /// device and not `/dev`.
+    #[test]
+    fn dev_null_is_writable_without_anyone_asking() {
+        let dir = temp_dir("devnull");
+        let text = profile(&policy_over(&dir.0)).expect("generates");
+        assert!(
+            text.contains("(allow file-write* (literal \"/dev/null\"))"),
+            "a shell cannot run `2>/dev/null` without this: {text}"
+        );
+        assert!(
+            !text.contains("(subpath \"/dev\")"),
+            "only the device is granted, not the directory: {text}"
         );
     }
 

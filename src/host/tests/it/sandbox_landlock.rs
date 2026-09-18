@@ -130,6 +130,53 @@ fn a_confined_command_can_still_write_inside_the_workspace() {
     assert!(target.exists());
 }
 
+/// `2>/dev/null` works, which it did not before #212. The Linux twin of
+/// `sandbox_seatbelt.rs::a_confined_command_can_redirect_to_dev_null`.
+///
+/// The shell opens the redirect before running the program, so a denied
+/// `/dev/null` means the command never runs and the error names `/dev/null`
+/// rather than anything the operator wrote.
+#[test]
+fn a_confined_command_can_redirect_to_dev_null() {
+    require_landlock();
+    let dirs = dirs("devnull");
+    let args = vec!["-c".to_owned(), "echo hi 2>/dev/null".to_owned()];
+    let out = confined(&dirs.workspace)
+        .exec("/bin/sh", &args, None, None)
+        .expect("the command runs");
+    assert_eq!(
+        out.code, 0,
+        "a shell redirecting to /dev/null runs: {}",
+        out.stderr
+    );
+    assert!(
+        out.stdout.contains("hi"),
+        "and the program itself ran: {out:?}"
+    );
+}
+
+/// The other half, and the reason the grant above is not a hole: the rule
+/// names the device, so the rest of `/dev` stays unwritable. Landlock scopes
+/// a file rule to that file, and this is what notices if it is ever widened
+/// to the directory.
+#[test]
+fn granting_dev_null_does_not_grant_the_device_directory() {
+    require_landlock();
+    let dirs = dirs("devdir");
+    let args = vec!["-c".to_owned(), "echo x > /dev/jan-klod-probe".to_owned()];
+    let out = confined(&dirs.workspace)
+        .exec("/bin/sh", &args, None, None)
+        .expect("the command runs");
+    assert_ne!(
+        out.code, 0,
+        "a write elsewhere under /dev is still denied: {out:?}"
+    );
+    assert!(
+        !Path::new("/dev/jan-klod-probe").exists(),
+        "and nothing was created in /dev"
+    );
+}
+
 /// Network denial via listener (closed port and denial look the same).
 #[test]
 fn a_confined_command_cannot_reach_the_network() {

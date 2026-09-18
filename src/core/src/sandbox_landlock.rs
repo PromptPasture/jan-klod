@@ -349,6 +349,21 @@ pub fn apply(plan: &Confinement) -> Result<(), String> {
             AccessFs::from_read(NEWEST_FS),
         ))
         .map_err(|err| format!("Landlock refused the read rule for `/`: {err}"))?;
+
+    // `/dev/null`, for every command and by nobody's configuration (#212).
+    // See `sandbox_seatbelt.rs`'s `DEV_NULL_RULE` for why this grants nothing
+    // and why a shell that cannot write here does not run the command at all.
+    //
+    // `WriteFile` alone, not `from_all`: `/dev/null` is a file, and the
+    // directory rights in `from_all` are not valid on a file rule — Landlock
+    // refuses the whole ruleset rather than ignoring the surplus.
+    created = created
+        .add_rule(PathBeneath::new(
+            PathFd::new("/dev/null")
+                .map_err(|err| format!("cannot open `/dev/null` to grant writes: {err}"))?,
+            AccessFs::WriteFile,
+        ))
+        .map_err(|err| format!("Landlock refused the write rule for `/dev/null`: {err}"))?;
     for path in &plan.writable {
         let fd = PathFd::new(path)
             .map_err(|err| format!("cannot open {} to grant writes: {err}", path.display()))?;

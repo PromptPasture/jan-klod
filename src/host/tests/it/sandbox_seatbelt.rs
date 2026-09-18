@@ -136,6 +136,55 @@ fn a_confined_command_can_still_write_inside_the_workspace() {
     assert!(target.exists());
 }
 
+/// `2>/dev/null` works, which it did not before #212.
+///
+/// The shell opens the redirect *before* running the program, so a denied
+/// `/dev/null` means the command never executes — and the error names
+/// `/dev/null` rather than anything the operator wrote. This was found through
+/// a cascade: `xcode-select` probes with `2> /dev/null`, so a refused write
+/// here was reported as a missing `clang`, which reads like a broken
+/// toolchain rather than a sandbox.
+#[test]
+fn a_confined_command_can_redirect_to_dev_null() {
+    let dirs = dirs("devnull");
+    let args = vec!["-c".to_owned(), "echo hi 2>/dev/null".to_owned()];
+    let out = confined(&dirs.workspace)
+        .exec("/bin/sh", &args, None, None)
+        .expect("the command runs");
+    assert_eq!(
+        out.code, 0,
+        "a shell redirecting to /dev/null runs: {}",
+        out.stderr
+    );
+    assert!(
+        out.stdout.contains("hi"),
+        "and the program itself ran: {out:?}"
+    );
+}
+
+/// The other half of the one above, and the reason it is not a hole.
+///
+/// Granting `/dev/null` must grant `/dev/null` and not `/dev`. Without this,
+/// widening the rule from `literal` to `subpath` — an easy edit, since every
+/// other grant in the profile is a `subpath` — would hand every command the
+/// device directory and pass the test above unchanged.
+#[test]
+fn granting_dev_null_does_not_grant_the_device_directory() {
+    let dirs = dirs("devdir");
+    let args = vec!["-c".to_owned(), "echo x > /dev/jan-klod-probe".to_owned()];
+    let out = confined(&dirs.workspace)
+        .exec("/bin/sh", &args, None, None)
+        .expect("the command runs");
+    assert_ne!(
+        out.code, 0,
+        "a write elsewhere under /dev is still denied: {out:?}"
+    );
+    assert!(
+        !Path::new("/dev/jan-klod-probe").exists(),
+        "and nothing was created in /dev"
+    );
+}
+
 /// Network denial, asserted by what the listener *did not see*.
 ///
 /// Not by `curl`'s exit code: a connection to a closed port fails the same way
