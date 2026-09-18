@@ -1463,6 +1463,31 @@ pub struct AgentSession {
 }
 
 impl AgentSession {
+    /// Record that a component was adopted into the runtime, or refused.
+    ///
+    /// The other half of [`Self::take_installed`]: the install says
+    /// "callable from the next turn" and that promise can fail, so the log
+    /// has to say whether it held. Written as a record rather than a turn
+    /// event because a load happens *between* turns — see
+    /// [`event_log::KIND_EXTENSION_LOADED`].
+    ///
+    /// Best-effort, like every other append: a store that cannot be written
+    /// must not stop a session from running.
+    pub fn record_load(&self, session: &str, stem: &str, outcome: Result<&str, &str>) {
+        let (loaded, detail) = match outcome {
+            Ok(id) => (true, id),
+            Err(reason) => (false, reason),
+        };
+        let payload = event_log::envelope(&serde_json::json!({
+            "stem": stem,
+            "loaded": loaded,
+            "detail": detail,
+        }));
+        if let Ok(store) = self.store.lock() {
+            let _ = store.append_event(session, event_log::KIND_EXTENSION_LOADED, &payload);
+        }
+    }
+
     /// Components installed by turns on this session, drained.
     ///
     /// **The seam between installing and loading** (#214). `ext-install`

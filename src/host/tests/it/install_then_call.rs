@@ -140,6 +140,8 @@ fn fixture() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
         &config,
         format!(
             "
+storage:
+  path: {db}
 registry:
   install-tool: true
   trusted-keys:
@@ -155,7 +157,8 @@ extensions:
     tool-selector:
       enabled: true
 ",
-            key = signer.public_key_base64()
+            key = signer.public_key_base64(),
+            db = dir.join("jan-klod.db").display()
         ),
     )
     .expect("writes the config");
@@ -201,11 +204,21 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
         vec!["tool-hello".to_string()],
         "the install left no note, so nothing downstream can know to load it"
     );
+    let mut outcomes = Vec::new();
     for stem in &installed {
-        runtime
-            .adopt_installed(stem)
-            .expect("adopts what it landed");
+        let outcome = runtime.adopt_installed(stem);
+        // The load is recorded on the session: the install already said
+        // "callable from the next turn", and that promise can fail.
+        match &outcome {
+            Ok(id) => agent.record_load("s1", stem, Ok(id.as_str())),
+            Err(err) => agent.record_load("s1", stem, Err(&err.to_string())),
+        }
+        outcomes.push(outcome);
     }
+    assert!(
+        outcomes.iter().all(Result::is_ok),
+        "adoption failed: {outcomes:?}"
+    );
     drop(agent);
     let mut agent = runtime.build_agent(&factory).expect("the agent rebuilds");
 
@@ -228,6 +241,22 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
         results[1].contains("replace me"),
         "the freshly installed tool did not answer in the same session: {}",
         results[1]
+    );
+
+    // The load is in the session log, as a record rather than a turn event.
+    // Without it the log ends on the install's "callable from the next
+    // turn" — a promise, with nothing saying whether it held.
+    let store =
+        jan_klod_core::store::Store::open(dir.join("jan-klod.db")).expect("the log is readable");
+    let rows = store.session_events("s1").expect("the session has a log");
+    assert!(
+        rows.iter().any(|row| {
+            row.kind == jan_klod_core::event_log::KIND_EXTENSION_LOADED
+                && row.payload.contains("tool-hello")
+                && row.payload.contains("\"loaded\":true")
+        }),
+        "the adoption is not in the session log, so the log promises a tool \
+         that nothing confirms arrived"
     );
 
     // And it was *offered*, not merely dispatchable. A fleet that knew the

@@ -125,7 +125,11 @@ fn message_for(record: Record) -> Option<Message> {
             content,
             tool_call_id: None,
         }),
-        Record::Ask { .. } | Record::Answer(_) => None,
+        // None of these is conversation. An `Ask` and its `Answer` happened
+        // between the host and the user, and an `ExtensionLoaded` between
+        // turns — the model was told none of them, so replaying any into a
+        // transcript would invent a turn that did not happen.
+        Record::Ask { .. } | Record::Answer(_) | Record::ExtensionLoaded { .. } => None,
         Record::Event(event) => match event {
             Event::Done { text, .. } => Some(Message {
                 role: Role::Assistant,

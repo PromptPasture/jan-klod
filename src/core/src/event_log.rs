@@ -82,6 +82,14 @@ pub const KIND_ANSWER: &str = "answer";
 /// The `kind` of a steering message injected mid-turn via `Driver::follow_up`.
 pub const KIND_FOLLOW_UP: &str = "follow-up";
 
+/// A component adopted into the running runtime, or refused (#214).
+///
+/// A `Record` rather than an [`Event`]: events are produced by a turn and
+/// streamed to clients, and a load happens *between* turns. Attributing it
+/// to the turn before would date it wrongly and to the turn after would
+/// hide it if none follows.
+pub const KIND_EXTENSION_LOADED: &str = "extension-loaded";
+
 /// Wrap `data` in the versioned envelope every row shares.
 ///
 /// Public because the records that are not [`Event`]s are built by their own
@@ -142,6 +150,21 @@ pub enum Record {
     Answer(String),
     /// A steering message injected mid-turn.
     FollowUp(String),
+    /// A component adopted into the running runtime after boot, or the
+    /// reason it was not (#214).
+    ///
+    /// Recorded because the install that preceded it says "callable from the
+    /// next turn", and that promise can fail: a component can land and then
+    /// be refused by the manifest cross-check. A log that recorded only the
+    /// install would assert something that never became true.
+    ExtensionLoaded {
+        /// The component stem, e.g. `tool-greet`.
+        stem: String,
+        /// Whether it is now part of the runtime.
+        loaded: bool,
+        /// The instance id when loaded, or why it was refused.
+        detail: String,
+    },
     /// One of the conductor's turn events.
     Event(Event),
 }
@@ -204,6 +227,13 @@ pub fn decode_record(kind: &str, payload: &str) -> Result<Record, DecodeError> {
         }),
         KIND_ANSWER => Ok(Record::Answer(text(kind, &data, "answer")?)),
         KIND_FOLLOW_UP => Ok(Record::FollowUp(text(kind, &data, "message")?)),
+        KIND_EXTENSION_LOADED => Ok(Record::ExtensionLoaded {
+            stem: text(kind, &data, "stem")?,
+            loaded: data.get("loaded").and_then(Value::as_bool).ok_or_else(|| {
+                DecodeError::Malformed(format!("`{kind}` has no boolean `loaded`"))
+            })?,
+            detail: text(kind, &data, "detail")?,
+        }),
         "text-delta" => Ok(Record::Event(Event::TextDelta(text(kind, &data, "text")?))),
         "tool-invoked" => Ok(Record::Event(Event::ToolInvoked(ToolCall {
             id: text(kind, &data, "id")?,

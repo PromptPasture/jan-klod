@@ -122,6 +122,52 @@ fn adopting_what_is_already_loaded_is_refused() {
     assert!(err.to_string().contains("already loaded"), "{err}");
 }
 
+/// A component that changed on disk is not reloaded (#214).
+///
+/// The "no silent reload" the issue requires, and it holds **by
+/// construction rather than by a guard**: nothing watches the filesystem,
+/// and the only way a component enters a running runtime is
+/// `adopt_installed`, which refuses an id it already has. So overwriting a
+/// loaded component's bytes changes nothing until the process restarts.
+///
+/// Worth a test anyway. The property is currently an absence — no watcher,
+/// no rescan — and absences are what a later convenience feature removes
+/// without noticing.
+#[test]
+fn a_component_rewritten_on_disk_is_not_picked_up() {
+    let Some((guard, mut runtime)) = runtime_over("rewritten", &["provider-openai"]) else {
+        return;
+    };
+    let ext = guard.0.join("ext");
+    let loaded = ext.join("provider-openai.wasm");
+    let before = std::fs::metadata(&loaded)
+        .expect("the loaded component is there")
+        .len();
+
+    // Replace it with something else entirely — a different component.
+    std::fs::copy(
+        common::repo_root().join("ext").join("tool-hello.wasm"),
+        &loaded,
+    )
+    .expect("overwrites the loaded component");
+    let after = std::fs::metadata(&loaded).expect("still there").len();
+    assert_ne!(
+        before, after,
+        "the fixture did not actually change the file"
+    );
+
+    // Nothing has rescanned, and asking would be refused.
+    let err = runtime
+        .adopt_installed("provider-openai")
+        .expect_err("a loaded id is not re-adopted");
+    assert!(err.to_string().contains("already loaded"), "{err}");
+    assert_eq!(
+        runtime.extension_ids(),
+        vec!["provider.openai".to_string()],
+        "the runtime's view of itself changed when only the disk did"
+    );
+}
+
 /// A component whose manifest under-declares is refused at adoption, the
 /// same as at boot.
 ///
