@@ -10,6 +10,13 @@
 //!
 //! Decoupled from Wasmtime via [`Completer`] and [`ToolInvoker`] traits;
 //! state machine is unit-tested with stubs.
+//!
+//! What a turn *emits* — [`Event`], [`Flow`], [`EventSink`] — now lives in
+//! [`jan_klod_protocol::turn`] beside the rest of the turn vocabulary,
+//! because the event log encodes an `Event` and sits below this crate (#180).
+//! Re-exported here, so every path that named `conductor::Event` still does.
+
+pub use jan_klod_protocol::turn::{Event, EventSink, Flow};
 
 use crate::intercept::{
     Dispatcher, Driver, FinalAnswer, HookState, Message, Outcome, PendingRequest, Phase,
@@ -134,45 +141,6 @@ impl ToolInvoker for NoTools {
     fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
         None
     }
-}
-
-/// Event emitted during a turn. Streamed via [`EventSink`] to drivers (TUI, REST SSE).
-/// `text-delta` is non-authoritative preview; terminal `Done` is authoritative
-/// (after-response/finalize may rewrite).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Event {
-    /// A chunk of assistant text (one per completion in v1, not per token).
-    TextDelta(String),
-    /// A tool is about to run (after the `tool-call` gate allowed it).
-    ToolInvoked(ToolCall),
-    /// A tool returned (post `tool-result`).
-    ToolResult(ToolOutcome),
-    /// A non-fatal notice (e.g. provider fallback, a malformed-output retry).
-    Warning(String),
-    /// The turn finished with the authoritative answer.
-    Done {
-        /// Final answer text.
-        text: String,
-        /// Whether the agentic path ran.
-        agentic: bool,
-    },
-}
-
-/// Whether loop continues after an event. Sink returns [`Flow::Stop`] to cancel
-/// at next boundary (e.g., disconnected SSE client, explicit stop button).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flow {
-    /// Keep going.
-    Continue,
-    /// Cancel the turn at the next boundary (finalize with what's in hand).
-    Stop,
-}
-
-/// Sink for conductor to push [`Event`]s; synchronous, on turn's thread (sync loop, `!Send`).
-/// Return [`Flow::Stop`] to cancel turn.
-pub trait EventSink {
-    /// Handle one event; return [`Flow::Stop`] to cancel the turn.
-    fn emit(&mut self, event: &Event) -> Flow;
 }
 
 /// An [`EventSink`] that drops every event — the non-streaming default.

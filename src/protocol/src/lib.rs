@@ -19,6 +19,15 @@
 //!
 //! REST + SSE do not go away — they become one projection of this contract.
 //!
+//! # And the turn vocabulary
+//!
+//! [`turn`] holds the types a turn is made of — [`Event`](turn::Event),
+//! [`Message`](turn::Message), [`ToolCall`](turn::ToolCall) and the rest. They
+//! are not wire shapes, so they sit in a module of their own rather than the
+//! crate root, but they belong in this crate: the log and the wire are two
+//! projections of one turn, and every crate above this one needs the same
+//! words for it (#180).
+//!
 //! # Versioning
 //!
 //! [`PROTOCOL_VERSION`] is semver. Removing a command, renaming one, or
@@ -30,6 +39,7 @@
 //! refusal too.
 
 pub mod jsonrpc;
+pub mod turn;
 
 use serde::{Deserialize, Serialize};
 

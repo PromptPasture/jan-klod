@@ -7,6 +7,11 @@ publish.workspace = true
 
 [dependencies]
 jan-klod-config = { path = "../config" }
+# The shared turn vocabulary (#180): `Event`, `Message`, `ToolCall` and the
+# rest live here, below both this crate and the session store, so the log can
+# name them without depending on the loop. No new package in the tree — the
+# workspace already builds it, and it depends on nothing but serde.
+jan-klod-protocol = { path = "../protocol" }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 serde_json.workspace = true

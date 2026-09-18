@@ -16,6 +16,14 @@
 //! - *across* phases: the conductor calls [`Dispatcher::dispatch`] once per
 //!   phase, in [`Phase`] declaration order;
 //! - *within* one phase: the load order interceptors were registered in.
+//!
+//! The vocabulary a turn is made of — [`Message`], [`Role`], [`ToolCall`],
+//! [`ToolOutcome`], [`UserPrompt`], [`Driver`] — now lives in
+//! [`jan_klod_protocol::turn`], because the event log needs the same words and
+//! sits below this crate (#180). It is re-exported here, so every path that
+//! named `intercept::Message` still does.
+
+pub use jan_klod_protocol::turn::{Driver, Message, Role, ToolCall, ToolOutcome, UserPrompt};
 
 /// The lifecycle points, in dispatch order. Mirrors the `phase` enum in
 /// `wit/interceptor.wit`.
@@ -41,30 +49,6 @@ pub enum Phase {
     PrepareNextTurn,
 }
 
-/// Role of a message in the conversation (mirrors `llm-types.role`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    /// System / instruction message.
-    System,
-    /// End-user message.
-    User,
-    /// Model message.
-    Assistant,
-    /// Tool-result message.
-    Tool,
-}
-
-/// A single conversation message (mirrors `llm-types.message`).
-#[derive(Debug, Clone)]
-pub struct Message {
-    /// Who authored the message.
-    pub role: Role,
-    /// The message text.
-    pub content: String,
-    /// Non-empty only when `role == Tool`.
-    pub tool_call_id: Option<String>,
-}
-
 /// A tool the model may call (mirrors `llm-types.tool-definition`).
 #[derive(Debug, Clone)]
 pub struct ToolDefinition {
@@ -74,17 +58,6 @@ pub struct ToolDefinition {
     pub description: String,
     /// JSON Schema string describing the parameters.
     pub parameters_schema: String,
-}
-
-/// A tool call emitted by the model (mirrors `llm-types.tool-call`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolCall {
-    /// Unique id for this call.
-    pub id: String,
-    /// Tool name being invoked.
-    pub name: String,
-    /// JSON-encoded arguments.
-    pub arguments: String,
 }
 
 /// The outbound completion being assembled — the mutable state the
@@ -157,21 +130,6 @@ pub struct RawResponse {
     pub finish_reason: String,
 }
 
-/// A tool's result (handed at `tool-result`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolOutcome {
-    /// The call this result answers.
-    pub tool_call_id: String,
-    /// Tool result content (may be modified).
-    pub content: String,
-    /// Whether the call failed (#162). **Not** part of `wit/interceptor.wit`'s
-    /// `tool-outcome` record — a wasm `tool-result` interceptor may replace
-    /// `content`, but whether it failed isn't its call to make, so the wasm
-    /// adapter (`interceptor_host.rs`) restores this field across such a
-    /// replace rather than letting the guest set it.
-    pub failed: bool,
-}
-
 /// The assembled final answer (handed at `finalize`).
 #[derive(Debug, Clone)]
 pub struct FinalAnswer {
@@ -208,17 +166,6 @@ pub enum HookState {
 pub struct BlockReason {
     /// Human-readable reason.
     pub message: String,
-}
-
-/// A question routed through the loop to the attached driver.
-#[derive(Debug, Clone)]
-pub struct UserPrompt {
-    /// The question to surface.
-    pub question: String,
-    /// Empty = free-text; non-empty = choose one.
-    pub options: Vec<String>,
-    /// Used when the driver cannot prompt (headless).
-    pub default_answer: String,
 }
 
 /// What an interceptor decided (mirrors `interceptor.decision`).
@@ -297,20 +244,6 @@ pub trait Interceptor {
         _arguments: &[crate::contributions::ArgumentValue],
     ) -> Result<crate::contributions::InvokeOutcome, crate::contributions::InvokeError> {
         Err(crate::contributions::InvokeError::Unknown)
-    }
-}
-
-/// The attached driver (TUI, chat, api-*) that answers an `Ask`.
-pub trait Driver {
-    /// Surface `prompt` and return the user's answer (or a default when headless).
-    fn ask(&mut self, prompt: &UserPrompt) -> String;
-
-    /// A follow-up user message to inject instead of ending the turn — the driver's
-    /// **steering** hook. The loop calls this when a turn would otherwise finish (no
-    /// pending tool calls): `Some(msg)` injects `msg` and runs another cycle; `None`
-    /// ends the turn. Default: none.
-    fn follow_up(&mut self) -> Option<String> {
-        None
     }
 }
 
