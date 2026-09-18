@@ -13,6 +13,8 @@
 #   coding         (default) models, the interceptor set, file and git tools
 #   headless-chat  a chat channel; nothing that touches the machine
 #   minimal        one provider and the interceptor set
+#   self-extend    coding, plus a shell so the agent can compile — commands
+#                  are ON and confined; read the security model first
 #
 # Add --gui for the archive that also carries the desktop window:
 #   curl -sSL .../install.sh | sh -s -- --gui
@@ -30,7 +32,7 @@ INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
 # `docs_match_config::the_installer_offers_the_distributions_the_release_builds`
 # — a name here that the release does not build is a 404 at the user, and the
 # test is what turns that into a failing build instead.
-DISTRIBUTIONS="coding headless-chat minimal"
+DISTRIBUTIONS="coding headless-chat minimal self-extend"
 DIST="coding"
 # The `-gui` suffix `make bundle GUI=1` adds, or empty. Not a distribution: see
 # the note at the top and scripts/distributions/README.md.

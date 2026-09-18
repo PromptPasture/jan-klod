@@ -1,0 +1,145 @@
+# jan-klod — self-extend distribution.
+#
+# The coding distribution, plus the one thing it withholds: a shell, so the
+# agent can compile. Everything else here is `coding`'s, for `coding`'s
+# reasons.
+#
+# Export OPENAI_API_KEY before starting.
+#
+# --- What this distribution does NOT do --------------------------------------
+#
+# It does not widen the sandbox. That is worth stating first, because it is
+# the thing a "distribution where the agent can compile" is expected to do and
+# the reason this one can skip it (#192).
+#
+# A confined command may write only under the workspace, and that is still
+# true here: `writable: ["."]` and nothing else. What a `cargo build` also
+# needs — `/dev/null` and a writable `TMPDIR` — the host now provides to every
+# command, not to this distribution: `/dev/null` is granted in both sandbox
+# backends, and `TMPDIR` is pointed at `<workspace>/.jan-klod/tmp`, which is
+# inside the jail already (#212). So there is no toolchain path granted here,
+# no build cache granted here, and no `writable` entry outside the workspace.
+#
+# Measured, not assumed: `cargo build --target wasm32-wasip2` completes under
+# a Seatbelt profile whose only write grants are the workspace and
+# `/dev/null`.
+#
+# --- Dependencies, and why `network: false` is honest -------------------------
+#
+# A cargo build fetches crates, and this distribution denies the network. The
+# answer is **vendored dependencies**: `cargo vendor` into the workspace, and
+# a build runs `--offline` against them. Measured on the guest workspace in
+# this repository: 47 crates, 34 MB. For scale, one guest's target directory
+# reaches ~126 MB, so the vendored source is the smaller half of what a
+# compiling workspace costs.
+#
+# The alternative — a named egress allowance for a registry — was not taken.
+# `require: true` below says "no command at all in preference to an
+# unconfined one", and a build that can reach the network is a build that can
+# exfiltrate; vendoring keeps both claims true at once.
+#
+# Verified offline end to end: with a cold `CARGO_HOME` and vendored sources,
+# a wasm guest builds under the jail with no network.
+
+# --- providers -------------------------------------------------------------
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY}
+      model: gpt-4o-mini
+    anthropic:
+      enabled: false
+      type: anthropic
+      api-key: ${ANTHROPIC_API_KEY}
+      model: claude-sonnet-4-6
+
+  # --- the turn's shaping phases -------------------------------------------
+  interceptor:
+    intent-router:
+      enabled: true
+    task-router:
+      enabled: true
+    context:
+      enabled: true
+    system:
+      enabled: true
+    tool-selector:
+      enabled: true
+    permission:
+      enabled: true
+    # Content policy. `permission` above asks whether an action may happen;
+    # this looks at what the text says. Keys and the full rule reference:
+    # docs/concepts/configuration.md#guardrails.
+    guardrails:
+      enabled: true
+      # Unlike `coding`, this distribution has a shell, so a
+      # `deny-tool-arguments` rule has something to refuse. `coding`'s config
+      # says a rule with no reachable target is a demonstration rather than a
+      # guardrail, and that deployments turning commands on should add one.
+      # This is that one.
+      #
+      # It is not the security boundary — the sandbox is, and it holds whether
+      # or not this matches. This refuses the shapes that are never a build
+      # step, so an operator reading a transcript sees a refusal rather than a
+      # confined disaster.
+      deny-tool-arguments:
+        - pattern: "rm +-[a-zA-Z]*r[a-zA-Z]* +/"
+          tool: shell
+          reason: "a recursive delete rooted at a filesystem root"
+        - pattern: "curl[^|]*\\|[^|]*sh"
+          tool: shell
+          reason: "piping a download into a shell — the network is denied, so this cannot work, and asking is the interesting part"
+      redact:
+        - pattern: "sk-[A-Za-z0-9]{16,}"
+          with: "[redacted api key]"
+          reason: "an API key of the shape this distribution's own provider uses"
+        - pattern: "gh[pousr]_[A-Za-z0-9]{36}"
+          with: "[redacted github token]"
+          reason: "a GitHub token, and this distribution ships git tooling"
+
+  # --- skills ---------------------------------------------------------------
+  registry:
+    skills:
+      enabled: true
+
+  # --- file, git and command tools ------------------------------------------
+  tool:
+    fs:
+      enabled: true
+    edit:
+      enabled: true
+    find:
+      enabled: true
+    git:
+      enabled: true
+    # The difference from `coding`. Every command it runs is confined by
+    # `execution.sandbox` below and gated by `interceptor-permission` above.
+    shell:
+      enabled: true
+
+storage:
+  path: ./jan-klod.db
+
+registry:
+  trusted-keys: []
+
+# Commands are ON here, which is the point of this distribution, and confined.
+# Read docs/concepts/security-model.md's "Command effects" row before changing
+# any of this.
+execution:
+  enabled: true
+  # A build is slower than a grep. The default 30s kills a cold `cargo build`
+  # partway and reports a timeout, which reads like a hung command.
+  timeout-secs: 600
+  output-cap: 262144
+  sandbox:
+    mode: os
+    # The workspace, and nothing else. See the header.
+    writable: ["."]
+    network: false
+    # No command at all, in preference to an unconfined one. This distribution
+    # exists to run a compiler on a model's behalf; on a platform with no
+    # sandbox backend that is not a degraded mode, it is a different product.
+    require: true

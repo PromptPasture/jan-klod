@@ -397,21 +397,27 @@ execution:
   # time and output are capped — and none of it bounds the command itself, which
   # runs with your privileges and can read or write anywhere you can.
   #
-  # `mode: os` asks the operating system to confine it. No OS backend exists
-  # yet (macOS Seatbelt and Linux Landlock are separate pieces of work), so
-  # today every platform resolves to `approval-only`: the confirmation prompt is
-  # the only thing between the model and your filesystem. That is printed at
-  # boot with its reason whenever execution is enabled — it is never downgraded
-  # quietly. `writable` and `network` are the policy a backend will enforce;
-  # they have no effect until one exists.
+  # `mode: os` asks the operating system to confine it, and on macOS and Linux
+  # it does: Seatbelt via `sandbox-exec`, Landlock via a ruleset. Reads are
+  # allowed, writes only under `writable`, and the network only if you say so.
+  # On any other platform there is no backend, so the mode resolves to
+  # `approval-only` — the confirmation prompt is then the only thing between
+  # the model and your filesystem. That is printed at boot with its reason
+  # whenever execution is enabled; it is never downgraded quietly.
+  #
+  # Two paths are granted to every confined command regardless of `writable`,
+  # because a command that cannot use them does not run at all rather than
+  # running unconfined: `/dev/null`, and a `TMPDIR` the host points inside the
+  # workspace. See docs/concepts/security-model.md for both rows.
   sandbox:
     mode: os                  # `os` or `approval-only`
     writable: ["."]           # workspace-relative roots a command may write to
     network: false            # whether a command may reach the network
     require: false            # `true` denies host-process entirely rather than
                               # falling back to approval-only — no command at
-                              # all, in preference to an unconfined one. With no
-                              # backend yet, `true` today means nothing runs.
+                              # all, in preference to an unconfined one. On a
+                              # platform with no backend, that means nothing
+                              # runs.
 
 # Which provider answers interceptors' model calls (the intent router's
 # simple-vs-agentic classification). Names an instance from

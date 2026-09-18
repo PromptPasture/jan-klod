@@ -141,6 +141,7 @@ jobs:
           make bundle DIST=coding
           make bundle DIST=headless-chat
           make bundle DIST=minimal
+          make bundle DIST=self-extend
           make bundle DIST=coding GUI=1
 
       - name: Upload bundle artifact

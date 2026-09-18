@@ -204,12 +204,14 @@ Everything above bounds the **caller**: jailed cwd, rebuilt environment, time/ou
 | `network` | Whether a command may reach the network | `false` |
 | `require` | `true` denies `host-process` entirely rather than falling back to `approval-only` — no command at all, in preference to an unconfined one | `false` |
 
-**No OS backend exists yet** (macOS Seatbelt and Linux Landlock are [Phase 15b/15c](roadmap.md#phase-15--os-level-effect-sandbox)), so every platform is `approval-only` today: confirmation prompt is the only barrier, `writable`/`network` have no effect until a backend lands. Boot prints the effective mode and why when it's not what you asked:
+**macOS and Linux have a backend** — Seatbelt via `sandbox-exec`, Landlock via a ruleset (Phase 15b/15c) — so `writable` and `network` are enforced there. Every other platform is `approval-only`: the confirmation prompt is the only barrier and those two keys have no effect. Boot prints the effective mode and why when it's not what you asked:
 
 ```console
 WARN [core] `execution.sandbox.mode: os` was requested, but this build has no
 sandbox backend for macos — a command is confined only by the confirmation prompt
 ```
+
+Two paths are granted to every confined command whatever `writable` says, because a command that cannot use them does not run at all: `/dev/null`, and `TMPDIR`, which the host points at `<workspace>/.jan-klod/tmp` rather than inheriting. Both have a row in [the security model](security-model.md).
 
 Two configurations refuse rather than degrade, both reported at boot: `require: true` without a backend, and an unreadable `sandbox` block (unrecognised `mode`, or `writable` leaving workspace). Both deny `host-process` — an unhonoured policy must not read as a grant.
 
