@@ -36,6 +36,34 @@ Since 2026-07-01 the loop is a thin **core** conductor and every *decision* is a
    - **Tier 2: LLM** — one constrained call to `llm-provider`, output one token: `simple` | `agentic`. All languages, no separate embedding model; reuses the loaded provider.
 7. **Retry/correction** *(core)* — on malformed output, inject a hint and retry (up to N times). Retry is loop-iteration control in core; policy (on/off, N, hint) from `host-config`.
 
+## External state management (mitigation 3) — half built
+
+`tool-plan` exists: a model-facing tool holding a list of steps, one mutation
+per call, the whole plan returned every time. `scope: session` keeps two
+sessions apart, enforced host-side so the guest holds no session id and
+cannot get the isolation wrong ([#215]).
+
+That covers the "working memory outside the model" half of mitigation 3. The
+"compress history before context bloats" half is still
+`interceptor-context`'s and is unchanged.
+
+**Whether it helps is not yet known, and should not be assumed.** The survey
+it came from ([#194]) found that Codex, Claude Code and oh-my-pi all ship a
+plan tool, and that Pi refuses one outright — "they confuse models" — while
+shipping four tools in total. Our models are smaller than any of theirs,
+which cuts both ways: more need for external working memory, less capacity
+to use a tool well. Nothing here has been measured against a real 9–12B model
+on real tasks.
+
+What a measurement would need: a task long enough to exceed the context a
+small model tracks reliably, run with the tool enabled and disabled, counting
+re-derivations of intent rather than task success. **A negative result is a
+complete outcome** and belongs in this section — the tool is one line of
+config to disable and one directory to delete.
+
+[#194]: https://github.com/PromptPasture/jan-klod/issues/194
+[#215]: https://github.com/PromptPasture/jan-klod/issues/215
+
 ## Edit reliability (`tool-edit`) — built
 
 Small models produce shaky edits: hallucinated line numbers, re-emitted files, or anchors to moved text. The sandboxed [`tool-edit`](../../src/extensions/tool-edit/src/lib.rs) guest mitigates this with a **hash-anchored patch format** — constrained decoding applied to edits.

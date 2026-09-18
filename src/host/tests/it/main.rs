@@ -37,6 +37,7 @@ mod local_model;
 mod manifest;
 mod mcp;
 mod persistence;
+mod plan_tool;
 mod polyglot;
 mod polyglot_py;
 mod polyglot_ts;
