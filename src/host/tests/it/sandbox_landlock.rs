@@ -1,10 +1,10 @@
 //! Linux Landlock confinement tests (same four cases as `sandbox_seatbelt.rs`).
 //! Two backends, one standard; unconfined baseline catches test errors.
 //!
-//! Landlock is kernel-dependent (pre-5.13 or no CONFIG_SECURITY_LANDLOCK).
+//! Landlock is kernel-dependent (pre-5.13 or no `CONFIG_SECURITY_LANDLOCK`).
 //! Check availability first to avoid ambiguous failures.
 //!
-//! Backend path is explicit (CARGO_BIN_EXE_jan-klod-gateway) because
+//! Backend path is explicit (`CARGO_BIN_EXE_jan-klod-gateway`) because
 //! `current_exe()` under `cargo test` is the test binary without `confine`.
 #![cfg(target_os = "linux")]
 

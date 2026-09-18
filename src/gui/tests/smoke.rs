@@ -18,7 +18,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-/// Timeout for webview to start and fetch two URLs (generous for cold WebKit on CI).
+/// Timeout for webview to start and fetch two URLs (generous for cold `WebKit` on CI).
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Token key read by `src/web/src/api.ts`, restated to catch drift (not imported).
