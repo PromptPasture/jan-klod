@@ -1,7 +1,7 @@
 /**
  * The core's REST + SSE surface, as this client uses it.
  *
- * Seven routes, and **cancel is not one of them**: a turn is cancelled by
+ * Nine routes, and **cancel is not one of them**: a turn is cancelled by
  * dropping the SSE connection, which the conductor turns into `Flow::Stop`.
  * That is why `send` takes an `AbortSignal` rather than offering a `cancel()`
  * — there is nothing to call, and pretending otherwise would invent a route
@@ -79,6 +79,83 @@ export async function answer(session: string, reply: string): Promise<void> {
     body: JSON.stringify({ answer: reply }),
   });
   if (!res.ok) throw new Error(`answering: ${res.status}`);
+}
+
+/** One argument a contributed command declares. */
+export interface ContributedArgument {
+  name: string;
+  description: string;
+  required: boolean;
+}
+
+/** A command an extension contributed. */
+export interface ContributedCommand {
+  name: string;
+  title: string;
+  description: string;
+  arguments: ContributedArgument[];
+}
+
+/** A short piece of state an extension wants visible. */
+export interface ContributedStatus {
+  name: string;
+  text: string;
+  detail: string;
+}
+
+/** Everything one extension contributes. */
+export interface Contributions {
+  extension: string;
+  commands: ContributedCommand[];
+  "status-items": ContributedStatus[];
+}
+
+/** What invoking one answered. */
+export interface InvokeOutcome {
+  text: string;
+  /** Whether the set moved, so this client should read it again. */
+  "contributions-changed": boolean;
+}
+
+/**
+ * What the extensions contribute to this client's interface.
+ *
+ * **Read, not pushed.** Over stdio the core announces this at the handshake
+ * and again when it changes; there is no handshake here and no stream outside
+ * a turn, so a browser asks — at start-up, and again whenever an invocation
+ * reports that the set moved.
+ *
+ * Every string in the answer is written by a sandboxed extension. Nothing
+ * here escapes it, because escaping belongs where the text meets the DOM;
+ * what this owes the caller is not pretending it is safe.
+ */
+export async function contributions(): Promise<Contributions[]> {
+  const res = await fetch("/contributions", { headers: headers() });
+  if (!res.ok) throw new Error(`reading contributions: ${res.status}`);
+  const body = (await res.json()) as { extensions?: Contributions[] };
+  return body.extensions ?? [];
+}
+
+/**
+ * Run a contributed command.
+ *
+ * `404` is a name nobody contributes — the caller's mistake, and worth
+ * distinguishing from an extension that ran and failed (`500`), because one
+ * means "this client is out of date" and the other "that extension is unwell".
+ */
+export async function invokeContribution(
+  extension: string,
+  name: string,
+  args: { name: string; value: string }[] = [],
+): Promise<InvokeOutcome> {
+  const res = await fetch("/contributions/invoke", {
+    method: "POST",
+    headers: headers({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ extension, name, arguments: args }),
+  });
+  if (res.status === 404) throw new Error(`no extension contributes ${name}`);
+  if (!res.ok) throw new Error(`invoking ${name}: ${res.status}`);
+  return (await res.json()) as InvokeOutcome;
 }
 
 /**
