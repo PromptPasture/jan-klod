@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -638,6 +638,17 @@ config:
 
 # One-time developer setup: cargo supply-chain plugins, git hooks, and the WIT
 # deps that only `wkg` can fetch.
+# The crate the self-extension chain test compiles (#221). Online and once:
+# it locks and fetches so the *jailed* build, which has no network and may not
+# write outside its workspace, can run `--offline --locked` against the shared
+# cargo cache. About 1 MB of `.crate` files rather than a 34 MB vendor tree —
+# the reasoning, and the numbers, are in the script.
+#
+# Not part of `all`, `gate` or `setup`: it reaches the network, and the test
+# that wants it skips loudly when it is absent.
+self-extend-fixture:
+	sh scripts/self-extend-fixture.sh
+
 setup:
 	cargo install cargo-audit --version $(CARGO_AUDIT_VERSION)
 	cargo install cargo-cyclonedx --version $(CARGO_CYCLONEDX_VERSION)

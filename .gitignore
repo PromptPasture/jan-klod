@@ -690,3 +690,8 @@ src/extensions/*/__pycache__/
 # Scratch a confined command is pointed at (`TMPDIR`), created under whatever
 # directory is the workspace — and this repository can be one.
 .jan-klod/
+
+# The crate the self-extension chain test compiles, prepared by
+# `make self-extend-fixture` (#221). Generated, reaches the network to lock
+# and fetch, and regenerated rather than kept in step by hand.
+/.fixtures/
