@@ -11,11 +11,86 @@
 //! What that leaves in each host is mechanical: call the method, map the
 //! result. What lives here is the part worth having in one place — the
 //! namespace scoping that keeps one guest out of another's data.
+//!
+//! # The seam under it
+//!
+//! Durable storage is reached through [`Entries`], a trait, rather than
+//! through the session store directly (#180). The capability lives with the
+//! component host; the SQLite store lives in `jk-session`, below it; and
+//! neither should name the other. So this side declares what it needs — four
+//! calls over a [`Row`] — and the crate that owns a session supplies
+//! something that does them.
+//!
+//! The trait is written here, with the capability, rather than beside the
+//! store: a seam takes the shape of whichever side declares it, and the side
+//! that knows what is *needed* is this one. Written the other way round it
+//! would be the store's whole API with a `dyn` in front of it.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use crate::store::Store as PersistentStore;
+/// One row as a backing store holds it: the scoped namespace it was written
+/// under, and no presentation applied.
+///
+/// Deliberately the same shape as a session store's own row, and deliberately
+/// not that type. Naming it would be the dependency this seam exists to
+/// avoid, and the duplication is five fields that have not changed since the
+/// store was written.
+pub struct Row {
+    /// The namespace as stored — scoped, not the one the guest asked for.
+    pub namespace: String,
+    /// Key within the namespace.
+    pub key: String,
+    /// The opaque value.
+    pub value: String,
+    /// Creation time, in whatever clock the backing store keeps.
+    pub created_at: u64,
+    /// Last write time.
+    pub updated_at: u64,
+}
+
+/// What `host-storage` needs from a durable store, and nothing more.
+///
+/// Four calls. The store behind them has many more — an event log, session
+/// listing, fork points — and none of that is this capability's business: a
+/// guest that can reach `host-storage` must not thereby be able to read a
+/// transcript.
+///
+/// `&self` throughout, because the implementations share one store between
+/// every guest in a fleet and do their own locking. An `&mut self` here would
+/// make that sharing impossible to express.
+///
+/// `Send + Sync` because a `wasmtime::Store`'s data must be, and this ends up
+/// inside one. Not a new constraint — the handle this replaces was an
+/// `Arc<Mutex<_>>`, which is both — but it has to be said out loud now that
+/// the type is erased.
+pub trait Entries: Send + Sync {
+    /// Upsert `value` and return the row as stored.
+    ///
+    /// # Errors
+    /// [`StorageFault::Backend`] when the store refuses or cannot be reached.
+    fn set(&self, namespace: &str, key: &str, value: &str) -> Result<Row, StorageFault>;
+
+    /// Fetch one row.
+    ///
+    /// # Errors
+    /// [`StorageFault::NotFound`] when there is no such row, or
+    /// [`StorageFault::Backend`].
+    fn get(&self, namespace: &str, key: &str) -> Result<Row, StorageFault>;
+
+    /// Remove one row.
+    ///
+    /// # Errors
+    /// [`StorageFault::NotFound`] when there is no such row, or
+    /// [`StorageFault::Backend`].
+    fn delete(&self, namespace: &str, key: &str) -> Result<(), StorageFault>;
+
+    /// The most recently written rows in a namespace, newest first.
+    ///
+    /// # Errors
+    /// [`StorageFault::Backend`] when the store refuses or cannot be reached.
+    fn recent(&self, namespace: &str, limit: u32) -> Result<Vec<Row>, StorageFault>;
+}
 
 /// An entry as a guest sees it, before a world's own `Entry` is built from it.
 pub struct StoredEntry {
@@ -40,20 +115,6 @@ pub enum StorageFault {
     NotFound,
     /// The backing store refused or could not be reached.
     Backend,
-}
-
-impl StorageFault {
-    /// A store error, with its detail logged rather than dropped — the
-    /// contract's error carries none.
-    fn from_store(err: &crate::store::StoreError) -> Self {
-        match err {
-            crate::store::StoreError::NotFound => Self::NotFound,
-            crate::store::StoreError::Backend { detail } => {
-                eprintln!("WARN [core] host-storage backend error: {detail}");
-                Self::Backend
-            }
-        }
-    }
 }
 
 /// Where a guest's `host-storage` calls actually land.
@@ -118,11 +179,14 @@ pub enum Backing {
         /// Monotonic clock, so timestamps order without a real clock.
         clock: u64,
     },
-    /// The core's store, namespaced to the owning component.
+    /// A durable store, namespaced to the owning component.
+    ///
+    /// Reached through [`Entries`] rather than held directly, so this crate
+    /// never names the crate that knows SQLite (#180).
     Durable {
         /// Shared with the [`AgentSession`](crate::AgentSession) that opened
-        /// it.
-        store: Arc<Mutex<PersistentStore>>,
+        /// it, and with every other guest in the fleet.
+        rows: Arc<dyn Entries>,
         /// The component id every namespace is prefixed with.
         owner: String,
     },
@@ -174,15 +238,15 @@ impl GuestStorage {
     }
 
     /// Present a stored row under the namespace the guest asked for.
-    fn present(&self, entry: crate::store::Entry) -> StoredEntry {
-        let namespace = self.unscope(&entry.namespace);
+    fn present(&self, row: Row) -> StoredEntry {
+        let namespace = self.unscope(&row.namespace);
         StoredEntry {
-            id: format!("{namespace}/{}", entry.key),
+            id: format!("{namespace}/{}", row.key),
             namespace,
-            key: entry.key,
-            value: entry.value,
-            created_at: entry.created_at,
-            updated_at: entry.updated_at,
+            key: row.key,
+            value: row.value,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }
     }
 
@@ -211,13 +275,9 @@ impl GuestStorage {
                     updated_at: now,
                 })
             }
-            Backing::Durable { store, .. } => {
-                let entry = store
-                    .lock()
-                    .map_err(|_| StorageFault::Backend)?
-                    .set(&scoped, &key, &value)
-                    .map_err(|err| StorageFault::from_store(&err))?;
-                Ok(self.present(entry))
+            Backing::Durable { rows, .. } => {
+                let row = rows.set(&scoped, &key, &value)?;
+                Ok(self.present(row))
             }
         }
     }
@@ -237,13 +297,9 @@ impl GuestStorage {
                     updated_at: *updated,
                 })
                 .ok_or(StorageFault::NotFound),
-            Backing::Durable { store, .. } => {
-                let entry = store
-                    .lock()
-                    .map_err(|_| StorageFault::Backend)?
-                    .get(&scoped, key)
-                    .map_err(|err| StorageFault::from_store(&err))?;
-                Ok(self.present(entry))
+            Backing::Durable { rows, .. } => {
+                let row = rows.get(&scoped, key)?;
+                Ok(self.present(row))
             }
         }
     }
@@ -256,11 +312,7 @@ impl GuestStorage {
                 .remove(&(scoped, key.to_string()))
                 .map(|_| ())
                 .ok_or(StorageFault::NotFound),
-            Backing::Durable { store, .. } => store
-                .lock()
-                .map_err(|_| StorageFault::Backend)?
-                .delete(&scoped, key)
-                .map_err(|err| StorageFault::from_store(&err)),
+            Backing::Durable { rows, .. } => rows.delete(&scoped, key),
         }
     }
 
@@ -280,14 +332,11 @@ impl GuestStorage {
                     updated_at: *updated,
                 })
                 .collect()),
-            Backing::Durable { store, .. } => {
-                let rows = store
-                    .lock()
-                    .map_err(|_| StorageFault::Backend)?
-                    .recent(&scoped, u32::MAX)
-                    .map_err(|err| StorageFault::from_store(&err))?;
-                Ok(rows.into_iter().map(|row| self.present(row)).collect())
-            }
+            Backing::Durable { rows, .. } => Ok(rows
+                .recent(&scoped, u32::MAX)?
+                .into_iter()
+                .map(|row| self.present(row))
+                .collect()),
         }
     }
 

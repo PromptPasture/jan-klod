@@ -397,7 +397,7 @@ impl ToolExtension {
         workspace: Option<Workspace>,
         process: ProcessRunner,
         http: Option<crate::route::HttpFn>,
-        storage: Option<std::sync::Arc<std::sync::Mutex<crate::store::Store>>>,
+        storage: Option<std::sync::Arc<dyn crate::guest_storage::Entries>>,
         per_session: bool,
     ) -> Result<Self, CoreError> {
         let mut linker: Linker<ToolHost> = Linker::new(engine);
@@ -424,8 +424,8 @@ impl ToolExtension {
                         entries: std::collections::HashMap::new(),
                         clock: 0,
                     },
-                    |store| crate::guest_storage::Backing::Durable {
-                        store,
+                    |rows| crate::guest_storage::Backing::Durable {
+                        rows,
                         owner: id.to_string(),
                     },
                 );
@@ -679,7 +679,7 @@ struct PendingTool {
     workspace: Option<Workspace>,
     process: ProcessRunner,
     http: Option<crate::route::HttpFn>,
-    storage: Option<std::sync::Arc<std::sync::Mutex<crate::store::Store>>>,
+    storage: Option<std::sync::Arc<dyn crate::guest_storage::Entries>>,
     per_session: bool,
 }
 
@@ -730,7 +730,7 @@ impl LazyToolFleet {
         workspace: Option<Workspace>,
         process: ProcessRunner,
         http: Option<crate::route::HttpFn>,
-        storage: Option<std::sync::Arc<std::sync::Mutex<crate::store::Store>>>,
+        storage: Option<std::sync::Arc<dyn crate::guest_storage::Entries>>,
         per_session: bool,
     ) {
         self.pending.push(PendingTool {

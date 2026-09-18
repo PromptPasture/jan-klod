@@ -14,7 +14,7 @@
 //! yet).
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
@@ -27,7 +27,6 @@ use crate::intercept::{
     self, BlockReason, Decision, HookState, InterceptInput, Interceptor, InterceptorError, Phase,
     UserPrompt,
 };
-use crate::store::Store as PersistentStore;
 use crate::CoreError;
 
 // Generated Component-Model bindings for the interceptor world; lint exemptions
@@ -314,7 +313,7 @@ impl WasmInterceptor {
         component: &Component,
         section: ConfigSection,
         provider: ProviderFn,
-        storage: Option<Arc<Mutex<PersistentStore>>>,
+        storage: Option<Arc<dyn crate::guest_storage::Entries>>,
     ) -> Result<Self, CoreError> {
         let mut linker: Linker<InterceptorHost> = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
@@ -341,10 +340,10 @@ impl WasmInterceptor {
                         },
                     )
                 },
-                |store| {
+                |rows| {
                     crate::guest_storage::GuestStorage::shared(
                         crate::guest_storage::Backing::Durable {
-                            store,
+                            rows,
                             owner: id.to_string(),
                         },
                     )

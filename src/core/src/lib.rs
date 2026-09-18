@@ -41,6 +41,7 @@ pub mod sandbox;
 pub mod sandbox_landlock;
 pub mod sandbox_seatbelt;
 pub mod session;
+mod session_entries;
 pub mod tool_host;
 mod wasm_cache;
 
@@ -982,7 +983,9 @@ impl Runtime {
                         workspace.cloned(),
                         process.clone(),
                         network.then(|| http_factory()),
-                        persist.then(|| Arc::clone(store)),
+                        persist.then(|| -> Arc<dyn guest_storage::Entries> {
+                            Arc::new(session_entries::SessionEntries::new(Arc::clone(store)))
+                        }),
                         per_session,
                     );
                 }
@@ -1060,7 +1063,9 @@ impl Runtime {
                     component,
                     ConfigSection::new(config),
                     provider_fn,
-                    persist.then(|| Arc::clone(store)),
+                    persist.then(|| -> Arc<dyn guest_storage::Entries> {
+                        Arc::new(session_entries::SessionEntries::new(Arc::clone(store)))
+                    }),
                 )?,
             ));
         }
