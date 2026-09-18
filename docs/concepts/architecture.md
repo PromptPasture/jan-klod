@@ -55,6 +55,28 @@ Extensions are **WASM components** (`.wasm` files) in `ext/`, loaded at runtime 
 
 Three languages are proven rather than claimed, each by a guest the gate runs a turn through: **Rust** (`wit-bindgen`, every first-party extension), **TypeScript** (`jco`, `tool-hello-ts`) and **Python** (`componentize-py`, `tool-hello-py`), plus a TinyGo spike. Note that only Rust uses `wit-bindgen` — the other two toolchains generate or embed their own bindings, which is why the claim is about the Component Model and not about one binding generator. [Writing an extension](../guides/writing-an-extension.md#meet-the-cost-first) has what each language costs; the non-Rust components are 12.7 MB and 18.5 MB against Rust's 55 KB, so this is a real choice rather than a free one.
 
+### One tool is not an extension
+
+Every model-facing tool is a component, with one exception: **`ext-install`**,
+implemented by the host in `core::native_tools`. It is stated here rather
+than left to be discovered, because "all tools are components" is a property
+worth keeping deliberately.
+
+Installing cannot be a guest. A guest that installs needs write access to
+`ext/` — the directory the trust boundary is built on — and granting that to
+any component would undo what installation is meant to protect. So the host
+does it and no guest holds the capability, because no guest is involved
+([#213]).
+
+Off unless `registry.install-tool` says otherwise, confirmed by
+`interceptor-permission` like any call outside its read-only allowlist, and
+subject to the same signature and digest rules as `jan-klod-gateway ext
+install` — self-authored is not a trust exemption. It is last in the fleet's
+chain, so a component of the same name wins and a built-in can never shadow
+an installed extension.
+
+[#213]: https://github.com/PromptPasture/jan-klod/issues/213
+
 ### What the host grants extensions
 
 - Outbound HTTP requests (to call LLM APIs, web search, etc.) — `host-http`

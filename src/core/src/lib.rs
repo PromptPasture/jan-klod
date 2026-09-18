@@ -28,6 +28,7 @@ pub mod http;
 pub mod intercept;
 pub mod interceptor_host;
 pub mod manifest;
+pub mod native_tools;
 pub mod projection;
 pub mod registry_host;
 pub mod route;
@@ -255,6 +256,9 @@ pub struct Runtime {
     /// Directory holding `config.yaml`, so a relative `storage.path` resolves
     /// against the deployment rather than the working directory.
     config_dir: PathBuf,
+    /// Where components live. Kept because the host's own install tool
+    /// writes here (#213); until then this was only a `boot` argument.
+    ext_dir: PathBuf,
     /// Wasmtime's own compile cache, wired into `engine` at boot (#60). Kept
     /// here (not read back from `engine`'s `Config`, which doesn't expose it)
     /// so [`Self::compile_cache_stats`] can report cache hits or misses.
@@ -389,6 +393,7 @@ impl Runtime {
             extensions,
             agent,
             config_dir,
+            ext_dir: ext_dir.to_path_buf(),
             compile_cache,
             sandbox_wrapper: None,
         })
@@ -665,6 +670,7 @@ impl Runtime {
         let mut tools = CombinedFleet {
             tools: tool_fleet,
             registry: registry_fleet,
+            native: self.native_tools(),
         };
         // Computed only if an interceptor will use it — with none enabled,
         // nothing in `instantiate_interceptors` below reads it, so resolving it
@@ -719,6 +725,33 @@ impl Runtime {
     /// (eager — see [`is_lazy_category`]), register every enabled tool and
     /// registry instance as pending — compiled already, instantiated on first
     /// use (#59).
+    /// The host's own tools, off unless `registry.install-tool` says
+    /// otherwise.
+    ///
+    /// Read from the same `registry:` block that holds `trusted-keys`,
+    /// because installing is that block's business and a second place to
+    /// configure installation is a second place to get it wrong.
+    fn native_tools(&self) -> native_tools::NativeTools {
+        let registry = self.agent.get("registry");
+        let enabled = registry
+            .and_then(|r| r.get("install-tool"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !enabled {
+            return native_tools::NativeTools::disabled();
+        }
+        let trusted_keys = registry
+            .and_then(|r| r.get("trusted-keys"))
+            .and_then(serde_json::Value::as_array)
+            .map(|keys| {
+                keys.iter()
+                    .filter_map(|k| k.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        native_tools::NativeTools::installing_into(self.ext_dir.clone(), trusted_keys)
+    }
+
     fn instantiate_providers_and_tools(
         &self,
         http_factory: &dyn Fn() -> route::HttpFn,
@@ -1242,6 +1275,10 @@ impl Runtime {
 struct CombinedFleet {
     tools: tool_host::LazyToolFleet,
     registry: registry_host::LazyRegistryFleet,
+    /// The host's own tools, empty unless configured (#213). Last in the
+    /// chain on purpose: a component of the same name wins, so adding a
+    /// built-in can never shadow an extension someone installed.
+    native: native_tools::NativeTools,
 }
 
 impl conductor::ToolInvoker for CombinedFleet {
@@ -1249,6 +1286,7 @@ impl conductor::ToolInvoker for CombinedFleet {
         self.tools
             .invoke(call)
             .or_else(|| self.registry.invoke(call))
+            .or_else(|| self.native.invoke(call))
     }
     fn bind_session(&mut self, session: &str) {
         self.tools.bind_session(session);
@@ -1299,6 +1337,7 @@ impl CombinedFleet {
                 "parameters-schema": schema,
             }));
         }
+        metas.extend(self.native.metas());
         Ok(serde_json::Value::Array(metas))
     }
 }
