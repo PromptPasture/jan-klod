@@ -27,6 +27,8 @@ const TIMEOUT_MS: u32 = 15_000;
 // Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod fetch {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
     /// Host names that always mean "this machine", whatever they resolve to.
     const LOCAL_NAMES: [&str; 4] = ["localhost", "ip6-localhost", "ip6-loopback", "metadata"];
     /// Suffixes that name a private or link-local naming scope.
@@ -118,24 +120,19 @@ mod fetch {
         Address::PublicName
     }
 
+    /// Classify a v4 literal.
+    ///
+    /// Parsing is `Ipv4Addr::from_str`'s, not this file's, and that is the
+    /// security-relevant part: it refuses every alternate encoding a resolver
+    /// might read differently — `0177.0.0.1` (octal), `0x7f.0.0.1` (hex),
+    /// `2130706433` (integer), `127.1` (short form), `010.0.0.1` (leading
+    /// zero). This code used to refuse them by hand, which meant the refusal
+    /// was only as good as the list somebody remembered to write.
     fn classify_v4(host: &str) -> Address {
-        let parts: Vec<&str> = host.split('.').collect();
-        if parts.len() != 4 {
+        let Ok(addr) = host.parse::<Ipv4Addr>() else {
             return Address::Unrecognised;
-        }
-        let mut octets = [0u8; 4];
-        for (slot, part) in octets.iter_mut().zip(parts) {
-            // A leading zero means octal to some resolvers and decimal to others;
-            // `0177.0.0.1` is loopback in the first reading. Refuse the ambiguity.
-            if part.is_empty() || (part.len() > 1 && part.starts_with('0')) {
-                return Address::Unrecognised;
-            }
-            match part.parse::<u8>() {
-                Ok(value) => *slot = value,
-                Err(_) => return Address::Unrecognised,
-            }
-        }
-        if is_private_v4(octets) {
+        };
+        if is_private_v4(addr) {
             Address::NonPublic
         } else {
             Address::Public
@@ -143,44 +140,69 @@ mod fetch {
     }
 
     /// Whether a v4 address is outside public routing.
+    ///
+    /// Six of these are the standard library's own predicates, kept current
+    /// by whoever maintains it rather than by this file. The two below them
+    /// have no stable predicate — `is_shared` and the rest of the `is_global`
+    /// family are unstable — so they stay written out, which is a much
+    /// smaller thing to keep right than the eight ranges that were here.
     #[must_use]
-    pub const fn is_private_v4(o: [u8; 4]) -> bool {
-        o[0] == 0                                        // 0.0.0.0/8 "this network"
-            || o[0] == 127                               // loopback
-            || o[0] == 10                                // private
-            || (o[0] == 172 && o[1] >= 16 && o[1] <= 31) // private
-            || (o[0] == 192 && o[1] == 168)              // private
-            || (o[0] == 169 && o[1] == 254)              // link-local — cloud metadata
-            || (o[0] == 100 && o[1] >= 64 && o[1] <= 127) // CGNAT
-            || o[0] >= 224 // multicast + reserved
+    pub fn is_private_v4(addr: Ipv4Addr) -> bool {
+        addr.is_unspecified()      // 0.0.0.0/8 "this network"
+            || addr.is_loopback()
+            || addr.is_private()   // 10/8, 172.16/12, 192.168/16
+            || addr.is_link_local() // 169.254/16 — cloud metadata
+            || addr.is_multicast()
+            || addr.is_broadcast()
+            // CGNAT, 100.64/10: `is_shared` is unstable.
+            || (addr.octets()[0] == 100 && (64..=127).contains(&addr.octets()[1]))
+            // 240/4 reserved, which `is_multicast` (224/4) stops short of.
+            || addr.octets()[0] >= 240
     }
 
+    /// Classify a v6 literal.
+    ///
+    /// Parsed rather than prefix-matched. The previous version tested the
+    /// text for `fe8`/`fe9`/`fea`/`feb`/`fc`/`fd`, which a compressed or
+    /// zero-padded form slips past — `fe80:0000::1` starts with `fe80`, but
+    /// so does nothing else it was written to catch, and `0:0:0:0:0:0:0:1` is
+    /// loopback while starting with none of them.
     fn classify_v6(addr: &str) -> Address {
         let addr = addr.split('%').next().unwrap_or(addr); // drop a zone id
-                                                           // IPv4-mapped (`::ffff:127.0.0.1`) is a v4 address wearing a v6 hat.
-        if let Some(tail) = addr.rsplit(':').next() {
-            if tail.contains('.') {
-                return classify_v4(tail);
-            }
+        let Ok(parsed) = addr.parse::<Ipv6Addr>() else {
+            return Address::Unrecognised;
+        };
+        // IPv4-mapped (`::ffff:127.0.0.1`) is a v4 address wearing a v6 hat,
+        // and must be judged by v4's rules or `::ffff:127.0.0.1` reaches
+        // loopback through a guard that only looked at v6 ranges.
+        if let Some(v4) = parsed.to_ipv4_mapped() {
+            return if is_private_v4(v4) {
+                Address::NonPublic
+            } else {
+                Address::Public
+            };
         }
-        if addr == "::1" || addr == "::" {
-            return Address::NonPublic;
-        }
-        let head = addr.trim_start_matches(':');
-        if head.starts_with("fe8")
-            || head.starts_with("fe9")
-            || head.starts_with("fea")
-            || head.starts_with("feb")
-            || head.starts_with("fc")
-            || head.starts_with("fd")
-        {
-            return Address::NonPublic;
-        }
-        if addr.chars().all(|c| c.is_ascii_hexdigit() || c == ':') {
-            Address::Public
+        if is_private_v6(parsed) {
+            Address::NonPublic
         } else {
-            Address::Unrecognised
+            Address::Public
         }
+    }
+
+    /// Whether a v6 address is outside public routing.
+    ///
+    /// Unique-local and link-local have no stable predicate either
+    /// (`is_unique_local`, `is_unicast_link_local`), so they are written out
+    /// — but over the parsed segments rather than the text, which is what
+    /// makes a compressed form impossible to slip through.
+    #[must_use]
+    pub const fn is_private_v6(addr: Ipv6Addr) -> bool {
+        let first = addr.segments()[0];
+        addr.is_loopback()
+            || addr.is_unspecified()
+            || addr.is_multicast()
+            || (first & 0xfe00) == 0xfc00 // fc00::/7 unique-local
+            || (first & 0xffc0) == 0xfe80 // fe80::/10 link-local
     }
 
     /// Whether the host is a name that means this machine or a private scope.
@@ -388,8 +410,68 @@ mod fetch {
             assert_eq!(classify_address("8.8.8.8"), Address::Public);
             assert_eq!(classify_address("10.1.2.3"), Address::NonPublic);
             assert_eq!(classify_address("999.1.1.1"), Address::Unrecognised);
-            assert!(is_private_v4([169, 254, 169, 254]));
-            assert!(!is_private_v4([1, 1, 1, 1]));
+            assert!(is_private_v4(std::net::Ipv4Addr::new(169, 254, 169, 254)));
+            assert!(!is_private_v4(std::net::Ipv4Addr::new(1, 1, 1, 1)));
+        }
+
+        /// The encodings a resolver may read differently from this guard.
+        /// Each one reaches loopback if it is canonicalised rather than
+        /// refused, which is why `Ipv4Addr::from_str` doing the refusing
+        /// matters more than the range checks after it.
+        #[test]
+        fn every_alternate_encoding_of_loopback_is_refused() {
+            for encoded in [
+                "0177.0.0.1", // octal
+                "0x7f.0.0.1", // hex
+                "2130706433", // integer
+                "127.1",      // short form
+                "010.0.0.1",  // leading zero
+                "127.0.0.01", // leading zero, last octet
+            ] {
+                assert_eq!(
+                    classify_address(encoded),
+                    Address::Unrecognised,
+                    "{encoded} was not refused"
+                );
+            }
+            // The canonical spelling still classifies, so the refusal above
+            // is about the encoding and not about the address.
+            assert_eq!(classify_address("127.0.0.1"), Address::NonPublic);
+        }
+
+        /// A v6 form that a prefix match over the text would miss.
+        #[test]
+        fn a_compressed_or_padded_v6_is_classified_by_value_not_by_spelling() {
+            for spelled in [
+                "[::1]",                    // loopback, compressed
+                "[0:0:0:0:0:0:0:1]",        // loopback, written out
+                "[fe80::1]",                // link-local
+                "[fe80:0000:0000:0000::1]", // link-local, padded
+                "[febf::1]",                // link-local, top of the range
+                "[fc00::1]",                // unique-local
+                "[fd12:3456::1]",           // unique-local
+                "[::ffff:127.0.0.1]",       // v4-mapped loopback
+            ] {
+                assert_eq!(
+                    classify_address(spelled),
+                    Address::NonPublic,
+                    "{spelled} was not recognised as non-public"
+                );
+            }
+            assert_eq!(classify_address("[2606:4700::1111]"), Address::Public);
+            assert_eq!(classify_address("[not:an:address]"), Address::Unrecognised);
+        }
+
+        /// CGNAT and the reserved top of the v4 space have no stable
+        /// predicate, so they are the two this file still spells out.
+        #[test]
+        fn the_ranges_stdlib_has_no_predicate_for_are_still_covered() {
+            assert_eq!(classify_address("100.64.0.1"), Address::NonPublic);
+            assert_eq!(classify_address("100.127.255.255"), Address::NonPublic);
+            assert_eq!(classify_address("240.0.0.1"), Address::NonPublic);
+            // Just outside CGNAT, so public.
+            assert_eq!(classify_address("100.128.0.1"), Address::Public);
+            assert_eq!(classify_address("100.63.255.255"), Address::Public);
         }
 
         #[test]
