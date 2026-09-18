@@ -18,6 +18,7 @@ pub mod paths;
 pub mod sidebar;
 pub mod theme;
 pub mod transport;
+pub mod untrusted;
 pub mod viewport;
 pub mod wrap;
 
