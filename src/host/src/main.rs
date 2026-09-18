@@ -851,8 +851,8 @@ fn serve(args: &[String]) -> ExitCode {
         }
     };
 
-    let server = match tiny_http::Server::http(&bind) {
-        Ok(server) => server,
+    let surface = match jan_klod_host::serve::Surface::bind(&bind) {
+        Ok(surface) => surface,
         Err(err) => {
             eprintln!("jan-klod: cannot bind {bind}: {err}");
             return ExitCode::FAILURE;
@@ -870,7 +870,7 @@ fn serve(args: &[String]) -> ExitCode {
     }
     println!("jan-klod: serving on http://{bind} — POST {{\"session\":\"…\",\"message\":\"…\"}}");
 
-    if let Err(err) = jan_klod_host::serve::serve_authed(&server, &mut agent, token.as_deref()) {
+    if let Err(err) = surface.serve_forever(&mut agent, token.as_deref()) {
         eprintln!("jan-klod: serve loop failed: {err}");
         return ExitCode::FAILURE;
     }

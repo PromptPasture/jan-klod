@@ -56,8 +56,7 @@ use std::net::TcpStream;
 use std::thread;
 
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::serve_once_authed;
-use tiny_http::Server;
+use jan_klod_host::serve::Surface;
 
 use crate::common;
 
@@ -109,8 +108,8 @@ fn the_web_client_is_served_without_a_token() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
-    let server = Server::http("127.0.0.1:0").expect("binds");
-    let port = server.server_addr().to_ip().expect("ip").port();
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
 
     let client = thread::spawn(move || {
         let page = get_unauthenticated(port, "/");
@@ -120,7 +119,9 @@ fn the_web_client_is_served_without_a_token() {
     // A token *is* configured. Serving these two anyway is the exemption under
     // test; with `None`, the test would pass on any surface.
     for _ in 0..2 {
-        serve_once_authed(&server, &mut agent, Some(TOKEN)).expect("serves");
+        surface
+            .serve_once_authed(&mut agent, Some(TOKEN))
+            .expect("serves");
     }
     let (page, script) = client.join().expect("client thread");
 
@@ -232,8 +233,8 @@ fn an_api_route_still_refuses_without_a_token() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
-    let server = Server::http("127.0.0.1:0").expect("binds");
-    let port = server.server_addr().to_ip().expect("ip").port();
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
 
     let client = thread::spawn(move || {
         let sessions = get_unauthenticated(port, "/sessions");
@@ -243,7 +244,9 @@ fn an_api_route_still_refuses_without_a_token() {
         (sessions, near_miss)
     });
     for _ in 0..2 {
-        serve_once_authed(&server, &mut agent, Some(TOKEN)).expect("serves");
+        surface
+            .serve_once_authed(&mut agent, Some(TOKEN))
+            .expect("serves");
     }
     let (sessions, near_miss) = client.join().expect("client thread");
 

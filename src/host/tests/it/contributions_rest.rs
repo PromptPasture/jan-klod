@@ -12,8 +12,7 @@ use std::net::TcpStream;
 use std::thread;
 
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::serve_once;
-use tiny_http::Server;
+use jan_klod_host::serve::Surface;
 
 use crate::common;
 
@@ -21,7 +20,7 @@ use crate::common;
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "interceptor-system.wasm"];
 
 /// An offline agent with `interceptor-system` enabled, and a bound server.
-fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession, Server, u16)> {
+fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession, Surface, u16)> {
     if !common::guests_staged(&GUESTS) {
         return None;
     }
@@ -50,15 +49,15 @@ extensions:
     let agent = runtime
         .build_agent(&|| common::canned_http("pong"))
         .expect("agent boots");
-    let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
-    let port = server.server_addr().to_ip().expect("ip addr").port();
-    Some((dir, agent, server, port))
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
+    Some((dir, agent, surface, port))
 }
 
 /// Send one request on its own thread while the session thread serves it.
 fn exchange(
     agent: &mut jan_klod_core::AgentSession,
-    server: &Server,
+    surface: &Surface,
     port: u16,
     request: String,
 ) -> String {
@@ -69,7 +68,7 @@ fn exchange(
         stream.read_to_string(&mut response).expect("reads");
         response
     });
-    serve_once(server, agent).expect("serves the request");
+    surface.serve_once(agent).expect("serves the request");
     client.join().expect("client thread")
 }
 
@@ -88,10 +87,10 @@ fn post(path: &str, body: &str) -> String {
 
 #[test]
 fn a_browser_can_read_what_the_extensions_contribute() {
-    let Some((_dir, mut agent, server, port)) = booted("read") else {
+    let Some((_dir, mut agent, surface, port)) = booted("read") else {
         return;
     };
-    let response = exchange(&mut agent, &server, port, get("/contributions"));
+    let response = exchange(&mut agent, &surface, port, get("/contributions"));
     assert!(response.contains("200 OK"), "{response}");
     assert!(
         response.contains("\"extension\":\"interceptor.system\""),
@@ -109,12 +108,12 @@ fn a_browser_can_read_what_the_extensions_contribute() {
 
 #[test]
 fn a_browser_can_invoke_one_and_is_told_whether_the_set_moved() {
-    let Some((_dir, mut agent, server, port)) = booted("invoke") else {
+    let Some((_dir, mut agent, surface, port)) = booted("invoke") else {
         return;
     };
     let response = exchange(
         &mut agent,
-        &server,
+        &surface,
         port,
         post(
             "/contributions/invoke",
@@ -136,12 +135,12 @@ fn a_browser_can_invoke_one_and_is_told_whether_the_set_moved() {
 /// status code rather than answering with an empty success.
 #[test]
 fn invoking_something_nobody_contributes_is_a_404() {
-    let Some((_dir, mut agent, server, port)) = booted("unknown") else {
+    let Some((_dir, mut agent, surface, port)) = booted("unknown") else {
         return;
     };
     let response = exchange(
         &mut agent,
-        &server,
+        &surface,
         port,
         post(
             "/contributions/invoke",
@@ -153,12 +152,12 @@ fn invoking_something_nobody_contributes_is_a_404() {
 
 #[test]
 fn an_invocation_without_a_name_is_refused_before_it_reaches_an_extension() {
-    let Some((_dir, mut agent, server, port)) = booted("malformed") else {
+    let Some((_dir, mut agent, surface, port)) = booted("malformed") else {
         return;
     };
     let response = exchange(
         &mut agent,
-        &server,
+        &surface,
         port,
         post(
             "/contributions/invoke",

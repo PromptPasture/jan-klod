@@ -6,8 +6,7 @@ use std::net::TcpStream;
 use std::thread;
 
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::serve_once;
-use tiny_http::Server;
+use jan_klod_host::serve::Surface;
 
 use crate::common;
 
@@ -42,8 +41,8 @@ extensions:
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
-    let port = server.server_addr().to_ip().expect("ip addr").port();
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
 
     // Client thread: POST message, read response
     let client = thread::spawn(move || {
@@ -62,7 +61,7 @@ extensions:
     });
 
     // Server: handle one request on session thread.
-    serve_once(&server, &mut agent).expect("serves one request");
+    surface.serve_once(&mut agent).expect("serves one request");
 
     let response = client.join().expect("client thread");
     assert!(
@@ -84,7 +83,9 @@ extensions:
         stream.read_to_string(&mut response).unwrap();
         response
     });
-    serve_once(&server, &mut agent).expect("serves the health request");
+    surface
+        .serve_once(&mut agent)
+        .expect("serves the health request");
     let health = health_client.join().expect("health client thread");
     assert!(health.contains("200 OK"), "health status line: {health}");
     assert!(
@@ -107,10 +108,18 @@ extensions:
         stream.read_to_string(&mut response).unwrap();
         response
     });
-    serve_once(&server, &mut agent).expect("serves the SSE request");
+    surface
+        .serve_once(&mut agent)
+        .expect("serves the SSE request");
     let sse = sse_client.join().expect("sse client thread");
+    // Case-insensitive because the header name's casing is the server's
+    // choice, not the protocol's: `hyper` writes it lowercase where
+    // `tiny_http` wrote it capitalised (#224). Every HTTP client compares
+    // these case-insensitively; only a test reading the raw socket can
+    // tell, and it should not be the thing that fails.
     assert!(
-        sse.contains("Content-Type: text/event-stream"),
+        sse.to_lowercase()
+            .contains("content-type: text/event-stream"),
         "SSE content-type: {sse}"
     );
     assert!(sse.contains("event: done"), "SSE has a done frame: {sse}");

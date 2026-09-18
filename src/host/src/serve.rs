@@ -32,13 +32,17 @@
 //! nothing is pending for that session. Unanswered prompts still time out at
 //! [`answer_timeout`], taking the prompt's default.
 
-use std::cell::RefCell;
-use std::io::Write;
-use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tiny_http::{Header, Method, Request, Response, Server};
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event as SseEvent, Sse};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Router;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use jan_klod_core::conductor::{Event, EventSink, Flow, RunResult};
 use jan_klod_core::intercept::{Driver, UserPrompt};
@@ -56,10 +60,6 @@ use crate::session_thread::{self, Jobs};
 /// streams get keepalive bytes. Comments (`:` lines) are protocol no-ops.
 const HEARTBEAT: Duration = Duration::from_secs(5);
 
-/// The response socket, shared between the event sink and the prompt driver —
-/// both write frames to the same stream while the turn runs.
-type SharedWriter = Rc<RefCell<Box<dyn Write + Send>>>;
-
 /// A ready HTTP reply: status code + JSON body.
 pub struct Reply {
     /// HTTP status code.
@@ -70,327 +70,350 @@ pub struct Reply {
 
 // ─── Route dispatch ──────────────────────────────────────────────────────────
 
-/// Serve one request from `server` through `agent`, then respond.
+/// A bound port, ready to serve.
 ///
-/// # Errors
-/// Returns the underlying I/O error if the request cannot be received.
-pub fn serve_once(server: &Server, agent: &mut AgentSession) -> std::io::Result<()> {
-    serve_requests(server, agent, None, 1)
+/// Binding is separate from serving because a test needs the port before
+/// anything is served on it — it has to tell a client where to knock. The
+/// production path binds and serves in two statements for the same reason:
+/// the address is reported to the operator before the loop starts.
+pub struct Surface {
+    listener: std::net::TcpListener,
 }
 
-/// Serve one request, requiring `Bearer <token>` when `token` is `Some`.
+/// What every handler shares.
 ///
-/// # Errors
-/// Returns the underlying I/O error if the request cannot be received.
-pub fn serve_once_authed(
-    server: &Server,
-    agent: &mut AgentSession,
-    token: Option<&str>,
-) -> std::io::Result<()> {
-    serve_requests(server, agent, token, 1)
+/// `Jobs` is in here rather than cloned per route because `axum` wants
+/// state it can hand to each request by reference; that is what made
+/// `Jobs` `Sync` (`session_thread`).
+#[derive(Clone)]
+struct App {
+    jobs: Arc<Jobs<AgentSession>>,
+    pending: Arc<Pending>,
+    token: Option<Arc<str>>,
+    /// Responses completed so far, against `limit`.
+    served: Arc<AtomicUsize>,
+    /// How many responses to complete before shutting down. `usize::MAX`
+    /// is the production loop, which is the same code with no bound.
+    limit: usize,
+    /// Raised when the surface should stop.
+    stop: Arc<tokio::sync::Notify>,
 }
 
-/// Serve while `client` runs, then stop.
-///
-/// The surface starts, hands `client` the port it is on, and keeps serving
-/// until that closure returns — at which point the accept loop is unblocked
-/// and everything winds down. The session stays on **this** thread, because
-/// it cannot leave it.
-///
-/// This is what tests drive, and it replaced a bounded
-/// `serve_requests(n)` whose `n` was a count of requests. A count is only
-/// meaningful while the loop is bounded, and it made every test state a
-/// number that had nothing to do with what it was asserting — the four that
-/// carried one had to change it when the confirmation path did (#225).
-///
-/// # Panics
-/// Propagates a panic from `client`, which is a test's own failure and must
-/// not be swallowed into a hang.
-pub fn serve_while<F, R>(
-    server: &Server,
-    agent: &mut AgentSession,
-    token: Option<&str>,
-    client: F,
-) -> R
-where
-    F: FnOnce(u16) -> R + Send,
-    R: Send,
-{
-    let port = server.server_addr().to_ip().map_or(0, |addr| addr.port());
-    let pending = Arc::new(Pending::new());
-    let token = token.map(str::to_owned);
-    let (jobs, queued) = session_thread::queue::<AgentSession>();
+impl App {
+    /// Run `handler` on the session's thread and answer with what it
+    /// returns.
+    ///
+    /// `spawn_blocking`, not a direct call: the session's queue blocks, and
+    /// blocking a runtime worker for the length of a turn would stall every
+    /// other request on that worker. This is the one thing about the port
+    /// that is not visible in a test until the surface is under load.
+    async fn on_session<F>(&self, handler: F) -> Response
+    where
+        F: FnOnce(&mut AgentSession) -> Reply + Send + 'static,
+    {
+        let jobs = Arc::clone(&self.jobs);
+        let reply = tokio::task::spawn_blocking(move || jobs.run(handler)).await;
+        match reply {
+            Ok(Ok(reply)) => reply.into_response(),
+            Ok(Err(why)) => {
+                error_reply(503, &format!("the session is unavailable: {why}")).into_response()
+            }
+            Err(_) => error_reply(500, "the request was cancelled").into_response(),
+        }
+    }
 
-    std::thread::scope(|scope| {
+    /// Count a completed response and stop once the bound is reached.
+    fn served_one(&self) {
+        if self.limit == usize::MAX {
+            return;
+        }
+        if self.served.fetch_add(1, Ordering::Relaxed) + 1 >= self.limit {
+            self.stop.notify_waiters();
+        }
+    }
+}
+
+impl Surface {
+    /// Bind `addr` without serving anything yet.
+    ///
+    /// # Errors
+    /// Whatever binding the address failed with.
+    pub fn bind(addr: &str) -> std::io::Result<Self> {
+        Ok(Self {
+            listener: std::net::TcpListener::bind(addr)?,
+        })
+    }
+
+    /// The port it is listening on.
+    ///
+    /// # Panics
+    /// If the listener has no local address, which cannot happen for a
+    /// bound socket.
+    #[must_use]
+    pub fn port(&self) -> u16 {
+        self.listener.local_addr().expect("a bound listener").port()
+    }
+
+    /// Serve one request, then return.
+    ///
+    /// # Errors
+    /// Whatever the server failed with.
+    pub fn serve_once(&self, agent: &mut AgentSession) -> std::io::Result<()> {
+        self.run(agent, None, 1, None::<fn(u16)>)
+    }
+
+    /// Serve one request, requiring `Bearer <token>` when one is set.
+    ///
+    /// # Errors
+    /// Whatever the server failed with.
+    pub fn serve_once_authed(
+        &self,
+        agent: &mut AgentSession,
+        token: Option<&str>,
+    ) -> std::io::Result<()> {
+        self.run(agent, token, 1, None::<fn(u16)>)
+    }
+
+    /// Serve while `client` runs, then stop, returning what it returned.
+    ///
+    /// # Panics
+    /// Propagates a panic from `client` rather than hanging on it.
+    pub fn serve_while<F, R>(&self, agent: &mut AgentSession, token: Option<&str>, client: F) -> R
+    where
+        F: FnOnce(u16) -> R + Send,
+        R: Send,
+    {
+        let answer = std::sync::Mutex::new(None);
+        let _ = self.run(
+            agent,
+            token,
+            usize::MAX,
+            Some(|port| {
+                let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client(port)));
+                *answer
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(out);
+            }),
+        );
+        match answer
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
         {
-            let pending = Arc::clone(&pending);
-            let token = token.clone();
-            scope.spawn(move || {
-                // Ends on the error `unblock` produces, which is the
-                // ordinary way out rather than a failure.
-                while let Ok(request) = server.recv() {
-                    dispatch(scope, request, &jobs, &pending, token.as_deref());
-                }
-            });
+            Some(Ok(out)) => out,
+            Some(Err(panic)) => std::panic::resume_unwind(panic),
+            None => unreachable!("the client closure always runs"),
         }
-        let running = scope.spawn(move || {
-            let out = client(port);
-            // Stops the accept loop above; the session loop follows once
-            // the last handle goes.
-            server.unblock();
-            out
-        });
-        session_thread::serve(agent, &queued);
-        match running.join() {
-            Ok(out) => out,
-            Err(panic) => std::panic::resume_unwind(panic),
-        }
-    })
-}
+    }
 
-/// Serve exactly `requests` requests, then return.
-///
-/// The single-request form is what most of the REST tests want: send one,
-/// serve it, assert on the answer. [`serve_while`] is for the ones that
-/// need a conversation.
-///
-/// # Errors
-/// Returns the underlying I/O error if a request cannot be received.
-fn serve_requests(
-    server: &Server,
-    agent: &mut AgentSession,
-    token: Option<&str>,
-    requests: usize,
-) -> std::io::Result<()> {
-    let pending = Arc::new(Pending::new());
-    let token = token.map(str::to_owned);
-    let (jobs, queued) = session_thread::queue::<AgentSession>();
+    /// Serve until killed.
+    ///
+    /// # Errors
+    /// Whatever the server failed with.
+    pub fn serve_forever(
+        &self,
+        agent: &mut AgentSession,
+        token: Option<&str>,
+    ) -> std::io::Result<()> {
+        // No closure: nothing should ever ask this one to stop, and a
+        // thread parked to represent "forever" would be a thread nothing
+        // can wake if the server fails.
+        self.run(agent, token, usize::MAX, None::<fn(u16)>)
+    }
 
-    std::thread::scope(|scope| {
-        let accepting = {
-            let pending = Arc::clone(&pending);
-            let token = token.clone();
-            scope.spawn(move || -> std::io::Result<()> {
-                for _ in 0..requests {
-                    let request = server.recv()?;
-                    dispatch(scope, request, &jobs, &pending, token.as_deref());
-                }
-                Ok(())
-            })
+    /// The one loop all four entry points are.
+    ///
+    /// The session stays on **this** thread — it cannot leave — so the
+    /// runtime runs on another, and `alongside` is whatever the caller
+    /// wants doing while it serves.
+    fn run<F>(
+        &self,
+        agent: &mut AgentSession,
+        token: Option<&str>,
+        limit: usize,
+        alongside: Option<F>,
+    ) -> std::io::Result<()>
+    where
+        F: FnOnce(u16) + Send,
+    {
+        let (jobs, queued) = session_thread::queue::<AgentSession>();
+        let app = App {
+            jobs: Arc::new(jobs),
+            pending: Arc::new(Pending::new()),
+            token: token.map(Arc::from),
+            served: Arc::new(AtomicUsize::new(0)),
+            limit,
+            stop: Arc::new(tokio::sync::Notify::new()),
         };
-        session_thread::serve(agent, &queued);
-        accepting
-            .join()
-            .unwrap_or_else(|_| Err(std::io::Error::other("the accept thread panicked")))
-    })
-}
+        let listener = self.listener.try_clone()?;
+        listener.set_nonblocking(true)?;
+        let port = self.port();
+        let stop = Arc::clone(&app.stop);
 
-/// Route one request: inline when it needs no session, on a worker when it
-/// does, queued when it streams.
-fn dispatch<'scope>(
-    scope: &'scope std::thread::Scope<'scope, '_>,
-    request: Request,
-    jobs: &Jobs<AgentSession>,
-    pending: &Arc<Pending>,
-    token: Option<&str>,
-) {
-    let method = request.method().clone();
-    let url = request.url().to_string();
-    // Strip query string for routing.
-    let path = url.split('?').next().unwrap_or(&url).to_string();
-
-    // Auth first. `/health` stays open: no session data, supervisor probes unauthed.
-    if !authorised(&request, token, &path) {
-        let _ = respond_json(request, error_reply(401, "missing or invalid bearer token"));
-        return;
-    }
-
-    // Anything needing no session is answered here and now.
-    let Some(mut request) = without_session(request, &method, &path, pending) else {
-        return;
-    };
-
-    // ── Streaming: queued, never waited for ─────────────────────────────
-    //
-    // Waiting here would hold the accepting thread for the whole turn, and
-    // the answer to its own confirmation would never be accepted.
-    if method == Method::Post {
-        if let Some(session) = strip_prefix(&path, "/session/")
-            .and_then(|rest| rest.strip_suffix("/message"))
-            .filter(|id| !id.contains('/'))
-            .map(str::to_owned)
-        {
-            let wants_sse = accepts_event_stream(&request);
-            let mut body = String::new();
-            if request.as_reader().read_to_string(&mut body).is_err() {
-                let _ = respond_json(request, error_reply(400, "unreadable body"));
-                return;
-            }
-            if wants_sse {
-                let writer = request.into_writer();
-                let pending = Arc::clone(pending);
-                let _ = jobs.send(move |agent: &mut AgentSession| {
-                    run_turn_streaming(agent, writer, &session, &body, &pending);
-                });
-            } else {
-                on_worker(scope, jobs, request, move |agent| {
-                    handle_message(agent, &session, &body)
+        let outcome = std::thread::scope(|scope| {
+            let serving = {
+                let app = app.clone();
+                let stopping = Arc::clone(&app.stop);
+                scope.spawn(move || -> std::io::Result<()> {
+                    let runtime = tokio::runtime::Builder::new_multi_thread()
+                        .enable_all()
+                        .build()?;
+                    runtime.block_on(async move {
+                        let listener = tokio::net::TcpListener::from_std(listener)?;
+                        axum::serve(listener, router(app))
+                            .with_graceful_shutdown(async move { stopping.notified().await })
+                            .await
+                    })
+                })
+            };
+            if let Some(alongside) = alongside {
+                scope.spawn(move || {
+                    alongside(port);
+                    // Done means stop. Without a closure — the production
+                    // loop — nothing here ever asks it to.
+                    stop.notify_waiters();
                 });
             }
-            return;
-        }
-    }
-
-    // ── Everything else needs the session, on a worker ──────────────────
-    if method == Method::Get && path == "/sessions" {
-        on_worker(scope, jobs, request, |agent: &mut AgentSession| {
-            handle_list_sessions(agent)
+            // Everything the surface holds is dropped when the runtime
+            // thread ends, which is what closes the queue below.
+            drop(app);
+            session_thread::serve(agent, &queued);
+            serving.join()
         });
-        return;
+        outcome.unwrap_or_else(|_| Err(std::io::Error::other("the serving thread panicked")))
     }
-    if method == Method::Get && path == "/contributions" {
-        on_worker(scope, jobs, request, handle_contributions);
-        return;
-    }
-    if method == Method::Post && path == "/contributions/invoke" {
-        let mut body = String::new();
-        if request.as_reader().read_to_string(&mut body).is_err() {
-            let _ = respond_json(request, error_reply(400, "unreadable body"));
-            return;
-        }
-        on_worker(scope, jobs, request, move |agent| {
-            handle_invoke(agent, &body)
-        });
-        return;
-    }
-    if method == Method::Get {
-        if let Some(id) = strip_prefix(&path, "/session/")
-            .filter(|id| !id.contains('/'))
-            .map(str::to_owned)
-        {
-            on_worker(scope, jobs, request, move |agent| {
-                handle_get_session(agent, &id)
-            });
-            return;
-        }
-    }
-    if method == Method::Post {
-        if let Some(id) = strip_prefix(&path, "/session/")
-            .and_then(|rest| rest.strip_suffix("/fork"))
-            .filter(|id| !id.contains('/'))
-            .map(str::to_owned)
-        {
-            let mut body = String::new();
-            if request.as_reader().read_to_string(&mut body).is_err() {
-                let _ = respond_json(request, error_reply(400, "unreadable body"));
-                return;
-            }
-            on_worker(scope, jobs, request, move |agent| {
-                handle_fork_session(agent, &id, &body)
-            });
-            return;
-        }
-    }
-
-    let _ = respond_json(request, error_reply(404, "not found"));
 }
 
-/// Serve the routes that need no session, on the accepting thread.
-///
-/// `Some(request)` hands it back unanswered for the session-bound routes
-/// below. The answer route is in **this** group deliberately: as a job it
-/// would queue behind the very turn that is parked waiting for it.
-fn without_session(
-    mut request: Request,
-    method: &Method,
-    path: &str,
-    pending: &Pending,
-) -> Option<Request> {
-    if *method == Method::Get {
-        match path {
-            "/" => {
-                let _ = respond_asset(request, WEB_INDEX, "text/html; charset=utf-8");
-                return None;
-            }
-            "/app.js" => {
-                let _ = respond_asset(request, WEB_APP_JS, "text/javascript; charset=utf-8");
-                return None;
-            }
-            "/health" => {
-                let _ = respond_json(request, health());
-                return None;
-            }
-            _ => return Some(request),
-        }
-    }
-    if *method != Method::Post {
-        return Some(request);
-    }
-    if path == "/sessions" {
-        let _ = respond_json(request, handle_create_session());
-        return None;
-    }
-    let answer_for = strip_prefix(path, "/session/").and_then(|rest| {
-        rest.strip_suffix("/answer")
-            .filter(|id| !id.contains('/'))
-            .map(str::to_owned)
-    });
-    if let Some(session) = answer_for {
-        let reply = request_answer(&mut request, &session, pending);
-        let _ = respond_json(request, reply);
-        return None;
-    }
-    Some(request)
+/// Every route, with `App` behind them.
+fn router(app: App) -> Router {
+    Router::new()
+        .route("/", get(index))
+        .route("/app.js", get(app_js))
+        .route("/health", get(health_route))
+        .route("/sessions", get(list_sessions).post(create_session))
+        .route("/contributions", get(contributions))
+        .route("/contributions/invoke", post(invoke))
+        .route("/session/{id}", get(get_session))
+        .route("/session/{id}/message", post(message))
+        .route("/session/{id}/answer", post(answer))
+        .route("/session/{id}/fork", post(fork_session))
+        .fallback(not_found)
+        .layer(axum::middleware::from_fn_with_state(app.clone(), guard))
+        .with_state(app)
 }
 
-/// Run `handler` on the session's thread and answer this request with what
-/// it returns, on a thread of this request's own.
+// ─── The routes, as `axum` sees them ─────────────────────────────────────────
+
+/// Bearer-token check and the response counter, in one layer.
 ///
-/// The worker exists so the accepting thread keeps accepting: a request
-/// that needs a busy session waits, and nothing else has to wait with it.
-fn on_worker<'scope, F>(
-    scope: &'scope std::thread::Scope<'scope, '_>,
-    jobs: &Jobs<AgentSession>,
-    request: Request,
-    handler: F,
-) where
-    F: FnOnce(&mut AgentSession) -> Reply + Send + 'static,
-{
-    let jobs = jobs.clone();
-    scope.spawn(move || {
-        let reply = jobs
-            .run(handler)
-            .unwrap_or_else(|why| error_reply(503, &format!("the session is unavailable: {why}")));
-        let _ = respond_json(request, reply);
-    });
+/// One place, as the module promises: every route passes through here, so
+/// a route added without thinking about auth is still covered.
+async fn guard(
+    State(app): State<App>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = request.uri().path().to_owned();
+    if !authorised(request.headers(), app.token.as_deref(), &path) {
+        app.served_one();
+        return error_reply(401, "missing or invalid bearer token").into_response();
+    }
+    let response = next.run(request).await;
+    app.served_one();
+    response
 }
 
-/// `POST /session/:id/answer` — hand the answer to the turn parked on it.
+async fn index() -> Response {
+    asset(WEB_INDEX, "text/html; charset=utf-8")
+}
+
+async fn app_js() -> Response {
+    asset(WEB_APP_JS, "text/javascript; charset=utf-8")
+}
+
+async fn health_route() -> Response {
+    health().into_response()
+}
+
+async fn not_found() -> Response {
+    error_reply(404, "not found").into_response()
+}
+
+async fn create_session() -> Response {
+    handle_create_session().into_response()
+}
+
+async fn list_sessions(State(app): State<App>) -> Response {
+    app.on_session(|agent: &mut AgentSession| handle_list_sessions(agent))
+        .await
+}
+
+async fn contributions(State(app): State<App>) -> Response {
+    app.on_session(handle_contributions).await
+}
+
+async fn invoke(State(app): State<App>, body: String) -> Response {
+    app.on_session(move |agent| handle_invoke(agent, &body))
+        .await
+}
+
+async fn get_session(State(app): State<App>, Path(id): Path<String>) -> Response {
+    app.on_session(move |agent| handle_get_session(agent, &id))
+        .await
+}
+
+async fn fork_session(State(app): State<App>, Path(id): Path<String>, body: String) -> Response {
+    app.on_session(move |agent| handle_fork_session(agent, &id, &body))
+        .await
+}
+
+/// `POST /session/{id}/answer` — hand the answer to the turn parked on it.
 ///
-/// Consumes the request's body and answers it here, on the accepting
-/// thread. Returns the request so the caller can respond with the reply
-/// this produced.
-fn request_answer(request: &mut Request, session: &str, pending: &Pending) -> Reply {
-    let mut body = String::new();
-    if request.as_reader().read_to_string(&mut body).is_err() {
-        return error_reply(400, "unreadable body");
-    }
+/// Answered here rather than on the session's thread. As a job it would
+/// queue behind the very turn that is parked waiting for it (#225), and no
+/// transport changes that.
+async fn answer(State(app): State<App>, Path(id): Path<String>, body: String) -> Response {
     match parse_answer_body(&body) {
-        Err(err) => error_reply(400, &err),
+        Err(err) => error_reply(400, &err).into_response(),
         Ok(answer) => {
-            if pending.answer(session, answer) {
+            if app.pending.answer(&id, answer) {
                 Reply {
                     status: 200,
                     body: r#"{"accepted":true}"#.to_string(),
                 }
+                .into_response()
             } else {
-                // Still a true statement, and the only one `409` makes now:
-                // nothing is parked for this session. What it no longer
-                // means is "someone else is confirming".
-                error_reply(409, "no confirmation is pending")
+                // Still true, and now the only thing it says: nothing is
+                // parked for this session.
+                error_reply(409, "no confirmation is pending").into_response()
             }
         }
     }
+}
+
+/// `POST /session/{id}/message` — JSON, or a stream when asked for one.
+async fn message(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !accepts_event_stream(&headers) {
+        return app
+            .on_session(move |agent| handle_message(agent, &id, &body))
+            .await;
+    }
+    // The turn runs on the session's thread and sends frames here. Queued,
+    // never awaited: a turn can park for as long as a person takes, and
+    // the surface has to keep serving meanwhile.
+    let (frames, stream) = unbounded_channel::<Frame>();
+    let pending = Arc::clone(&app.pending);
+    let queued = app.jobs.send(move |agent: &mut AgentSession| {
+        run_turn_streaming(agent, &frames, &id, &body, &pending);
+    });
+    if queued.is_err() {
+        return error_reply(503, "the session is unavailable").into_response();
+    }
+    Sse::new(Frames(stream)).into_response()
 }
 
 // ─── Route handlers ──────────────────────────────────────────────────────────
@@ -546,55 +569,87 @@ fn handle_message(agent: &mut AgentSession, session: &str, body: &str) -> Reply 
     }
 }
 
-/// `POST /session/:id/message` (SSE variant) — stream a turn, on the
-/// session's own thread.
+/// One SSE frame on its way to a client.
 ///
-/// The writer arrives here rather than the request: `Request::into_writer`
-/// hands back a `Box<dyn Write + Send>`, which is the one thing about this
-/// surface that may cross to the session's thread, and the reason a turn
-/// can stream from where the session lives.
+/// A message rather than bytes on a socket: the response is a stream now,
+/// and the turn that produces frames runs on a different thread from the
+/// one writing them. A closed receiver — the client went away — is how a
+/// vanished client is noticed, which is the job the heartbeat write used
+/// to do.
+enum Frame {
+    /// `event: <kind>` with a JSON `data:` line.
+    Named {
+        /// The `event:` name.
+        kind: &'static str,
+        /// Its JSON payload.
+        data: String,
+    },
+    /// A `:` comment, which the protocol treats as a no-op keepalive.
+    Comment,
+}
+
+/// The frames of one turn, as a stream `axum` can serve.
+///
+/// Hand-written rather than `tokio-stream`'s wrapper, which would be a
+/// package for ten lines. `futures_core` is already in the tree under
+/// `hyper`.
+struct Frames(UnboundedReceiver<Frame>);
+
+impl futures_core::Stream for Frames {
+    type Item = Result<SseEvent, std::convert::Infallible>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.poll_recv(context).map(|frame| {
+            frame.map(|frame| {
+                Ok(match frame {
+                    Frame::Named { kind, data } => SseEvent::default().event(kind).data(data),
+                    Frame::Comment => SseEvent::default().comment("waiting for an answer"),
+                })
+            })
+        })
+    }
+}
+
+/// Run a turn, streaming its events, on the session's own thread.
 fn run_turn_streaming(
     agent: &mut AgentSession,
-    writer: Box<dyn Write + Send>,
+    frames: &UnboundedSender<Frame>,
     session: &str,
     body: &str,
     pending: &Pending,
 ) {
-    let writer: SharedWriter = Rc::new(RefCell::new(writer));
-    if writer
-        .borrow_mut()
-        .write_all(
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
-          Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
-        )
-        .is_err()
-    {
-        return;
-    }
-
     let message = match parse_message_body(body) {
-        Ok(m) => m,
+        Ok(message) => message,
         Err(err) => {
             let (kind, data) = error_frame(&err);
-            let _ = write_frame(&mut *writer.borrow_mut(), kind, &data.to_string());
+            let _ = frames.send(Frame::Named {
+                kind,
+                data: data.to_string(),
+            });
             return;
         }
     };
 
     let mut sink = SseSink {
-        writer: Rc::clone(&writer),
+        frames: frames.clone(),
         live: true,
     };
     let mut driver = PromptDriver {
         pending,
-        writer: Rc::clone(&writer),
+        frames: frames.clone(),
         session: session.to_string(),
     };
     if let RunResult::Failed(reason) =
         agent.run_streaming_with_driver(&mut driver, &mut sink, session, &message)
     {
         let (kind, data) = error_frame(&reason);
-        let _ = write_frame(&mut *writer.borrow_mut(), kind, &data.to_string());
+        let _ = frames.send(Frame::Named {
+            kind,
+            data: data.to_string(),
+        });
     }
 }
 
@@ -607,14 +662,21 @@ fn run_turn_streaming(
 /// stops being a thing that happens.
 struct PromptDriver<'a> {
     pending: &'a Pending,
-    writer: SharedWriter,
+    frames: UnboundedSender<Frame>,
     session: String,
 }
 
 impl Driver for PromptDriver<'_> {
     fn ask(&mut self, prompt: &UserPrompt) -> String {
         let (kind, payload) = prompt_frame(prompt, &self.session);
-        if write_frame(&mut *self.writer.borrow_mut(), kind, &payload.to_string()).is_err() {
+        if self
+            .frames
+            .send(Frame::Named {
+                kind,
+                data: payload.to_string(),
+            })
+            .is_err()
+        {
             // The client is gone; nobody can answer, so take the safe default.
             return prompt.default_answer.clone();
         }
@@ -649,8 +711,11 @@ impl PromptDriver<'_> {
                 // The real deadline, not a tick.
                 return None;
             }
-            if write_comment(&mut *self.writer.borrow_mut()).is_err() {
-                // Nobody is listening, so nobody can answer.
+            if self.frames.send(Frame::Comment).is_err() {
+                // The receiver is gone, which means the client is: nobody
+                // can answer. This is the heartbeat's other job, and the
+                // only way a vanished client is noticed now that nothing
+                // writes to a socket here.
                 return None;
             }
         }
@@ -665,7 +730,7 @@ impl PromptDriver<'_> {
 /// bind is loopback, so requiring a secret to talk to your own machine would be
 /// friction without a threat. When a token *is* configured it is required
 /// everywhere except `/health`, which the supervisor probes and which leaks nothing.
-fn authorised(request: &Request, token: Option<&str>, path: &str) -> bool {
+fn authorised(headers: &HeaderMap, token: Option<&str>, path: &str) -> bool {
     let Some(expected) = token else { return true };
     // `/health` is probed by the supervisor without credentials.
     // The page and bundle are open because they carry no session data and grant
@@ -674,17 +739,10 @@ fn authorised(request: &Request, token: Option<&str>, path: &str) -> bool {
     if matches!(path, "/health" | "/" | "/app.js") {
         return true;
     }
-    request
-        .headers()
-        .iter()
-        .find(|h| {
-            h.field
-                .as_str()
-                .as_str()
-                .eq_ignore_ascii_case("authorization")
-        })
-        .and_then(|h| {
-            let value = h.value.as_str();
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
             value
                 .strip_prefix("Bearer ")
                 .or_else(|| value.strip_prefix("bearer "))
@@ -693,11 +751,11 @@ fn authorised(request: &Request, token: Option<&str>, path: &str) -> bool {
 }
 
 /// Whether the client asked for an SSE stream (`Accept: text/event-stream`).
-fn accepts_event_stream(request: &Request) -> bool {
-    request.headers().iter().any(|h| {
-        h.field.as_str().as_str().eq_ignore_ascii_case("accept")
-            && h.value.as_str().contains("text/event-stream")
-    })
+fn accepts_event_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/event-stream"))
 }
 
 /// The web client, compiled into the binary via `include_str!`. No directory
@@ -707,24 +765,28 @@ fn accepts_event_stream(request: &Request) -> bool {
 const WEB_INDEX: &str = include_str!("../../web/dist/index.html");
 const WEB_APP_JS: &str = include_str!("../../web/dist/app.js");
 
-/// Serve one embedded asset with its own content type.
-fn respond_asset(request: Request, body: &str, content_type: &str) -> std::io::Result<()> {
-    let header = Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes())
-        .expect("a static content type is valid");
-    request.respond(Response::from_string(body).with_header(header))
+/// A static asset, served with its content type.
+fn asset(body: &'static str, content_type: &'static str) -> Response {
+    ([(axum::http::header::CONTENT_TYPE, content_type)], body).into_response()
 }
 
-fn respond_json(request: Request, reply: Reply) -> std::io::Result<()> {
-    request.respond(
-        Response::from_string(reply.body)
-            .with_status_code(reply.status)
-            .with_header(json_content_type()),
-    )
+impl IntoResponse for Reply {
+    fn into_response(self) -> Response {
+        (
+            StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            [(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            )],
+            self.body,
+        )
+            .into_response()
+    }
 }
 
 /// An [`EventSink`] that writes each event as an SSE frame to the socket.
 struct SseSink {
-    writer: SharedWriter,
+    frames: UnboundedSender<Frame>,
     live: bool,
 }
 
@@ -789,25 +851,19 @@ impl EventSink for SseSink {
             return Flow::Stop;
         }
         let (kind, data) = sse_frame(event);
-        if write_frame(&mut *self.writer.borrow_mut(), kind, &data.to_string()).is_err() {
+        if self
+            .frames
+            .send(Frame::Named {
+                kind,
+                data: data.to_string(),
+            })
+            .is_err()
+        {
             self.live = false;
             return Flow::Stop;
         }
         Flow::Continue
     }
-}
-
-/// Write SSE frame `event: <kind>\ndata: <json>\n\n`, flushed.
-fn write_frame(writer: &mut dyn Write, kind: &str, data: &str) -> std::io::Result<()> {
-    write!(writer, "event: {kind}\ndata: {data}\n\n")?;
-    writer.flush()
-}
-
-/// Write SSE comment (`:` line). Not an empty `event:` (UI parser would report
-/// unknown kind as error). Protocol has this no-op for keepalives.
-fn write_comment(writer: &mut dyn Write) -> std::io::Result<()> {
-    write!(writer, ": waiting for an answer\n\n")?;
-    writer.flush()
 }
 
 /// Extract `answer` from a `POST /session/:id/answer` body (`{"answer":"yes"}`).
@@ -832,43 +888,10 @@ fn parse_message_body(body: &str) -> Result<String, String> {
     Ok(message.to_string())
 }
 
-/// Strip `prefix` from `s`, returning the remainder if it matches.
-fn strip_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    s.strip_prefix(prefix)
-}
-
 fn error_reply(status: u16, message: &str) -> Reply {
     Reply {
         status,
         body: serde_json::json!({ "error": message }).to_string(),
-    }
-}
-
-fn json_content_type() -> Header {
-    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap_or_else(|()| {
-        Header::from_bytes(&b"X-Content"[..], &b"json"[..]).expect("static header")
-    })
-}
-
-/// Serve requests forever (the accept loop). Blocks the calling thread.
-///
-/// # Errors
-/// Propagates the first I/O error from [`serve_once`].
-pub fn serve(server: &Server, agent: &mut AgentSession) -> std::io::Result<()> {
-    serve_authed(server, agent, None)
-}
-
-/// Serve until killed, requiring `Bearer <token>` when one is configured.
-///
-/// # Errors
-/// Propagates the first I/O error from the accept loop.
-pub fn serve_authed(
-    server: &Server,
-    agent: &mut AgentSession,
-    token: Option<&str>,
-) -> std::io::Result<()> {
-    loop {
-        serve_once_authed(server, agent, token)?;
     }
 }
 

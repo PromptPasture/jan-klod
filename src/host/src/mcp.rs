@@ -10,11 +10,18 @@
 //! stdout for frames, stderr for logging — which is [`crate::rpc`] exactly.
 //! So this is a method-name-and-payload adapter, not a transport.
 //!
-//! `rmcp`, the official Rust SDK, is async on tokio. The core is deliberately
-//! synchronous: the agent session is `!Send` and lives on one thread, `tiny_http`
-//! was chosen over `axum` for the same reason. Adopting an async SDK would be an
-//! architectural change dressed as convenience, so the envelope is reused and
-//! this module costs no new dependency.
+//! `rmcp`, the official Rust SDK, is async on tokio. This module stays
+//! synchronous anyway: the agent session is `!Send` and lives on one
+//! thread, and reaching it means going through the job queue
+//! (`session_thread`) rather than holding it. Adopting an async SDK would
+//! be an architectural change dressed as convenience, so the envelope is
+//! reused and this module costs no new dependency.
+//!
+//! The sentence that used to be here said `tiny_http` was chosen over
+//! `axum` for that reason. The REST surface is `axum` as of #224, and the
+//! reason turned out to be about who owns the session rather than about
+//! which library serves — the other four claims of the same shape are
+//! #227's.
 //!
 //! # What is reused, and what could not be
 //!

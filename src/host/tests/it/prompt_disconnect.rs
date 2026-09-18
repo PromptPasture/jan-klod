@@ -6,6 +6,8 @@
 
 use jan_klod_core::route::HttpFn;
 
+use jan_klod_host::serve::Surface;
+
 use crate::common;
 
 const GUESTS: [&str; 3] = [
@@ -82,8 +84,8 @@ fn a_disconnected_client_does_not_hold_the_turn_open() {
         .expect("runtime boots");
     let factory = tool_then_answer_http;
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
-    let server = tiny_http::Server::http("127.0.0.1:0").expect("binds");
-    let port = server.server_addr().to_ip().expect("ip").port();
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
 
     let client = std::thread::spawn(move || {
         use std::io::{BufRead, BufReader, Write};
@@ -107,7 +109,9 @@ fn a_disconnected_client_does_not_hold_the_turn_open() {
     });
 
     let started = std::time::Instant::now();
-    jan_klod_host::serve::serve_once_authed(&server, &mut agent, None).expect("serves the turn");
+    surface
+        .serve_once_authed(&mut agent, None)
+        .expect("serves the turn");
     let elapsed = started.elapsed();
     let _ = client.join();
 

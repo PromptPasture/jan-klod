@@ -17,8 +17,7 @@ use jan_klod_client::{stream_turn, StreamEvent};
 use jan_klod_core::http::WireResponse;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::serve_while;
-use tiny_http::Server;
+use jan_klod_host::serve::Surface;
 
 use crate::common;
 
@@ -223,12 +222,12 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
         );
     }
 
-    let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
-    let port = server.server_addr().to_ip().expect("ip addr").port();
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
     let addr = format!("127.0.0.1:{port}");
 
     // Real UI library (same as TUI).
-    let (result, asked, answer) = serve_while(&server, &mut agent, None, move |_| {
+    let (result, asked, answer) = surface.serve_while(&mut agent, None, move |_| {
         let mut asked = None;
         let mut answer = String::new();
         let result = stream_turn(
@@ -287,11 +286,11 @@ fn a_refused_confirmation_leaves_the_workspace_untouched() {
     let factory = write_then_answer_http;
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    let server = Server::http("127.0.0.1:0").expect("binds an ephemeral port");
-    let port = server.server_addr().to_ip().expect("ip addr").port();
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
     let addr = format!("127.0.0.1:{port}");
 
-    let _ = serve_while(&server, &mut agent, None, move |_| {
+    let _ = surface.serve_while(&mut agent, None, move |_| {
         stream_turn(&addr, "shipped-2", "create hello.txt", &mut |event| {
             if matches!(event, StreamEvent::Prompt { .. }) {
                 let _ = post_answer(port, "shipped-2", "no");

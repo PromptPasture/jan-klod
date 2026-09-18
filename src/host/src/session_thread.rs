@@ -63,9 +63,16 @@ impl std::fmt::Display for NoAnswer {
 
 impl std::error::Error for NoAnswer {}
 
-/// A handle to the thread owning a `T`. Cheap to clone, safe to send.
+/// A handle to the thread owning a `T`. Cheap to clone, safe to send, and
+/// **shareable**: `&Jobs` works from several threads at once.
+///
+/// The `Mutex` is what makes it `Sync`. `mpsc::Sender` is `Send` but not
+/// `Sync`, and an HTTP framework wants handler state that every request
+/// can borrow — so the choice is a lock held for the length of a `send`,
+/// or a handle that has to be cloned before it can be shared. The lock is
+/// smaller, and a `send` onto an unbounded channel does not block.
 pub struct Jobs<T> {
-    hand: Sender<Job<T>>,
+    hand: std::sync::Mutex<Sender<Job<T>>>,
 }
 
 impl<T> Clone for Jobs<T> {
@@ -73,7 +80,7 @@ impl<T> Clone for Jobs<T> {
     // holds a channel, never a `T`.
     fn clone(&self) -> Self {
         Self {
-            hand: self.hand.clone(),
+            hand: std::sync::Mutex::new(self.sender()),
         }
     }
 }
@@ -83,10 +90,27 @@ impl<T> Clone for Jobs<T> {
 #[must_use]
 pub fn queue<T>() -> (Jobs<T>, Receiver<Job<T>>) {
     let (hand, jobs) = channel();
-    (Jobs { hand }, jobs)
+    (
+        Jobs {
+            hand: std::sync::Mutex::new(hand),
+        },
+        jobs,
+    )
 }
 
 impl<T> Jobs<T> {
+    /// A sender of our own, recovering from a poisoned lock.
+    ///
+    /// Poisoning here means a panic while cloning a `Sender`, which leaves
+    /// nothing half-built; refusing every later job over it would turn one
+    /// panicked request into a dead surface.
+    fn sender(&self) -> Sender<Job<T>> {
+        self.hand
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Run `job` on the owning thread and wait for what it returns.
     ///
     /// Blocks the calling thread, which is the point: a request handler
@@ -118,7 +142,7 @@ impl<T> Jobs<T> {
             // done either way.
             let _ = answer.send(outcome.map_err(|_| NoAnswer::Panicked));
         });
-        self.hand.send(boxed).map_err(|_| NoAnswer::Stopped)?;
+        self.sender().send(boxed).map_err(|_| NoAnswer::Stopped)?;
         // A closed channel here means the job never sent: the loop died
         // between accepting the job and running it.
         wait.recv().unwrap_or(Err(NoAnswer::Stopped))
@@ -139,7 +163,7 @@ impl<T> Jobs<T> {
         let boxed: Job<T> = Box::new(move |owned| {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || job(owned)));
         });
-        self.hand.send(boxed).map_err(|_| NoAnswer::Stopped)
+        self.sender().send(boxed).map_err(|_| NoAnswer::Stopped)
     }
 }
 

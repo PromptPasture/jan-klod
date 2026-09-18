@@ -11,8 +11,7 @@ use std::net::TcpStream;
 use std::thread;
 
 use jan_klod_core::Runtime;
-use jan_klod_host::serve::{serve_once_authed, serve_while};
-use tiny_http::Server;
+use jan_klod_host::serve::Surface;
 
 use crate::common;
 
@@ -88,8 +87,8 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
-    let server = Server::http("127.0.0.1:0").expect("binds");
-    let port = server.server_addr().to_ip().expect("ip").port();
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
 
     let client = thread::spawn(move || {
         let none = request(port, "/session/a/message", None);
@@ -100,7 +99,9 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
     });
 
     for _ in 0..4 {
-        serve_once_authed(&server, &mut agent, Some(TOKEN)).expect("serves");
+        surface
+            .serve_once_authed(&mut agent, Some(TOKEN))
+            .expect("serves");
     }
     let (none, wrong, right, health) = client.join().expect("client thread");
 
@@ -134,11 +135,11 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
-    let server = Server::http("127.0.0.1:0").expect("binds");
-    let port = server.server_addr().to_ip().expect("ip").port();
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
 
     let client = thread::spawn(move || request(port, "/session/a/message", None));
-    serve_once_authed(&server, &mut agent, None).expect("serves");
+    surface.serve_once_authed(&mut agent, None).expect("serves");
     let response = client.join().expect("client thread");
 
     // Requiring a secret to talk to your own loopback is friction without a
@@ -251,13 +252,11 @@ extensions:
     let ext_dir = common::repo_root().join("ext");
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
-    let server = Server::http("127.0.0.1:0").expect("binds");
-    let port = server.server_addr().to_ip().expect("ip").port();
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
 
     let (refused, accepted, stream_text) =
-        serve_while(&server, &mut agent, Some(TOKEN), move |_| {
-            drive_confirmation(port)
-        });
+        surface.serve_while(&mut agent, Some(TOKEN), move |_| drive_confirmation(port));
 
     assert!(
         refused.contains("401"),

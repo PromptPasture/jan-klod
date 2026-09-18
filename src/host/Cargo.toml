@@ -11,12 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 jan-klod-core = { path = "../core" }
-# The `serve` subcommand binds the host-side REST surface. Also used by the
-# api_rest integration test (a normal dep is visible to tests too).
-# Synchronous/blocking, which matches the sync loop + the !Send Wasmtime-backed
-# AgentSession (no async runtime, no cross-thread sharing of the session). See
-# docs/concepts/architecture.md#transport.
-tiny_http = "0.12"
 # The surfaces speak JSON on the wire: `serde` derives the frame types the
 # stdio surfaces parse, `serde_json` reads and writes them. Both are already in
 # the lock via jan-klod-core, so naming them here costs no package.
@@ -28,6 +22,9 @@ serde_json.workspace = true
 # depending on this crate would drag wasmtime into every client that reads a
 # frame. Was a dev-dependency here while the surfaces lived in the kernel.
 jan-klod-protocol = { path = "../protocol" }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "sync", "time"] }
+futures-core = "0.3"
 
 # Examples and integration tests drive the guests over the Component Model:
 # spike_gate (Slice 1a gate), provider_probe (live single provider leg),
