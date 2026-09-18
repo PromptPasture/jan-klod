@@ -34,6 +34,7 @@
 //!   verified against `registry.trusted-keys`.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::conductor::{ToolInvocation, ToolInvoker};
 use crate::ext::{install, Checks};
@@ -46,7 +47,7 @@ const INSTALL: &str = "ext-install";
 const DESCRIPTION: &str = "Install a WebAssembly extension into the runtime's \
     extension directory. The operator is asked before it happens. An unsigned \
     component requires its sha256; a signed one is verified against the \
-    configured trusted keys. The extension is callable after a restart.";
+    configured trusted keys. The extension is callable from the next turn.";
 
 /// The argument schema, matching [`Checks`] rather than inventing a shape.
 const SCHEMA: &str = r#"{"type":"object","required":["path"],"properties":{
@@ -61,25 +62,48 @@ pub struct NativeTools {
     /// Minisign keys from `registry.trusted-keys`. Empty means nothing is
     /// trusted, which is default-deny rather than "skip the check".
     trusted_keys: Vec<String>,
+    /// Stems installed during this session, waiting to be adopted (#214).
+    ///
+    /// Shared rather than returned, because an install happens *inside* a
+    /// turn — the tool is dispatched from within the fleet and cannot reach
+    /// the `Runtime` that would load it. So it leaves a note, and whoever
+    /// drives turns reads it between them.
+    installed: Arc<Mutex<Vec<String>>>,
 }
 
 impl NativeTools {
     /// Answers nothing, advertises nothing.
     #[must_use]
-    pub const fn disabled() -> Self {
+    pub fn disabled() -> Self {
         Self {
             ext_dir: None,
             trusted_keys: Vec::new(),
+            installed: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     /// The install tool, writing into `ext_dir`.
     #[must_use]
-    pub const fn installing_into(ext_dir: PathBuf, trusted_keys: Vec<String>) -> Self {
+    pub fn installing_into(ext_dir: PathBuf, trusted_keys: Vec<String>) -> Self {
         Self {
             ext_dir: Some(ext_dir),
             trusted_keys,
+            installed: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Take the stems installed since this was last asked.
+    ///
+    /// Draining rather than reading: adoption happens once per install, and
+    /// a list that kept its entries would have the caller adopt the same
+    /// component on every turn thereafter — which `adopt_installed` refuses,
+    /// loudly, for the rest of the session.
+    #[must_use]
+    pub fn take_installed(&self) -> Vec<String> {
+        self.installed
+            .lock()
+            .map(|mut queued| std::mem::take(&mut *queued))
+            .unwrap_or_default()
     }
 
     /// Metadata for whatever is enabled, in the fleet's advertisement shape.
@@ -127,14 +151,19 @@ impl NativeTools {
                 .unwrap_or(false),
         };
         match install(dir, Path::new(source), &checks) {
-            Ok(installed) => (
-                format!(
-                    "installed {} at {}",
-                    installed.name,
-                    installed.component.display()
-                ),
-                false,
-            ),
+            Ok(installed) => {
+                if let Ok(mut queued) = self.installed.lock() {
+                    queued.push(installed.name.clone());
+                }
+                (
+                    format!(
+                        "installed {} at {}; it is callable from the next turn",
+                        installed.name,
+                        installed.component.display()
+                    ),
+                    false,
+                )
+            }
             Err(err) => (format!("refused: {err}"), true),
         }
     }

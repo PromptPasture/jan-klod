@@ -33,6 +33,7 @@ mod guardrails;
 mod host_fs;
 mod host_process;
 mod install_refusals;
+mod install_then_call;
 mod installed_layout;
 mod lazy_tool_fleet;
 mod local_model;

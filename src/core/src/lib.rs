@@ -1382,6 +1382,13 @@ struct CombinedFleet {
     native: native_tools::NativeTools,
 }
 
+impl CombinedFleet {
+    /// Stems installed during turns run on this fleet, drained.
+    fn take_installed(&self) -> Vec<String> {
+        self.native.take_installed()
+    }
+}
+
 impl conductor::ToolInvoker for CombinedFleet {
     fn invoke(&mut self, call: &intercept::ToolCall) -> Option<conductor::ToolInvocation> {
         self.tools
@@ -1456,6 +1463,32 @@ pub struct AgentSession {
 }
 
 impl AgentSession {
+    /// Components installed by turns on this session, drained.
+    ///
+    /// **The seam between installing and loading** (#214). `ext-install`
+    /// runs inside a turn, from inside the fleet, and cannot reach the
+    /// [`Runtime`] that would compile what it landed — so it leaves the
+    /// stem here and whoever drives turns picks it up *between* them:
+    ///
+    /// ```ignore
+    /// for stem in agent.take_installed() {
+    ///     runtime.adopt_installed(&stem)?;
+    ///     agent = runtime.build_agent(&factory)?;
+    /// }
+    /// ```
+    ///
+    /// Between turns and not during one, deliberately. A turn runs on the
+    /// fleet it started with, which is the only answer that cannot leave a
+    /// turn half-reconfigured — and rebuilding is ~9 ms, so the wait costs
+    /// the next turn nothing worth measuring.
+    ///
+    /// Draining, so a caller that ignores it does not adopt the same
+    /// component on every turn for the rest of the session.
+    #[must_use]
+    pub fn take_installed(&mut self) -> Vec<String> {
+        self.tools.take_installed()
+    }
+
     /// Run one turn headless, using the session's tool fleet. An interceptor
     /// `ask` resolves to its `default-answer`.
     pub fn run(&mut self, session: &str, message: &str) -> conductor::RunResult {
