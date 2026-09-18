@@ -96,6 +96,37 @@ fn talk(port: u16, token: Option<&str>, frames: Vec<String>) -> Result<Vec<Strin
         })
 }
 
+/// A framed request, ready to send.
+fn frame(id: u32, method: &str) -> String {
+    serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method }).to_string()
+}
+
+/// [`talk`], for frames that are not all text.
+fn talk_mixed(port: u16, frames: Vec<Message>) -> Result<Vec<String>, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+        .block_on(async move {
+            let url = format!("ws://127.0.0.1:{port}/ws");
+            let (mut socket, _) = tokio_tungstenite::connect_async(url)
+                .await
+                .map_err(|err| err.to_string())?;
+            let mut answers = Vec::new();
+            for frame in frames {
+                socket.send(frame).await.map_err(|err| err.to_string())?;
+                match socket.next().await {
+                    Some(Ok(Message::Text(text))) => answers.push(text.to_string()),
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => return Err(err.to_string()),
+                    None => break,
+                }
+            }
+            let _ = socket.close(None).await;
+            Ok(answers)
+        })
+}
+
 fn hello() -> String {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -159,5 +190,105 @@ fn the_socket_is_refused_without_the_token() {
     assert!(
         accepted[0].contains(jan_klod_protocol::PROTOCOL_VERSION),
         "and gets the handshake: {accepted:?}"
+    );
+}
+
+/// A verb that needs the session is answered over the socket, and the
+/// handshake it needed first is remembered across frames.
+///
+/// The second half is socket-specific and is the part worth testing: the
+/// negotiated flag lives in the connection loop and is handed into each
+/// job and read back out, because a job cannot borrow it. If that came
+/// back wrong, every command after the first would be refused — which is
+/// exactly what a client would report as "it works once".
+#[test]
+fn a_session_verb_is_answered_and_the_handshake_is_remembered() {
+    let Some((_guard, mut agent)) = booted("verbs") else {
+        return;
+    };
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let answers = surface.serve_while(&mut agent, None, |port| {
+        talk(
+            port,
+            None,
+            vec![
+                hello(),
+                frame(2, "session/create"),
+                frame(3, "session/list"),
+            ],
+        )
+        .expect("the socket answers")
+    });
+
+    assert_eq!(answers.len(), 3, "one answer per frame: {answers:?}");
+    for (n, answer) in answers.iter().enumerate() {
+        assert!(
+            !answer.contains("\"error\""),
+            "frame {n} was refused, so the handshake did not carry: {answer}"
+        );
+    }
+    assert!(
+        answers[2].contains("sessions"),
+        "session/list answered with a session list: {}",
+        answers[2]
+    );
+}
+
+/// A command before the handshake is refused — the protocol's rule, not
+/// the socket's, and it reaches the socket because the dispatch is shared.
+#[test]
+fn a_command_before_the_handshake_is_refused() {
+    let Some((_guard, mut agent)) = booted("premature") else {
+        return;
+    };
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let answers = surface.serve_while(&mut agent, None, |port| {
+        talk(port, None, vec![frame(1, "session/list")]).expect("the socket answers")
+    });
+    assert!(
+        answers[0].contains("\"error\""),
+        "an un-negotiated command was served: {}",
+        answers[0]
+    );
+}
+
+/// A frame that is not this protocol is answered, and **the connection
+/// continues** — `rpc::serve`'s rule, and the reason one bad client
+/// cannot take a session down.
+///
+/// Three kinds in one connection: not JSON, JSON that is not a request,
+/// and a binary frame. The frame after them all is the assertion: it is
+/// answered normally, so none of the three closed the socket.
+#[test]
+fn a_bad_frame_is_answered_and_the_connection_survives_it() {
+    let Some((_guard, mut agent)) = booted("bad-frames") else {
+        return;
+    };
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let answers = surface.serve_while(&mut agent, None, |port| {
+        talk_mixed(
+            port,
+            vec![
+                Message::text(hello()),
+                Message::text("not json at all".to_owned()),
+                Message::text(serde_json::json!({ "hello": "world" }).to_string()),
+                Message::binary(vec![0x00, 0x01, 0x02]),
+                Message::text(frame(9, "session/list")),
+            ],
+        )
+        .expect("the socket answers")
+    });
+
+    assert_eq!(answers.len(), 5, "every frame was answered: {answers:?}");
+    for (n, answer) in answers.iter().enumerate().take(4).skip(1) {
+        assert!(
+            answer.contains("\"error\""),
+            "frame {n} should have been refused: {answer}"
+        );
+    }
+    assert!(
+        !answers[4].contains("\"error\"") && answers[4].contains("sessions"),
+        "the connection did not survive three bad frames: {}",
+        answers[4]
     );
 }
