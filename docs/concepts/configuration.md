@@ -169,7 +169,7 @@ A top-level block, not under `extensions` — it's a substrate for enabled tools
 |---|---|---|
 | `enabled` | Whether `host-process` runs commands at all. Also requires a workspace, since the cwd is jailed to it | `false` |
 | `timeout-secs` | A command outrunning this is killed | `30` |
-| `output-cap` | Captured bytes per stream, stdout and stderr each | `65536` |
+| `output-cap` | Captured bytes per stream, stdout and stderr each. Also bounds what a **long-lived** child may hold unread: past it the oldest output is dropped and the host says so, because a child nobody reads would otherwise grow the host for as long as it runs | `65536` |
 | `env-passthrough` | Extra environment names a child inherits, one at a time. Everything else is stripped — the gateway's own environment holds your API keys | none |
 | `sandbox` | What a command may do once running (below) | see below |
 | `long-lived` | Children a guest may hold open, **named one at a time** (below) | none |
@@ -192,6 +192,21 @@ execution:
 Missing `name` or `command` is skipped, not guessed. Half-written grants are unreadable; conservative reading is none.
 
 Long-lived children are confined by the same `execution.sandbox` policy as one-shot commands — they outlive their call, so more exposed — and killed when the instance goes, including on gateway exit. Guests that never call `kill` can't leave processes behind.
+
+A guest can ask which names it was granted (`host-process.granted`), names only — what a name runs never leaves the host. That is what lets a *tool* offer them: see `tool.proc` below.
+
+#### Letting the model drive one (`tool.proc`)
+
+The grants above are reachable only by a guest. `tool.proc` is the shipped tool that puts them in front of the model — `list`, `start`, `output`, `stop`, each naming a child from the list above:
+
+```yaml
+extensions:
+  tool:
+    proc:
+      enabled: true
+```
+
+Two grants, not one: enabling the tool grants nothing on its own, and an empty `long-lived` list leaves it with nothing to start. The model never supplies a command, so the widest thing it can do is start something you wrote down — the same rule that makes this section narrower than `enabled`, unchanged by having a model on the other end of it.
 
 ### `execution.sandbox`
 
