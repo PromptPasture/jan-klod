@@ -203,3 +203,70 @@ fn dropping_the_registry_stops_every_agent() {
         "a queue still answers after its registry was dropped"
     );
 }
+
+/// Two agents, one store — even with **no `storage.path` at all** (#233).
+///
+/// The configuration this is written against is the one that was wrong:
+/// with a path, several `Store::open` handles to one file agreed by luck
+/// and the bug was invisible. Without one, every agent used to get its
+/// own in-memory database, so a session had a transcript for the agent
+/// that wrote it and `[]` for every other — and the REST surface reads
+/// sessions through the *housekeeping* agent, so `GET /sessions` and
+/// `GET /session/{id}` reported nothing while the session worked.
+///
+/// Nothing errored, which is what made it worth a test rather than a
+/// comment.
+#[test]
+fn a_session_written_by_one_agent_is_visible_to_another() {
+    if !common::guests_staged(&["provider-openai.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-onestore-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("creates the temp dir");
+    let _guard = common::TempDir(dir.clone());
+    let config = dir.join("config.yaml");
+    // Deliberately no `storage:` block.
+    std::fs::write(
+        &config,
+        "
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+",
+    )
+    .expect("writes the config");
+    let runtime =
+        Runtime::boot(&config, common::repo_root().join("ext")).expect("the runtime boots");
+    let agents = Agents::new(runtime, Arc::new(|| common::canned_http("pong")));
+
+    agents
+        .of("alpha")
+        .run(|agent: &mut AgentSession| {
+            agent.run("alpha", "hello");
+        })
+        .expect("alpha's turn ran");
+
+    // The housekeeping agent is the one the REST surface reads through.
+    let (transcript, listed) = agents
+        .housekeeping()
+        .run(|agent: &mut AgentSession| {
+            (
+                agent.transcript("alpha").len(),
+                jan_klod_core::session::sessions_payload(agent).to_string(),
+            )
+        })
+        .expect("the reader ran");
+
+    assert!(
+        transcript >= 2,
+        "another agent saw {transcript} messages in a session that has a turn"
+    );
+    assert!(
+        listed.contains("alpha"),
+        "the session is not in the list every client reads: {listed}"
+    );
+}

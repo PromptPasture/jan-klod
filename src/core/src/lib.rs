@@ -291,13 +291,16 @@ pub struct Runtime {
     engine: Engine,
     linker: Linker<HostState>,
     extensions: Vec<LoadedExtension>,
+    /// The one store, shared by every agent this runtime builds.
+    ///
+    /// One per runtime rather than one per agent: sessions have to agree
+    /// about what has been said, and with per-session agents (#229) a
+    /// store each meant they did not (#233).
+    store: Arc<Mutex<store::Store>>,
     /// Top-level agent-behaviour config (`routing`, `providers`, …), preserved
     /// verbatim and served to interceptors that need it (e.g. task-router) via
     /// `host-config`. Always a JSON object.
     agent: serde_json::Value,
-    /// Directory holding `config.yaml`, so a relative `storage.path` resolves
-    /// against the deployment rather than the working directory.
-    config_dir: PathBuf,
     /// Where components live. Kept because the host's own install tool
     /// writes here (#213); until then this was only a `boot` argument.
     ext_dir: PathBuf,
@@ -442,12 +445,17 @@ impl Runtime {
             });
         }
 
+        // Opened here rather than per agent, and so a `storage.path` that
+        // cannot be opened now fails the boot — where an operator is
+        // already reading output — instead of the first request.
+        let store = Self::open_store(&agent, &config_dir)?;
+
         Ok(Self {
             engine,
             linker,
             extensions,
+            store,
             agent,
-            config_dir,
             ext_dir: ext_dir.to_path_buf(),
             compile_cache,
             sandbox_wrapper: None,
@@ -798,7 +806,7 @@ impl Runtime {
         // tool-selector gets combined advertised metadata when asked).
         // Opened before the fleets rather than after: a tool's `host-storage`
         // needs the same handle an interceptor's does (#215).
-        let store = self.open_store()?;
+        let store = Arc::clone(&self.store);
         let ProvidersAndTools {
             providers,
             provider_ids,
@@ -1364,13 +1372,21 @@ impl Runtime {
     /// A relative `path` resolves against the directory holding `config.yaml`,
     /// not the working directory — otherwise each startup directory gets its
     /// own `jan-klod.db` and conversation history.
-    fn open_store(&self) -> Result<Arc<Mutex<store::Store>>, CoreError> {
-        let sqlite_path = self
-            .agent
+    ///
+    /// Called **once**, at boot, and shared by every agent (#233). Opened
+    /// per agent it was a different database per session whenever no path
+    /// was configured, so a transcript existed for the session that wrote
+    /// it and for nobody else — and with a path it was several handles to
+    /// one file agreeing by luck.
+    fn open_store(
+        agent: &serde_json::Value,
+        config_dir: &Path,
+    ) -> Result<Arc<Mutex<store::Store>>, CoreError> {
+        let sqlite_path = agent
             .get("storage")
             .and_then(|storage| storage.get("path"))
             .and_then(serde_json::Value::as_str)
-            .map(|path| self.config_dir.join(path));
+            .map(|path| config_dir.join(path));
         let store = sqlite_path
             .map_or_else(store::Store::open_in_memory, store::Store::open)
             .map_err(|source| CoreError::Store {
