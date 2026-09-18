@@ -76,6 +76,14 @@ jobs:
         with:
           tool: wasm-tools@1.258.0
 
+      # jaq generates each guest's manifest, merges the SBOM and checks the
+      # registry index — all three read by something else, so it is pinned like
+      # every other tool here (#208). `jq` used to do this and was installed by
+      # nothing: it worked because runner images ship it.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: jaq@2.3.0
+
       # Two things resolve wit/spike/deps (wasi:cli & co) through bindgen!: the
       # spike_gate example, which `make clippy` compiles by passing the `examples`
       # feature it is gated behind, and the `it` test binary's polyglot module,
@@ -231,6 +239,14 @@ jobs:
         with:
           tool: wasm-tools@1.258.0
 
+      # jaq generates each guest's manifest, merges the SBOM and checks the
+      # registry index — all three read by something else, so it is pinned like
+      # every other tool here (#208). `jq` used to do this and was installed by
+      # nothing: it worked because runner images ship it.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: jaq@2.3.0
+
       # `make gate` builds the `it` test binary, and its polyglot module resolves
       # wit/spike through bindgen!, so this job needs wit/spike/deps too. It died
       # on "failed to resolve directory while parsing WIT for path .../wit/spike"
@@ -349,7 +365,7 @@ jobs:
       # versions.mk.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-cyclonedx@0.5.9
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-cyclonedx@0.5.9,jaq@2.3.0
 
       - name: cargo-deny (license / advisory / source policy)
         run: make deny

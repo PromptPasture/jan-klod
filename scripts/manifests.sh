@@ -36,8 +36,8 @@ command -v wasm-tools >/dev/null 2>&1 || {
     echo "manifests.sh: wasm-tools is required (cargo install wasm-tools)" >&2
     exit 1
 }
-command -v jq >/dev/null 2>&1 || {
-    echo "manifests.sh: jq is required" >&2
+command -v jaq >/dev/null 2>&1 || {
+    echo 'manifests.sh: jaq is required — run: make setup' >&2
     exit 1
 }
 
@@ -61,9 +61,9 @@ for guest in "$@"; do
     }
 
     version="$(printf '%s' "$METADATA" |
-        jq -r --arg n "$guest" '.packages[] | select(.name == $n) | .version')"
+        jaq -r --arg n "$guest" '.packages[] | select(.name == $n) | .version')"
     description="$(printf '%s' "$METADATA" |
-        jq -r --arg n "$guest" '.packages[] | select(.name == $n) | .description // ""')"
+        jaq -r --arg n "$guest" '.packages[] | select(.name == $n) | .description // ""')"
     [ -n "$version" ] || {
         echo "manifests.sh: $guest is not a package in $EXT_SRC/Cargo.toml" >&2
         exit 1

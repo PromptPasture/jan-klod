@@ -47,3 +47,17 @@ WASM_TOOLS_VERSION := 1.258.0
 # a resolution of *some* registry state at the time it was written, and a newer
 # wkg is not guaranteed to reproduce it.
 WKG_VERSION := 0.15.1
+
+# jaq is jq, in Rust, so the one tool the scripts here depended on without
+# pinning becomes `cargo install`-able like the rest (#208). It reads
+# `cargo metadata` for each guest's manifest, merges the two workspaces'
+# CycloneDX documents, and checks the registry index is sorted — output every
+# one of those is read by something else, which is this file's whole subject.
+#
+# **It is not a drop-in, and the difference is one flag.** `jq -s` over several
+# file arguments slurps *across* them into one array; `jaq -s` slurps per file
+# and emits one document each. The SBOM merge depended on the former, so it
+# pipes the files in as one stream now, where jaq's output is byte-identical to
+# jq's. Verified against all four filter sites before the swap, which the
+# toolchain survey (#167) specifically warned not to skip.
+JAQ_VERSION := 2.3.0

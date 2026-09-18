@@ -332,7 +332,7 @@ audit deny:
 # in this release?" — with two thirds of it.
 #
 # `cd` per workspace because cargo-cyclonedx writes beside each manifest; the
-# results are then merged into one document by `jq`.
+# results are then merged into one document by `jaq` (#208).
 #
 # **One** glob, `src/*/*.cdx.json`, and that is not a shortcut: every crate in
 # both workspaces — the five host members and `jan-klod-gui` — is a direct
@@ -350,8 +350,9 @@ sbom:
 	  test "$$n" -eq 6 \
 	    || { echo "sbom: expected 6 per-crate documents, found $$n:" >&2; \
 	         ls $(HOST_WS)/*/*.cdx.json >&2; exit 1; }
-	jq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
-	  $(HOST_WS)/*/*.cdx.json > sbom.cdx.json
+	cat $(HOST_WS)/*/*.cdx.json | \
+	  jaq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
+	  > sbom.cdx.json
 
 # The npm leg (#120). A named target rather than a line inlined below, and that
 # is not a style choice: the inlined supervisor line further down has never run
@@ -602,6 +603,7 @@ setup:
 	cargo install cargo-deny --version $(CARGO_DENY_VERSION)
 	cargo install wasm-tools --version $(WASM_TOOLS_VERSION)
 	cargo install wkg --version $(WKG_VERSION)
+	cargo install jaq --version $(JAQ_VERSION)
 	$(MAKE) -C $(EXT) spike-deps
 	$(MAKE) install-hooks
 

@@ -38,8 +38,8 @@ ROOT="$(CDPATH='' cd -- "$HERE/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-command -v jq >/dev/null 2>&1 || {
-    echo "registry-index-drift: jq is required" >&2
+command -v jaq >/dev/null 2>&1 || {
+    echo 'registry-index-drift: jaq is required — run: make setup' >&2
     exit 1
 }
 
@@ -74,7 +74,7 @@ twice_agrees() {
 # Entries sorted by name, and no name twice. Two runs can agree on a wrong
 # order; nothing can agree on a duplicate.
 sorted_and_unique() {
-    jq -e '
+    jaq -e '
         [.extensions[].name] as $names
         | ($names == ($names | sort)) and (($names | unique | length) == ($names | length))
     ' "$1" >/dev/null 2>&1
@@ -98,7 +98,7 @@ echo "registry-index-drift: two runs agree, 0 drift"
 
 if ! sorted_and_unique "$WORK/first.json"; then
     echo "registry-index-drift: the index is not sorted by name, or names repeat" >&2
-    jq -r '[.extensions[].name] | @json' "$WORK/first.json" >&2
+    jaq -r '[.extensions[].name] | @json' "$WORK/first.json" >&2
     exit 1
 fi
 echo "registry-index-drift: entries sorted by name, names unique"
