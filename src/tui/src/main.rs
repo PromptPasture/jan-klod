@@ -256,6 +256,10 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
             StreamEvent::ToolResult { .. } => eprint!("✓"),
             StreamEvent::Warning(msg) => eprint!("\n  ⚠ {msg}"),
             StreamEvent::Error(msg) => eprint!("\n  error: {msg}"),
+            // This mode has no menu and no panes to put a contribution in.
+            // Ignoring it is a valid client by the contract's own rule, and
+            // the turn is unaffected.
+            StreamEvent::Contributions(_) => {}
             // The turn is blocked until this is answered, so ask right here on
             // the same stdin the REPL already owns.
             StreamEvent::Prompt {

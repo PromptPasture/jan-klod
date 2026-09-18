@@ -59,9 +59,7 @@ fn event_loop(
     // Session id owned by App, mutable from here (#105): switch or `/new`
     // replaces it via `App::load_session`, not held by loop.
     app.set_session(session.to_string());
-    // Transport kind never changes, drives quit confirm wording (#105).
-    // Over stdio: spawned gateway dies with client. Over `--addr`: doesn't.
-    app.set_stdio(transport.is_stdio());
+    take_connect_facts(&mut app, transport);
     let mut view = Viewport::default();
     // Last frame's state. Scroll keys need transcript line count and pane
     // height; only `render` knows these (it wraps text to terminal width).
@@ -214,6 +212,18 @@ fn event_loop(
     Ok(())
 }
 
+/// What the model learns once, at connect, and never polls for again.
+///
+/// The transport kind drives the quit confirm's wording (#105) — over stdio
+/// the spawned gateway dies with the client, over `--addr` it does not. The
+/// contributions were reported during the handshake and held by the transport
+/// until there was a model to give them to; a connection that does not carry
+/// them yields none, which renders as no extra menu entries and nothing else.
+fn take_connect_facts(app: &mut App, transport: &Arc<dyn Transport>) {
+    app.set_stdio(transport.is_stdio());
+    app.set_contributions(&transport.contributions());
+}
+
 /// Asks raised since last frame, sent to transport (#105). One function
 /// (all three same shape): model raises intent, loop executes/reports back.
 /// Switcher's `session/get` not here: answered from keystroke, not drained.
@@ -243,6 +253,21 @@ fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
             ),
             Err(err) => app.record_error(format!("session/list: {err}")),
         }
+    }
+
+    // A contributed command the user chose. Same shape as the three above:
+    // the model recorded intent, and this is where a transport exists to act
+    // on it. The answer goes to the status line — a contribution reports in
+    // words, and the transcript is for the turn.
+    if let Some((extension, name)) = app.take_invoke_request() {
+        match transport.invoke_contribution(&extension, &name) {
+            Ok(text) if text.is_empty() => app.record_status(format!("{name} ran")),
+            Ok(text) => app.record_status(text),
+            Err(err) => app.record_error(format!("{name}: {err}")),
+        }
+        // An invocation may have changed what is contributed; the transport
+        // caught the new set while reading the answer.
+        app.set_contributions(&transport.contributions());
     }
 
     // `/new`: `session/create` needs no id, can't race turn's reader.
@@ -723,6 +748,10 @@ fn apply_event(
             app.record_error(err);
             return Step::Ended;
         }
+        // Not a turn event: an extension reported that what it offers has
+        // changed, mid-turn. Taking it now keeps the menu honest without
+        // touching the turn.
+        Ok(Ok(StreamEvent::Contributions(sets))) => app.set_contributions(&sets),
         // The transport itself failed — `Transport::stream_turn` returned
         // `Err` rather than a frame the core sent. That is a dead connection,
         // not a turn outcome (#104): say so in the status bar and stop

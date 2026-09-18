@@ -118,6 +118,11 @@ pub enum StreamEvent {
     },
     /// The turn failed.
     Error(String),
+    /// What the extensions contribute to this client's interface, as a whole
+    /// set (`wit/client-surface.wit`). Not a turn event: it arrives at the
+    /// handshake and again whenever the set changes, so a client that ignores
+    /// it renders no contributions and otherwise behaves identically.
+    Contributions(Vec<jan_klod_protocol::Contributions>),
 }
 
 /// Parse SSE frame (event kind + data JSON) → [`StreamEvent`] or `None`.

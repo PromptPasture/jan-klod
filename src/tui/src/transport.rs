@@ -86,6 +86,27 @@ pub trait Transport: Send + Sync {
     /// keystroke that silently vanishes teaches the wrong lesson.
     fn follow_up(&self, session: &str, message: &str) -> Result<(), String>;
 
+    /// What the extensions contributed, as reported at connect.
+    ///
+    /// Defaults to nothing: contributions travel on the client protocol's
+    /// notification, which only the stdio transport carries. Over REST the
+    /// menu simply gains no contributed entries, which the contract makes a
+    /// valid client rather than a degraded one.
+    fn contributions(&self) -> Vec<jan_klod_protocol::Contributions> {
+        Vec::new()
+    }
+
+    /// Run a command an extension contributed, returning what it answered.
+    ///
+    /// # Errors
+    /// A human-readable message if the call cannot be sent or the extension
+    /// refuses it. Over REST, always: that projection does not carry
+    /// contributions, so there is nothing there to invoke.
+    fn invoke_contribution(&self, extension: &str, name: &str) -> Result<String, String> {
+        let _ = (extension, name);
+        Err("contributions are not available over this connection".to_owned())
+    }
+
     /// How to describe this connection in a status line.
     fn describe(&self) -> String;
 
@@ -201,6 +222,10 @@ pub struct Stdio {
     /// Request IDs: counter incremented by two threads atomically.
     next_id: AtomicI64,
     described: String,
+    /// What the core reported at the handshake, before the client had
+    /// anywhere to put it. Held rather than dropped: the notification arrives
+    /// once, ahead of the hello answer, and nothing is listening yet.
+    contributed: Mutex<Vec<jan_klod_protocol::Contributions>>,
 }
 
 impl Stdio {
@@ -244,6 +269,7 @@ impl Stdio {
             reader: Mutex::new(reader),
             next_id: AtomicI64::new(1),
             described: format!("{} over stdio", bin.display()),
+            contributed: Mutex::new(Vec::new()),
         };
         match transport.handshake() {
             Ok(()) => Ok(transport),
@@ -281,7 +307,15 @@ impl Stdio {
         let id = self.send(&Rpc::Hello {
             version: PROTOCOL_VERSION.to_owned(),
         })?;
-        let result = self.read_until(&id, &mut |_| {})?;
+        // The contributions notification comes before this answer, so it is
+        // caught here or not at all.
+        let result = self.read_until(&id, &mut |event| {
+            if let StreamEvent::Contributions(sets) = event {
+                if let Ok(mut held) = self.contributed.lock() {
+                    *held = sets;
+                }
+            }
+        })?;
         let core = result
             .get("version")
             .and_then(serde_json::Value::as_str)
@@ -475,6 +509,39 @@ impl Transport for Stdio {
         Ok(())
     }
 
+    fn contributions(&self) -> Vec<jan_klod_protocol::Contributions> {
+        self.contributed
+            .lock()
+            .map(|held| held.clone())
+            .unwrap_or_default()
+    }
+
+    /// Safe only when no turn streams, like `session/get` and `session/create`
+    /// above: it reads the answer off the same pipe a turn's reader holds. The
+    /// menu is unreachable mid-turn, which is what keeps that true.
+    fn invoke_contribution(&self, extension: &str, name: &str) -> Result<String, String> {
+        let id = self.send(&Rpc::SurfaceInvoke {
+            extension: extension.to_owned(),
+            name: name.to_owned(),
+            arguments: Vec::new(),
+        })?;
+        // A contribution may report that the set changed; the notification
+        // carrying the new set arrives before this answer, so it is taken
+        // here for the caller to read back.
+        let result = self.read_until(&id, &mut |event| {
+            if let StreamEvent::Contributions(sets) = event {
+                if let Ok(mut held) = self.contributed.lock() {
+                    *held = sets;
+                }
+            }
+        })?;
+        Ok(result
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned())
+    }
+
     fn describe(&self) -> String {
         self.described.clone()
     }
@@ -552,7 +619,12 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
         // nothing renders them yet (#190), and ignoring them is a valid client
         // rather than a gap — `wit/client-surface.wit` makes that a rule, so
         // no extension may assume a contribution was rendered.
-        Notification::SessionUpdated { .. } | Notification::SurfaceContributions { .. } => None,
+        Notification::SurfaceContributions { extensions } => {
+            Some(StreamEvent::Contributions(extensions.clone()))
+        }
+        // `session/updated`: this client shows one session, so list moves are
+        // noise.
+        Notification::SessionUpdated { .. } => None,
     }
 }
 
@@ -565,6 +637,25 @@ mod tests {
     /// Stdio half of #154: id and arguments reach client (used to be discarded).
     /// Asserted here and in `tests/parse_frame.rs` because #81 had two faces,
     /// only one reported. SSE+not-stdio pairing would be the same bug.
+    /// The contributions notification is not a turn event, but it arrives on
+    /// the same stream and has to reach the model rather than being dropped.
+    #[test]
+    fn a_contributions_notification_becomes_an_event() {
+        let event = event_for(&Notification::SurfaceContributions {
+            extensions: vec![jan_klod_protocol::Contributions {
+                extension: "interceptor.system".to_owned(),
+                commands: vec![],
+                status_items: vec![],
+                forms: vec![],
+            }],
+        });
+        let Some(StreamEvent::Contributions(sets)) = event else {
+            panic!("a contributions notification must reach the client: {event:?}");
+        };
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].extension, "interceptor.system");
+    }
+
     #[test]
     fn the_stdio_mapping_carries_the_call_id_and_its_arguments() {
         let event = event_for(&Notification::ToolInvoked {
