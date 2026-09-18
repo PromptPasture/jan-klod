@@ -158,15 +158,15 @@ There is **no WIT UI contract.** UIs are not extensions and run in their own pro
 |---|---|---|
 | stdio JSON-RPC | spawn `jan-klod-gateway rpc`; newline-delimited frames on its stdin/stdout | 13b |
 | REST + SSE | `POST /session/:id/message` against a running `serve`, streamed back as `event:`/`data:` | since Phase 3, now a projection |
-| WebSocket | — | 13c |
+| WebSocket | `GET /ws` against a running `serve`; the stdio frames, one connection | 20d |
 
 **stdio is the default for `jan-klod`.** No port, no token, nothing left running: client spawns the gateway and owns it. **Stdout carries frames only** — all logs go to stderr, so clients splitting on newlines don't read stray `println!` as frames.
 
-Three differences follow from the shape:
+Three differences follow from the shape, and the WebSocket sits with stdio on all three — it is the stdio dispatch over a socket, not a third implementation:
 
-- **Confirmation**: answered on a second REST connection; over stdio one pipe, a reader thread holds it while the turn runs and hands frames between events.
-- **Cancel**: REST is client disconnect (no route); stdio is `turn/cancel` frame read at the same seam.
-- **Steering** (`turn/follow-up`): works over stdio, not REST, which can't deliver messages into running turns.
+- **Confirmation**: answered on a second REST connection; over stdio and `/ws`, on the connection the question came up.
+- **Cancel**: REST is client disconnect (no route); stdio and `/ws` carry `turn/cancel` as a frame, read while the turn runs.
+- **Steering** (`turn/follow-up`): works over stdio and `/ws`, not REST, which can't deliver messages into running turns.
 
 An answer that arrives when nothing asked is refused on both — `409` over REST, `invalid request` over stdio. Not stashed: a held answer would sit until the *next* question and approve it.
 

@@ -289,7 +289,9 @@ for the rationale.
 
 ## Transport
 
-The HTTP surface is **host-side** — `jan_klod_host::serve` runs a synchronous `tiny_http` listener exposing core over **REST + Server-Sent Events (SSE)**. UI clients, browsers, and remote ACP callers consume it. Curl-debuggable, browser-compatible, no stub generation. Endpoints: `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`.
+The HTTP surface is **host-side** — `jan_klod_host::serve` runs an `axum` listener exposing core over **REST + Server-Sent Events (SSE)**, and `GET /ws` beside them. UI clients, browsers, and remote ACP callers consume it. Curl-debuggable, browser-compatible, no stub generation. Endpoints: `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`, `GET /ws`.
+
+The session is still `!Send` and still lives on one thread; what changed in Phase 20 is that nothing else does. Requests are served by the runtime, and the session is reached by job (`host::session_thread`) — so a parked confirmation no longer stops the surface, which is what it used to do (#223, #225).
 
 **It is no longer the only surface.** Phase 13 made the client surface a versioned contract ranked as WIT — `jan-klod-protocol`, with typed commands/notifications and version negotiated at connect (see [Contracts](contracts.md#ui--core-client-surface)) — and gave it a second transport:
 
@@ -297,13 +299,13 @@ The HTTP surface is **host-side** — `jan_klod_host::serve` runs a synchronous 
 
 The two differ structurally. Over REST, mid-turn confirmation answers on a *second connection* and cancel is client disconnect. Over stdio there's one pipe: a reader thread holds it during the turn, handing frames to the loop between turn events — how `turn/cancel` gets read and how `turn/follow-up` (steering a running turn) becomes possible, which REST cannot do.
 
-**Phase 13c — WebSocket — is deferred until Phase 17 needs it** ([#43](https://github.com/PromptPasture/jan-klod/issues/43)). The obstacle is not framing but the socket: the protocol needs reads that time out (so silent clients cannot pin turns open — core is single-threaded, blocking the runtime, what `prompt_disconnect.rs` guards) and reads running while writes happen (so mid-turn `turn/cancel` is readable). `tiny_http`'s `Request::upgrade` returns two halves **fused**, with no `try_clone` or `set_read_timeout`, and private accessors aren't exposed. Paths out — a second listener or core-owned listener serving both — are best made by the client that will use one (not yet started). REST + SSE stays one contract projection, not a second contract. Vision [decision 1](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions); plan in [roadmap](roadmap.md#phase-13--client-protocol).
+**WebSocket is built** (#226, closing [#43](https://github.com/PromptPasture/jan-klod/issues/43)). It was deferred for years of plan-time on a two-part obstacle, and the honest record is that only half of it was ever about the socket. `tiny_http`'s `Request::upgrade` returns two halves fused, with no `try_clone` and no `set_read_timeout`, and the argument was that the protocol needs reads that time out *and* reads running while writes happen. The first requirement **dissolved**: since #225 a parked `ask` waits on a channel with its own deadline and reads nothing, so no socket timeout is involved. The second stood, and `axum` answers it — a split stream, a reader task and a writer task. `GET /ws` carries the stdio frames, dispatched by the same `rpc::command`, with `turn/cancel` read while a turn runs. REST + SSE remains one contract projection, not a second contract. Vision [decision 1](../decisions/2026-09-08-harness-platform-vision/Vision.md#decisions).
 
 ### The MCP port (`jan-klod-gateway mcp`)
 
 A third surface, first one core doesn't define: **MCP's stdio transport is the framing `rpc` already speaks** — newline-delimited JSON-RPC 2.0, stdout frames and nothing else, stderr logs. `jan_klod_host::mcp` is a method-name-and-payload adapter over the same envelope, not a second transport, costing no dependency.
 
-`rmcp`, the official Rust SDK, is async on tokio. This core is deliberately synchronous — the session is `!Send` and single-threaded (why `tiny_http` over `axum`) — so adopting it would be an architectural change.
+`rmcp`, the official Rust SDK, is async on tokio. `mcp.rs` stays synchronous anyway — the session is `!Send` and reached by job rather than held — so adopting it would be an architectural change rather than a convenience. The parenthetical that used to be here, "why `tiny_http` over `axum`", stopped being true in Phase 20: the surface is `axum` and the session's thread is unaffected by it.
 
 Three tools: `ask` (one turn, answer as text), `session_list`, `session_get` (reading same payloads REST serves so editor and browser agree on session shape).
 
@@ -408,7 +410,7 @@ Required, not optional: with log-based read surfaces, unconverted databases have
 | Process model | `core` = standalone process under the user's privileges, hosting the WASM sandbox; UI clients connect over an `api-*` HTTP+SSE surface |
 | WASM host | Wasmtime (Rust-native, no CGo) |
 | Extension format | WASM Component Model + WIT interfaces (`wit-bindgen`) — every extension, incl. `api-*`/`chat-*` |
-| HTTP surface | host-side `tiny_http` (sync); REST + SSE; `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message` |
+| HTTP surface | host-side `axum`; REST + SSE + `GET /ws`; `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`, `GET /ws`. The session stays on one thread and is reached by job |
 | SQL (host-side) | `rusqlite` bundled; host-side store (not SQLite-in-wasm) |
 | UI clients (separate, optional) | `jan-klod-ui`: TUI (`ratatui`); GUI via Tauri *(planned)*; web via browser |
 | Build | Cargo (native binary; no CGo in the core) |
