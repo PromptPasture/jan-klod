@@ -18,6 +18,7 @@ mod bundle_distributions;
 mod classifier;
 mod client_surface;
 mod component_harness;
+mod contributions_rest;
 mod docs_match_config;
 mod egress_boundary;
 mod event_log;

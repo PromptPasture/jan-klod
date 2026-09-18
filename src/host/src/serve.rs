@@ -1,8 +1,9 @@
 //! REST API surface (v0.1.0).
 //!
 //! Routes: GET /health, GET /sessions, POST /sessions, GET /session/:id, POST
-//! /session/:id/message (SSE or JSON), answer, fork. Synchronous/blocking
-//! (`tiny_http`): one request at a time.
+//! /session/:id/message (SSE or JSON), answer, fork, GET /contributions and
+//! POST /contributions/invoke. Synchronous/blocking (`tiny_http`): one request
+//! at a time.
 //!
 //! Mid-turn confirmations without threads: interceptors block in `Driver::ask`;
 //! the waiting driver serves the socket itself via `recv_timeout` loop until
@@ -99,6 +100,19 @@ pub fn serve_once_authed(
         return respond_json(request, handle_create_session());
     }
 
+    // GET /contributions
+    if method == Method::Get && path == "/contributions" {
+        return respond_json(request, handle_contributions(agent));
+    }
+
+    // POST /contributions/invoke
+    if method == Method::Post && path == "/contributions/invoke" {
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body)?;
+        let reply = handle_invoke(agent, &body);
+        return respond_json(request, reply);
+    }
+
     // GET /session/:id
     if method == Method::Get {
         if let Some(id) = strip_prefix(path, "/session/") {
@@ -158,6 +172,78 @@ pub fn health() -> Reply {
         status: 200,
         body: serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") })
             .to_string(),
+    }
+}
+
+/// `GET /contributions` — what the loaded extensions offer a client.
+///
+/// A route rather than a frame, and **no SSE frame at all**, which is a
+/// difference from the stdio transport worth stating. There, the set is
+/// pushed at the handshake and again when it changes, because the connection
+/// is open the whole time. Here there is no handshake to push at, and a
+/// stream exists only while a turn runs — so the set is *read*, and the one
+/// thing that can change it mid-session says so in its own answer (see
+/// [`handle_invoke`]). Inventing a frame nothing could emit outside a turn
+/// would be a projection of nothing.
+fn handle_contributions(agent: &mut AgentSession) -> Reply {
+    Reply {
+        status: 200,
+        body: contributions_payload(agent).to_string(),
+    }
+}
+
+/// `POST /contributions/invoke` — run one, as `{"extension":…,"name":…}`.
+///
+/// The answer carries `contributions-changed`, which is how a client learns
+/// to re-read the set: it asked, so it is listening, and that is the only
+/// moment the set can move while a session is up.
+fn handle_invoke(agent: &mut AgentSession, body: &str) -> Reply {
+    let value: serde_json::Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(err) => return error_reply(400, &format!("invalid JSON body: {err}")),
+    };
+    let (Some(extension), Some(name)) = (
+        value.get("extension").and_then(serde_json::Value::as_str),
+        value.get("name").and_then(serde_json::Value::as_str),
+    ) else {
+        return error_reply(400, "both `extension` and `name` are required");
+    };
+    let arguments: Vec<jan_klod_core::contributions::ArgumentValue> = value
+        .get("arguments")
+        .and_then(serde_json::Value::as_array)
+        .map(|given| {
+            given
+                .iter()
+                .filter_map(|argument| {
+                    Some(jan_klod_core::contributions::ArgumentValue {
+                        name: argument.get("name")?.as_str()?.to_owned(),
+                        value: argument.get("value")?.as_str()?.to_owned(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    match agent.invoke_contribution(extension, name, &arguments) {
+        Ok(outcome) => Reply {
+            status: 200,
+            body: serde_json::json!({
+                "text": outcome.text,
+                "contributions-changed": outcome.contributions_changed,
+            })
+            .to_string(),
+        },
+        // A name nobody contributes is the caller's mistake; the other two are
+        // the extension's, and the status codes say which.
+        Err(error @ jan_klod_core::contributions::InvokeError::Unknown) => {
+            error_reply(404, &error.to_string())
+        }
+        Err(error @ jan_klod_core::contributions::InvokeError::InvalidArguments) => {
+            error_reply(400, &error.to_string())
+        }
+        Err(error @ jan_klod_core::contributions::InvokeError::Failed(_)) => {
+            error_reply(500, &error.to_string())
+        }
     }
 }
 
@@ -572,6 +658,52 @@ pub fn serve_authed(
     loop {
         serve_once_authed(server, agent, token)?;
     }
+}
+
+/// What the extensions contribute, as this surface reports it.
+///
+/// The same information the client protocol's `surface/contributions` carries,
+/// shaped for a reader that asked: one object per extension, in load order.
+/// Field names match the protocol's so a client written against the schema
+/// reads either without a second mapping.
+fn contributions_payload(agent: &mut AgentSession) -> serde_json::Value {
+    let extensions: Vec<serde_json::Value> = agent
+        .contributions()
+        .into_iter()
+        .map(|set| {
+            serde_json::json!({
+                "extension": set.extension,
+                "commands": set
+                    .commands
+                    .into_iter()
+                    .map(|command| serde_json::json!({
+                        "name": command.name,
+                        "title": command.title,
+                        "description": command.description,
+                        "arguments": command
+                            .arguments
+                            .into_iter()
+                            .map(|argument| serde_json::json!({
+                                "name": argument.name,
+                                "description": argument.description,
+                                "required": argument.required,
+                            }))
+                            .collect::<Vec<_>>(),
+                    }))
+                    .collect::<Vec<_>>(),
+                "status-items": set
+                    .status_items
+                    .into_iter()
+                    .map(|item| serde_json::json!({
+                        "name": item.name,
+                        "text": item.text,
+                        "detail": item.detail,
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    serde_json::json!({ "extensions": extensions })
 }
 
 #[cfg(test)]
