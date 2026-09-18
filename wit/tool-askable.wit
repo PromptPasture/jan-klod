@@ -1,0 +1,84 @@
+package jan-klod:interfaces@0.3.0;
+
+/// A tool that can put a question to the user before it answers (#216).
+///
+/// Until now only an *interceptor* could ask. `decision::ask` in
+/// `wit/interceptor.wit` suspends the turn, the driver answers, and the host
+/// re-invokes the interceptor — so a permission gate can confirm with a
+/// person even though the UI is a separate process. A tool had no such
+/// channel: the model could act, or fail, but never say "I need to know X
+/// first".
+///
+/// # Return-then-reinvoke, not a callback
+///
+/// This mirrors `interceptor.wit` exactly, and the shape is the point rather
+/// than a convention. A guest does **not** call the host and block while a
+/// person is asked. It returns a prompt, the host asks, and the host invokes
+/// it again with the answer. So no guest is ever on the stack while the loop
+/// is suspended, and a tool cannot re-enter the loop that is waiting for it.
+///
+/// The alternative — a `host-ask` capability a guest calls synchronously —
+/// would be less code and would put a component's frame underneath a
+/// suspended turn. The interceptor design refused that once already; this
+/// does not reopen it.
+///
+/// # Probed, never required
+///
+/// No world requires this interface. The host looks for the export on each
+/// component and uses it where it finds one, the way `client-surface` is
+/// probed (Phase 24, #175) — which is why adding it leaves every existing
+/// `tool-callable` guest untouched, including the twenty in this repository.
+/// A tool that never asks implements nothing new.
+interface tool-askable {
+    use tool-callable.{tool-error};
+
+    /// A question for the user, in the same shape `interceptor.wit` uses.
+    ///
+    /// Deliberately the same record rather than a second vocabulary: a
+    /// client already renders one of these, and a driver already answers
+    /// one. A tool's question is not a different kind of question.
+    record ask {
+        question: string,
+        /// Empty = free-text; non-empty = choose one.
+        options: list<string>,
+        /// Used when the driver cannot prompt — a REST client or an ACP peer
+        /// may have no human behind it. A tool that asks must be able to
+        /// proceed on this, because "nobody answered" has to be an answer
+        /// rather than a hung turn.
+        default-answer: string,
+    }
+
+    /// What one invocation produced.
+    variant step {
+        /// The tool is done; this is its JSON-encoded result.
+        done(string),
+        /// The tool needs an answer first. The host asks, then invokes
+        /// again with `answer` set.
+        asking(ask),
+    }
+
+    /// Invoke the tool, with the answer to its previous question if it asked
+    /// one.
+    ///
+    /// `answer` is present only on re-invocation after this tool returned
+    /// `asking` — the same rule `interceptor.wit` states for its own
+    /// re-invocation. `arguments` is the original call's, unchanged, so a
+    /// tool that asks does not have to carry them itself.
+    invoke-asking: func(arguments: string, answer: option<string>) -> result<step, tool-error>;
+}
+
+/// A tool that may ask. Exports `tool-callable` too, because a tool that
+/// cannot answer without asking is not useful to a model that gave it
+/// arguments — `meta` still describes it, and `invoke` is what a host
+/// without this interface would call.
+world tool-asking-world {
+    include tool-world;
+
+    export tool-askable;
+}
+
+/// The host's probe view: what it instantiates a component as when checking
+/// whether it can ask, without requiring anything of components that cannot.
+world tool-askable-view {
+    export tool-askable;
+}
