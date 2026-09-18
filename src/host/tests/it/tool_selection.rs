@@ -16,22 +16,12 @@
 
 use jan_klod_core::intercept::{Dispatcher, HookState, Message, PendingRequest, Phase, Role};
 use jan_klod_core::interceptor_host::WasmInterceptor;
-use jan_klod_core::{ConfigSection, Runtime};
+use jan_klod_core::ConfigSection;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
 use crate::common;
-
-/// The guests `self-extend` needs before any of this means anything.
-const NEEDED: &[&str] = &[
-    "provider-openai.wasm",
-    "interceptor-tool-selector.wasm",
-    "tool-fs.wasm",
-    "tool-edit.wasm",
-    "tool-find.wasm",
-    "tool-git.wasm",
-    "tool-shell.wasm",
-];
+use crate::self_extend::shipped_fleet;
 
 /// A driver that is never asked: `select-tools` has no question to put.
 struct NoDriver;
@@ -39,49 +29,6 @@ impl jan_klod_core::intercept::Driver for NoDriver {
     fn ask(&mut self, _prompt: &jan_klod_core::intercept::UserPrompt) -> String {
         unreachable!("select-tools does not ask")
     }
-}
-
-/// The shipped distribution, pointed at a mock provider and a temp directory.
-fn shipped_config(dir: &std::path::Path) -> String {
-    let path = common::repo_root().join("scripts/distributions/self-extend/config.yaml");
-    let mut config = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("{} is readable: {err}", path.display()));
-    for (from, to) in [
-        (
-            "base-url: https://api.openai.com/v1",
-            "base-url: http://mock/v1",
-        ),
-        ("api-key: ${OPENAI_API_KEY}", "api-key: test"),
-        ("path: ./jan-klod.db", "path: ./self-extend-measure.db"),
-    ] {
-        assert!(
-            config.contains(from),
-            "{} no longer contains `{from}`, so this test is measuring a \
-             distribution nobody ships",
-            path.display()
-        );
-        config = config.replace(from, to);
-    }
-    format!("{config}\nworkspace: {}\n", dir.display())
-}
-
-/// Every tool `self-extend` advertises, as the interceptor is served them.
-fn shipped_fleet() -> Option<(common::TempDir, serde_json::Value)> {
-    if !common::guests_staged(NEEDED) {
-        return None;
-    }
-    let dir = std::env::temp_dir().join(format!("jk-toolsel-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("creates the workspace");
-    let guard = common::TempDir(dir.clone());
-    let config = dir.join("config.yaml");
-    std::fs::write(&config, shipped_config(&dir)).expect("writes the config");
-
-    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
-    let mut agent = runtime
-        .build_agent(&|| common::canned_http("ok"))
-        .expect("the distribution boots");
-    let metas = agent.all_metas_json().expect("the fleet reports its tools");
-    Some((guard, metas))
 }
 
 /// The selector, configured with `tools` and whatever else the case needs.

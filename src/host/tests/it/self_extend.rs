@@ -27,8 +27,64 @@
 //! put that on every `make gate` to test the same boundary this does in about
 //! a second. What is under test is the sandbox, not `wit-bindgen`.
 
+use jan_klod_core::Runtime;
+
 use crate::common;
 use crate::execution_config::run_command_in;
+
+/// The guests `self-extend` needs before any of this means anything.
+pub const NEEDED: &[&str] = &[
+    "provider-openai.wasm",
+    "interceptor-tool-selector.wasm",
+    "tool-fs.wasm",
+    "tool-edit.wasm",
+    "tool-find.wasm",
+    "tool-git.wasm",
+    "tool-shell.wasm",
+];
+
+/// The shipped distribution, pointed at a mock provider and a temp directory.
+fn shipped_config(dir: &std::path::Path) -> String {
+    let path = common::repo_root().join("scripts/distributions/self-extend/config.yaml");
+    let mut config = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("{} is readable: {err}", path.display()));
+    for (from, to) in [
+        (
+            "base-url: https://api.openai.com/v1",
+            "base-url: http://mock/v1",
+        ),
+        ("api-key: ${OPENAI_API_KEY}", "api-key: test"),
+        ("path: ./jan-klod.db", "path: ./self-extend-measure.db"),
+    ] {
+        assert!(
+            config.contains(from),
+            "{} no longer contains `{from}`, so this test is measuring a \
+             distribution nobody ships",
+            path.display()
+        );
+        config = config.replace(from, to);
+    }
+    format!("{config}\nworkspace: {}\n", dir.display())
+}
+
+/// Every tool `self-extend` advertises, as the interceptor is served them.
+pub fn shipped_fleet() -> Option<(common::TempDir, serde_json::Value)> {
+    if !common::guests_staged(NEEDED) {
+        return None;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-toolsel-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("creates the workspace");
+    let guard = common::TempDir(dir.clone());
+    let config = dir.join("config.yaml");
+    std::fs::write(&config, shipped_config(&dir)).expect("writes the config");
+
+    let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
+    let mut agent = runtime
+        .build_agent(&|| common::canned_http("ok"))
+        .expect("the distribution boots");
+    let metas = agent.all_metas_json().expect("the fleet reports its tools");
+    Some((guard, metas))
+}
 
 /// The `execution:` block the distribution ships, spliced verbatim.
 ///
@@ -54,6 +110,37 @@ fn shipped_execution_block(distribution: &str) -> String {
         path.display()
     );
     block
+}
+
+/// The install step of the chain exists at all (#221).
+///
+/// `registry.install-tool` is what decides whether `ext-install` is in the
+/// fleet, and this distribution left it unset until now — so
+/// compile → install → load → call had no install step, in the one
+/// distribution that slice is about. Asserted against the **booted fleet**
+/// rather than the YAML, because a key read by nobody is what this failed
+/// as: the config said `registry:` and the model saw five tools.
+#[test]
+fn the_distribution_offers_the_agent_a_way_to_install_what_it_built() {
+    let Some((_guard, tools)) = shipped_fleet() else {
+        return;
+    };
+    let names: Vec<&str> = tools
+        .as_array()
+        .expect("an array of tools")
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
+        .collect();
+    assert!(
+        names.contains(&"ext-install"),
+        "the agent cannot install what it compiles: {names:?}"
+    );
+    // Its control: the fleet is the real one, not an empty list that would
+    // make any absence assertion pass.
+    assert!(
+        names.contains(&"shell"),
+        "the compiling half of the chain is missing too: {names:?}"
+    );
 }
 
 /// A crate that compiles to wasm and needs nothing from the network.

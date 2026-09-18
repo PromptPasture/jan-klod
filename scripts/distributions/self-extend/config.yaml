@@ -123,7 +123,19 @@ storage:
   path: ./jan-klod.db
 
 registry:
+  # Nothing is trusted, so the *registry* half of `ext-install` refuses every
+  # name: an entry has to be vouched for by a key listed here, and none is.
   trusted-keys: []
+  # The local half is what this distribution is for (#221). An agent that just
+  # compiled a component installs it by `path`, which needs `allow-unsigned`
+  # and the component's `sha256` — self-authored is not a trust exemption
+  # (#213). Without this key the tool does not exist at all, and the
+  # compile → install → load → call chain has no install step.
+  #
+  # It is not a wider grant than it looks: a component still needs a manifest
+  # beside it declaring what it imports, the host still cross-checks that
+  # against the artefact, and the operator still answers the install prompt.
+  install-tool: true
 
 # Commands are ON here, which is the point of this distribution, and confined.
 # Read docs/concepts/security-model.md's "Command effects" row before changing

@@ -69,6 +69,7 @@ Off by default because inspectable components are what manifests enforce. `make 
 | Key | Meaning | Default |
 |---|---|---|
 | `registry.trusted-keys` | Minisign public keys that may vouch for an installed component. **Top-level**, and distinct from `extensions.registry`, which is the category holding the `skills` and `mcp` catalogues — they share a word and nothing else | `[]` |
+| `registry.install-tool` | Whether the **model** may install a component, through the `ext-install` and `ext-search` tools. Off by default: `jan-klod-gateway ext install` is the operator's route and needs no grant, and a fleet that can extend itself is a different posture from one that cannot. Every check above still applies — a manifest beside the component, its imports cross-checked, a digest for anything unsigned, and the operator answering the prompt | `false` |
 
 **Empty list means nothing is trusted, not "skip the check"** — the same default-deny rule: named no keys = granted nothing, every install refused until configured. Empty meaning unsigned-is-fine would disappear the check for exactly the person who never configured it.
 
