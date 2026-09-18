@@ -133,6 +133,14 @@ mod component {
 
     /// The confirmation to put to the driver. `always`/`never` are only offered
     /// when there is a scope to file them against.
+    // `map_or_else` here would put a `&mut options` push inside one of two
+    // closures and the question's wording in both. The match says "a scoped
+    // concern offers two more answers and explains them"; the closure pair
+    // says the same thing with the subject buried.
+    #[allow(
+        clippy::option_if_let_else,
+        reason = "side-effecting arm reads worse as closures"
+    )]
     fn prompt(tool: &str, arguments: &str, reason: &str, scope: Option<&str>) -> UserPrompt {
         let mut options = vec!["yes".to_string(), "no".to_string()];
         // Lead with what the call *does*, not just why it's unclassified — the
@@ -184,6 +192,10 @@ mod component {
             vec![Phase::ToolCall]
         }
 
+        #[allow(
+            clippy::option_if_let_else,
+            reason = "the scoped arm counts, logs and remembers before yielding a bool"
+        )]
         fn intercept(input: InterceptInput) -> Result<Decision, InterceptorError> {
             let HookState::ToolCall(call) = input.state else {
                 log(LogLevel::Error, "dispatched with non-tool-call state");

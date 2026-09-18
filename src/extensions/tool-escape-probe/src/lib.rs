@@ -116,7 +116,7 @@ mod component {
         let args: Vec<String> = std::env::args().collect();
         // A guest always sees *something* here — wasi gives argv[0] — so an empty
         // list is not the test; the host's real arguments appearing is.
-        format!("ARGS {:?}", args)
+        format!("ARGS {args:?}")
     }
 
     /// Try to open a path with ambient `std::fs`, ignoring the path-jailed `host-fs`.

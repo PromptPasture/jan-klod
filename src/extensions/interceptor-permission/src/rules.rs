@@ -347,16 +347,20 @@ pub fn summarise(name: &str, arguments: &str) -> String {
         let where_ = format!("`{}`", one_line(path, 80));
         return match op.as_str() {
             "" => format!("act on {where_}"),
-            "write" => match field("contents") {
-                Some(text) => format!(
-                    "write {} to {where_}: \"{}\"",
-                    bytes(text.len()),
-                    one_line(text, 100)
-                ),
-                None => format!("write to {where_}"),
-            },
+            "write" => field("contents").map_or_else(
+                || format!("write to {where_}"),
+                |text| {
+                    format!(
+                        "write {} to {where_}: \"{}\"",
+                        bytes(text.len()),
+                        one_line(text, 100)
+                    )
+                },
+            ),
             "replace" | "insert" => match field("contents") {
-                Some(text) if text.is_empty() => format!("delete lines in {where_}"),
+                // An empty `contents` is a deletion, which is worth saying in
+                // those words rather than showing an empty quotation.
+                Some("") => format!("delete lines in {where_}"),
                 Some(text) => format!("{op} in {where_}: \"{}\"", one_line(text, 100)),
                 None => format!("{op} in {where_}"),
             },
@@ -371,12 +375,17 @@ pub fn summarise(name: &str, arguments: &str) -> String {
 }
 
 /// A human-readable byte count.
+///
+/// Integer arithmetic rather than a float divide: this is a label in a
+/// confirmation dialog, and `1536 B` reading as `1.5 kB` needs one decimal,
+/// not the precision a `usize`-to-`f64` cast quietly spends.
 fn bytes(n: usize) -> String {
     if n < 1024 {
-        format!("{n} B")
-    } else {
-        format!("{:.1} kB", n as f64 / 1024.0)
+        return format!("{n} B");
     }
+    let whole = n / 1024;
+    let tenths = (n % 1024) * 10 / 1024;
+    format!("{whole}.{tenths} kB")
 }
 
 /// Collapse `text` onto one bounded line that cannot forge prompt structure.

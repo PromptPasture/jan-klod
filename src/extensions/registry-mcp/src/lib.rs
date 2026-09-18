@@ -59,7 +59,7 @@ struct Server {
 
 impl Server {
     /// Wire name for `list-servers`.
-    fn transport_name(&self) -> &'static str {
+    const fn transport_name(&self) -> &'static str {
         match self.wire {
             Wire::Http(_) => "sse",
             Wire::Stdio(_) => "stdio",

@@ -225,7 +225,7 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
 }
 
 /// Describe a `host-http` error in words, not a Rust identifier (e.g. `HttpError::ConnectionFailed`).
-const fn describe_http(err: &HttpError) -> &'static str {
+const fn describe_http(err: HttpError) -> &'static str {
     match err {
         HttpError::ConnectionFailed => {
             "the endpoint refused the connection or could not be resolved"
@@ -348,7 +348,7 @@ impl LlmProvider for Component {
         let response = host_http::fetch(&http_request).map_err(|err| {
             log(
                 LogLevel::Warn,
-                &format!("request failed: {}", describe_http(&err)),
+                &format!("request failed: {}", describe_http(err)),
             );
             map_http_error(err)
         })?;

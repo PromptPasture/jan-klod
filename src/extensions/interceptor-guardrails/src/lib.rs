@@ -139,7 +139,7 @@ mod component {
             match input.state {
                 HookState::ToolCall(call) => tool_call(&call, input.answer.as_deref()),
                 HookState::AfterResponse(response) => after_response(response),
-                HookState::Finalize(answer) => finalize(answer),
+                HookState::Finalize(answer) => finalize(&answer),
                 HookState::SelectContext(request) => select_context(request),
                 _ => {
                     log(LogLevel::Error, "dispatched with an unsubscribed state");
@@ -155,9 +155,10 @@ mod component {
     /// elsewhere, which is exactly the severity each phase deserves — so every
     /// phase reports the same error and lets host policy grade it.
     fn with_rules<T>(read: impl FnOnce(&Rules) -> T) -> Result<T, InterceptorError> {
-        RULES.with(|r| match &*r.borrow() {
-            Err(_) => Err(InterceptorError::Internal),
-            Ok(rules) => Ok(read(rules)),
+        RULES.with(|r| {
+            (*r.borrow())
+                .as_ref()
+                .map_or_else(|_| Err(InterceptorError::Internal), |rules| Ok(read(rules)))
         })
     }
 
@@ -224,7 +225,7 @@ mod component {
 
     /// `finalize` — the assembled answer, before it reaches the transcript and
     /// the client. The last point at which a secret can be kept out of the log.
-    fn finalize(answer: FinalAnswer) -> Result<Decision, InterceptorError> {
+    fn finalize(answer: &FinalAnswer) -> Result<Decision, InterceptorError> {
         Ok(match with_rules(|rules| rules.review_text(&answer.text))? {
             None => Decision::Proceed,
             Some(TextVerdict::Redacted(text)) => {

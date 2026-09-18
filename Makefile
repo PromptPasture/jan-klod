@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -65,6 +65,7 @@ help:
 	@echo "  test-web    run the browser client's suite (src/web; needs Node, not in 'test')"
 	@echo "  test-gui    run the Tauri shell's suite (src/gui; needs a display, not in 'test')"
 	@echo "  clippy-gui  lint the Tauri shell (-D warnings)"
+	@echo "  clippy-guests lint the wasm guests, native + wasm32 (-D warnings)"
 	@echo "  web-dist-drift  check src/web/dist/ is still what src/web/src/ builds"
 	@echo "  registry-index  write the registry index for ext/ (REGISTRY_INDEX=path)"
 	@echo "  registry-index-drift  check that index generation is deterministic"
@@ -184,6 +185,11 @@ test-gui:
 
 clippy-gui:
 	$(MAKE) -C $(GUI_DIR) clippy
+
+# The guests are their own cargo workspace too, and declare the same strict
+# lint policy — see `src/extensions/Makefile` for why this runs twice.
+clippy-guests:
+	$(MAKE) -C $(EXT) clippy
 
 # The committed bundle is still what the sources build (#127). Kept out of
 # `test-web` on cost: that leg needs Node on PATH and installs nothing, while

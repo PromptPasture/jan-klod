@@ -37,7 +37,7 @@ LIBS := guest-fs
 # no wasm target required. Add a guest here once it carries such tests.
 TESTABLE_GUESTS := interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router interceptor-system tool-fs tool-shell tool-edit tool-find tool-git tool-fetch
 
-.PHONY: all stage manifests clean test audit deny go-supply-chain spike-deps spike-guest $(GUESTS)
+.PHONY: all stage manifests clean test clippy audit deny go-supply-chain spike-deps spike-guest $(GUESTS)
 
 # Build every Rust guest in one cargo invocation, not 13 serial `make` recipes —
 # cargo's own scheduler compiles independent guests in parallel across cores. The
@@ -73,6 +73,19 @@ test:
 	sh $(ROOT)/scripts/manifests-selftest.sh $(EXT_DIR)
 	@echo "== ext-new template =="
 	sh $(ROOT)/scripts/ext-new-selftest.sh
+
+# Lint every guest, twice, because each run sees a different half of one.
+#
+# The native run lints the pure logic — the same half `test` above covers,
+# since the Component-Model glue is behind `#[cfg(target_arch = "wasm32")]`.
+# The wasm run is the only thing that ever looks at that glue. Skipping either
+# leaves a policy that reads as enforced and is not: `[workspace.lints]` in
+# this directory's Cargo.toml declares the same strict set as the host
+# workspace, and until this target existed nothing ran it (#205). The guest
+# written *after* that policy still arrived with two findings.
+clippy:
+	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --workspace --target wasm32-wasip2 -- -D warnings
 
 # Build a single guest and stage it in ext/ (`make tool-fs`, e.g., for
 # targeted dev iteration — `all` above builds every guest at once). Rust guests

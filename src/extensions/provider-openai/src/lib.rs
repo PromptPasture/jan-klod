@@ -92,7 +92,7 @@ fn message_to_json(msg: &Message) -> Value {
     Value::Object(obj)
 }
 
-/// Convert a tool to OpenAI's `{type:"function", function:{…}}` shape.
+/// Convert a tool to `OpenAI`'s `{type:"function", function:{…}}` shape.
 /// The `parameters-schema` is already JSON; fall back to `{}` if not valid JSON.
 fn tool_to_json(tool: &ToolDefinition) -> Value {
     let parameters: Value =
@@ -187,7 +187,7 @@ fn str_field(obj: &Value, key: &str) -> String {
 }
 
 /// Describe a `host-http` error in words, not a Rust identifier (e.g. `HttpError::ConnectionFailed`).
-const fn describe_http(err: &HttpError) -> &'static str {
+const fn describe_http(err: HttpError) -> &'static str {
     match err {
         HttpError::ConnectionFailed => {
             "the endpoint refused the connection or could not be resolved"
@@ -321,7 +321,7 @@ impl LlmProvider for Component {
         let response = host_http::fetch(&http_request).map_err(|err| {
             log(
                 LogLevel::Warn,
-                &format!("request failed: {}", describe_http(&err)),
+                &format!("request failed: {}", describe_http(err)),
             );
             map_http_error(err)
         })?;
