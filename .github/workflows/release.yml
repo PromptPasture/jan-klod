@@ -384,14 +384,26 @@ jobs:
           printf '%s\n' "$NOTES" > /tmp/release_notes.txt
           echo "notes_file=/tmp/release_notes.txt" >> "$GITHUB_OUTPUT"
 
+      # The asset list is built from what exists: `gh release create` refuses a
+      # glob that matches nothing, and `dist/*.minisig` matches nothing on an
+      # unsigned run — so the "publishes UNSIGNED with a warning" path above
+      # never actually published until the `v0.0.1` dry run hit it (#236). An
+      # unsigned release is marked as a pre-release, so nobody mistakes it for
+      # a box.
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ steps.minisign.outputs.available }}
         run: |
+          set -euo pipefail
+          assets=(dist/*.tar.gz dist/SHA256SUMS.txt)
+          for f in dist/*.minisig; do [ -e "$f" ] && assets+=("$f"); done
+          flags=()
+          if [ "$SIGNED" != "true" ]; then flags+=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" \
             --title "jan-klod $GITHUB_REF_NAME" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
-            dist/*.tar.gz dist/SHA256SUMS.txt dist/*.minisig
+            "${flags[@]}" "${assets[@]}"
 
       # ---- The registry, published where `registry.url` points (#139) ----
       #
