@@ -241,7 +241,10 @@ principal in the record. An unlisted Telegram sender is refused before a session
   respecting 27d's redaction. *Waits on Phase 22.*
 - **29c** — `architecture.md:27` stops promising what the code does not do, and a `tracing`
   subscriber emits structured JSON in the same change.
-- **29d** — an optional interceptor recording the permission decision per tool call.
+- **29d** — an opt-in `tool-decision` event the conductor records per tool-call gate outcome (proceed
+  or block), off by default. Not an interceptor: only the host writes the event log — persistence is
+  host-side by the standing rule, the argument decision 5 already makes for redaction — so the
+  interceptor keeps deciding and the host records what it decided.
 
 **Exit gate:** a ten-turn session with tool calls, a denial and a follow-up is exported to JSONL by
 an extension, re-imported to the identical transcript, its chain verifies, a single altered row
