@@ -37,7 +37,12 @@ jobs:
             os: darwin
             arch: arm64
             target: aarch64-apple-darwin
-          - runner: macos-13
+          # `macos-13` was retired by GitHub and a job asking for it queues
+          # forever (both `v0.0.1` runs, 2026-09-19, #236). `macos-15-intel` is
+          # the current Intel label (`macos-26-intel` is the other); it is the
+          # last Intel generation GitHub hosts, so 26c (#239) decides whether the
+          # box keeps shipping for Intel Macs at all.
+          - runner: macos-15-intel
             os: darwin
             arch: x86_64
             target: x86_64-apple-darwin
