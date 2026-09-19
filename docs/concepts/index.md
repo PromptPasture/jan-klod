@@ -1,6 +1,6 @@
 # Concepts
 
-- [Roadmap](roadmap.md) — phased build plan: Phases 1–12 to v0.1.0, Phases 13–18 toward [Harness-as-a-Platform](../decisions/2026-09-08-harness-platform-vision/Vision.md)
+- [Roadmap](roadmap.md) — phased build plan: Phases 1–12 to v0.1.0, Phases 13–25 toward [Harness-as-a-Platform](../decisions/2026-09-08-harness-platform-vision/Vision.md), Phases 26–31 to the [Enterprise Box](../decisions/2026-09-18-enterprise-box/Vision.md)
 - [Architecture](architecture.md) — system design, extension model, agent loop
 - [Security model](security-model.md) — component grants, enforcement, tests, and gaps
 - [Contracts](contracts.md) — stable WIT interfaces between core and extensions

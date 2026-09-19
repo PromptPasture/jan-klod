@@ -21,7 +21,9 @@ question an enterprise review asks.
 Two products out of one repository, stated by the owner:
 
 - **The foundation** — configurable any way the user wants, with nothing agent-specific welded into
-  the kernel. This is the Phase 13–25 line of work and it is nearly done.
+  the kernel. This is the Phase 13–25 line of work and it is nearly done: 13–18 are the phases
+  [Harness as a Platform](../2026-09-08-harness-platform-vision/Vision.md) phased, and 19–25 were
+  added to the roadmap afterwards as the same half of the product.
 - **The box** — a turnkey install for someone who will not configure anything, defined by two
   pillars:
   - **It passes review.** Authentication and RBAC on the inbound surfaces, an audit trail and
@@ -41,12 +43,17 @@ is host-side because it writes. *Zero agent behaviour* is true.
 What is missing is on the other side, and it is missing from the tracker as well as from the code:
 
 - **Nothing has ever been released.** `git tag` returns nothing. `scripts/install.sh` has nothing to
-  fetch. Phase 16 built signing and a registry index and then shipped with `registry.trusted-keys`
-  empty and no default `registry.url`, so `ext search` and `ext install` refuse by construction
+  fetch. Phase 16 built signing and a registry index and then shipped every distribution's
+  `config.yaml` with `registry.trusted-keys` empty and no `registry.url` — the root `config.yaml`
+  names one, the four under `scripts/distributions/` do not — so `ext search` and `ext install`
+  refuse by construction
   ([#93](https://github.com/PromptPasture/jan-klod/issues/93)). The distribution machinery is
   complete and inert.
 - **There is one shared bearer token.** `authorised()` in `src/host/src/serve.rs` compares a secret;
   it does not establish a principal. Every caller sees every session.
+- **Telegram checks nothing.** `src/host/src/telegram.rs` turns every chat id into a session and
+  answers every sender who finds the bot; there is no allowlist to configure. `headless-chat` is
+  reached over nothing else.
 - **Secrets are `${VAR}` expansion** (`src/config/src/lib.rs`) and nothing systematically keeps a key
   out of the event log, an SSE frame or a rebuilt transcript.
 - **The log records everything and nothing reads it out**
@@ -60,9 +67,11 @@ What is missing is on the other side, and it is missing from the tracker as well
 
 Batteries are the same story from the other end. Measured against the capability groups of
 [`pi-onboard`](https://github.com/PromptPasture/pi-onboard) — the owner's own audit-first installer
-for Pi, and the closest thing to a specification for this box — safer editing, planning, web
-research, permissions and external tools all ship. **Persistent memory, scheduled tasks and
-sub-agents do not.** `src/core/src/delegate.rs` is written and unit-tested and never instantiated,
+for Pi, and the closest thing to a specification for this box — safer editing and permission
+prompts ship in the `coding` distribution; planning, web fetching and MCP exist as guests
+(`tool-plan`, `tool-fetch`, `registry-mcp`) that no distribution's `guests` list carries, so they are
+built and not shipped. **Persistent memory, web search, scheduled tasks and sub-agents do not
+exist.** `src/core/src/delegate.rs` is written and unit-tested and never instantiated,
 because `CATEGORIES` at `src/core/src/lib.rs:259` is `["provider", "interceptor", "registry",
 "tool"]` and `agent` is not among them.
 
@@ -98,7 +107,10 @@ party can replace any of it — true of the enterprise features too.
    ships through the same channel. → **Phase 26.**
 4. **Identity comes from the transport credential, never from a client's claim**, and the session
    store is where it binds. RBAC is then an ordinary interceptor reading a principal out of the turn
-   context. → **Phase 28.**
+   context. Telegram is the one surface whose transport credential is not ours: the Bot API asserts
+   the sender's id over the bot token, so `telegram:<id>` is the principal, and an allowlist of those
+   ids in the distribution's config is the check — empty by default, so an unlisted sender is refused
+   before a session exists. → **Phase 28.**
 5. **Secrets get a capability; redaction gets one boundary.** `host-secrets` is manifest-gated like
    every other capability, and redaction is enforced at `PersistingSink`, the single point every
    persisted and streamed string passes through — not scattered across the call sites that happen to
@@ -111,12 +123,23 @@ party can replace any of it — true of the enterprise features too.
    the format a company wants is the format it wants, and that is a guest's problem. → **Phase 29.**
 7. **Curated memory: ship the episodic half, decline the curation half.** The roadmap parked this as
    *decide if before how*. The answer is: a thin `tool-memory` guest storing and recalling facts over
-   the `host-storage` namespace that already exists, with no new contract. Semantic search,
-   consolidation and working/episodic tiering stay out — they belong to an MCP server or a third
-   party, and `registry-mcp` already reaches both. → **Phase 30.**
+   the `host-storage` namespace that already exists, with no new contract, and remembering *across*
+   sessions: `host-storage` is run-scoped by default and `scope: session` is the opt-in, and
+   `tool-memory` does not opt in, because a memory that ends with the session adds nothing the
+   context window does not already hold. Once 28b binds sessions to a principal, the namespace
+   follows the principal. Semantic search, consolidation and working/episodic tiering stay out —
+   they belong to an MCP server or a third party, and `registry-mcp` already reaches both.
+   → **Phase 30.**
 8. **Observability: retire the false claim now, ship structured logging, defer the rest.**
    `architecture.md:27` is corrected in the same change that adds a `tracing` subscriber emitting
    JSON. Prometheus and OpenTelemetry wait for an operator who asks for them by name. → **Phase 29.**
+9. **Skills ship as content; MCP servers ship as configuration.** The owner's list of batteries names
+   both, and the first draft of Phase 30 shipped only their registries. A first-party skill set —
+   `SKILL.md` files delivered inside the distribution archive and signed with it — is content the box
+   can carry. Third-party MCP servers are binaries from other projects' package managers, which the
+   signed channel cannot vouch for, so the box carries the *list*: which servers it expects, with
+   their commands, as `registry-mcp`'s `servers` configuration, and `setup` reports which are present.
+   → **Phase 30g, Phase 31a.**
 
 Standing rules are unchanged: the core is Rust and holds mechanism only, first-party extensions
 default to Rust, storage stays host-side, capabilities are default-deny and granted per extension
@@ -142,6 +165,9 @@ whole thing installs with no network.
 
 - **26a** — a minisign keypair, its public half committed, its private half a CI secret.
 - **26b** — the release carries `sbom.cdx.json` and a `.minisig` beside every archive and component.
+  Today `ci.yml` generates the SBOM and keeps it as a workflow artifact, `release.yml` does not
+  publish it, and `make sbom` covers the Rust crates only — the npm dependencies of `src/web` have to
+  be in it before it is the release's bill of materials.
 - **26c** — `v0.1.0` is tagged and `release.yml` publishes all distributions per platform.
 - **26d** — the shipped `config.yaml` names a default `registry.url` and lists the published key in
   `registry.trusted-keys`, so `ext install <name>` works without `--allow-unsigned`.
@@ -157,16 +183,22 @@ index, and runs a turn — and a tampered archive is refused with the reason nam
 A key is fetched through a capability instead of read out of the environment into a config string,
 and a secret that reaches the model's output does not reach the log.
 
-- **27a** — `wit/host-secrets.wit` with `get(name) -> result<string, error>`, an environment-backed
-  implementation, and the manifest cross-check that already refuses undeclared imports.
+- **27a** — `wit/host-secrets.wit` with `get(name) -> result<string, secrets-error>`, where
+  `secrets-error` is `not-found`, `denied` or `backend`, in the shape `host-config.wit`'s
+  `config-error` already has; an environment-backed implementation; and the manifest cross-check
+  that already refuses undeclared imports.
 - **27b** — macOS Keychain backend.
 - **27c** — Linux libsecret backend, with the environment as the fallback when D-Bus is absent.
 - **27d** — redaction at `PersistingSink`, its patterns read from the `interceptor-guardrails` rule
-  set that is already data.
+  set that is already data, and failing closed on its own terms: a malformed redaction set refuses
+  to start the host rather than persisting in the clear. That rule has to be written here because
+  the dispatcher does not supply it (see Risks). `docs/concepts/security-model.md` gains the row for
+  what redaction catches and what it cannot.
 
 **Exit gate:** a provider reads its key through `host-secrets`, the model echoes that key verbatim,
 and neither the event log, nor a live SSE client, nor a transcript rebuilt after a restart contains
-it — while a second extension that did not declare the capability cannot read the key at all.
+it — while a second extension that did not declare the capability cannot read the key at all. A
+malformed redaction rule set refuses to start, naming the rule.
 
 ### Phase 28 — Identity at the boundary
 
@@ -174,21 +206,35 @@ The host knows who is asking, sessions belong to someone, and a policy guest can
 basis.
 
 - **28a** — the inbound credential resolves to a principal in the `serve.rs` guard; an unauthenticated
-  request is still refused, an authenticated one now carries a name.
+  request is still refused, an authenticated one now carries a name. The mechanism is a table, not a
+  token format: `serve.principals` maps a name to a token (or to the environment variable holding
+  one), and today's single `JAN_KLOD_TOKEN` is the principal `operator`, so an existing install
+  changes nothing. `security-model.md`'s REST row records that one token means one principal until an
+  operator lists more.
 - **28b** — sessions are scoped to their principal in `jk-session`; listing returns one principal's
   sessions and reading another's is refused, on every surface that has a credential to check.
 - **28c** — the principal reaches the interceptor context as an optional field on `user-turn` in
   `wit/interceptor.wit`; guests that do not read it are unaffected.
 - **28d** — `interceptor-rbac`, a reference guest with roles as configuration data, off by default.
+  It composes with `interceptor-permission`'s per-session grants as two gates in series — both have
+  to admit — and that rule is written into `security-model.md`, not left to be inferred. `ext install`
+  is a tool call, so the same guest gates it at `tool-call`; `setup`, `serve` and a config reload are
+  operator commands on the host and are the operating system's to protect, not RBAC's.
+- **28e** — Telegram: the sender id the Bot API asserts becomes the principal `telegram:<id>`, and
+  `headless-chat` ships an empty allowlist that refuses every sender until an operator lists one.
+  Lands in `src/host/src/telegram.rs` if 22b
+  ([#185](https://github.com/PromptPasture/jan-klod/issues/185)) has not yet moved the bot into a
+  guest, and in the guest's config if it has — the rule is the same either way.
 
 **Exit gate:** two principals each run a turn; each sees only their own sessions; the RBAC guest
 admits one and stops the other at `before-loop` rather than at the tool; and the refusal names the
-principal in the record.
+principal in the record. An unlisted Telegram sender is refused before a session exists.
 
 ### Phase 29 — An audit trail that survives a review
 
 - **29a** — each event row carries the previous row's digest, and `verify_chain` rebuilds it; an
-  edited payload or a reordered pair breaks it.
+  edited payload or a reordered pair breaks it. The `security-model.md` row says what the chain
+  detects — edits by anything that is not the writer — and what it does not.
 - **29b** — session export as an extension over `host-agent`, emitting JSONL of the raw events and
   respecting 27d's redaction. *Waits on Phase 22.*
 - **29c** — `architecture.md:27` stops promising what the code does not do, and a `tracing`
@@ -204,8 +250,9 @@ breaks the chain — and no document claims observability the binary does not ha
 Ordered cheapest-useful-first, and the three that close the gap against the `pi-onboard` checklist
 come first among those that can.
 
-- **30a** — `tool-memory`: store and recall over `host-storage`, namespaced per session, no new
-  contract. This is decision 7, built.
+- **30a** — `tool-memory`: store and recall over `host-storage`, run-scoped so a fact stored in one
+  session is recalled in the next, keyed by principal once 28b exists, no new contract. This is
+  decision 7, built.
 - **30b** — `tool-web-search` over `host-http`, its provider and key configuration.
 - **30c** — `interceptor-persona`: personality as data, read from config at `before-loop`.
 - **30d** — sub-agents: `agent` becomes a category with a world and a boot arm, and
@@ -214,17 +261,24 @@ come first among those that can.
 - **30f** — the provider fleet: Bedrock and Vertex as their own guests, since SigV4 and Google OAuth
   are not a base-URL change; self-hosted OpenAI-compatible endpoints already work through
   `provider-openai`'s configurable `base_url` and need documentation, not code.
+- **30g** — the curated skill set: first-party `SKILL.md` files for what a coding agent is asked for
+  daily (commit, review, plan at least), delivered inside the distribution archive. `registry-skills`
+  reads `.agents/skills` in the workspace today and nothing else, so the slice gives it a second,
+  distribution-level directory that the workspace one overrides — the catalogue is not empty on
+  first run, and a team's own skills still win. This is decision 9, built.
 
-**Exit gate:** one session in the enterprise distribution stores a fact, recalls it a turn later,
-searches the web, delegates to a sub-agent and answers under a named persona — with no extension
-installed by hand and no `config.yaml` edited after install.
+**Exit gate:** a session in the enterprise distribution stores a fact and a *later* session recalls
+it; a session searches the web, delegates to a sub-agent, answers under a named persona and runs a
+shipped skill — with no extension installed by hand and no `config.yaml` edited after install.
 
 ### Phase 31 — The enterprise distribution and the guided first run
 
 - **31a** — `scripts/distributions/enterprise/`: guardrails on, sandbox `require: true`, egress
-  pinned, the registry trusting the published key, audit export enabled. Every one of these is a
-  knob an earlier phase built or that `src/core/src/egress.rs` already holds — 31a *configures*, it
-  does not implement.
+  pinned, the registry trusting the published key, audit export enabled, the Telegram allowlist
+  empty, the Phase 30 guests and the three built-but-unshipped ones (`tool-plan`, `tool-fetch`,
+  `registry-mcp`) in its `guests` list, the MCP servers it expects named in `registry-mcp`'s
+  `servers`, and the 30g skill set inside the archive. Every one of these is a knob an earlier phase
+  built or that `src/core/src/egress.rs` already holds — 31a *configures*, it does not implement.
 - **31b** — `jan-klod-gateway setup` audits the current state and prints what would run. It writes
   nothing. It is a host-side subcommand rather than a guest, and for a structural reason rather than
   convenience: it is the thing that decides which guests load, so it has to run before there are any.
@@ -256,6 +310,11 @@ Each of these was proposed during the research for it and is refused, so that it
 - **Curated memory** — semantic search, consolidation, working/episodic tiering. Decision 7.
 - **New interceptor phases.** The nine dispatched phases carry every decision these six phases need;
   the closed enum is a contract, and contracts change when something cannot be expressed, not before.
+- **A memory that ends with the session.** Decision 7: `tool-memory` is run-scoped, then per
+  principal. `scope: session` exists for a permission gate's standing grants; a memory has no use for
+  it.
+- **Vendoring MCP servers.** Decision 9: other projects' binaries cannot pass through the signed
+  channel, so the box names the servers it expects and `setup` finds them.
 
 ## Risks
 
@@ -267,8 +326,10 @@ Each of these was proposed during the research for it and is refused, so that it
   ([#232](https://github.com/PromptPasture/jan-klod/issues/232)); adding a principal gives the same
   decision a second scope, and the two have to be documented as layers or they will be confused.
 - **Redaction is lossy and silent when wrong.** A pattern that does not match removes nothing and
-  says nothing. The guardrails rule set already fails closed on a malformed set; the redaction rules
-  must inherit that, not soften it.
+  says nothing. The guardrails rule set fails closed on a malformed set only where the dispatcher
+  does: `src/core/src/intercept.rs` blocks on an interceptor error at `tool-call` and proceeds at
+  every other phase, which is where the guest redacts text today. So the redaction 27d moves to
+  `PersistingSink` cannot inherit a fail-closed rule — it has to state one, and 27d does.
 - **A hash chain proves less than it looks like.** The host owns the database; the chain detects
   edits by anything that is not the writer, and that limit belongs in the security model row rather
   than in a sales sentence.
