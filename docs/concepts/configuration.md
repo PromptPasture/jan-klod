@@ -159,6 +159,23 @@ Every key except `enabled`/`type` is the instance's private config section. The 
 
 `${VAR}` expands from the process environment. **Unset variables are hard errors**, but **only for enabled instances** — disabled providers may reference missing secrets without blocking startup.
 
+## Tools (`extensions.tool:`)
+
+Discrete callable tools that implement guest-facing operations. Off by default unless `enabled: true`. Some tools require additional grants:
+
+| Tool | What it does | Requires | Config | Notes |
+|---|---|---|---|---|
+| `tool.fs` | Read, write, grep workspace files | A workspace | `enabled` | On by default; reads and greps are unprompted, writes are confirmed |
+| `tool.edit` | Hash-anchored partial edits (view/replace/insert) | A workspace | `enabled` | On by default; grants writes to specific files and line ranges |
+| `tool.find` | Glob the workspace tree for discovery | A workspace | `enabled` | On by default; filters out credential files (`.env`, `*.pem`, etc.) |
+| `tool.git` | Read-only repo inspection (`status`, `diff`, `log`, `show`, `branch`) | `execution.enabled` and a workspace | `enabled` | Off by default; read-only, safe anywhere execution is allowed |
+| `tool.shell` | Run any command through the host process | `execution.enabled` and a workspace | `enabled` | Off by default; the command comes from the model — the widest grant |
+| `tool.fetch` | GET a public HTTP(S) URL and return readable text | Network grant | `enabled`, `network: true`, optional `allow-private` | Off by default; URL is an exfiltration channel, even though it only reads. Private, loopback, and link-local addresses are refused unless `allow-private: true` |
+| `tool.web-search` | Search the web through a configured provider API | Network grant | `enabled`, `network: true`, `base-url`, `api-key` | Off by default; query and api-key are sensitive (like `tool.fetch`). `base-url` names the search provider endpoint; `api-key` is expanded from environment (`${VAR}` syntax) |
+| `tool.proc` | List and manage long-lived subprocesses | `execution.long-lived` entries | `enabled` | Off by default; the model never supplies a command, only names from the config |
+
+**Network grants** (`network: true` on fetch/web-search) allow `host-http` egress. The destination is checked: public by default, permitted origins (from config `base-url`/`endpoint` or `network.allow`) are trusted. Every redirect hop is checked; credentials don't survive redirects.
+
 ## Core invariants
 
 The loader enforces core-level rules only; domain rules live in consuming extensions.

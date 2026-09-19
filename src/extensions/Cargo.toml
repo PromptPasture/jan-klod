@@ -24,6 +24,7 @@ members = [
     "tool-find",
     "tool-git",
     "tool-fetch",
+    "tool-web-search",
     "tool-ask-probe",
     "tool-hello",
     "tool-plan",
