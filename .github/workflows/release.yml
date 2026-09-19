@@ -57,6 +57,20 @@ jobs:
         with:
           workspaces: src
 
+      # `make extensions` generates each guest's capability manifest with
+      # `scripts/manifests.sh`, which refuses to run without `wasm-tools` (it
+      # reads the component's imports out of `wasm-tools component wit`) and
+      # `jaq` (it reads versions out of `cargo metadata`). ci.yml installs both
+      # for the same reason; this workflow did not, and the first tag ever
+      # pushed (`v0.0.1`, 2026-09-19, #236) failed on every runner at exactly
+      # that line. Same pins as ci.yml — keep them in step with versions.mk.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools@1.258.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: jaq@2.3.0
+
       # These two used to run the other way round — the fetch first, then the
       # install — so `wkg` did not exist when `wkg wit fetch` was called, and
       # `|| true` on both meant nothing said so (#166). `wit/spike/deps` was
