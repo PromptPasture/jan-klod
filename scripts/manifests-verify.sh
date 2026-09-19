@@ -65,7 +65,7 @@ expect() {
 expect tool-fs "host-fs" "a world's exports are not capabilities"
 # Type-only imports excluded: this one also imports `llm-types`, which grants
 # nothing and must not read as something an operator has to allow.
-expect provider-openai "host-config,host-http,host-log" \
+expect provider-openai "host-config,host-http,host-log,host-secrets" \
     "type-only imports are not capabilities"
 # The component written to attempt escapes with plain `std` rather than typed
 # imports asks for nothing but logging — the manifest should say so.

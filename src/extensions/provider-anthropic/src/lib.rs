@@ -33,6 +33,7 @@ use bindings::exports::jan_klod::interfaces::llm_provider::{
 use bindings::jan_klod::interfaces::host_config;
 use bindings::jan_klod::interfaces::host_http::{self, HttpError, HttpHeader, HttpRequest};
 use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
+use bindings::jan_klod::interfaces::host_secrets;
 
 /// Anthropic API version header value.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -267,8 +268,25 @@ impl Lifecycle for Component {
     fn init(ctx: ExtensionContext) -> Result<(), String> {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
         let section: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+
+        // Determine API key: prefer api-key-secret (via host-secrets) over api-key
+        let api_key =
+            if let Some(secret_name) = section.get("api-key-secret").and_then(Value::as_str) {
+                // Try to read from host-secrets first
+                match host_secrets::get(secret_name) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        // Fall back to api-key if secret is not available
+                        config_str(&section, "api-key")
+                    }
+                }
+            } else {
+                // No api-key-secret, use api-key
+                config_str(&section, "api-key")
+            };
+
         let config = ProviderConfig {
-            api_key: config_str(&section, "api-key"),
+            api_key,
             model: config_str(&section, "model"),
         };
         // Never log the api-key.

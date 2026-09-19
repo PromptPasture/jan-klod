@@ -41,6 +41,7 @@ world extension-world {
     import host-log;
     import host-config;
     import host-http;
+    import host-secrets;
 
     export extension-lifecycle;
 }

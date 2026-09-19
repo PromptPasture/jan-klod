@@ -26,6 +26,7 @@ members = [
     "tool-hello",
     "tool-plan",
     "tool-proc",
+    "host-secrets-probe",
 ]
 
 [workspace.package]

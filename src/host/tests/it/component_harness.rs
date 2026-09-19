@@ -133,6 +133,38 @@ impl provider_bind::jan_klod::interfaces::host_http::Host for TestHost {
     }
 }
 
+// --- host-secrets: grant and retrieve from environment ---
+
+impl provider_bind::jan_klod::interfaces::host_secrets::Host for TestHost {
+    fn get(
+        &mut self,
+        name: String,
+    ) -> std::result::Result<String, provider_bind::jan_klod::interfaces::host_secrets::SecretsError>
+    {
+        use provider_bind::jan_klod::interfaces::host_secrets::SecretsError;
+        // Check if the instance is granted the secrets capability.
+        match self.section.get("secrets") {
+            Some(s) => {
+                // Check if it's the boolean true (will be "true" as a JSON string)
+                if s != "true" {
+                    return Err(SecretsError::Denied);
+                }
+            }
+            None => {
+                // Not granted
+                return Err(SecretsError::Denied);
+            }
+        }
+
+        // Attempt to read from environment
+        match std::env::var(&name) {
+            Ok(value) => Ok(value),
+            Err(std::env::VarError::NotPresent) => Err(SecretsError::NotFound),
+            Err(std::env::VarError::NotUnicode(_)) => Err(SecretsError::Backend),
+        }
+    }
+}
+
 /// Resolve a staged guest at `<repo>/ext/<file>`. Returns `None` (with a skip
 /// note) when absent, so an unbuilt tree still passes.
 fn staged_component(engine: &Engine, file: &str) -> Option<Component> {
@@ -151,7 +183,7 @@ fn provider_openai_complete_streams_text() -> Result<()> {
     use provider_bind::exports::jan_klod::interfaces::llm_provider::{
         CompletionChunk, CompletionRequest, Message, Role,
     };
-    use provider_bind::jan_klod::interfaces::{host_config, host_http, host_log};
+    use provider_bind::jan_klod::interfaces::{host_config, host_http, host_log, host_secrets};
     use provider_bind::ProviderWorld;
 
     let engine = Engine::default();
@@ -179,6 +211,7 @@ fn provider_openai_complete_streams_text() -> Result<()> {
     host_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     host_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     host_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    host_secrets::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
 
     let mut store = Store::new(&engine, host);
     let world = ProviderWorld::instantiate(&mut store, &component, &linker)?;
@@ -241,7 +274,7 @@ fn provider_openai_maps_auth_error() -> Result<()> {
     use provider_bind::exports::jan_klod::interfaces::llm_provider::{
         CompletionRequest, Message, ProviderError, Role,
     };
-    use provider_bind::jan_klod::interfaces::{host_config, host_http, host_log};
+    use provider_bind::jan_klod::interfaces::{host_config, host_http, host_log, host_secrets};
     use provider_bind::ProviderWorld;
 
     let engine = Engine::default();
@@ -264,6 +297,7 @@ fn provider_openai_maps_auth_error() -> Result<()> {
     host_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     host_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     host_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    host_secrets::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
 
     let mut store = Store::new(&engine, host);
     let world = ProviderWorld::instantiate(&mut store, &component, &linker)?;
@@ -311,7 +345,7 @@ fn provider_openai_keeps_text_that_accompanies_tool_calls() -> Result<()> {
     use provider_bind::exports::jan_klod::interfaces::llm_provider::{
         CompletionChunk, CompletionRequest, Message, Role,
     };
-    use provider_bind::jan_klod::interfaces::{host_config, host_http, host_log};
+    use provider_bind::jan_klod::interfaces::{host_config, host_http, host_log, host_secrets};
     use provider_bind::ProviderWorld;
 
     let engine = Engine::default();
@@ -345,6 +379,7 @@ fn provider_openai_keeps_text_that_accompanies_tool_calls() -> Result<()> {
     host_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     host_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
     host_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
+    host_secrets::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s)?;
 
     let mut store = Store::new(&engine, host);
     let world = ProviderWorld::instantiate(&mut store, &component, &linker)?;

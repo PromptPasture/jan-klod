@@ -52,7 +52,7 @@ use std::sync::{Arc, Mutex};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
 
-use bindings::jan_klod::interfaces::{host_config, host_http, host_log};
+use bindings::jan_klod::interfaces::{host_config, host_http, host_log, host_secrets};
 use bindings::ExtensionWorld;
 use jan_klod_config::{Config, ExtensionInstance};
 
@@ -2074,13 +2074,14 @@ impl intercept::Driver for HeadlessDriver {
 }
 
 /// Build the capability linker every extension store shares: WASI for the guest
-/// runtime, plus the host-granted `host-log` / `host-config` / `host-http`.
+/// runtime, plus the host-granted `host-log` / `host-config` / `host-http` / `host-secrets`.
 fn build_linker(engine: &Engine) -> Result<Linker<HostState>, CoreError> {
     let mut linker: Linker<HostState> = Linker::new(engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
     host_log::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
     host_config::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
     host_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
+    host_secrets::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
     Ok(linker)
 }
 

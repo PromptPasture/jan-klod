@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use serde_json::Value;
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-use crate::bindings::jan_klod::interfaces::{host_config, host_http, host_log};
+use crate::bindings::jan_klod::interfaces::{host_config, host_http, host_log, host_secrets};
 
 /// Extension instance's slice of `config.yaml`, served via `host-config`.
 /// Keys are dot-separated paths into the (env-expanded) config.
@@ -180,5 +180,35 @@ const fn to_http_error(err: &crate::http::WireError) -> host_http::HttpError {
         WireError::ClientError(code) => host_http::HttpError::ClientError(*code),
         WireError::ServerError(code) => host_http::HttpError::ServerError(*code),
         WireError::Backend => host_http::HttpError::Backend,
+    }
+}
+
+impl host_secrets::Host for HostState {
+    /// Retrieve a secret by name from the configured backend (currently environment).
+    ///
+    /// Returns `denied` if the instance does not have `secrets: true` in config.yaml.
+    /// Returns `not-found` if the backend has no secret with this name.
+    /// Returns `backend` if the backend itself failed.
+    fn get(&mut self, name: String) -> Result<String, host_secrets::SecretsError> {
+        // Check if the instance is granted the secrets capability.
+        match self.section.get("secrets") {
+            Some(s) => {
+                // Check if it's the boolean true (will be "true" as a JSON string)
+                if s != "true" {
+                    return Err(host_secrets::SecretsError::Denied);
+                }
+            }
+            None => {
+                // Not granted
+                return Err(host_secrets::SecretsError::Denied);
+            }
+        }
+
+        // Attempt to read from environment
+        match std::env::var(&name) {
+            Ok(value) => Ok(value),
+            Err(std::env::VarError::NotPresent) => Err(host_secrets::SecretsError::NotFound),
+            Err(std::env::VarError::NotUnicode(_)) => Err(host_secrets::SecretsError::Backend),
+        }
     }
 }

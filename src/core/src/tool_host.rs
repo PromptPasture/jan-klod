@@ -47,6 +47,7 @@ use bind::jan_klod::interfaces::host_fs as g_fs;
 use bind::jan_klod::interfaces::host_http as g_http;
 use bind::jan_klod::interfaces::host_log as g_log;
 use bind::jan_klod::interfaces::host_process as g_proc;
+use bind::jan_klod::interfaces::host_secrets as g_secrets;
 use bind::jan_klod::interfaces::host_storage as g_storage;
 
 /// Host state for a tool guest.
@@ -144,6 +145,12 @@ impl g_http::Host for ToolHost {
             }),
             Err(_) => Err(g_http::HttpError::ConnectionFailed),
         }
+    }
+}
+
+impl g_secrets::Host for ToolHost {
+    fn get(&mut self, name: String) -> Result<String, g_secrets::SecretsError> {
+        std::env::var(&name).map_err(|_| g_secrets::SecretsError::NotFound)
     }
 }
 
@@ -407,6 +414,7 @@ impl ToolExtension {
         g_http::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
         g_fs::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
         g_proc::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
+        g_secrets::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
         g_storage::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = ToolHost {

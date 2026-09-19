@@ -54,6 +54,7 @@ Core grants these capabilities to every extension.
 | `host-config.wit` | `host-config` | Read own section of `config.yaml` |
 | `host-event.wit` | `host-event` | Event bus publish/subscribe — **observation-only** (fire-and-forget); cannot shape the loop |
 | `host-storage.wit` | `host-storage` | Namespaced view of the core's own store. **Granted** (`persist: true`), never ambient; namespaces are prefixed with the calling component's id |
+| `host-secrets.wit` | `host-secrets` | Named secrets from the configured backend (e.g. environment variables). **Granted** (`secrets: true`), default-deny; no enumeration or listing, read-only by name |
 | `host-agent.wit` | `host-agent` | Drive a session from inside the sandbox — the inward twin of `jan-klod-protocol` (create/list/read/fork a session, send a message, answer a prompt). Default-deny, manifest-declared *(Phase 22, drafted ahead of a host implementation)* |
 
 Interceptor dispatch isn't in this table: it's a core-native call of `interceptor` (above), not a capability.

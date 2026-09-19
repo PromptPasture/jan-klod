@@ -156,6 +156,16 @@ impl provider_bind::jan_klod::interfaces::host_http::Host for CapHost {
     }
 }
 
+impl provider_bind::jan_klod::interfaces::host_secrets::Host for CapHost {
+    fn get(
+        &mut self,
+        name: String,
+    ) -> Result<String, provider_bind::jan_klod::interfaces::host_secrets::SecretsError> {
+        use provider_bind::jan_klod::interfaces::host_secrets::SecretsError;
+        std::env::var(&name).map_err(|_| SecretsError::NotFound)
+    }
+}
+
 // Provider instantiation + Completer adapter
 
 /// Instantiate a provider in its store with injected `host-http`; drive
@@ -179,6 +189,11 @@ fn instantiate_provider(
     )
     .map_err(CoreError::linker)?;
     provider_bind::jan_klod::interfaces::host_http::add_to_linker::<_, HasSelf<_>>(
+        &mut linker,
+        |s| s,
+    )
+    .map_err(CoreError::linker)?;
+    provider_bind::jan_klod::interfaces::host_secrets::add_to_linker::<_, HasSelf<_>>(
         &mut linker,
         |s| s,
     )

@@ -165,6 +165,8 @@ The loader enforces core-level rules only; domain rules live in consuming extens
 
 - **Persistence has one store, host-side, not an extension** — the top-level `storage:` block (`storage.path`) names the SQLite file; `host-storage` is core's own proxy in front of it, granted to components rather than backed by one of several store extensions.
 
+- **Secrets come from the configured backend, granted per instance** — the top-level `secrets:` block names the backend (e.g. `backend: env` for environment variables); `host-secrets` is core's own interface, granted only to instances with `secrets: true`. An ungranted instance sees `denied` for every call; enumeration is not possible.
+
 `providers` and `routing` (fallback chain and task→model routing) are **top-level, not under `extensions`**. Core preserves them for `interceptor-task-router` (via `host-config`) without validating references — routing is interceptor domain logic. See [Architecture → Provider fallback](architecture.md#provider-fallback) and [Task routing](architecture.md#task-routing).
 
 ## Command execution (`execution:`)

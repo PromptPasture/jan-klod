@@ -80,6 +80,7 @@ world provider-world {
     import host-log;
     import host-config;
     import host-http;
+    import host-secrets;
 
     export extension-lifecycle;
     export llm-provider;
