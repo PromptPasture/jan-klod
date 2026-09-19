@@ -9,17 +9,21 @@
 //!   `jan-klod serve --bind <addr>`                  — serve, resolving paths
 //!   `jan-klod rpc [config-path] [ext-dir]`        — boot + serve JSON-RPC on stdio
 //!   `jan-klod verify [config-path] [ext-dir]`     — check the install, then exit
+//!   `jan-klod verify --chain [session-id]`        — verify event chain integrity (as planned)
 //!
 //!   config-path  path to config.yaml   (default: config.yaml)
 //!   ext-dir      directory of *.wasm    (default: ext)
 //!   bind         host:port to listen on (default: 127.0.0.1:8787)
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use jan_klod_config::Config;
 use jan_klod_core::ext_index;
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
+use jk_session::event_log::{verify_chain, ChainStatus};
+use jk_session::store::Store;
 
 /// Where the installed copies of `config.yaml` and `ext/` live, relative to the
 /// gateway binary: `<prefix>/bin/jan-klod-gateway` → `<prefix>/share/jan-klod/`.
@@ -575,6 +579,17 @@ fn verify(args: &[String]) -> ExitCode {
     // and should stay runnable in a build step, while asking a paid endpoint to say
     // one word is a thing someone should choose to do.
     let live = args.iter().any(|arg| arg == "--live");
+    let has_chain = args.iter().any(|arg| arg == "--chain");
+    let chain_session = if has_chain {
+        args.iter()
+            .position(|arg| arg == "--chain")
+            .and_then(|pos| args.get(pos + 1))
+            .filter(|arg| !arg.starts_with("--"))
+            .map(std::string::ToString::to_string)
+    } else {
+        None
+    };
+
     let paths: Vec<String> = args
         .iter()
         .filter(|arg| !arg.starts_with("--"))
@@ -617,6 +632,13 @@ fn verify(args: &[String]) -> ExitCode {
     match runtime.start_all_eager() {
         Ok(started) => {
             println!("verified: {} extension(s) start cleanly", started.len());
+
+            // Verify event chain if --chain was provided
+            if has_chain {
+                let chain_result = verify_event_chain(&config_path, chain_session);
+                return chain_result;
+            }
+
             if live {
                 return verify_live(&runtime);
             }
@@ -628,6 +650,153 @@ fn verify(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Verify event chain integrity for one or multiple sessions.
+#[allow(clippy::too_many_lines)]
+fn verify_event_chain(config_path: &str, session_id: Option<String>) -> ExitCode {
+    // Load the config to find the store path
+    let config = match Config::from_path(config_path) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!("jan-klod: config error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Extract the store path from the config
+    let store_path = config
+        .agent
+        .get("storage")
+        .and_then(|storage| storage.get("path"))
+        .and_then(serde_json::Value::as_str)
+        .map(|path| {
+            let config_dir = Path::new(config_path)
+                .parent()
+                .unwrap_or_else(|| Path::new("."));
+            config_dir.join(path)
+        });
+
+    // Open the store
+    let store = match store_path {
+        Some(path) => match Store::open(&path) {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!("jan-klod: failed to open store: {err}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => {
+            // No storage path configured, use in-memory (shouldn't have sessions)
+            match Store::open_in_memory() {
+                Ok(s) => s,
+                Err(err) => {
+                    eprintln!("jan-klod: failed to open store: {err}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    };
+
+    // If a specific session is provided, verify just that one
+    if let Some(session) = session_id {
+        match verify_chain(&store, &session) {
+            Ok(verification) => match &verification.status {
+                ChainStatus::Intact => {
+                    println!("session {session}: chain intact");
+                    ExitCode::SUCCESS
+                }
+                ChainStatus::Broken { seq, kind, reason } => {
+                    println!("session {session}: chain broken at seq={seq}, kind={kind}: {reason}");
+                    ExitCode::FAILURE
+                }
+            },
+            Err(err) => {
+                eprintln!("jan-klod: {err}");
+                ExitCode::FAILURE
+            }
+        }
+    } else {
+        // Verify the 10 most recent sessions
+        match get_recent_sessions(&store, 10) {
+            Ok(sessions) => {
+                if sessions.is_empty() {
+                    println!("no sessions found");
+                    return ExitCode::SUCCESS;
+                }
+
+                let mut broken = Vec::new();
+                for session in &sessions {
+                    match verify_chain(&store, session) {
+                        Ok(verification) => {
+                            if let ChainStatus::Broken { seq, kind, reason } = verification.status {
+                                broken.push((session.clone(), seq, kind, reason));
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("jan-klod: error verifying session {session}: {err}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+
+                if broken.is_empty() {
+                    println!("{} sessions checked, all intact", sessions.len());
+                    ExitCode::SUCCESS
+                } else {
+                    println!(
+                        "{} of {} sessions broken here:",
+                        broken.len(),
+                        sessions.len()
+                    );
+                    for (session, seq, kind, reason) in broken {
+                        println!("  {session}: chain broken at seq={seq}, kind={kind}: {reason}");
+                    }
+                    ExitCode::FAILURE
+                }
+            }
+            Err(err) => {
+                eprintln!("jan-klod: {err}");
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
+/// Get the N most recent sessions, ordered by the timestamp of their last event.
+fn get_recent_sessions(store: &Store, limit: usize) -> Result<Vec<String>, String> {
+    // Get all sessions
+    let all_sessions = store
+        .event_sessions()
+        .map_err(|e| format!("failed to list sessions: {e}"))?;
+
+    if all_sessions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Get the last event timestamp for each session
+    let mut sessions_with_max_ts: Vec<(String, u64)> = all_sessions
+        .into_iter()
+        .filter_map(|session| {
+            store.session_events(&session).ok().and_then(|events| {
+                events
+                    .iter()
+                    .map(|e| e.ts)
+                    .max()
+                    .map(|max_ts| (session, max_ts))
+            })
+        })
+        .collect();
+
+    // Sort by timestamp descending (most recent first)
+    sessions_with_max_ts.sort_by_key(|a| std::cmp::Reverse(a.1));
+
+    // Take the top N sessions
+    Ok(sessions_with_max_ts
+        .into_iter()
+        .take(limit)
+        .map(|(session, _)| session)
+        .collect())
 }
 
 /// Ask the configured model one question, and report what happened.

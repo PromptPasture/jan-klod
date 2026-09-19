@@ -11,6 +11,8 @@ use jan_klod_core::conductor::Event;
 use jan_klod_core::event_log::{self, decode};
 use jan_klod_core::store::Store;
 use jan_klod_core::Runtime;
+use jk_session::event_log::{verify_chain, ChainStatus};
+use rusqlite::params;
 
 use crate::common;
 
@@ -396,4 +398,220 @@ extensions:
          tool was probably not enabled, and the attempt is unrecorded: \
          {refusal}"
     );
+}
+
+#[test]
+fn an_edited_event_breaks_the_chain() {
+    let dir = std::env::temp_dir().join(format!("jk-chain-edit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok();
+
+    // Create a simple store and add a few events
+    let store = Store::open(dir.join("test.db")).expect("store opens");
+    for i in 1..=5u64 {
+        store
+            .append_event_at(
+                "test-session",
+                "test-event",
+                &format!("event payload {i}"),
+                1000 + i,
+            )
+            .expect("event appends");
+    }
+
+    // Now edit one event's payload directly in the database
+    // This simulates tampering that should be detected by verify_chain
+    let conn = rusqlite::Connection::open(dir.join("test.db")).expect("connection opens");
+    conn.execute(
+        "UPDATE events SET payload = ? WHERE session = ? AND seq = ?",
+        params!["TAMPERED payload 3", "test-session", 3u64],
+    )
+    .expect("payload is updated");
+    drop(conn);
+    drop(store);
+
+    // Re-open and verify
+    let store = Store::open(dir.join("test.db")).expect("store re-opens");
+    let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
+
+    // The chain should be broken at event 4 (whose prev_digest now doesn't match event 3's actual digest)
+    match result.status {
+        ChainStatus::Intact => panic!("chain should be broken after payload edit"),
+        ChainStatus::Broken { seq, .. } => {
+            assert_eq!(seq, 4, "chain breaks at the event after the tampered one");
+        }
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_reordered_pair_breaks_the_chain() {
+    let dir = std::env::temp_dir().join(format!("jk-chain-reorder-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok();
+
+    // Create a simple store and add a few events
+    let store = Store::open(dir.join("test.db")).expect("store opens");
+    for i in 1..=5u64 {
+        store
+            .append_event_at(
+                "test-session",
+                "test-event",
+                &format!("event payload {i}"),
+                2000 + i,
+            )
+            .expect("event appends");
+    }
+
+    // Now swap two events' rows in the database
+    let conn = rusqlite::Connection::open(dir.join("test.db")).expect("connection opens");
+    conn.execute("BEGIN TRANSACTION", []).ok();
+    // Get events 3 and 4
+    let (_seq3, _ts3, _kind3, _payload3, _pd3) = conn
+        .query_row(
+            "SELECT seq, ts, kind, payload, prev_digest FROM events WHERE session = ? AND seq = ?",
+            params!["test-session", 3u64],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .expect("row 3 retrieved");
+    let (_seq4, _ts4, _kind4, _payload4, _pd4) = conn
+        .query_row(
+            "SELECT seq, ts, kind, payload, prev_digest FROM events WHERE session = ? AND seq = ?",
+            params!["test-session", 4u64],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .expect("row 4 retrieved");
+
+    // Swap them using a temporary seq value to avoid primary key conflict
+    conn.execute(
+        "UPDATE events SET seq = 999999 WHERE session = ? AND seq = ?",
+        params!["test-session", 3i64],
+    )
+    .expect("row 3 temp update");
+    conn.execute(
+        "UPDATE events SET seq = 3 WHERE session = ? AND seq = ?",
+        params!["test-session", 4i64],
+    )
+    .expect("row 4 moved to 3");
+    conn.execute(
+        "UPDATE events SET seq = 4 WHERE session = ? AND seq = ?",
+        params!["test-session", 999_999_i64],
+    )
+    .expect("row 3 moved to 4");
+    conn.execute("COMMIT", []).ok();
+    drop(conn);
+    drop(store);
+
+    // Re-open and verify
+    let store = Store::open(dir.join("test.db")).expect("store re-opens");
+    let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
+
+    // The chain should be broken
+    match result.status {
+        ChainStatus::Intact => panic!("chain should be broken after reordering"),
+        ChainStatus::Broken { seq, .. } => {
+            // After swapping, event 3 now has event 4's prev_digest (pointing to original event 3)
+            // but the actual previous event is original event 2, so the digests don't match
+            assert!(
+                seq == 3 || seq == 4,
+                "chain breaks at one of the swapped events"
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_deleted_event_breaks_the_chain() {
+    let dir = std::env::temp_dir().join(format!("jk-chain-delete-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok();
+
+    // Create a simple store and add a few events
+    let store = Store::open(dir.join("test.db")).expect("store opens");
+    for i in 1..=5u64 {
+        store
+            .append_event_at(
+                "test-session",
+                "test-event",
+                &format!("event payload {i}"),
+                3000 + i,
+            )
+            .expect("event appends");
+    }
+
+    // Now delete an event from the middle
+    let conn = rusqlite::Connection::open(dir.join("test.db")).expect("connection opens");
+    conn.execute(
+        "DELETE FROM events WHERE session = ? AND seq = ?",
+        params!["test-session", 3u64],
+    )
+    .expect("event deleted");
+    drop(conn);
+    drop(store);
+
+    // Re-open and verify
+    let store = Store::open(dir.join("test.db")).expect("store re-opens");
+    let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
+
+    // The chain should be broken at event 4 (which now has prev_digest pointing to the deleted event 3)
+    match result.status {
+        ChainStatus::Intact => panic!("chain should be broken after deletion"),
+        ChainStatus::Broken { seq, .. } => {
+            assert_eq!(seq, 4, "chain breaks at the event after the deleted one");
+        }
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_intact_chain_verifies_cleanly() {
+    let dir = std::env::temp_dir().join(format!("jk-chain-intact-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok();
+
+    // Create a simple store and add a few events
+    let store = Store::open(dir.join("test.db")).expect("store opens");
+    for i in 1..=5u64 {
+        store
+            .append_event_at(
+                "test-session",
+                "test-event",
+                &format!("event payload {i}"),
+                4000 + i,
+            )
+            .expect("event appends");
+    }
+    drop(store);
+
+    // Re-open and verify without any tampering
+    let store = Store::open(dir.join("test.db")).expect("store re-opens");
+    let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
+
+    // The chain should be intact
+    match result.status {
+        ChainStatus::Intact => {
+            // Success!
+        }
+        ChainStatus::Broken { seq, kind, reason } => {
+            panic!("chain should be intact but is broken at seq={seq}, kind={kind}: {reason}");
+        }
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
 }

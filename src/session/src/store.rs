@@ -11,6 +11,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
+use sha2::Digest;
 
 /// A stored entry. Mirrors `store-types.entry`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,18 +104,24 @@ impl Store {
                 PRIMARY KEY (namespace, key)
             );
             CREATE TABLE IF NOT EXISTS events (
-                session TEXT    NOT NULL,
-                seq     INTEGER NOT NULL,
-                ts      INTEGER NOT NULL,
-                kind    TEXT    NOT NULL,
-                payload TEXT    NOT NULL,
+                session     TEXT    NOT NULL,
+                seq         INTEGER NOT NULL,
+                ts          INTEGER NOT NULL,
+                kind        TEXT    NOT NULL,
+                payload     TEXT    NOT NULL,
+                prev_digest TEXT,
                 PRIMARY KEY (session, seq)
             );",
         )
         .map_err(|e| StoreError::Backend {
             detail: e.to_string(),
         })?;
-        Ok(Self { conn })
+
+        // Add prev_digest column if it doesn't exist (for backward compatibility with old databases)
+        let store = Self { conn };
+        store.ensure_prev_digest_column()?;
+
+        Ok(store)
     }
 
     /// Upsert `value` at `(namespace, key)`, returning the stored entry.
@@ -310,18 +317,45 @@ impl Store {
         payload: &str,
         ts: u64,
     ) -> Result<LoggedEvent, StoreError> {
+        // Compute the digest of the previous event (if it exists)
+        let prev_digest: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT seq, ts, kind, payload FROM events \
+                 WHERE session = ?1 ORDER BY seq DESC LIMIT 1",
+                params![session],
+                |row| {
+                    let seq = to_u64(row.get::<_, i64>(0)?);
+                    let prev_ts = to_u64(row.get::<_, i64>(1)?);
+                    let prev_kind = row.get::<_, String>(2)?;
+                    let prev_payload = row.get::<_, String>(3)?;
+                    Ok(Self::compute_event_digest(
+                        seq,
+                        prev_ts,
+                        &prev_kind,
+                        &prev_payload,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| StoreError::Backend {
+                detail: e.to_string(),
+            })?;
+
+        // Insert the new event with the computed prev_digest
         let seq: i64 = self
             .conn
             .query_row(
-                "INSERT INTO events (session, seq, ts, kind, payload)
-                 SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2, ?3, ?4
+                "INSERT INTO events (session, seq, ts, kind, payload, prev_digest)
+                 SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2, ?3, ?4, ?5
                  FROM events WHERE session = ?1
                  RETURNING seq",
                 params![
                     session,
                     i64::try_from(ts).unwrap_or(i64::MAX),
                     kind,
-                    payload
+                    payload,
+                    prev_digest
                 ],
                 |row| row.get(0),
             )
@@ -535,6 +569,228 @@ impl Store {
             .map_err(|e| StoreError::Backend {
                 detail: e.to_string(),
             })
+    }
+
+    /// Ensure the `prev_digest` column exists in the events table.
+    /// For backward compatibility, this adds the column if it doesn't exist and
+    /// runs the migration to populate digests.
+    fn ensure_prev_digest_column(&self) -> Result<(), StoreError> {
+        // Check if the column exists using PRAGMA table_info
+        let has_column = {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA table_info(events)")
+                .map_err(|e| StoreError::Backend {
+                    detail: e.to_string(),
+                })?;
+            let rows: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| StoreError::Backend {
+                    detail: e.to_string(),
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| StoreError::Backend {
+                    detail: e.to_string(),
+                })?;
+            rows.iter().any(|name| name == "prev_digest")
+        };
+
+        if !has_column {
+            // Add the column if it doesn't exist
+            self.conn
+                .execute("ALTER TABLE events ADD COLUMN prev_digest TEXT", [])
+                .map_err(|e| StoreError::Backend {
+                    detail: e.to_string(),
+                })?;
+
+            // Run the migration to populate prev_digest values
+            self.migrate_digests()?;
+        }
+
+        Ok(())
+    }
+
+    /// Compute the SHA-256 digest of an event's `(seq, ts, kind, payload)` tuple.
+    /// The digest is formatted as hex and used as `prev_digest` in the next event.
+    fn compute_event_digest(seq: u64, ts: u64, kind: &str, payload: &str) -> String {
+        let tuple = format!("{seq}/{ts}/{kind}/{payload}");
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(tuple.as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Idempotent migration to populate `prev_digest` for all events in all sessions.
+    /// For each session, walks events in order and sets `prev_digest` to the digest
+    /// of the previous event (or NULL for the first event).
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Backend`] on any SQL failure.
+    pub(crate) fn migrate_digests(&self) -> Result<u64, StoreError> {
+        let mut migrated = 0;
+
+        // Get list of all sessions
+        let sessions: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT DISTINCT session FROM events ORDER BY session")
+                .map_err(|e| StoreError::Backend {
+                    detail: e.to_string(),
+                })?;
+            let rows = stmt
+                .query_map([], |row| row.get(0))
+                .map_err(|e| StoreError::Backend {
+                    detail: e.to_string(),
+                })?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| StoreError::Backend {
+                    detail: e.to_string(),
+                })?
+        };
+
+        // For each session, compute digests and populate prev_digest
+        for session in sessions {
+            let events: Vec<(u64, u64, String, String)> = {
+                let mut stmt = self
+                    .conn
+                    .prepare(
+                        "SELECT seq, ts, kind, payload FROM events \
+                         WHERE session = ?1 ORDER BY seq ASC",
+                    )
+                    .map_err(|e| StoreError::Backend {
+                        detail: e.to_string(),
+                    })?;
+                let rows = stmt
+                    .query_map(params![&session], |row| {
+                        Ok((
+                            to_u64(row.get::<_, i64>(0)?),
+                            to_u64(row.get::<_, i64>(1)?),
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    })
+                    .map_err(|e| StoreError::Backend {
+                        detail: e.to_string(),
+                    })?;
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| StoreError::Backend {
+                        detail: e.to_string(),
+                    })?
+            };
+
+            // For each event after the first, compute the digest of the previous event
+            for (i, (seq, _ts, _kind, _payload)) in events.iter().enumerate() {
+                if i == 0 {
+                    // First event has no previous, so prev_digest is NULL
+                    continue;
+                }
+
+                let (prev_seq, prev_ts, prev_kind, prev_payload) = &events[i - 1];
+                let prev_digest =
+                    Self::compute_event_digest(*prev_seq, *prev_ts, prev_kind, prev_payload);
+
+                self.conn
+                    .execute(
+                        "UPDATE events SET prev_digest = ?1 WHERE session = ?2 AND seq = ?3",
+                        params![prev_digest, &session, seq],
+                    )
+                    .map_err(|e| StoreError::Backend {
+                        detail: e.to_string(),
+                    })?;
+            }
+
+            migrated += 1;
+        }
+
+        Ok(migrated)
+    }
+
+    /// Internal method to verify a session's event chain integrity.
+    /// Returns a `ChainVerification` result, which is used by `event_log.rs`.
+    pub(crate) fn verify_chain_internal(
+        &self,
+        session: &str,
+    ) -> Result<crate::event_log::ChainVerification, crate::event_log::VerifyError> {
+        use crate::event_log::{ChainStatus, ChainVerification, VerifyError};
+
+        // Query all events for the session with their prev_digest values
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, ts, kind, payload, prev_digest FROM events \
+                 WHERE session = ?1 ORDER BY seq ASC",
+            )
+            .map_err(|e| VerifyError::Backend(e.to_string()))?;
+
+        let events: Vec<(u64, u64, String, String, Option<String>)> = stmt
+            .query_map([session], |row| {
+                Ok((
+                    to_u64(row.get::<_, i64>(0)?),
+                    to_u64(row.get::<_, i64>(1)?),
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map_err(|e| VerifyError::Backend(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| VerifyError::Backend(e.to_string()))?;
+
+        if events.is_empty() {
+            return Err(VerifyError::NotFound(session.to_string()));
+        }
+
+        // Verify the chain
+        for (i, (seq, _ts, kind, _payload, prev_digest)) in events.iter().enumerate() {
+            if i == 0 {
+                // First event must have NULL prev_digest
+                if prev_digest.is_some() {
+                    return Ok(ChainVerification {
+                        session: session.to_string(),
+                        status: ChainStatus::Broken {
+                            seq: *seq,
+                            kind: kind.clone(),
+                            reason: "first event should have NULL prev_digest".to_string(),
+                        },
+                    });
+                }
+                continue;
+            }
+
+            // For events after the first, compute the digest of the previous event
+            let (prev_seq, prev_ts, prev_kind, prev_payload, _) = &events[i - 1];
+            let computed_digest =
+                Self::compute_event_digest(*prev_seq, *prev_ts, prev_kind, prev_payload);
+
+            // Check if the stored prev_digest matches the computed one
+            if let Some(stored_digest) = prev_digest {
+                if stored_digest != &computed_digest {
+                    return Ok(ChainVerification {
+                        session: session.to_string(),
+                        status: ChainStatus::Broken {
+                            seq: *seq,
+                            kind: kind.clone(),
+                            reason: format!(
+                                "prev_digest mismatch: expected {computed_digest}, got {stored_digest}"
+                            ),
+                        },
+                    });
+                }
+            } else {
+                return Ok(ChainVerification {
+                    session: session.to_string(),
+                    status: ChainStatus::Broken {
+                        seq: *seq,
+                        kind: kind.clone(),
+                        reason: "non-first event missing prev_digest".to_string(),
+                    },
+                });
+            }
+        }
+
+        Ok(ChainVerification {
+            session: session.to_string(),
+            status: ChainStatus::Intact,
+        })
     }
 }
 

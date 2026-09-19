@@ -447,6 +447,70 @@ fn append_encoded(
 /// two formats to read forever — which Phase 14 exists to remove. Converting
 /// once means every reader after this has one source.
 ///
+/// Indicates whether a chain is intact or broken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChainStatus {
+    /// The chain is intact; every row's `prev_digest` matches the computed digest
+    /// of the row before it.
+    Intact,
+    /// The chain is broken at a specific row. The mismatch indicates either the
+    /// event was edited, reordered, or a row was deleted.
+    Broken {
+        /// The `seq` of the event where the chain breaks.
+        seq: u64,
+        /// The `kind` of the event where the chain breaks.
+        kind: String,
+        /// Why the chain is broken at this point.
+        reason: String,
+    },
+}
+
+/// Result of verifying a session's event chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainVerification {
+    /// The session that was verified.
+    pub session: String,
+    /// Whether the chain is intact or where it broke.
+    pub status: ChainStatus,
+}
+
+/// Error when verifying a chain.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum VerifyError {
+    /// The session does not exist.
+    #[error("session not found: {0}")]
+    NotFound(String),
+    /// Backend storage error.
+    #[error("storage error: {0}")]
+    Backend(String),
+}
+
+impl From<StoreError> for VerifyError {
+    fn from(err: StoreError) -> Self {
+        match err {
+            StoreError::NotFound => Self::NotFound("session not found".to_string()),
+            StoreError::Backend { detail } => Self::Backend(detail),
+        }
+    }
+}
+
+/// Verify that a session's event chain is intact.
+///
+/// Walks all events in the session in order, computing the SHA-256 digest of
+/// each event's `(seq, ts, kind, payload)` tuple and checking that every row's
+/// `prev_digest` matches the computed digest of the row before it. The first
+/// row's `prev_digest` must be NULL.
+///
+/// # Errors
+/// Returns [`VerifyError::NotFound`] if the session does not exist, or
+/// [`VerifyError::Backend`] on a storage error.
+pub fn verify_chain(store: &Store, session: &str) -> Result<ChainVerification, VerifyError> {
+    // Check if the session exists by querying directly
+    // We need to access the Store's internal connection to verify the chain
+    // This function is in the session module but needs to call a private method
+    store.verify_chain_internal(session)
+}
+
 /// # What is lost, precisely
 ///
 /// A transcript row is `{user, answer}`, a migrated turn becomes exactly two

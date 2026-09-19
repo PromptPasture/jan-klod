@@ -19,6 +19,7 @@ thiserror.workspace = true
 # host-side, so no wasm constraint. Moved here from `jan-klod-core` with the
 # store itself.
 rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
 
 [lints]
 workspace = true

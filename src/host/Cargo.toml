@@ -24,6 +24,8 @@ serde_json.workspace = true
 jan-klod-protocol = { path = "../protocol" }
 # Load principals from config.yaml at serve startup (Slice 28a).
 jan-klod-config = { path = "../config" }
+# Session/event log storage and verification (Slice 29a).
+jk-session = { path = "../session" }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "sync", "time"] }
 futures-core = "0.3"
@@ -63,6 +65,8 @@ ring = "0.17.14"
 # `sha2` 0.10 is already a direct dependency of jan-klod-core and shares
 # `digest 0.10` with the `blake2` pin above.
 sha2 = "0.10"
+# SQLite for integration tests (chain verification).
+rusqlite = { version = "0.32", features = ["bundled"] }
 tokio-tungstenite = { version = "0.29", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
