@@ -5,6 +5,11 @@
 //! Editors speak this shape (LSP, Codex's `app-server`), so Phase 18's MCP and
 //! ACP adapt *this* rather than REST.
 //!
+//! # Credentials
+//!
+//! This transport carries no credential; the operator spawning the process is the principal.
+//! Authentication and authorization happen at the HTTP boundary (serve.rs), not on stdio.
+//!
 //! # Generic over streams, on purpose
 //!
 //! [`serve`] takes any [`BufRead`] and [`Write`], not `stdin()`/`stdout()`.

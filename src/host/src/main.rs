@@ -814,6 +814,59 @@ fn confine(_args: &[String]) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// Load principals from config or `JAN_KLOD_TOKEN` fallback.
+///
+/// Reads `serve.principals` from the config. If present, expands `${VAR}` references
+/// and returns a map of principal name to resolved token. If not present and `JAN_KLOD_TOKEN`
+/// is set, defaults to `operator: ${JAN_KLOD_TOKEN}`. If neither is present, returns an
+/// empty map (surface is unauthenticated).
+fn load_principals(config_path: &str) -> Result<std::collections::HashMap<String, String>, String> {
+    use jan_klod_config::Config;
+
+    let config =
+        Config::from_path(config_path).map_err(|e| format!("failed to load config: {e}"))?;
+
+    // Extract serve.principals from the agent config
+    if let Some(serve) = config.agent.get("serve") {
+        if let Some(principals_obj) = serve.get("principals") {
+            if let Some(map) = principals_obj.as_object() {
+                let mut principals = std::collections::HashMap::new();
+                for (name, value) in map {
+                    let token = match value {
+                        serde_json::Value::String(s) => {
+                            // Check if it's an env var reference like ${VAR}
+                            if s.starts_with("${") && s.ends_with('}') {
+                                let var_name = &s[2..s.len() - 1];
+                                std::env::var(var_name).map_err(|_| {
+                                    format!(
+                                        "principal {name}: unset environment variable {var_name}"
+                                    )
+                                })?
+                            } else {
+                                s.clone()
+                            }
+                        }
+                        _ => return Err(format!("principal {name}: value must be a string")),
+                    };
+                    principals.insert(name.clone(), token);
+                }
+                return Ok(principals);
+            }
+        }
+    }
+
+    // Fallback: if JAN_KLOD_TOKEN is set, use it as operator
+    if let Ok(token) = std::env::var("JAN_KLOD_TOKEN") {
+        if !token.trim().is_empty() {
+            let mut principals = std::collections::HashMap::new();
+            principals.insert("operator".to_string(), token);
+            return Ok(principals);
+        }
+    }
+
+    Ok(std::collections::HashMap::new())
+}
+
 /// Boot the agent and serve turns over the host-side REST surface until killed.
 fn serve(args: &[String]) -> ExitCode {
     let (positional, flagged_bind) = split_serve_args(args);
@@ -856,18 +909,25 @@ fn serve(args: &[String]) -> ExitCode {
         }
     };
     // A secret belongs in the environment, not in a file people paste into issues.
-    let token = std::env::var("JAN_KLOD_TOKEN")
-        .ok()
-        .filter(|t| !t.trim().is_empty());
-    if token.is_some() {
-        println!("jan-klod: requiring a bearer token (JAN_KLOD_TOKEN); /health stays open");
+    let principals = match load_principals(&config_path) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("jan-klod: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !principals.is_empty() {
+        println!(
+            "jan-klod: requiring authentication ({} principal(s)); /health stays open",
+            principals.len()
+        );
     }
-    if let Some(warning) = exposure_warning(&bind, token.is_some()) {
+    if let Some(warning) = exposure_warning(&bind, !principals.is_empty()) {
         eprintln!("{warning}");
     }
     println!("jan-klod: serving on http://{bind} — POST {{\"session\":\"…\",\"message\":\"…\"}}");
 
-    if let Err(err) = surface.serve_forever(&agents, token.as_deref()) {
+    if let Err(err) = surface.serve_forever(&agents, principals) {
         eprintln!("jan-klod: serve loop failed: {err}");
         return ExitCode::FAILURE;
     }

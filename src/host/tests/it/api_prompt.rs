@@ -14,6 +14,7 @@ use jan_klod_host::serve::Surface;
 use jan_klod_host::sessions::Agents;
 
 use crate::common;
+use std::collections::HashMap;
 
 /// Set short answer timeout for fast failure
 fn short_answer_timeout() {
@@ -134,7 +135,7 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
 
     // Client A: read frames. On `prompt` frame, client B answers on second
     // connection while stream stays open.
-    let (stream_text, answered) = surface.serve_while(&agents, None, move |_| {
+    let (stream_text, answered) = surface.serve_while(&agents, HashMap::new(), move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
         let request = format!(
@@ -250,7 +251,7 @@ fn a_bystander_is_served_while_another_session_is_confirming() {
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
-    let bystander = surface.serve_while(&agents, None, move |_| {
+    let bystander = surface.serve_while(&agents, HashMap::new(), move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
         let request = format!(
@@ -313,7 +314,7 @@ fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
-    let queued = surface.serve_while(&agents, None, move |_| {
+    let queued = surface.serve_while(&agents, HashMap::new(), move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
         let request = format!(

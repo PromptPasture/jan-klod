@@ -177,7 +177,7 @@ fn the_capability_sets_are_the_ones_expected() {
     // grants nothing.
     assert_eq!(
         of("provider-openai.wasm"),
-        vec!["host-config", "host-http", "host-log"]
+        vec!["host-config", "host-http", "host-log", "host-secrets"]
     );
     // The component written to attempt escapes with plain `std` rather than
     // typed imports asks for nothing but logging — which is why

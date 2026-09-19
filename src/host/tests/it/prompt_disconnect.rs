@@ -27,6 +27,7 @@ use jan_klod_host::serve::Surface;
 use jan_klod_host::sessions::Agents;
 
 use crate::common;
+use std::collections::HashMap;
 
 const GUESTS: [&str; 3] = [
     "provider-openai.wasm",
@@ -128,7 +129,7 @@ fn a_disconnected_client_does_not_hold_the_turn_open() {
 
     let started = std::time::Instant::now();
     surface
-        .serve_once_authed(&agents, None)
+        .serve_once_authed(&agents, HashMap::new())
         .expect("serves the turn");
     let elapsed = started.elapsed();
     let _ = client.join();

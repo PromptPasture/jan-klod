@@ -36,6 +36,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event as SseEvent, Sse};
@@ -89,7 +91,7 @@ pub struct Surface {
 struct App {
     agents: Arc<Agents>,
     pending: Arc<Pending>,
-    token: Option<Arc<str>>,
+    principals: HashMap<String, String>,
     /// Responses completed so far, against `limit`.
     served: Arc<AtomicUsize>,
     /// How many responses to complete before shutting down. `usize::MAX`
@@ -166,7 +168,7 @@ impl Surface {
     /// # Errors
     /// Whatever the server failed with.
     pub fn serve_once(&self, agents: &Arc<Agents>) -> std::io::Result<()> {
-        self.run(agents, None, 1, None::<fn(u16)>)
+        self.run(agents, HashMap::new(), 1, None::<fn(u16)>)
     }
 
     /// Serve one request, requiring `Bearer <token>` when one is set.
@@ -176,16 +178,21 @@ impl Surface {
     pub fn serve_once_authed(
         &self,
         agents: &Arc<Agents>,
-        token: Option<&str>,
+        principals: HashMap<String, String>,
     ) -> std::io::Result<()> {
-        self.run(agents, token, 1, None::<fn(u16)>)
+        self.run(agents, principals, 1, None::<fn(u16)>)
     }
 
     /// Serve while `client` runs, then stop, returning what it returned.
     ///
     /// # Panics
     /// Propagates a panic from `client` rather than hanging on it.
-    pub fn serve_while<F, R>(&self, agents: &Arc<Agents>, token: Option<&str>, client: F) -> R
+    pub fn serve_while<F, R>(
+        &self,
+        agents: &Arc<Agents>,
+        principals: HashMap<String, String>,
+        client: F,
+    ) -> R
     where
         F: FnOnce(u16) -> R + Send,
         R: Send,
@@ -193,7 +200,7 @@ impl Surface {
         let answer = std::sync::Mutex::new(None);
         let _ = self.run(
             agents,
-            token,
+            principals,
             usize::MAX,
             Some(|port| {
                 let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client(port)));
@@ -216,11 +223,15 @@ impl Surface {
     ///
     /// # Errors
     /// Whatever the server failed with.
-    pub fn serve_forever(&self, agents: &Arc<Agents>, token: Option<&str>) -> std::io::Result<()> {
+    pub fn serve_forever(
+        &self,
+        agents: &Arc<Agents>,
+        principals: HashMap<String, String>,
+    ) -> std::io::Result<()> {
         // No closure: nothing should ever ask this one to stop, and a
         // thread parked to represent "forever" would be a thread nothing
         // can wake if the server fails.
-        self.run(agents, token, usize::MAX, None::<fn(u16)>)
+        self.run(agents, principals, usize::MAX, None::<fn(u16)>)
     }
 
     /// The one loop all four entry points are.
@@ -231,7 +242,7 @@ impl Surface {
     fn run<F>(
         &self,
         agents: &Arc<Agents>,
-        token: Option<&str>,
+        principals: HashMap<String, String>,
         limit: usize,
         alongside: Option<F>,
     ) -> std::io::Result<()>
@@ -241,7 +252,7 @@ impl Surface {
         let app = App {
             agents: Arc::clone(agents),
             pending: Arc::new(Pending::new()),
-            token: token.map(Arc::from),
+            principals,
             served: Arc::new(AtomicUsize::new(0)),
             limit,
             stop: Arc::new(tokio::sync::Notify::new()),
@@ -309,17 +320,19 @@ fn router(app: App) -> Router {
 /// a route added without thinking about auth is still covered.
 async fn guard(
     State(app): State<App>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
     let path = request.uri().path().to_owned();
-    if !authorised(request.headers(), app.token.as_deref(), &path) {
+    if let Some(principal) = authorised(request.headers(), &app.principals, &path) {
+        request.extensions_mut().insert(principal);
+        let response = next.run(request).await;
         app.served_one();
-        return error_reply(401, "missing or invalid bearer token").into_response();
+        response
+    } else {
+        app.served_one();
+        error_reply(401, "missing or invalid bearer token").into_response()
     }
-    let response = next.run(request).await;
-    app.served_one();
-    response
 }
 
 async fn index() -> Response {
@@ -748,15 +761,26 @@ impl PromptDriver<'_> {
 /// bind is loopback, so requiring a secret to talk to your own machine would be
 /// friction without a threat. When a token *is* configured it is required
 /// everywhere except `/health`, which the supervisor probes and which leaks nothing.
-fn authorised(headers: &HeaderMap, token: Option<&str>, path: &str) -> bool {
-    let Some(expected) = token else { return true };
-    // `/health` is probed by the supervisor without credentials.
+fn authorised(
+    headers: &HeaderMap,
+    principals: &HashMap<String, String>,
+    path: &str,
+) -> Option<String> {
+    // `/health`, `/`, and `/app.js` are always open (no credentials required).
     // The page and bundle are open because they carry no session data and grant
-    // nothing. Clients need tokens to read sessions, send messages, or answer
-    // prompts — all routes below. See test `an_api_route_still_refuses_without_a_token`.
+    // nothing. `/health` is probed by the supervisor without credentials.
+    // Clients need tokens to read sessions, send messages, or answer prompts.
+    // See test `an_api_route_still_refuses_without_a_token`.
     if matches!(path, "/health" | "/" | "/app.js") {
-        return true;
+        return Some(String::new()); // Allow, but no principal (open path)
     }
+
+    // If no principals are configured, allow everything.
+    if principals.is_empty() {
+        return Some(String::new()); // Allow, but no principal
+    }
+
+    // Extract bearer token and look up principal
     headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -765,7 +789,13 @@ fn authorised(headers: &HeaderMap, token: Option<&str>, path: &str) -> bool {
                 .strip_prefix("Bearer ")
                 .or_else(|| value.strip_prefix("bearer "))
         })
-        .is_some_and(|presented| presented.trim() == expected)
+        .and_then(|presented| {
+            // Look up the presented token in the principals map
+            principals
+                .iter()
+                .find(|(_, token)| token.trim() == presented.trim())
+                .map(|(principal, _)| principal.clone())
+        })
 }
 
 /// Whether the client asked for an SSE stream (`Accept: text/event-stream`).

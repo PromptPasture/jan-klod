@@ -1,6 +1,11 @@
 //! ACP: Agent Client Protocol for editor↔agent (Zed's standard).
 //! Version is integer (not date); bidirectional (agent requests client).
 //! Sessions require `initialize` first.
+//!
+//! # Credentials
+//!
+//! This transport carries no credential; the operator spawning the process is the principal.
+//! Authentication and authorization happen at the HTTP boundary (serve.rs), not on stdio.
 
 use std::cell::RefCell;
 use std::io::{BufRead, Write};

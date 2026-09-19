@@ -1,6 +1,6 @@
 //! `provider-openai` — OpenAI-compatible implementation of `llm-provider`.
 //!
-//! The reference network extension. Imports `host-http`, `host-config`, and `host-log`.
+//! The reference network extension. Imports `host-http`, `host-config`, `host-log`, and `host-secrets`.
 //! `complete` builds a Chat Completions request, calls `host-http::fetch` (no streaming),
 //! parses the reply into chunks, and buffers them under a stream handle. One build serves
 //! all OpenAI-compatible endpoints (LM Studio, Groq, vLLM, …); `base-url`, `api-key`, and `model` differ.

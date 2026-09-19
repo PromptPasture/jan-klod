@@ -22,6 +22,8 @@ serde_json.workspace = true
 # depending on this crate would drag wasmtime into every client that reads a
 # frame. Was a dev-dependency here while the surfaces lived in the kernel.
 jan-klod-protocol = { path = "../protocol" }
+# Load principals from config.yaml at serve startup (Slice 28a).
+jan-klod-config = { path = "../config" }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "sync", "time"] }
 futures-core = "0.3"
@@ -36,7 +38,6 @@ futures-util = { version = "0.3", default-features = false, features = ["sink"] 
 [dev-dependencies]
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
-jan-klod-config = { path = "../config" }
 # The shipped-defaults gate drives core through the *real* UI client library
 # rather than a hand-rolled HTTP client, so the test exercises the same code a
 # user's TUI runs. Test-only: the `jan-klod` binary does not depend on the UI.

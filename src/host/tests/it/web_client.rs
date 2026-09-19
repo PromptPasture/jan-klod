@@ -60,6 +60,7 @@ use jan_klod_host::serve::Surface;
 use jan_klod_host::sessions::Agents;
 
 use crate::common;
+use std::collections::HashMap;
 
 const TOKEN: &str = "s3cret-token";
 
@@ -121,7 +122,11 @@ fn the_web_client_is_served_without_a_token() {
     // test; with `None`, the test would pass on any surface.
     for _ in 0..2 {
         surface
-            .serve_once_authed(&agents, Some(TOKEN))
+            .serve_once_authed(&agents, {
+                let mut principals = HashMap::new();
+                principals.insert("operator".to_string(), TOKEN.to_string());
+                principals
+            })
             .expect("serves");
     }
     let (page, script) = client.join().expect("client thread");
@@ -246,7 +251,11 @@ fn an_api_route_still_refuses_without_a_token() {
     });
     for _ in 0..2 {
         surface
-            .serve_once_authed(&agents, Some(TOKEN))
+            .serve_once_authed(&agents, {
+                let mut principals = HashMap::new();
+                principals.insert("operator".to_string(), TOKEN.to_string());
+                principals
+            })
             .expect("serves");
     }
     let (sessions, near_miss) = client.join().expect("client thread");

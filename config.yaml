@@ -16,6 +16,14 @@
 # extension instance through the host-config interface. ${VAR} references are
 # expanded from the environment.
 
+# REST and WebSocket authentication (Slice 28a). If absent and JAN_KLOD_TOKEN is set,
+# defaults to `operator: ${JAN_KLOD_TOKEN}`. If both are absent, the surface is open
+# (no token required). An unset environment variable fails at boot with a message.
+#
+# serve:
+#   principals:
+#     operator: ${JAN_KLOD_TOKEN}
+
 extensions:
 
   # ---- LLM providers: each entry is one configured endpoint ----

@@ -15,6 +15,7 @@ use jan_klod_host::serve::Surface;
 use jan_klod_host::sessions::Agents;
 
 use crate::common;
+use std::collections::HashMap;
 
 const TOKEN: &str = "s3cret-token";
 
@@ -55,8 +56,9 @@ fn request(port: u16, target: &str, auth: Option<&str>) -> String {
     } else {
         r#"{"message":"hello"}"#
     };
-    let raw = if target == "/health" {
-        format!("GET /health HTTP/1.1\r\nHost: localhost\r\n{header}Connection: close\r\n\r\n")
+    // Use GET for open paths and /health, POST for everything else
+    let raw = if matches!(target, "/health" | "/" | "/app.js") {
+        format!("GET {target} HTTP/1.1\r\nHost: localhost\r\n{header}Connection: close\r\n\r\n")
     } else {
         format!(
             "POST {target} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
@@ -101,7 +103,11 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
 
     for _ in 0..4 {
         surface
-            .serve_once_authed(&agents, Some(TOKEN))
+            .serve_once_authed(&agents, {
+                let mut principals = HashMap::new();
+                principals.insert("operator".to_string(), TOKEN.to_string());
+                principals
+            })
             .expect("serves");
     }
     let (none, wrong, right, health) = client.join().expect("client thread");
@@ -140,7 +146,9 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     let port = surface.port();
 
     let client = thread::spawn(move || request(port, "/session/a/message", None));
-    surface.serve_once_authed(&agents, None).expect("serves");
+    surface
+        .serve_once_authed(&agents, HashMap::new())
+        .expect("serves");
     let response = client.join().expect("client thread");
 
     // Requiring a secret to talk to your own loopback is friction without a
@@ -256,8 +264,15 @@ extensions:
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
-    let (refused, accepted, stream_text) =
-        surface.serve_while(&agents, Some(TOKEN), move |_| drive_confirmation(port));
+    let (refused, accepted, stream_text) = surface.serve_while(
+        &agents,
+        {
+            let mut principals = HashMap::new();
+            principals.insert("operator".to_string(), TOKEN.to_string());
+            principals
+        },
+        move |_| drive_confirmation(port),
+    );
 
     assert!(
         refused.contains("401"),
@@ -277,5 +292,128 @@ extensions:
     assert!(
         accepted.contains("200 OK") && accepted.contains("accepted"),
         "the authenticated answer was accepted rather than lost to the timeout: {accepted}"
+    );
+}
+
+#[test]
+fn principal_resolves_from_credentials_in_the_guard() {
+    short_answer_timeout();
+    if !common::guests_staged(&["provider-openai.wasm"]) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jk-principal-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = common::TempDir(dir.clone());
+
+    let ext_dir = common::repo_root().join("ext");
+    let config = write_config(&dir);
+    let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
+    let factory = || common::canned_http("pong");
+    let agents = Agents::new(runtime, std::sync::Arc::new(factory));
+    let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let port = surface.port();
+
+    // Test 1: Multiple principals with different tokens
+    let client = thread::spawn(move || {
+        let no_token = request(port, "/session/a/message", None);
+        let wrong_token = request(port, "/session/a/message", Some("wrong-token"));
+        let op_token = request(port, "/session/a/message", Some("operator-secret"));
+        let admin_token = request(port, "/session/a/message", Some("admin-secret"));
+        let health_no_auth = request(port, "/health", None);
+        let health_with_auth = request(port, "/health", Some("operator-secret"));
+        let index_no_auth = request(port, "/", None);
+        let app_js_no_auth = request(port, "/app.js", None);
+        (
+            no_token,
+            wrong_token,
+            op_token,
+            admin_token,
+            health_no_auth,
+            health_with_auth,
+            index_no_auth,
+            app_js_no_auth,
+        )
+    });
+
+    let mut principals = HashMap::new();
+    principals.insert("operator".to_string(), "operator-secret".to_string());
+    principals.insert("admin".to_string(), "admin-secret".to_string());
+
+    // Serve 8 requests (2 for each request type)
+    for _ in 0..8 {
+        surface
+            .serve_once_authed(&agents, principals.clone())
+            .expect("serves");
+    }
+
+    let (
+        no_token,
+        wrong_token,
+        op_token,
+        admin_token,
+        health_no_auth,
+        health_with_auth,
+        index_no_auth,
+        app_js_no_auth,
+    ) = client.join().expect("client thread");
+
+    // No token -> 401
+    assert!(
+        no_token.contains("401"),
+        "no token should be refused: {no_token}"
+    );
+
+    // Wrong token -> 401
+    assert!(
+        wrong_token.contains("401"),
+        "wrong token should be refused: {wrong_token}"
+    );
+
+    // Correct token -> 200
+    assert!(
+        op_token.contains("200 OK"),
+        "operator token should be accepted: {op_token}"
+    );
+    assert!(
+        op_token.contains("pong"),
+        "and should reach the agent: {op_token}"
+    );
+
+    // Another principal's token -> 200
+    assert!(
+        admin_token.contains("200 OK"),
+        "admin token should be accepted: {admin_token}"
+    );
+    assert!(
+        admin_token.contains("pong"),
+        "and should reach the agent: {admin_token}"
+    );
+
+    // /health stays open without credentials
+    assert!(
+        health_no_auth.contains("200 OK"),
+        "/health should be open without token: {health_no_auth}"
+    );
+    assert!(
+        !health_no_auth.contains("401"),
+        "/health should not be refused: {health_no_auth}"
+    );
+
+    // /health stays open even with credentials
+    assert!(
+        health_with_auth.contains("200 OK"),
+        "/health should be open with token: {health_with_auth}"
+    );
+
+    // / (index) stays open without credentials
+    assert!(
+        index_no_auth.contains("200 OK"),
+        "/ should be open without token: {index_no_auth}"
+    );
+
+    // /app.js stays open without credentials
+    assert!(
+        app_js_no_auth.contains("200 OK"),
+        "/app.js should be open without token: {app_js_no_auth}"
     );
 }

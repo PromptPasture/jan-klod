@@ -15,6 +15,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::common;
+use std::collections::HashMap;
 
 const TOKEN: &str = "ws-token";
 
@@ -195,7 +196,7 @@ fn a_client_connects_and_negotiates_the_protocol() {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let answers = surface.serve_while(&agents, None, |port| {
+    let answers = surface.serve_while(&agents, HashMap::new(), |port| {
         talk(port, None, vec![hello()]).expect("the socket answers")
     });
 
@@ -223,11 +224,19 @@ fn the_socket_is_refused_without_the_token() {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let (refused, accepted) = surface.serve_while(&agents, Some(TOKEN), |port| {
-        let refused = talk(port, None, vec![hello()]);
-        let accepted = talk(port, Some(TOKEN), vec![hello()]);
-        (refused, accepted)
-    });
+    let (refused, accepted) = surface.serve_while(
+        &agents,
+        {
+            let mut principals = HashMap::new();
+            principals.insert("operator".to_string(), TOKEN.to_string());
+            principals
+        },
+        |port| {
+            let refused = talk(port, None, vec![hello()]);
+            let accepted = talk(port, Some(TOKEN), vec![hello()]);
+            (refused, accepted)
+        },
+    );
 
     assert!(
         refused.is_err(),
@@ -254,7 +263,7 @@ fn a_session_verb_is_answered_and_the_handshake_is_remembered() {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let answers = surface.serve_while(&agents, None, |port| {
+    let answers = surface.serve_while(&agents, HashMap::new(), |port| {
         talk(
             port,
             None,
@@ -289,7 +298,7 @@ fn a_command_before_the_handshake_is_refused() {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let answers = surface.serve_while(&agents, None, |port| {
+    let answers = surface.serve_while(&agents, HashMap::new(), |port| {
         talk(port, None, vec![frame(1, "session/list")]).expect("the socket answers")
     });
     assert!(
@@ -312,7 +321,7 @@ fn a_bad_frame_is_answered_and_the_connection_survives_it() {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let answers = surface.serve_while(&agents, None, |port| {
+    let answers = surface.serve_while(&agents, HashMap::new(), |port| {
         talk_mixed(
             port,
             vec![
@@ -425,7 +434,7 @@ fn a_turn_streams_and_its_ask_is_answered_in_band() {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let seen = surface.serve_while(&agents, None, |port| {
+    let seen = surface.serve_while(&agents, HashMap::new(), |port| {
         talk_until(
             port,
             vec![
@@ -476,7 +485,7 @@ fn a_turn_is_cancelled_over_the_same_socket_while_it_runs() {
         return;
     };
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let seen = surface.serve_while(&agents, None, |port| {
+    let seen = surface.serve_while(&agents, HashMap::new(), |port| {
         talk_until(
             port,
             vec![

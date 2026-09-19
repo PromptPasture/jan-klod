@@ -3,6 +3,11 @@
 //! `registry-mcp` consumes MCP servers; this makes the core one, so Claude Code,
 //! Codex, Goose and editors can call it the way they call anything else.
 //!
+//! # Credentials
+//!
+//! This transport carries no credential; the operator spawning the process is the principal.
+//! Authentication and authorization happen at the HTTP boundary (serve.rs), not on stdio.
+//!
 //! # Why there is no SDK here
 //!
 //! MCP's stdio transport is the framing this repository already speaks. The spec:

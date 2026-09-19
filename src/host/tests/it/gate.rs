@@ -30,6 +30,7 @@ use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 
 use crate::common;
+use std::collections::HashMap;
 
 // ── Phase 2 helpers ──────────────────────────────────────────────────────────
 
@@ -557,7 +558,7 @@ fn phase20_exit_gate_two_sessions_at_once() {
         return;
     };
 
-    let (streamed, answered) = surface.serve_while(&agents, None, |port| {
+    let (streamed, answered) = surface.serve_while(&agents, HashMap::new(), |port| {
         // A parks: the permission gate asks, and nothing answers yet.
         let parked = phase20_open_stream(port, "gate-a", "use bash to clean up");
         let asked = phase20_read_until(&parked, "event: prompt");
@@ -597,7 +598,7 @@ fn phase20_one_session_still_serialises_the_same_two_turns() {
         return;
     };
 
-    let finished_second = surface.serve_while(&agents, None, |port| {
+    let finished_second = surface.serve_while(&agents, HashMap::new(), |port| {
         let parked = phase20_open_stream(port, "same", "use bash to clean up");
         assert!(
             phase20_read_until(&parked, "event: prompt").contains("event: prompt"),
