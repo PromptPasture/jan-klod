@@ -37,15 +37,11 @@ jobs:
             os: darwin
             arch: arm64
             target: aarch64-apple-darwin
-          # `macos-13` was retired by GitHub and a job asking for it queues
-          # forever (both `v0.0.1` runs, 2026-09-19, #236). `macos-15-intel` is
-          # the current Intel label (`macos-26-intel` is the other); it is the
-          # last Intel generation GitHub hosts, so 26c (#239) decides whether the
-          # box keeps shipping for Intel Macs at all.
-          - runner: macos-15-intel
-            os: darwin
-            arch: x86_64
-            target: x86_64-apple-darwin
+          # No Intel macOS entry, on purpose: Intel Macs are not supported
+          # (decided 2026-09-19, #236, when GitHub's retirement of `macos-13`
+          # left the `v0.0.1` dry run queued forever on that leg). `install.sh`
+          # refuses `darwin/x86_64` with the same sentence, so a user hears it
+          # from the installer rather than from a 404.
 
     steps:
       - uses: actions/checkout@v4

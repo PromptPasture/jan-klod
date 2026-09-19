@@ -335,7 +335,9 @@ Each of these was proposed during the research for it and is refused, so that it
   than in a sales sentence.
 - **Windows.** The OS sandbox is still deferred ([#49](https://github.com/PromptPasture/jan-klod/issues/49)),
   so an enterprise install there runs approval-only and `require: true` refuses execution outright.
-  The box ships on macOS and Linux and says this plainly rather than degrading quietly.
+  The box ships on Linux and on Apple-silicon macOS — Intel Macs are not supported, decided
+  2026-09-19 when GitHub retired the last runner that built for them — and says this plainly
+  rather than degrading quietly.
 
 ## Open questions
 

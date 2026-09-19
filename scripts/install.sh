@@ -66,7 +66,10 @@ ARCH="$(uname -m)"
 case "${OS}/${ARCH}" in
   linux/x86_64)          ARCH="x86_64"  ;;
   linux/aarch64|linux/arm64) ARCH="aarch64" ;;
-  darwin/x86_64)         ARCH="x86_64"  ;;
+  darwin/x86_64)
+    echo "error: Intel Macs are not supported — no archive is published for darwin/x86_64" >&2
+    exit 1
+    ;;
   darwin/arm64|darwin/aarch64) ARCH="arm64" ;;
   linux/*|darwin/*)
     echo "error: unsupported architecture: ${ARCH}" >&2
