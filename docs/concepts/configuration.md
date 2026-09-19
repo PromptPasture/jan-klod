@@ -302,6 +302,28 @@ ever serve, not the one in front of you.
 A scope escape is never remembered either way: "always allow writes" covers
 writing files, not writing outside the workspace.
 
+### `persona`
+
+Injects personality text into the model's context at `select-model` phase, allowing per-turn customization of model behavior without altering the standing system prompt. **Off by default**: enable and configure personas when you want to shape model behavior through role or style guidance distinct from `interceptor-system`'s instructions.
+
+Personas are **data** — opaque text descriptions of preferred behavior — never code. Configuration specifies a map of named personas and a default selection:
+
+```yaml
+    persona:
+      enabled: true
+      personalities:                    # optional; map of persona names to descriptions
+        helpful: "You are helpful, concise and focused on solving the problem."
+        expert: "You are a technical expert with deep knowledge of the domain."
+        terse: "Answer in short, direct sentences. No examples unless asked."
+      default: helpful                  # optional; which persona to use (default "helpful")
+```
+
+When enabled, the persona configured as `default` (or the built-in "You are helpful, concise, and focused on solving the user's problem." if no `default` is specified or it references a missing persona) is injected as a distinct context block before model selection. The text reaches the token budget measurement at `select-context`, so its tokens are accounted for.
+
+If `personalities` is empty or absent and `enabled: true`, the built-in helpful persona is used. If a `default` references a non-existent persona, a warning is logged and the built-in text is used instead.
+
+This slice (30c) reads only the `default` persona. Per-principal persona selection (using the optional `principal` field in `user-turn`) is a later phase.
+
 ### `guardrails`
 
 Where `permission` asks whether an action may happen, `guardrails` looks at what

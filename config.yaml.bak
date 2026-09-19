@@ -96,15 +96,6 @@ extensions:
                                # no system message reaches the model at all.
       # prompt: |              # replaces the built-in text; empty string = none
       #   You are a terse reviewer. Never write files.
-    persona:
-      enabled: false           # select-model: injects personality data as context.
-                               # Off by default; enable and configure personas when
-                               # you want per-turn personality/instructions, distinct
-                               # from the standing system prompt.
-      # personalities:         # map of named personas; optional.
-      #   helpful: "You are helpful, concise and focused on solving the problem."
-      #   expert: "You are a technical expert with deep knowledge of the domain."
-      # default: helpful       # persona to use when none is selected; default "helpful".
     tool-selector:
       enabled: true            # select-tools: expose the active tool set (Slice 2d).
                                # On by default: without it the enabled tool.* below

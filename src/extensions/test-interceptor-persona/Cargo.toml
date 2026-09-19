@@ -1,0 +1,17 @@
+[package]
+name = "test-interceptor-persona"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "test guest for interceptor-persona: verifies persona configuration loading and injection."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

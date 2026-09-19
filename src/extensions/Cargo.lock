@@ -147,6 +147,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "interceptor-persona"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "interceptor-system"
 version = "0.1.0"
 dependencies = [
@@ -355,6 +363,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "test-interceptor-persona"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
 ]
 
 [[package]]
