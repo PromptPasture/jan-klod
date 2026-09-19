@@ -42,8 +42,10 @@ is host-side because it writes. *Zero agent behaviour* is true.
 
 What is missing is on the other side, and it is missing from the tracker as well as from the code:
 
-- **Nothing has ever been released.** `git tag` returns nothing. `scripts/install.sh` has nothing to
-  fetch. Phase 16 built signing and a registry index and then shipped every distribution's
+- **Nothing signed has ever been released.** Until 2026-09-19 `git tag` returned nothing; since then
+  there is one tag, `v0.0.1`, a technical pre-release made to run `release.yml` once before this
+  phase — unsigned, because no key exists, and invisible to `scripts/install.sh`, which asks
+  GitHub for the *latest* release and GitHub does not count a pre-release as one. Phase 16 built signing and a registry index and then shipped every distribution's
   `config.yaml` with `registry.trusted-keys` empty and no `registry.url` — the root `config.yaml`
   names one, the four under `scripts/distributions/` do not — so `ext search` and `ext install`
   refuse by construction
