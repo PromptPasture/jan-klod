@@ -13,8 +13,88 @@
 //! are preserved for `manager-agent-loop`; the core has no routing logic.
 
 use std::path::Path;
+use std::str::FromStr;
 
 use serde_json::{Map, Value};
+
+/// Output format for observability logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Human-readable text format.
+    Human,
+    /// Newline-delimited JSON format (JSONL).
+    Json,
+}
+
+impl FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "human" => Ok(Self::Human),
+            "json" => Ok(Self::Json),
+            _ => Err(format!(
+                "invalid output format '{s}': must be 'human' or 'json'"
+            )),
+        }
+    }
+}
+
+impl OutputFormat {
+    /// Return the string representation of this format.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Json => "json",
+        }
+    }
+}
+
+/// Observability configuration from the `observability:` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Observability {
+    /// Output format for logs: `human` (default) or `json`.
+    pub output_format: OutputFormat,
+}
+
+impl Observability {
+    /// Parse observability config from a top-level value.
+    ///
+    /// # Errors
+    /// Returns error if the value is not a string or is an invalid format.
+    pub fn from_value(value: &Value) -> Result<Self, ConfigError> {
+        let Value::Object(obs) = value else {
+            return Err(ConfigError::ObservabilityNotMap);
+        };
+
+        // Get the output-format key, defaulting to Human if absent
+        match obs.get("output-format") {
+            None => Ok(Self {
+                output_format: OutputFormat::Human,
+            }),
+            Some(format_value) => {
+                let Some(format_str) = format_value.as_str() else {
+                    return Err(ConfigError::ObservabilityFormatNotString);
+                };
+
+                OutputFormat::from_str(format_str)
+                    .map(|output_format| Self { output_format })
+                    .map_err(|_| ConfigError::InvalidOutputFormat {
+                        value: format_str.to_string(),
+                    })
+            }
+        }
+    }
+
+    /// Default observability configuration (human-readable format).
+    #[must_use]
+    pub const fn default() -> Self {
+        Self {
+            output_format: OutputFormat::Human,
+        }
+    }
+}
 
 /// One configured extension instance resolved from `config.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +132,8 @@ pub struct Config {
     /// Top-level keys excluding `extensions` (e.g. `providers`, `routing`),
     /// preserved for agent-loop. Always an object.
     pub agent: Value,
+    /// Observability configuration (structured logging format).
+    pub observability: Observability,
 }
 
 impl Config {
@@ -105,10 +187,19 @@ impl Config {
             .unwrap_or_else(|| Value::Object(Map::new()));
         let instances = parse_instances(extensions)?;
         validate(&instances)?;
+
+        // Parse observability configuration or use default.
+        let observability = if let Some(obs_value) = root.remove("observability") {
+            Observability::from_value(&obs_value)?
+        } else {
+            Observability::default()
+        };
+
         // Whatever remains at the top level is opaque agent-behaviour config.
         Ok(Self {
             instances,
             agent: Value::Object(root),
+            observability,
         })
     }
 
@@ -290,5 +381,20 @@ pub enum ConfigError {
     UnterminatedExpansion {
         /// The instance whose config contains the unterminated placeholder.
         id: String,
+    },
+    /// `observability:` section is not a mapping.
+    #[error("observability: must be a mapping")]
+    ObservabilityNotMap,
+    /// `observability:` section is missing `output-format` key.
+    #[error("observability: missing required key 'output-format'")]
+    ObservabilityMissingFormat,
+    /// `observability.output-format` is not a string.
+    #[error("observability: 'output-format' must be a string")]
+    ObservabilityFormatNotString,
+    /// `observability.output-format` has an invalid value.
+    #[error("observability: invalid output format '{value}' (allowed: 'human', 'json')")]
+    InvalidOutputFormat {
+        /// The invalid format value.
+        value: String,
     },
 }

@@ -24,7 +24,7 @@ Core runs as a **standalone user-privilege process** (not a daemon) and is **hea
 - WASM host (Wasmtime) — capability sandbox for extensions
 - Event bus (extension-to-extension, observation-only)
 - **Agent loop mechanism** — thin conductor (`stream → tools → loop`) + **interceptor dispatch** (see [Agent loop architecture](#agent-loop-architecture))
-- Observability (structured logging, Prometheus, OpenTelemetry)
+- Observability (structured logging)
 
 **Zero agent behaviour in core.** The loop is pure *mechanism* — no policy. Every decision (loop entry, model, tools, history trim, tool permit) comes from sandboxed **interceptor** extensions. A core-only boot with no interceptors runs bare `stream → tools → loop`. UIs are separate clients, and the kernel crate holds no transport at all: REST, stdio JSON-RPC, ACP and MCP live in the `jan-klod-host` binary crate that serves them ([#179](https://github.com/PromptPasture/jan-klod/issues/179)), and the Telegram poller sits beside them until [#173](https://github.com/PromptPasture/jan-klod/issues/173) makes it an extension.
 

@@ -238,6 +238,25 @@ Two paths are granted to every confined command whatever `writable` says, becaus
 
 Two configurations refuse rather than degrade, both reported at boot: `require: true` without a backend, and an unreadable `sandbox` block (unrecognised `mode`, or `writable` leaving workspace). Both deny `host-process` — an unhonoured policy must not read as a grant.
 
+## Observability (`observability:`)
+
+A top-level block controlling how the host emits structured logging. Default-deny: no `observability:` block uses the default human-readable format.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `output-format` | Emit format: `json` (newline-delimited JSON on stderr) or `human` (human-readable text on stderr). Invalid values are refused at boot with the allowed values named | `human` |
+
+**JSON output format:** Each log record is a complete JSON object on a single line (JSONL). Records include the event level, component name, message, and any key-value fields from the guest or host call. Example:
+
+```json
+{"timestamp":"2026-09-20T10:30:45.123456Z","level":"info","component":"tool-shell","message":"command completed","exit_code":0}
+```
+
+**Human output format:** Logs are emitted in a human-readable format optimized for terminal viewing and manual inspection. This is the default for backward compatibility.
+
+**Invalid values are rejected at boot** with a clear error message naming the key, the invalid value, and the allowed values (`json`, `human`).
+
+
 ## Interceptors
 
 Interceptors (`interceptor.*` category) are extensions with an `enabled` flag. Config **only enables/disables** them — never orders them. Dispatch order is **structural**: across phases by `phase` enum order, within a phase by extension **load order** (see [`wit/interceptor.wit`](contracts.md) and [Roadmap → Phase 2](roadmap.md#phase-2--first-real-value-the-agent-loop)). No config key sequences steps, so ordering can't drift.

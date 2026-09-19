@@ -427,6 +427,14 @@ execution:
                               # platform with no backend, that means nothing
                               # runs.
 
+
+# Observability configuration: controls how the host emits structured logging.
+# `output-format` controls the format of log output on stderr:
+#   `human` (default) — human-readable text format, optimized for terminal viewing
+#   `json` — newline-delimited JSON (JSONL) with structured data
+observability:
+  output-format: human  # or `json`
+
 # Which provider answers interceptors' model calls (the intent router's
 # simple-vs-agentic classification). Names an instance from
 # `extensions.provider` above; omit to use the head of the chain below.

@@ -334,7 +334,9 @@ fn every_config_key_is_one_the_runtime_reads() {
     //                `ext search` reads. Distinct from `extensions.registry`,
     //                which is the category above; they share a word and
     //                nothing else.
-    const CONSUMED_TOP_LEVEL: [&str; 10] = [
+    //   observability — Config::from_path, the output-format setting that the
+    //                   tracing subscriber reads at boot
+    const CONSUMED_TOP_LEVEL: [&str; 11] = [
         "allow-unmanifested",
         "extensions",
         "workspace",
@@ -345,6 +347,7 @@ fn every_config_key_is_one_the_runtime_reads() {
         "storage",
         "limits",
         "registry",
+        "observability",
     ];
 
     let config = std::fs::read_to_string(common::repo_root().join("config.yaml"))

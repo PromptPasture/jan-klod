@@ -15,6 +15,7 @@
 //!   ext-dir      directory of *.wasm    (default: ext)
 //!   bind         host:port to listen on (default: 127.0.0.1:8787)
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -24,6 +25,8 @@ use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 use jk_session::event_log::{verify_chain, ChainStatus};
 use jk_session::store::Store;
+use tracing::Level;
+use tracing_subscriber::fmt::time::SystemTime;
 
 /// Where the installed copies of `config.yaml` and `ext/` live, relative to the
 /// gateway binary: `<prefix>/bin/jan-klod-gateway` → `<prefix>/share/jan-klod/`.
@@ -51,8 +54,51 @@ fn resolve_default(name: &str) -> String {
     }
 }
 
+/// Initialize the tracing subscriber based on config.yaml.
+///
+/// Must be called before any extensions are loaded. Installs a global
+/// subscriber that emits structured logs in the format specified in the config.
+fn init_tracing(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Load config to get observability settings.
+    let config = Config::from_path(config_path)?;
+
+    // Build and install the subscriber based on the configured output format.
+    match config.observability.output_format {
+        jan_klod_config::OutputFormat::Json => {
+            // JSON output: newline-delimited JSON on stderr
+            tracing_subscriber::fmt()
+                .json()
+                .with_writer(io::stderr)
+                .with_timer(SystemTime)
+                .with_max_level(Level::DEBUG)
+                .with_target(true)
+                .init();
+        }
+        jan_klod_config::OutputFormat::Human => {
+            // Human-readable text on stderr
+            tracing_subscriber::fmt()
+                .pretty()
+                .with_writer(io::stderr)
+                .with_timer(SystemTime)
+                .with_max_level(Level::DEBUG)
+                .with_target(true)
+                .init();
+        }
+    }
+
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Initialize tracing subscriber before any extensions load.
+    let config_path = resolve_default("config.yaml");
+    if let Err(err) = init_tracing(&config_path) {
+        eprintln!("jan-klod: failed to initialize observability: {err}");
+        return ExitCode::FAILURE;
+    }
+
     match args.first().map(String::as_str) {
         Some("serve") => serve(&args[1..]),
         Some("rpc") => rpc(&args[1..]),
