@@ -1,0 +1,17 @@
+[package]
+name = "interceptor-principal-probe"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "A guest that tests principal boundary: receives principal at before-loop, can route based on it, existing guests that ignore it continue to work."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

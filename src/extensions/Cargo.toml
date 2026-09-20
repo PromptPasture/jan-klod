@@ -15,6 +15,7 @@ members = [
     "interceptor-task-router",
     "interceptor-system",
     "interceptor-persona",
+    "interceptor-principal-probe",
     "test-interceptor-persona",
     "tool-proc-probe",
     "tool-escape-probe",

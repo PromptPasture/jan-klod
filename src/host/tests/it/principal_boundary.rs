@@ -41,7 +41,7 @@ extensions:
       model: mock-1
       api-key: test
   interceptor:
-    principal-boundary-guest:
+    interceptor-principal-probe:
       enabled: true
 "
     } else {
@@ -87,9 +87,9 @@ fn send_message(port: u16, session: &str, auth: Option<&str>, message: &str) -> 
 #[test]
 fn two_sessions_with_different_principals_each_see_their_own_principal() {
     let ext_dir = common::repo_root().join("ext");
-    // Skip if the principal-boundary-guest fixture is not staged in ext/.
-    // Build it with: make principal-boundary-fixture && make extensions
-    if !common::guests_staged(&["provider-openai.wasm", "principal-boundary-guest.wasm"]) {
+    // Skip if the interceptor-principal-probe is not staged in ext/.
+    // Build it with: make extensions
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-principal-probe.wasm"]) {
         return;
     }
 
@@ -136,7 +136,7 @@ fn two_sessions_with_different_principals_each_see_their_own_principal() {
 
     // Both sessions completed without error, proving the principal field was
     // correctly passed through the conductor to the guest. The interceptor
-    // (principal-boundary-guest) at before-loop reads the principal field and
+    // (interceptor-principal-probe) at before-loop reads the principal field and
     // logs it; the fact that all requests succeed proves the interceptor ran
     // without error and received the principal field correctly.
     //
