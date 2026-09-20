@@ -10,6 +10,7 @@
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod persona_verification {
     use serde_json::Value;
+    use std::collections::HashMap;
 
     /// Check if interceptor-persona is configured as enabled.
     pub fn is_persona_enabled(config_json: &str) -> bool {
@@ -36,25 +37,106 @@ mod persona_verification {
         false
     }
 
-    /// Verify persona injection: assert text is present when enabled, absent when disabled.
+    /// Extract personas map and default name from config.
+    /// Returns (personalities_map, default_name).
+    pub fn extract_personas(config_json: &str) -> (HashMap<String, String>, String) {
+        let mut personalities = HashMap::new();
+        let mut default_name = "helpful".to_string();
+
+        if let Ok(config_value) = serde_json::from_str::<Value>(config_json) {
+            if let Some(config_obj) = config_value.as_object() {
+                if let Some(extensions) = config_obj.get("extensions") {
+                    if let Some(extensions_obj) = extensions.as_object() {
+                        if let Some(interceptor) = extensions_obj.get("interceptor") {
+                            if let Some(interceptor_obj) = interceptor.as_object() {
+                                if let Some(persona) = interceptor_obj.get("persona") {
+                                    if let Some(persona_obj) = persona.as_object() {
+                                        // Extract personalities map
+                                        if let Some(personas_value) =
+                                            persona_obj.get("personalities")
+                                        {
+                                            if let Some(personas_obj) = personas_value.as_object() {
+                                                for (name, desc) in personas_obj {
+                                                    if let Some(description) = desc.as_str() {
+                                                        personalities.insert(
+                                                            name.clone(),
+                                                            description.to_string(),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // Extract default name
+                                        if let Some(default_value) = persona_obj.get("default") {
+                                            if let Some(name) = default_value.as_str() {
+                                                default_name = name.to_string();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        (personalities, default_name)
+    }
+
+    /// Verify persona injection: assert the configured persona text is present when enabled,
+    /// and absent when disabled. Also verifies that only the configured persona is injected.
     /// Returns Ok(()) if assertion passes, Err with message if assertion fails.
     pub fn verify_injection(config_json: &str, messages: &[String]) -> Result<(), String> {
         let enabled = is_persona_enabled(config_json);
+        let (personalities, default_name) = extract_personas(config_json);
 
-        let has_persona = messages.iter().any(|msg| msg.starts_with("## Persona"));
+        // Combine all message contents
+        let all_message_content = messages.join("\n");
+        let has_persona_section = all_message_content.contains("## Persona");
 
-        if enabled && !has_persona {
+        if enabled && !has_persona_section {
             return Err(
-                "ASSERTION FAILED: persona enabled in config but no '## Persona' message found in request"
+                "ASSERTION FAILED: persona enabled in config but no '## Persona' section found in request"
                     .to_string(),
             );
         }
 
-        if !enabled && has_persona {
+        if !enabled && has_persona_section {
             return Err(
-                "ASSERTION FAILED: persona disabled in config but '## Persona' message was injected"
+                "ASSERTION FAILED: persona disabled in config but '## Persona' section was injected"
                     .to_string(),
             );
+        }
+
+        // When enabled, verify the configured persona text is present
+        if enabled {
+            // Get the text of the configured default persona
+            let configured_text = personalities
+                .get(&default_name)
+                .cloned()
+                .unwrap_or_else(|| {
+                    // If no custom personas or default not found, should be the built-in default
+                    "You are helpful, concise, and focused on solving the user's problem."
+                        .to_string()
+                });
+
+            if !all_message_content.contains(&configured_text) {
+                return Err(format!(
+                    "ASSERTION FAILED: persona '{}' text not found in request. Expected: '{}'",
+                    default_name, configured_text
+                ));
+            }
+
+            // Verify that other personas' text is NOT present
+            for (persona_name, persona_text) in &personalities {
+                if persona_name != &default_name && all_message_content.contains(persona_text) {
+                    return Err(format!(
+                        "ASSERTION FAILED: non-configured persona '{}' text found in request. Only '{}' should be injected.",
+                        persona_name, default_name
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -97,13 +179,17 @@ mod persona_verification {
         }
 
         #[test]
-        fn test_verification_enabled_with_persona_present() {
+        fn test_verification_enabled_with_configured_persona_present() {
             let config = r#"{
                 "extensions": {
                     "interceptor": {
                         "persona": {
                             "enabled": true,
-                            "default": "expert"
+                            "default": "expert",
+                            "personalities": {
+                                "expert": "You are a technical expert.",
+                                "helpful": "You are helpful and concise."
+                            }
                         }
                     }
                 }
@@ -119,12 +205,60 @@ mod persona_verification {
                     "interceptor": {
                         "persona": {
                             "enabled": true,
-                            "default": "expert"
+                            "default": "expert",
+                            "personalities": {
+                                "expert": "You are a technical expert."
+                            }
                         }
                     }
                 }
             }"#;
             let messages = vec!["Some other message".to_string()];
+            assert!(verify_injection(config, &messages).is_err());
+        }
+
+        #[test]
+        fn test_verification_enabled_with_wrong_persona_text_fails() {
+            let config = r#"{
+                "extensions": {
+                    "interceptor": {
+                        "persona": {
+                            "enabled": true,
+                            "default": "expert",
+                            "personalities": {
+                                "expert": "You are a technical expert.",
+                                "helpful": "You are helpful and concise."
+                            }
+                        }
+                    }
+                }
+            }"#;
+            // Message has a persona section but with the wrong persona's text
+            let messages = vec!["## Persona\nYou are helpful and concise.".to_string()];
+            assert!(verify_injection(config, &messages).is_err());
+        }
+
+        #[test]
+        fn test_verification_enabled_with_non_configured_persona_present_fails() {
+            let config = r#"{
+                "extensions": {
+                    "interceptor": {
+                        "persona": {
+                            "enabled": true,
+                            "default": "expert",
+                            "personalities": {
+                                "expert": "You are a technical expert.",
+                                "helpful": "You are helpful and concise."
+                            }
+                        }
+                    }
+                }
+            }"#;
+            // Message has the correct persona text AND another persona's text
+            let messages = vec![
+                "## Persona\nYou are a technical expert.".to_string(),
+                "Additional context: You are helpful and concise.".to_string(),
+            ];
             assert!(verify_injection(config, &messages).is_err());
         }
 
@@ -156,6 +290,28 @@ mod persona_verification {
             }"#;
             let messages = vec!["## Persona\nYou are helpful.".to_string()];
             assert!(verify_injection(config, &messages).is_err());
+        }
+
+        #[test]
+        fn test_verification_invalid_default_name_falls_back_to_builtin() {
+            let config = r#"{
+                "extensions": {
+                    "interceptor": {
+                        "persona": {
+                            "enabled": true,
+                            "default": "nonexistent",
+                            "personalities": {
+                                "helpful": "You are helpful and concise."
+                            }
+                        }
+                    }
+                }
+            }"#;
+            // When default persona name doesn't exist, should fall back to built-in
+            let builtin_text =
+                "You are helpful, concise, and focused on solving the user's problem.";
+            let messages = vec![format!("## Persona\n{}", builtin_text)];
+            assert!(verify_injection(config, &messages).is_ok());
         }
 
         #[test]
