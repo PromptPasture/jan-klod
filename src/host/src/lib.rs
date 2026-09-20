@@ -16,6 +16,7 @@ pub mod rpc;
 pub mod serve;
 pub mod session_thread;
 pub mod sessions;
+pub mod setup;
 pub mod telegram;
 // Private: the socket is reached through `serve`'s router, never named by
 // a caller. `pub` items inside stay crate-visible.

@@ -4,8 +4,182 @@
 //! printing what would be configured without writing any files.
 
 use std::fs;
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::Command;
+
+/// Configuration strategy for a capability group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum ConfigStrategy {
+    /// No user-configurable options; merge extensions with their defaults.
+    Nothing,
+    /// Group has options but setup doesn't prompt; print config keys in manual format.
+    Manual,
+    /// Group has options; setup asks questions interactively.
+    Prompt(Vec<Question>),
+}
+
+/// A single question to ask when a group uses the Prompt strategy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub struct Question {
+    /// Configuration key path, e.g., "providers.openai.api-key"
+    pub name: String,
+    /// The question text to display to the user
+    pub prompt: String,
+    /// Type of answer expected
+    pub kind: QuestionType,
+    /// Default answer when stdin closes (always safe: no/false/refuse)
+    pub default: String,
+}
+
+/// Type of answer for a question.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum QuestionType {
+    /// Boolean yes/no question
+    Bool,
+    /// Free-form text response
+    String,
+    /// Multiple choice; holds the list of options
+    Choice(Vec<String>),
+}
+
+/// A capability group with its name, members, and configuration strategy.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct Group {
+    /// Name of the capability group.
+    pub name: String,
+    /// List of guest/extension names in this group.
+    pub guests: Vec<String>,
+    /// Configuration strategy for this group.
+    pub strategy: ConfigStrategy,
+}
+
+/// Terminal-based driver for prompting questions during setup.
+#[allow(dead_code)]
+pub struct SetupDriver;
+
+impl SetupDriver {
+    /// Ask a question and return the user's answer, or the default if stdin closes.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn ask(question_text: &str, default: &str, options: &[&str]) -> String {
+        print!("{question_text}");
+        if !options.is_empty() {
+            print!(" [{}]", options.join(" / "));
+        }
+        print!(" (default: {default}): ");
+
+        let _ = io::stdout().flush();
+
+        let stdin = io::stdin();
+        let mut line = String::new();
+        let result = stdin.lock().read_line(&mut line);
+        match result {
+            Ok(0) | Err(_) => default.to_string(), // EOF or error: return default
+            Ok(_) => {
+                let trimmed = line.trim().to_string();
+                if trimmed.is_empty() {
+                    default.to_string()
+                } else {
+                    trimmed
+                }
+            }
+        }
+    }
+}
+
+/// Apply a configuration strategy for a group, printing or collecting configuration.
+#[allow(dead_code)]
+pub fn apply_group_strategy(group: &Group) -> ConfigResult {
+    match &group.strategy {
+        ConfigStrategy::Nothing => {
+            println!("Group: {}", group.name);
+            println!(
+                "  No configuration needed for group '{}' — the extensions are enabled by default.",
+                group.name
+            );
+            ConfigResult {
+                group_name: group.name.clone(),
+                config: serde_json::json!({}),
+            }
+        }
+        ConfigStrategy::Manual => {
+            println!("Group: {}", group.name);
+            println!("  Add under extensions:");
+            // This is a simple example; real implementation would need to know
+            // what keys to print for the group's extensions
+            for guest in &group.guests {
+                println!("    # Guest: {guest}");
+            }
+            ConfigResult {
+                group_name: group.name.clone(),
+                config: serde_json::json!({}),
+            }
+        }
+        ConfigStrategy::Prompt(questions) => {
+            println!("Group: {}", group.name);
+            let mut answers = serde_json::json!({});
+
+            for question in questions {
+                let options: Vec<&str> = match &question.kind {
+                    QuestionType::Bool => vec!["yes", "no"],
+                    QuestionType::Choice(opts) => opts.iter().map(String::as_str).collect(),
+                    QuestionType::String => vec![],
+                };
+
+                let answer = SetupDriver::ask(&question.prompt, &question.default, &options);
+                set_nested_json(&mut answers, &question.name, &answer);
+            }
+
+            ConfigResult {
+                group_name: group.name.clone(),
+                config: answers,
+            }
+        }
+    }
+}
+
+/// Result of applying a configuration strategy.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct ConfigResult {
+    /// Name of the group that was configured.
+    pub group_name: String,
+    /// Configuration dictionary collected from the strategy.
+    pub config: serde_json::Value,
+}
+
+/// Set a value in a nested JSON object using dot-notation path.
+#[allow(dead_code)]
+fn set_nested_json(obj: &mut serde_json::Value, path: &str, value: &str) {
+    let parts: Vec<&str> = path.split('.').collect();
+
+    if parts.is_empty() {
+        return;
+    }
+
+    let mut current = obj;
+
+    for (i, &part) in parts.iter().enumerate() {
+        if i == parts.len() - 1 {
+            // Last part: set the value
+            if !current.is_object() {
+                *current = serde_json::json!({});
+            }
+            current[part] = serde_json::json!(value);
+        } else {
+            // Intermediate part: navigate or create
+            if !current[part].is_object() {
+                current[part] = serde_json::json!({});
+            }
+            current = &mut current[part];
+        }
+    }
+}
 
 /// Run the setup audit for a given distribution.
 ///
