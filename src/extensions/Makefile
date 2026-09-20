@@ -18,7 +18,7 @@ include $(ROOT)/versions.mk
 # Rust guests, by directory name (= staged ext/<name>.wasm). Add a guest here and
 # it gets `make <name>` + a slot in `all`/`clean` for free.
 # The cargo artifact swaps '-' for '_' (e.g. tool-fs -> tool_fs.wasm).
-GUESTS := interceptor-persona provider-openai provider-anthropic registry-skills registry-mcp interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-tool-selector interceptor-context interceptor-task-router interceptor-system tool-proc-probe tool-escape-probe tool-fs tool-shell tool-edit tool-find tool-git tool-fetch tool-web-search tool-hello tool-ask-probe tool-plan tool-proc host-secrets-probe
+GUESTS := host-secrets-probe interceptor-context interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-persona interceptor-system interceptor-task-router interceptor-tool-selector provider-anthropic provider-openai registry-mcp registry-skills tool-ask-probe tool-edit tool-escape-probe tool-fetch tool-find tool-fs tool-git tool-hello tool-memory tool-plan tool-proc tool-proc-probe tool-shell tool-web-search
 
 # Shared cargo-deny policy (repo root) — the same file the host workspace uses.
 DENY_CONFIG := $(ROOT)/deny.toml
@@ -35,7 +35,7 @@ LIBS := guest-fs
 # behind `#[cfg(target_arch = "wasm32")]`, so a host `cargo test` compiles only
 # the pure logic modules (e.g. the intent router) + their `#[cfg(test)]` tests —
 # no wasm target required. Add a guest here once it carries such tests.
-TESTABLE_GUESTS := test-interceptor-persona tool-plan interceptor-tool-selector interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-context interceptor-task-router interceptor-system tool-fs tool-shell tool-edit tool-find tool-git tool-fetch tool-web-search
+TESTABLE_GUESTS := interceptor-context interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-system interceptor-task-router interceptor-tool-selector test-interceptor-persona tool-edit tool-fetch tool-find tool-fs tool-git tool-memory tool-plan tool-shell tool-web-search
 
 .PHONY: all stage manifests clean test clippy audit deny go-supply-chain spike-deps spike-guest ts-guest py-guest $(GUESTS)
 

@@ -27,6 +27,7 @@ members = [
     "tool-web-search",
     "tool-ask-probe",
     "tool-hello",
+    "tool-memory",
     "tool-plan",
     "tool-proc",
     "host-secrets-probe",
@@ -43,6 +44,7 @@ wit-bindgen = "0.58"
 serde_json = "1"
 whatlang = "0.16"
 regex = "1"
+chrono = "0.4"
 
 # Linting policy, declared once and inherited by every guest via `lints.workspace =
 # true`. Same strict policy as the host workspace (src/Cargo.toml) — the guests
