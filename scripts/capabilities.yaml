@@ -1,0 +1,104 @@
+version: "0.1.0"
+description: "Capability groups offered by setup and the Configurator"
+
+groups:
+  reasoning:
+    order: 1
+    description: "Core agent reasoning: turn routing, context management, tool selection, permissions"
+    required: true
+    members:
+      - interceptor-intent-router
+      - interceptor-task-router
+      - interceptor-context
+      - interceptor-system
+      - interceptor-tool-selector
+      - interceptor-permission
+
+  content-guard:
+    order: 10
+    description: "Content filtering: redaction of secrets and blocked patterns"
+    required: false
+    members:
+      - interceptor-guardrails
+    notes: "Awaits interceptor-guardrails guest to be built and shipped in the registry"
+
+  provider-openai:
+    order: 20
+    description: "OpenAI / OpenAI-compatible endpoint"
+    required: false
+    members:
+      - provider-openai
+    notes: "First-party provider; one provider always required (mutually exclusive with provider-anthropic)"
+
+  provider-anthropic:
+    order: 21
+    description: "Anthropic Models API"
+    required: false
+    members:
+      - provider-anthropic
+    notes: "First-party provider; mutually exclusive with OpenAI if only one provider selected"
+
+  file-tools:
+    order: 30
+    description: "Workspace file read and edit"
+    required: false
+    members:
+      - tool-fs
+      - tool-edit
+      - tool-find
+    notes: "Bundled; requires reasoning; all three or none"
+
+  version-control:
+    order: 40
+    description: "Git repository inspection (read-only)"
+    required: false
+    members:
+      - tool-git
+    notes: "Requires execution: { enabled: true }"
+
+  shell-access:
+    order: 50
+    description: "Arbitrary command execution"
+    required: false
+    members:
+      - tool-shell
+      - tool-proc-probe
+    notes: "Requires execution: { enabled: true }; dangerous; gated by approval or OS sandbox"
+
+  web-fetch:
+    order: 60
+    description: "Fetch public HTTP(S) URLs"
+    required: false
+    members:
+      - tool-fetch
+
+  plan-analyze:
+    order: 70
+    description: "Planning and code structure analysis"
+    required: false
+    members:
+      - tool-plan
+    notes: "Awaits tool-plan guest to be built and shipped in the registry"
+
+  ecosystem:
+    order: 80
+    description: "Skills and MCP server integration"
+    required: false
+    members:
+      - registry-skills
+      - registry-mcp
+
+# Guests not yet shipped: built but not yet in the distributed registry, or Phase 30 planned guests
+pending:
+  interceptor-guardrails:
+    description: "Content filtering: redaction of secrets and blocked patterns (built, not yet shipped)"
+  tool-plan:
+    description: "Planning and code structure analysis (built, not yet shipped)"
+  tool-memory:
+    description: "Episodic recall over host-storage, run-scoped"
+  tool-web-search:
+    description: "Web search over host-http"
+  interceptor-persona:
+    description: "Personality as config data"
+  agent:
+    description: "Sub-agents via ACP (category, not a single extension)"

@@ -20,5 +20,8 @@ examples = []
 name = "dump"
 required-features = ["examples"]
 
+[[test]]
+name = "capabilities_validation"
+
 [lints]
 workspace = true

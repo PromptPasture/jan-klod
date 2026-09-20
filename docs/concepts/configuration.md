@@ -398,6 +398,20 @@ until it is fixed rather than leaving a guardrail that is silently absent.
 Full rule reference, including how the lists compose:
 [`src/extensions/interceptor-guardrails/README.md`](../../src/extensions/interceptor-guardrails/README.md).
 
+## Capability groups
+
+`scripts/capabilities.yaml` defines groups of extensions that work together, offered by `setup` and the Configurator. A group bundles related extensions with their configuration overrides, allowing operators to enable multiple extensions at once with consistent settings.
+
+Each group names:
+- Its semantic meaning (e.g. "Core agent reasoning", "Content filtering")
+- The extensions it activates
+- Dependencies or requirements (e.g. execution mode, storage backend)
+- Order in the setup menu
+
+Groups are **data only** — parsed at `setup` startup or Configurator load time. When an operator selects multiple groups, their extensions merge by union, with per-instance naming resolving conflicts when two groups enable the same extension with different config.
+
+Phase 30 guests not yet built (e.g. `tool-memory`, `tool-web-search`, `interceptor-persona`) are documented in a `pending` section and do not appear in the menu until they are built.
+
 ## Inspecting a config
 
 `make config` resolves the repo's `config.yaml` and prints the plan (instance → wasm), exercising the loader:
