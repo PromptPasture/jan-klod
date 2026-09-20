@@ -1205,6 +1205,27 @@ fn telegram(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Load config to extract telegram.allowed-senders (#257).
+    // If telegram section exists, use its allowlist (empty by default denies all).
+    // If missing, allow all (backward compat).
+    let allowed_senders_opt = match Config::from_path(&config_path) {
+        Ok(config) => config
+            .agent
+            .get("telegram")
+            .and_then(|telegram_value| telegram_value.get("allowed-senders"))
+            .and_then(|senders_value| senders_value.as_array())
+            .map(|senders_array| {
+                senders_array
+                    .iter()
+                    .filter_map(serde_json::Value::as_i64)
+                    .collect::<Vec<_>>()
+            }),
+        Err(err) => {
+            eprintln!("jan-klod: config load failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -1246,7 +1267,13 @@ fn telegram(args: &[String]) -> ExitCode {
     let mut offset = 0;
     let mut consecutive_errors: u32 = 0;
     loop {
-        match jan_klod_host::telegram::poll_once(&mut agent, &fetch, &token, offset) {
+        match jan_klod_host::telegram::poll_once(
+            &mut agent,
+            &fetch,
+            &token,
+            offset,
+            allowed_senders_opt.as_deref(),
+        ) {
             Ok(next) => {
                 consecutive_errors = 0;
                 offset = next;

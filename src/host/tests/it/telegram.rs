@@ -48,7 +48,7 @@ extensions:
                 "ok": true,
                 "result": [{
                     "update_id": 100,
-                    "message": { "message_id": 1, "chat": { "id": 555 }, "text": "hello there" }
+                    "message": { "message_id": 1, "from": { "id": 123 }, "chat": { "id": 555 }, "text": "hello there" }
                 }]
             });
             Ok(updates.to_string().into_bytes())
@@ -59,7 +59,7 @@ extensions:
         }
     };
 
-    let next = poll_once(&mut agent, &fetch, "TEST-TOKEN", 0).expect("poll succeeds");
+    let next = poll_once(&mut agent, &fetch, "TEST-TOKEN", 0, None).expect("poll succeeds");
     assert_eq!(next, 101, "offset advances past the handled update");
 
     let sent = sent.into_inner();
@@ -149,12 +149,12 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
             let result = if n == 0 {
                 serde_json::json!([{
                     "update_id": 100,
-                    "message": { "chat": { "id": 555 }, "text": "create note.txt" }
+                    "message": { "from": { "id": 123 }, "chat": { "id": 555 }, "text": "create note.txt" }
                 }])
             } else if n == 1 {
                 serde_json::json!([
-                    { "update_id": 101, "message": { "chat": { "id": 555 }, "text": "yes" } },
-                    { "update_id": 102, "message": { "chat": { "id": 777 }, "text": "hi" } }
+                    { "update_id": 101, "message": { "from": { "id": 123 }, "chat": { "id": 555 }, "text": "yes" } },
+                    { "update_id": 102, "message": { "from": { "id": 456 }, "chat": { "id": 777 }, "text": "hi" } }
                 ])
             } else {
                 serde_json::json!([])
@@ -169,10 +169,96 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
         }
     };
 
-    let next = poll_once(&mut agent, &fetch, "TEST-TOKEN", 0).expect("poll succeeds");
+    let next = poll_once(&mut agent, &fetch, "TEST-TOKEN", 0, None).expect("poll succeeds");
 
     let sent = sent.into_inner();
     assert_confirmation_flow(&sent, next, &dir);
+}
+
+/// Telegram sender allowlist: unlisted sender is refused before session creation (#257).
+/// Listed sender drives a turn normally. The principal is available for downstream.
+#[test]
+fn telegram_sender_allowlist_refuses_unlisted_and_accepts_listed() {
+    let ext_dir = common::repo_root().join("ext");
+    if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("jk-tg-allowlist-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        "
+extensions:
+  provider:
+    openai:
+      enabled: true
+      base-url: http://mock/v1
+      model: mock-1
+      api-key: test
+  interceptor:
+    intent-router:
+      enabled: true
+",
+    )
+    .unwrap();
+
+    let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
+    let factory = || common::canned_http("pong");
+    let mut agent = runtime.build_agent(&factory).expect("agent boots");
+
+    // Allowlist only sender 999.
+    let allowed_senders = vec![999i64];
+
+    // Injected HTTP: getUpdates → two messages (one unlisted, one listed).
+    let sent: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let fetch = |_method: &str, url: &str, _headers: &[(&str, &str)], body: Option<&[u8]>| {
+        if url.contains("getUpdates") {
+            let updates = serde_json::json!({
+                "ok": true,
+                "result": [
+                    {
+                        "update_id": 100,
+                        "message": { "from": { "id": 888 }, "chat": { "id": 555 }, "text": "unlisted" }
+                    },
+                    {
+                        "update_id": 101,
+                        "message": { "from": { "id": 999 }, "chat": { "id": 666 }, "text": "hello" }
+                    }
+                ]
+            });
+            Ok(updates.to_string().into_bytes())
+        } else {
+            sent.borrow_mut()
+                .push(String::from_utf8_lossy(body.unwrap()).to_string());
+            Ok(br#"{"ok":true}"#.to_vec())
+        }
+    };
+
+    let next = poll_once(&mut agent, &fetch, "TEST-TOKEN", 0, Some(&allowed_senders))
+        .expect("poll succeeds");
+    assert_eq!(next, 102, "offset advances past both updates");
+
+    let sent = sent.into_inner();
+    // Only the listed sender (999) should get a reply; unlisted sender (888) should not.
+    assert_eq!(
+        sent.len(),
+        1,
+        "exactly one reply sent (unlisted sender refused)"
+    );
+    assert!(
+        sent[0].contains("\"chat_id\":666"),
+        "reply targets the listed sender's chat: {}",
+        sent[0]
+    );
+    assert!(
+        sent[0].contains("pong"),
+        "reply carries the answer: {}",
+        sent[0]
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// Config with provider, interceptors, tool.fs jailed to dir.

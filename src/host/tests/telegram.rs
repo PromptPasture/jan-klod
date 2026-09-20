@@ -7,7 +7,7 @@ fn updates_body(update_id: i64, chat_id: i64, text: &str) -> Vec<u8> {
         "ok": true,
         "result": [{
             "update_id": update_id,
-            "message": { "message_id": 1, "chat": { "id": chat_id }, "text": text }
+            "message": { "message_id": 1, "from": { "id": 123 }, "chat": { "id": chat_id }, "text": text }
         }]
     })
     .to_string()
@@ -21,6 +21,7 @@ fn parse_updates_extracts_text_messages() {
         updates,
         vec![Update {
             update_id: 10,
+            sender_id: 123,
             chat_id: 42,
             text: "hello".into()
         }]
@@ -33,13 +34,14 @@ fn parse_updates_skips_non_text_and_bad_shapes() {
         "result": [
             { "update_id": 1, "message": { "chat": { "id": 5 } } },
             { "update_id": 2, "edited_message": { "text": "x" } },
-            { "update_id": 3, "message": { "chat": { "id": 7 }, "text": "ok" } }
+            { "update_id": 3, "message": { "from": { "id": 456 }, "chat": { "id": 7 }, "text": "ok" } }
         ]
     })
     .to_string();
     let updates = parse_updates(body.as_bytes());
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].chat_id, 7);
+    assert_eq!(updates[0].sender_id, 456);
 }
 
 #[test]
@@ -47,11 +49,13 @@ fn next_offset_is_one_past_the_highest_id() {
     let updates = vec![
         Update {
             update_id: 4,
+            sender_id: 123,
             chat_id: 1,
             text: "a".into(),
         },
         Update {
             update_id: 9,
+            sender_id: 123,
             chat_id: 1,
             text: "b".into(),
         },

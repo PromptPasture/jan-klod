@@ -6,6 +6,16 @@
 #
 # Export OPENAI_API_KEY before starting.
 
+# --- telegram sender allowlist ----------------------------------------
+#
+# Telegram sender identity — asserted by the Telegram Bot API, not authenticated
+# by jan-klod — becomes the principal `telegram:<sender_id>`. An operator lists
+# which sender ids are permitted; the allowlist ships empty, so an unlisted sender
+# is refused before a session is created (#257).
+#
+telegram:
+  allowed-senders: []
+
 # --- providers -------------------------------------------------------------
 extensions:
   provider:

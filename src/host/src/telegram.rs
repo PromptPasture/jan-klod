@@ -25,6 +25,8 @@ use jan_klod_core::AgentSession;
 pub struct Update {
     /// Monotonic update id (drives the poll offset).
     pub update_id: i64,
+    /// Sender id from message.from.id (used for principal and allowlist check).
+    pub sender_id: i64,
     /// Chat to reply to — also used as the loop session id.
     pub chat_id: i64,
     /// The message text.
@@ -62,6 +64,7 @@ pub fn parse_updates(body: &[u8]) -> Vec<Update> {
             let message = update.get("message")?;
             Some(Update {
                 update_id: update.get("update_id")?.as_i64()?,
+                sender_id: message.get("from")?.get("id")?.as_i64()?,
                 chat_id: message.get("chat")?.get("id")?.as_i64()?,
                 text: message.get("text")?.as_str()?.to_string(),
             })
@@ -79,6 +82,12 @@ pub fn next_offset(updates: &[Update]) -> Option<i64> {
 /// One poll cycle: fetch updates from `offset`, drive each message through the
 /// loop, send the answer back, and return the next offset (unchanged if idle).
 ///
+/// `allowed_senders`: The list of sender ids permitted to drive turns. Senders not
+/// on the list are refused before a session is created, as per #257 (Telegram sender
+/// allowlist). If `None`, all senders are permitted (backward compat for tests).
+/// If 22b (#185) has moved the bot to a guest, the allowlist moves to the guest's
+/// config and the principal storage moves to the guest's session context — same rule.
+///
 /// # Errors
 /// Returns a transport error string if `getUpdates` or a `sendMessage` fails.
 pub fn poll_once(
@@ -86,6 +95,7 @@ pub fn poll_once(
     fetch: Fetch,
     token: &str,
     offset: i64,
+    allowed_senders: Option<&[i64]>,
 ) -> Result<i64, String> {
     let body = fetch("GET", &get_updates_url(token, offset), &[], None)?;
     let updates = parse_updates(&body);
@@ -98,11 +108,26 @@ pub fn poll_once(
 
     let mut queue: VecDeque<Update> = updates.into_iter().collect();
     while let Some(update) = queue.pop_front() {
+        // Check sender against allowlist (empty by default denies all).
+        // Refuse before a session is created (#257).
+        if let Some(allowed) = allowed_senders {
+            if !allowed.contains(&update.sender_id) {
+                eprintln!(
+                    "jan-klod: telegram: sender {} not in allowlist — refusing before session creation",
+                    update.sender_id
+                );
+                continue;
+            }
+        }
+
         let session = update.chat_id.to_string();
+        let principal = Some(format!("telegram:{}", update.sender_id));
         let mut driver = ChatDriver {
             fetch,
             token,
             chat_id: update.chat_id,
+            sender_id: update.sender_id,
+            principal: principal.clone(),
             cursor: Rc::clone(&cursor),
             deferred: Rc::clone(&deferred),
         };
@@ -140,11 +165,16 @@ fn send_message(fetch: Fetch, token: &str, chat_id: i64, text: &str) -> Result<(
 
 /// Puts an interceptor's question to the chat and waits for the user's next
 /// message there to answer it.
+#[allow(dead_code)]
 struct ChatDriver<'a> {
     fetch: Fetch<'a>,
     token: &'a str,
     /// The chat being asked — only its messages answer the question.
     chat_id: i64,
+    /// Sender id of this update (from message.from.id).
+    sender_id: i64,
+    /// Principal of the sender (`telegram:<sender_id>`), available for 28c downstream.
+    principal: Option<String>,
     /// Shared poll offset, advanced as this driver consumes updates.
     cursor: Rc<Cell<i64>>,
     /// Updates from other chats seen while waiting, to run after this turn.

@@ -274,6 +274,26 @@ A top-level block controlling how the host emits structured logging. Default-den
 **Invalid values are rejected at boot** with a clear error message naming the key, the invalid value, and the allowed values (`json`, `human`).
 
 
+## Telegram (`telegram:`)
+
+A top-level block configuring the Telegram Bot API integration when running the bot with `jan-klod-gateway telegram`. Controls sender identity allowlisting — the list of Telegram user ids permitted to drive turns.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `allowed-senders` | A list of Telegram sender ids (from `message.from.id`) that are permitted to send messages. A message from a sender not on this list is refused with a log message **before a session is created** (#257). Empty list denies all senders (default, requires operator to explicitly allow senders). | `[]` (empty, denies all) |
+
+**Security model:** The Telegram sender's id — asserted by the Telegram Bot API but not authenticated by jan-klod — becomes the principal `telegram:<sender_id>` when a message is accepted. A sender not in the allowlist is refused before a session is created, preventing resource consumption on unauthorized senders. The allowlist ships empty so an operator must explicitly grant access; adding senders is an opt-in operation.
+
+**Example:** Allow two specific Telegram user ids:
+
+```yaml
+telegram:
+  allowed-senders: [123456789, 987654321]
+```
+
+If the bot has been moved to a guest by the time this slice lands (22b, #185), the allowlist moves to the guest's config and the principal storage moves to the guest's session context — same security rule applies either way.
+
+
 ## Interceptors
 
 Interceptors (`interceptor.*` category) are extensions with an `enabled` flag. Config **only enables/disables** them — never orders them. Dispatch order is **structural**: across phases by `phase` enum order, within a phase by extension **load order** (see [`wit/interceptor.wit`](contracts.md) and [Roadmap → Phase 2](roadmap.md#phase-2--first-real-value-the-agent-loop)). No config key sequences steps, so ordering can't drift.
