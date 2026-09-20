@@ -9,7 +9,7 @@
 //!   `jan-klod serve --bind <addr>`                  — serve, resolving paths
 //!   `jan-klod rpc [config-path] [ext-dir]`        — boot + serve JSON-RPC on stdio
 //!   `jan-klod verify [config-path] [ext-dir]`     — check the install, then exit
-//!   `jan-klod verify --chain [session-id]`        — verify event chain integrity (as planned)
+//!   `jan-klod verify --chain [session-id]`        — verify event chain integrity
 //!
 //!   config-path  path to config.yaml   (default: config.yaml)
 //!   ext-dir      directory of *.wasm    (default: ext)
