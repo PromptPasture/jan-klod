@@ -24,7 +24,7 @@ mod persona_verification {
                                     if let Some(persona_obj) = persona.as_object() {
                                         return persona_obj
                                             .get("enabled")
-                                            .and_then(|v| v.as_bool())
+                                            .and_then(serde_json::Value::as_bool)
                                             .unwrap_or(false);
                                     }
                                 }
@@ -38,7 +38,7 @@ mod persona_verification {
     }
 
     /// Extract personas map and default name from config.
-    /// Returns (personalities_map, default_name).
+    /// Returns (`personalities_map`, `default_name`).
     pub fn extract_personas(config_json: &str) -> (HashMap<String, String>, String) {
         let mut personalities = HashMap::new();
         let mut default_name = "helpful".to_string();
@@ -123,8 +123,7 @@ mod persona_verification {
 
             if !all_message_content.contains(&configured_text) {
                 return Err(format!(
-                    "ASSERTION FAILED: persona '{}' text not found in request. Expected: '{}'",
-                    default_name, configured_text
+                    "ASSERTION FAILED: persona '{default_name}' text not found in request. Expected: '{configured_text}'"
                 ));
             }
 
@@ -132,8 +131,7 @@ mod persona_verification {
             for (persona_name, persona_text) in &personalities {
                 if persona_name != &default_name && all_message_content.contains(persona_text) {
                     return Err(format!(
-                        "ASSERTION FAILED: non-configured persona '{}' text found in request. Only '{}' should be injected.",
-                        persona_name, default_name
+                        "ASSERTION FAILED: non-configured persona '{persona_name}' text found in request. Only '{default_name}' should be injected."
                     ));
                 }
             }
@@ -333,7 +331,7 @@ mod component {
     )]
     mod bindings {
         wit_bindgen::generate!({
-            world: "interceptor-contributor-world",
+            world: "interceptor-world",
             path: "../../../wit",
         });
     }
@@ -358,7 +356,7 @@ mod component {
             host_log::log(
                 LogLevel::Info,
                 "test-interceptor-persona",
-                &format!("Config received: {}", config_str),
+                &format!("Config received: {config_str}"),
                 &[],
             );
 
@@ -407,18 +405,19 @@ mod component {
                 request.messages.iter().map(|m| m.content.clone()).collect();
 
             // Verify persona injection: persona text must be present if enabled, absent if disabled
-            match persona_verification::verify_injection(&config_str, &message_contents) {
+            match crate::persona_verification::verify_injection(&config_str, &message_contents) {
                 Ok(()) => {
                     // Assertion passed; log for debugging and proceed
-                    let persona_status = if persona_verification::is_persona_enabled(&config_str) {
-                        "present (enabled)"
-                    } else {
-                        "absent (disabled)"
-                    };
+                    let persona_status =
+                        if crate::persona_verification::is_persona_enabled(&config_str) {
+                            "present (enabled)"
+                        } else {
+                            "absent (disabled)"
+                        };
                     host_log::log(
                         LogLevel::Info,
                         "test-interceptor-persona",
-                        &format!("Persona injection verified: {}", persona_status),
+                        &format!("Persona injection verified: {persona_status}"),
                         &[],
                     );
                     Ok(Decision::Proceed)
@@ -431,7 +430,7 @@ mod component {
                         &assertion_error,
                         &[],
                     );
-                    Err(InterceptorError::ValidationFailed)
+                    Err(InterceptorError::Internal)
                 }
             }
         }
@@ -448,9 +447,4 @@ mod component {
         use super::{bindings, Component};
         bindings::export!(Component with_types_in bindings);
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn main() {
-    println!("This is a WebAssembly component, not a native executable.");
 }

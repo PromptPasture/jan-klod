@@ -78,7 +78,7 @@ mod component {
                 .ok_or(ToolError::InvalidArguments)?;
 
             match host_secrets::get(name) {
-                Ok(secret) => Ok(format!("SUCCESS: {}", secret)),
+                Ok(secret) => Ok(format!("SUCCESS: {secret}")),
                 Err(host_secrets::SecretsError::NotFound) => Ok("DENIED: not-found".to_string()),
                 Err(host_secrets::SecretsError::Denied) => Ok("DENIED: denied".to_string()),
                 Err(host_secrets::SecretsError::Backend) => Ok("DENIED: backend".to_string()),

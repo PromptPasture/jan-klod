@@ -243,21 +243,18 @@ impl Lifecycle for Component {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
         let section: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
 
-        // Determine API key: prefer api-key-secret (via host-secrets) over api-key
-        let api_key =
-            if let Some(secret_name) = section.get("api-key-secret").and_then(Value::as_str) {
-                // Try to read from host-secrets first
-                match host_secrets::get(secret_name) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        // Fall back to api-key if secret is not available
-                        config_str(&section, "api-key")
-                    }
-                }
-            } else {
-                // No api-key-secret, use api-key
-                config_str(&section, "api-key")
-            };
+        // Determine the API key: prefer `api-key-secret` (read through host-secrets)
+        // over `api-key`, falling back to `api-key` when the secret is not available.
+        let api_key = section
+            .get("api-key-secret")
+            .and_then(Value::as_str)
+            .map_or_else(
+                || config_str(&section, "api-key"),
+                |secret_name| {
+                    host_secrets::get(secret_name)
+                        .unwrap_or_else(|_| config_str(&section, "api-key"))
+                },
+            );
 
         let config = ProviderConfig {
             base_url: config_str(&section, "base-url"),

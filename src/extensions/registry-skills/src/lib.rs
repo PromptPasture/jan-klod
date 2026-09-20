@@ -78,9 +78,11 @@ fn yaml_str<'a>(front: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// Load all Markdown files with `name:` in front matter from both sources.
-/// Merges skills from two sources in priority order:
+///
+/// Skills are merged from two sources in priority order:
 /// 1. `.agents/skills/` (workspace level, user override) — checked first
 /// 2. `skills/` (distribution level, bundled fallback) — checked second
+///
 /// If a skill name exists in both, the workspace version wins.
 fn load_skills() -> Vec<Skill> {
     use std::collections::HashMap;

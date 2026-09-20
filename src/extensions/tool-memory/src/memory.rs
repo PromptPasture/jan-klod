@@ -40,7 +40,7 @@ impl Fact {
         let value = obj.get("value")?.as_str()?.to_string();
         let created_at = obj.get("created_at")?.as_str()?.to_string();
         let updated_at = obj.get("updated_at")?.as_str()?.to_string();
-        Some(Fact {
+        Some(Self {
             id,
             key,
             value,
@@ -86,10 +86,10 @@ pub struct Memory {
 
 impl Memory {
     /// Parse memory from stored JSON representation (or create empty if None).
+    #[must_use]
     pub fn parse(stored: Option<&str>) -> Self {
-        match stored {
-            None => Memory::default(),
-            Some(json_str) => match serde_json::from_str::<Value>(json_str) {
+        stored.map_or_else(Self::default, |json_str| {
+            match serde_json::from_str::<Value>(json_str) {
                 Ok(Value::Array(items)) => {
                     let mut facts = BTreeMap::new();
                     let mut max_id = 0u64;
@@ -99,23 +99,28 @@ impl Memory {
                             facts.insert(fact.key.clone(), fact);
                         }
                     }
-                    Memory {
+                    Self {
                         facts,
                         next_id: max_id + 1,
                     }
                 }
-                _ => Memory::default(),
-            },
-        }
+                _ => Self::default(),
+            }
+        })
     }
 
     /// Render memory as JSON array.
+    #[must_use]
     pub fn render(&self) -> String {
-        let items: Vec<Value> = self.facts.values().map(|f| f.to_json()).collect();
+        let items: Vec<Value> = self.facts.values().map(Fact::to_json).collect();
         serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string())
     }
 
     /// Store a fact. Returns the stored fact.
+    ///
+    /// # Errors
+    ///
+    /// `MemoryError::BadArguments` when `key` is empty.
     pub fn store(&mut self, key: String, value: String) -> Result<Fact, MemoryError> {
         if key.is_empty() {
             return Err(MemoryError::BadArguments("key cannot be empty".to_string()));
@@ -144,25 +149,32 @@ impl Memory {
 
     /// Recall facts. If key is provided, return that fact. Otherwise, return
     /// the 10 most recent facts in reverse chronological order.
+    ///
+    /// # Errors
+    ///
+    /// `MemoryError::NotFound` when `key` names no stored fact.
     pub fn recall(&self, key: Option<String>) -> Result<Vec<Fact>, MemoryError> {
-        match key {
-            Some(k) => {
-                if let Some(fact) = self.facts.get(&k) {
-                    Ok(vec![fact.clone()])
-                } else {
-                    Err(MemoryError::NotFound(k))
-                }
-            }
-            None => {
+        key.map_or_else(
+            || {
                 // Return up to 10 most recent facts (by updated_at, descending)
                 let mut all_facts: Vec<_> = self.facts.values().cloned().collect();
                 all_facts.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
                 Ok(all_facts.into_iter().take(10).collect())
-            }
-        }
+            },
+            |k| {
+                self.facts.get(&k).map_or_else(
+                    || Err(MemoryError::NotFound(k)),
+                    |fact| Ok(vec![fact.clone()]),
+                )
+            },
+        )
     }
 
     /// Forget a fact. Returns the forgotten fact's key.
+    ///
+    /// # Errors
+    ///
+    /// `MemoryError::NotFound` when `key` names no stored fact.
     pub fn forget(&mut self, key: String) -> Result<String, MemoryError> {
         if self.facts.remove(&key).is_some() {
             Ok(key)
@@ -172,6 +184,13 @@ impl Memory {
     }
 
     /// Apply an operation from JSON arguments.
+    ///
+    /// # Errors
+    ///
+    /// `MemoryError::InvalidJson` when `arguments` is not JSON, `BadArguments`
+    /// when a required field is missing or `op` is unknown, and whatever the
+    /// operation itself returns (`NotFound` for `recall`/`forget` of an
+    /// absent key).
     pub fn apply(&mut self, arguments: &str) -> Result<String, MemoryError> {
         let args: Value = serde_json::from_str(arguments).map_err(|_| MemoryError::InvalidJson)?;
 
@@ -198,7 +217,7 @@ impl Memory {
             "recall" => {
                 let key = args.get("key").and_then(Value::as_str).map(String::from);
                 let facts = self.recall(key)?;
-                let response: Vec<Value> = facts.iter().map(|f| f.to_json()).collect();
+                let response: Vec<Value> = facts.iter().map(Fact::to_json).collect();
                 Ok(serde_json::to_string(&response).unwrap_or_default())
             }
             "forget" => {
@@ -211,8 +230,7 @@ impl Memory {
                 Ok(serde_json::to_string(&json!({"key": removed_key})).unwrap_or_default())
             }
             _ => Err(MemoryError::BadArguments(format!(
-                "unknown operation: {}",
-                op
+                "unknown operation: {op}"
             ))),
         }
     }

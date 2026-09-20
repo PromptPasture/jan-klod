@@ -21,6 +21,8 @@ const TIMEOUT_MS: u32 = 10_000;
 // Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod search {
+    use std::fmt::Write as _;
+
     /// URL encode a string for use in query parameters.
     /// Encodes spaces as %20 and other reserved characters.
     fn url_encode(s: &str) -> String {
@@ -33,7 +35,7 @@ mod search {
                 ' ' => result.push_str("%20"),
                 _ => {
                     for byte in ch.to_string().as_bytes() {
-                        result.push_str(&format!("%{:02X}", byte));
+                        let _ = write!(result, "%{byte:02X}");
                     }
                 }
             }
@@ -44,7 +46,7 @@ mod search {
     /// Construct a GET URL for the search provider.
     ///
     /// # Errors
-    /// Returns an error if required config is missing (base_url or api_key).
+    /// Returns an error if required config is missing (`base_url` or `api_key`).
     pub fn construct_url(base_url: &str, query: &str, api_key: &str) -> Result<String, String> {
         if base_url.is_empty() {
             return Err("base-url is not configured".to_string());
@@ -62,16 +64,13 @@ mod search {
         // Construct the URL with query parameters
         // Assume base_url doesn't have query params; separate with ? if no existing ?
         let separator = if base_url.contains('?') { "&" } else { "?" };
-        let url = format!(
-            "{}{}q={}&api_key={}",
-            base_url, separator, encoded_query, api_key
-        );
+        let url = format!("{base_url}{separator}q={encoded_query}&api_key={api_key}");
         Ok(url)
     }
 
     /// Parse JSON search results and format as plain text.
     ///
-    /// Expected JSON structure (typical of SerpAPI and similar providers):
+    /// Expected JSON structure (typical of `SerpAPI` and similar providers):
     /// ```json
     /// {
     ///   "organic_results": [
@@ -87,37 +86,38 @@ mod search {
         };
 
         // Try to extract results from common provider formats
-        if let Some(results) = value
+        value
             .get("organic_results")
             .and_then(serde_json::Value::as_array)
-        {
-            let formatted: Vec<String> = results
-                .iter()
-                .filter_map(|result| {
-                    let title = result
-                        .get("title")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("(no title)");
-                    let snippet = result
-                        .get("snippet")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("(no snippet)");
-                    let link = result
-                        .get("link")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("(no link)");
-                    Some(format!("{} | {} | {}", title, snippet, link))
-                })
-                .collect();
+            .map_or_else(
+                || "(unexpected search result format; expected organic_results array)".to_string(),
+                |results| {
+                    let formatted: Vec<String> = results
+                        .iter()
+                        .map(|result| {
+                            let title = result
+                                .get("title")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("(no title)");
+                            let snippet = result
+                                .get("snippet")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("(no snippet)");
+                            let link = result
+                                .get("link")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("(no link)");
+                            format!("{title} | {snippet} | {link}")
+                        })
+                        .collect();
 
-            if formatted.is_empty() {
-                "(no search results found)".to_string()
-            } else {
-                formatted.join("\n")
-            }
-        } else {
-            "(unexpected search result format; expected organic_results array)".to_string()
-        }
+                    if formatted.is_empty() {
+                        "(no search results found)".to_string()
+                    } else {
+                        formatted.join("\n")
+                    }
+                },
+            )
     }
 
     #[cfg(test)]
@@ -288,8 +288,8 @@ mod component {
                 .and_then(serde_json::Value::as_str)
                 .ok_or(ToolError::InvalidArguments)?;
 
-            let base_url = BASE_URL.with(|u| u.take());
-            let api_key = API_KEY.with(|k| k.take());
+            let base_url = BASE_URL.with(std::cell::Cell::take);
+            let api_key = API_KEY.with(std::cell::Cell::take);
 
             // Restore the values for next invocation
             BASE_URL.with(|u| u.set(base_url.clone()));

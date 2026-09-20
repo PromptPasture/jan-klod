@@ -54,7 +54,7 @@ impl Interceptor for Component {
         {
             // Scenario (a): Read the principal and log it
             if let Some(ref principal) = user_turn.principal {
-                let msg = format!("Principal is '{}'", principal);
+                let msg = format!("Principal is '{principal}'");
                 host_log::log(LogLevel::Info, "interceptor-principal-probe", &msg, &[]);
             } else {
                 host_log::log(

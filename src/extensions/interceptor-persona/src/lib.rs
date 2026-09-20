@@ -29,16 +29,14 @@ mod persona {
     /// Persona configuration deserialized from extension config.
     #[derive(Clone, Debug)]
     pub struct PersonaConfig {
-        /// Whether the extension is enabled.
-        pub enabled: bool,
-        /// Map of persona names to descriptions.
-        pub personalities: std::collections::HashMap<String, String>,
-        /// Default persona to use when none is selected.
+        /// The persona text in force: the configured default, or the built-in
+        /// one. The other personas are resolved at parse time and not kept —
+        /// nothing reads them afterwards.
         pub default: String,
     }
 
     impl PersonaConfig {
-        /// Parse PersonaConfig from the extension's config section (JSON).
+        /// Parse `PersonaConfig` from the extension's config section (JSON).
         /// Returns None if no valid config, along with an optional warning message.
         pub fn from_config(raw_json: &str) -> (Option<Self>, Option<String>) {
             let config_value: Value = match serde_json::from_str(raw_json) {
@@ -58,7 +56,7 @@ mod persona {
             // Check if enabled (default false)
             let enabled = config_obj
                 .get("enabled")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
 
             if !enabled {
@@ -88,30 +86,21 @@ mod persona {
             let default_text = personalities
                 .get(&default_name)
                 .cloned()
-                .unwrap_or_else(|| {
-                    if personalities.is_empty() {
-                        // No custom personas; use built-in
-                        DEFAULT_HELPFUL.to_string()
-                    } else {
-                        // Custom personas exist but default not found; warn and use built-in
-                        return DEFAULT_HELPFUL.to_string();
-                    }
-                });
+                // No custom personas, or the named default is not among them:
+                // the built-in text serves (the warning below says which case).
+                .unwrap_or_else(|| DEFAULT_HELPFUL.to_string());
 
             let warning = if !personalities.contains_key(&default_name) && !personalities.is_empty()
             {
                 Some(format!(
-                    "Persona '{}' not found in personalities; using built-in default",
-                    default_name
+                    "Persona '{default_name}' not found in personalities; using built-in default"
                 ))
             } else {
                 None
             };
 
             (
-                Some(PersonaConfig {
-                    enabled,
-                    personalities,
+                Some(Self {
                     default: default_text,
                 }),
                 warning,
@@ -137,7 +126,6 @@ mod persona {
             assert!(config.is_some());
             assert!(warn.is_none());
             let cfg = config.unwrap();
-            assert!(cfg.enabled);
             assert_eq!(cfg.default, "You are a technical expert.");
         }
 
@@ -226,37 +214,17 @@ mod component {
             let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
 
             // Extract the persona section from the full config
-            let persona_json =
-                if let Ok(config_value) = serde_json::from_str::<serde_json::Value>(&raw) {
-                    if let Some(config_obj) = config_value.as_object() {
-                        if let Some(extensions) = config_obj.get("extensions") {
-                            if let Some(extensions_obj) = extensions.as_object() {
-                                if let Some(interceptor) = extensions_obj.get("interceptor") {
-                                    if let Some(interceptor_obj) = interceptor.as_object() {
-                                        if let Some(persona) = interceptor_obj.get("persona") {
-                                            serde_json::to_string(persona)
-                                                .unwrap_or_else(|_| "{}".to_owned())
-                                        } else {
-                                            "{}".to_owned()
-                                        }
-                                    } else {
-                                        "{}".to_owned()
-                                    }
-                                } else {
-                                    "{}".to_owned()
-                                }
-                            } else {
-                                "{}".to_owned()
-                            }
-                        } else {
-                            "{}".to_owned()
-                        }
-                    } else {
-                        "{}".to_owned()
-                    }
-                } else {
-                    "{}".to_owned()
-                };
+            let persona_json = serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|config_value| {
+                    config_value
+                        .get("extensions")?
+                        .get("interceptor")?
+                        .get("persona")
+                        .cloned()
+                })
+                .and_then(|persona| serde_json::to_string(&persona).ok())
+                .unwrap_or_else(|| "{}".to_owned());
 
             let (config, warning) = persona::PersonaConfig::from_config(&persona_json);
 
@@ -328,15 +296,12 @@ mod component {
             };
 
             // Find the position after the system message, if present
-            let insert_pos = if request
-                .messages
-                .iter()
-                .any(|m| matches!(m.role, Role::System))
-            {
-                1
-            } else {
-                0
-            };
+            let insert_pos = usize::from(
+                request
+                    .messages
+                    .iter()
+                    .any(|m| matches!(m.role, Role::System)),
+            );
 
             request.messages.insert(insert_pos, persona_msg);
             Ok(Decision::Replace(HookState::SelectModel(request)))
