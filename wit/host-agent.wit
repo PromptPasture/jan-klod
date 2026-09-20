@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.3.0;
+package jan-klod:interfaces@0.4.0;
 
 /// Drive a session from inside the sandbox — the inward twin of the client
 /// protocol (Phase 22).

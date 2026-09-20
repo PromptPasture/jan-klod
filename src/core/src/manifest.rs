@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 /// than a baked value. The drift is real, so `host/tests/it/manifest.rs`
 /// asserts this equals what every `wit/*.wit` declares — the same agreement
 /// `scripts/manifests.sh` refuses to guess at.
-pub const API_VERSION: &str = "0.3.0";
+pub const API_VERSION: &str = "0.4.0";
 
 /// Whether a component built against `declared` can run on a host speaking
 /// `host`.
@@ -406,9 +406,9 @@ mod api_version_tests {
 
     #[test]
     fn a_differing_major_is_not() {
-        assert!(!api_compatible("1.0.0", "2.0.0"));
+        assert!(!api_compatible("0.4.0", "2.0.0"));
         assert!(!api_compatible("2.0.0", "1.9.9"));
-        assert!(!api_compatible("0.1.0", "1.0.0"));
+        assert!(!api_compatible("0.1.0", "0.4.0"));
     }
 
     /// The clause that matters today: everything in play is `0.x`, where a

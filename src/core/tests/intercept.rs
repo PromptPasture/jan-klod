@@ -47,6 +47,7 @@ impl Interceptor for Stub {
                 Ok(Decision::Replace(HookState::BeforeLoop(UserTurn {
                     session: "s".into(),
                     user_message: text.clone(),
+                    principal: None,
                 })))
             }
             Behavior::AskThenProceed(expected) => input.answer.as_ref().map_or_else(
@@ -116,6 +117,7 @@ fn dispatch_order_is_across_and_within_phase() {
     let mut before = HookState::BeforeLoop(UserTurn {
         session: "s".into(),
         user_message: "hi".into(),
+        principal: None,
     });
     assert!(matches!(
         d.dispatch(Phase::BeforeLoop, &mut before, &mut driver),
@@ -151,6 +153,7 @@ fn replace_swaps_the_phase_state() {
     let mut state = HookState::BeforeLoop(UserTurn {
         session: "s".into(),
         user_message: "original".into(),
+        principal: None,
     });
     d.dispatch(Phase::BeforeLoop, &mut state, &mut driver);
     match state {
@@ -170,6 +173,7 @@ fn block_short_circuits_remaining_interceptors() {
     let mut state = HookState::BeforeLoop(UserTurn {
         session: "s".into(),
         user_message: "hi".into(),
+        principal: None,
     });
     assert!(matches!(
         d.dispatch(Phase::BeforeLoop, &mut state, &mut driver),
@@ -222,6 +226,7 @@ fn non_tool_call_error_fails_open() {
     let mut state = HookState::BeforeLoop(UserTurn {
         session: "s".into(),
         user_message: "hi".into(),
+        principal: None,
     });
     assert!(matches!(
         d.dispatch(Phase::BeforeLoop, &mut state, &mut driver),

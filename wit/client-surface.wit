@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.3.0;
+package jan-klod:interfaces@0.4.0;
 
 /// What a sandboxed extension may declare about a user interface it cannot see
 /// (Phase 24).

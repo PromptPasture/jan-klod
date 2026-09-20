@@ -653,6 +653,7 @@ fn to_gen_state(state: &HookState) -> g_icept::HookState {
         HookState::BeforeLoop(t) => g_icept::HookState::BeforeLoop(g_icept::UserTurn {
             session: t.session.clone(),
             user_message: t.user_message.clone(),
+            principal: t.principal.clone(),
         }),
         HookState::SelectModel(r) => g_icept::HookState::SelectModel(to_gen_request(r)),
         HookState::SelectContext(r) => g_icept::HookState::SelectContext(to_gen_request(r)),
@@ -680,6 +681,7 @@ fn from_gen_state(state: g_icept::HookState) -> HookState {
         g_icept::HookState::BeforeLoop(t) => HookState::BeforeLoop(intercept::UserTurn {
             session: t.session,
             user_message: t.user_message,
+            principal: t.principal,
         }),
         g_icept::HookState::SelectModel(r) => HookState::SelectModel(from_gen_request(r)),
         g_icept::HookState::SelectContext(r) => HookState::SelectContext(from_gen_request(r)),
@@ -878,6 +880,7 @@ mod tests {
         HookState::BeforeLoop(UserTurn {
             session: "s".into(),
             user_message: msg.into(),
+            principal: None,
         })
     }
 

@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions self-extend-fixture principal-boundary-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -649,6 +649,9 @@ config:
 # that wants it skips loudly when it is absent.
 self-extend-fixture:
 	sh scripts/self-extend-fixture.sh
+
+principal-boundary-fixture:
+	sh scripts/principal-boundary-fixture.sh
 
 setup:
 	cargo install cargo-audit --version $(CARGO_AUDIT_VERSION)

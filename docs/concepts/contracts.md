@@ -41,6 +41,20 @@ Extensions implement these and the host routes calls between them.
 
 **Interceptor dispatch is core-native.** The core loop invokes enabled `interceptor-*` components directly and acts on their returned `decision` (`proceed`/`replace`/`block`/`ask`). One generic function over a `phase` enum (`session-start`, `before-loop`, `select-model`, `select-context`, `select-tools`, `after-response`, `tool-call`, `tool-result`, `on-error`, `finalize`, `prepare-next-turn`) — new lifecycle points are new enum cases, never new functions. **Ordering is structural:** across phases it follows the enum; within a phase it's deterministic extension load order. `config.yaml` **only enables/disables** — interceptors declare phases via `subscribed-phases()`. `intercept` returns `result<decision, interceptor-error>`; errors/traps fail closed at `tool-call`, open-with-log elsewhere.
 
+#### Interceptor state — the `user-turn` record at `before-loop`
+
+The `user-turn` record handed to interceptors at the `before-loop` phase carries the session ID, the user's message, and an optional **principal** (user identity, established by bearer token extraction in the REST/WebSocket guard):
+
+```wit
+record user-turn {
+    session: session-id,
+    user-message: string,
+    principal: option<string>,
+}
+```
+
+- **`principal: option<string>`** — Identifies the authenticated user if set, or `None` if no principal is configured or the request carries no token. A guest may read this to make data-driven decisions (route to specific models/tools, log the principal, redact it from output). **No policy logic runs inside the guest** — decisions must be encoded in `config.yaml` or determined by the guest's own heuristics. The host provides only the fact; the interceptor decides what to do with it.
+
 ### Host-provided interfaces
 
 Core grants these capabilities to every extension.

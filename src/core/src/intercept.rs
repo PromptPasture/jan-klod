@@ -119,6 +119,8 @@ pub struct UserTurn {
     pub session: String,
     /// The raw user message.
     pub user_message: String,
+    /// Optional principal identifying the user (from session store).
+    pub principal: Option<String>,
 }
 
 /// Raw model output before parsing (handed at `after-response`).

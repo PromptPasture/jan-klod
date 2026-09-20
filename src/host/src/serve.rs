@@ -51,7 +51,7 @@ use jan_klod_core::intercept::{Driver, UserPrompt};
 use jan_klod_core::session::{
     answer_timeout, fork, new_session_id, session_payload, sessions_payload, Forked,
 };
-use jan_klod_core::AgentSession;
+use jan_klod_core::{AgentSession, HeadlessDriver};
 
 use crate::pending::Pending;
 use crate::sessions::Agents;
@@ -426,10 +426,11 @@ async fn message(
     headers: HeaderMap,
     body: String,
 ) -> Response {
+    let principal = authorised(&headers, &app.principals, "");
     if !accepts_event_stream(&headers) {
         return app
             .on_session(Some(&id.clone()), move |agent| {
-                handle_message(agent, &id, &body)
+                handle_message(agent, &id, &body, principal.clone())
             })
             .await;
     }
@@ -439,7 +440,7 @@ async fn message(
     let (frames, stream) = unbounded_channel::<Frame>();
     let pending = Arc::clone(&app.pending);
     let queued = app.agents.of(&id).send(move |agent: &mut AgentSession| {
-        run_turn_streaming(agent, &frames, &id, &body, &pending);
+        run_turn_streaming(agent, &frames, &id, &body, &pending, principal);
     });
     if queued.is_err() {
         return error_reply(503, "the session is unavailable").into_response();
@@ -586,12 +587,18 @@ fn handle_get_session(agent: &AgentSession, id: &str) -> Reply {
 }
 
 /// `POST /session/:id/message` — blocking (non-SSE) turn.
-fn handle_message(agent: &mut AgentSession, session: &str, body: &str) -> Reply {
+fn handle_message(
+    agent: &mut AgentSession,
+    session: &str,
+    body: &str,
+    principal: Option<String>,
+) -> Reply {
     let message = match parse_message_body(body) {
         Ok(m) => m,
         Err(err) => return error_reply(400, &err),
     };
-    match agent.run(session, &message) {
+    let mut driver = HeadlessDriver;
+    match agent.run_with_driver_principal(&mut driver, session, &message, principal) {
         RunResult::Answered { text, agentic } => Reply {
             status: 200,
             body: serde_json::json!({ "answer": text, "agentic": agentic }).to_string(),
@@ -651,6 +658,7 @@ fn run_turn_streaming(
     session: &str,
     body: &str,
     pending: &Pending,
+    principal: Option<String>,
 ) {
     let message = match parse_message_body(body) {
         Ok(message) => message,
@@ -673,9 +681,13 @@ fn run_turn_streaming(
         frames: frames.clone(),
         session: session.to_string(),
     };
-    if let RunResult::Failed(reason) =
-        agent.run_streaming_with_driver(&mut driver, &mut sink, session, &message)
-    {
+    if let RunResult::Failed(reason) = agent.run_streaming_with_driver_principal(
+        &mut driver,
+        &mut sink,
+        session,
+        &message,
+        principal,
+    ) {
         let (kind, data) = error_frame(&reason);
         let _ = frames.send(Frame::Named {
             kind,

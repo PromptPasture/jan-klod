@@ -1,4 +1,4 @@
-package jan-klod:interfaces@0.3.0;
+package jan-klod:interfaces@0.4.0;
 
 /// A tool that can put a question to the user before it answers (#216).
 ///

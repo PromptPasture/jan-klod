@@ -1616,6 +1616,7 @@ impl AgentSession {
             &mut conductor::NoSink,
             session,
             message,
+            None,
         )
     }
 
@@ -1639,6 +1640,7 @@ impl AgentSession {
             &mut conductor::NoSink,
             session,
             message,
+            None,
         )
     }
 
@@ -1660,6 +1662,7 @@ impl AgentSession {
             &mut conductor::NoSink,
             session,
             message,
+            None,
         )
     }
 
@@ -1683,6 +1686,7 @@ impl AgentSession {
             sink,
             session,
             message,
+            None,
         )
     }
 
@@ -1705,6 +1709,30 @@ impl AgentSession {
             &mut conductor::NoSink,
             session,
             message,
+            None,
+        )
+    }
+
+    /// Non-streaming turn with principal: like [`Self::run_with_driver`] but
+    /// with an authenticated principal from the request (e.g. REST bearer token).
+    pub fn run_with_driver_principal(
+        &mut self,
+        driver: &mut dyn intercept::Driver,
+        session: &str,
+        message: &str,
+        principal: Option<String>,
+    ) -> conductor::RunResult {
+        run_and_persist(
+            &mut self.dispatcher,
+            &mut self.providers,
+            &self.store,
+            self.limits,
+            &mut self.tools,
+            driver,
+            &mut conductor::NoSink,
+            session,
+            message,
+            principal,
         )
     }
 
@@ -1731,6 +1759,31 @@ impl AgentSession {
             sink,
             session,
             message,
+            None,
+        )
+    }
+
+    /// Streaming turn with principal: like [`Self::run_streaming_with_driver`] but
+    /// with an authenticated principal from the request (e.g. REST bearer token).
+    pub fn run_streaming_with_driver_principal(
+        &mut self,
+        driver: &mut dyn intercept::Driver,
+        sink: &mut dyn conductor::EventSink,
+        session: &str,
+        message: &str,
+        principal: Option<String>,
+    ) -> conductor::RunResult {
+        run_and_persist(
+            &mut self.dispatcher,
+            &mut self.providers,
+            &self.store,
+            self.limits,
+            &mut self.tools,
+            driver,
+            sink,
+            session,
+            message,
+            principal,
         )
     }
 
@@ -1753,6 +1806,7 @@ impl AgentSession {
             sink,
             session,
             message,
+            None,
         )
     }
 
@@ -1915,6 +1969,7 @@ fn run_and_persist(
     sink: &mut dyn conductor::EventSink,
     session: &str,
     message: &str,
+    principal: Option<String>,
 ) -> conductor::RunResult {
     // Locked around each use, never across the turn: an interceptor writing its
     // own `host-storage` mid-dispatch takes the same lock, holding it here
@@ -1948,6 +2003,7 @@ fn run_and_persist(
         message,
         history,
         limits,
+        principal,
         &mut log_effective_message,
     );
     // No transcript append. The turn recorded itself as it ran — user message
@@ -2506,6 +2562,7 @@ extensions:
                 intercept::HookState::BeforeLoop(intercept::UserTurn {
                     session: "s".to_string(),
                     user_message: self.replacement.clone(),
+                    principal: None,
                 }),
             ))
         }
@@ -2563,6 +2620,7 @@ extensions:
             &mut sink,
             "s",
             "the message the caller actually sent",
+            None,
         );
 
         let events = store.lock().unwrap().session_events("s").unwrap();

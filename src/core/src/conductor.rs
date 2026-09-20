@@ -186,6 +186,7 @@ pub fn run_turn(
     user_message: &str,
     history: Vec<Message>,
     limits: Limits,
+    principal: Option<String>,
     on_effective_message: &mut dyn FnMut(&str),
 ) -> RunResult {
     // Before anything dispatches: a fleet with session-scoped state needs to
@@ -199,6 +200,7 @@ pub fn run_turn(
         session,
         user_message,
         history,
+        principal,
         on_effective_message,
     );
 
@@ -304,11 +306,13 @@ fn build_initial_request(
     session: &str,
     user_message: &str,
     history: Vec<Message>,
+    principal: Option<String>,
     on_effective_message: &mut dyn FnMut(&str),
 ) -> (bool, PendingRequest) {
     let mut state = HookState::BeforeLoop(UserTurn {
         session: session.to_string(),
         user_message: user_message.to_string(),
+        principal,
     });
     let agentic = matches!(
         dispatcher.dispatch(Phase::BeforeLoop, &mut state, driver),
@@ -797,8 +801,10 @@ mod tests {
             "hello",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert_eq!(
             out,
             RunResult::Answered {
@@ -852,8 +858,10 @@ mod tests {
             "do many things",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert_eq!(
             out,
             RunResult::Answered {
@@ -877,6 +885,7 @@ mod tests {
             Decision::Replace(HookState::BeforeLoop(UserTurn {
                 session: "s".into(),
                 user_message: "rewritten".into(),
+                principal: None,
             })),
         )]);
         let mut providers = vec![text_provider("p", Ok("hi"))];
@@ -892,8 +901,10 @@ mod tests {
             "original",
             vec![],
             Limits::default(),
+            None,
             &mut record,
         );
+
         assert_eq!(
             *seen.borrow(),
             vec!["rewritten".to_string()],
@@ -935,6 +946,7 @@ mod tests {
             "keep going",
             vec![],
             Limits { max_iterations: 3 },
+            None,
             &mut |_: &str| {},
         );
 
@@ -983,8 +995,10 @@ mod tests {
             "multi-step",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert_eq!(
             out,
             RunResult::Answered {
@@ -1033,8 +1047,10 @@ mod tests {
             "please rm",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert_eq!(
             out,
             RunResult::Answered {
@@ -1076,8 +1092,10 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         // Exactly text, no "stopped before" note: terminate is decision, not interruption.
         assert_eq!(
             out,
@@ -1109,8 +1127,10 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert_eq!(
             out,
             RunResult::Answered {
@@ -1138,8 +1158,10 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert!(
             matches!(out, RunResult::Failed(msg) if msg.contains("malformed output after 3 retries"))
         );
@@ -1162,8 +1184,10 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert_eq!(
             out,
             RunResult::Answered {
@@ -1190,8 +1214,10 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert!(matches!(out, RunResult::Failed(msg) if msg.contains("all providers failed")));
     }
 
@@ -1218,8 +1244,10 @@ mod tests {
             "hello",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert_eq!(
             out,
             RunResult::Answered {
@@ -1270,8 +1298,10 @@ mod tests {
             "hello",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert_eq!(
             sink.0,
             vec![
@@ -1310,8 +1340,10 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         // First completion has no text (only tool call), so no leading delta.
         assert_eq!(
             sink.0,
@@ -1370,8 +1402,10 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert_eq!(
             out,
             RunResult::Answered {
@@ -1417,8 +1451,10 @@ mod tests {
             "go",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert!(
             matches!(out, RunResult::Answered { .. }),
             "a cancelled turn still finalizes"
@@ -1456,8 +1492,10 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert!(
             matches!(&sink.0[0], Event::Warning(w) if w.contains("primary") && w.contains("falling back")),
             "first event should be a fallback warning: {:?}",
@@ -1495,6 +1533,7 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
 
@@ -1527,8 +1566,10 @@ mod tests {
             "hi",
             vec![],
             Limits::default(),
+            None,
             &mut |_: &str| {},
         );
+
         assert!(
             !sink.0.iter().any(|e| matches!(e, Event::Warning(_))),
             "a finished answer is not flagged: {:?}",

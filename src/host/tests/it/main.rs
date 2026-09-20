@@ -45,6 +45,7 @@ mod plan_tool;
 mod polyglot;
 mod polyglot_py;
 mod polyglot_ts;
+mod principal_boundary;
 mod prompt_disconnect;
 mod provider_chain;
 mod registry_stdio;
