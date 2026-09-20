@@ -1304,10 +1304,10 @@ fn setup(args: &[String]) -> ExitCode {
     if args.iter().any(|arg| arg == "--help") {
         println!("Usage: jan-klod-gateway setup [distribution] [config-path] [ext-dir]");
         println!();
-        println!("Perform a configuration audit on the provided paths.");
+        println!("Audit the environment and distribution state without writing files.");
         println!();
         println!("Arguments:");
-        println!("  distribution   Name of the distribution (e.g., coding, assistant) [optional]");
+        println!("  distribution   Name of the distribution (e.g., coding, minimal) [optional]");
         println!("  config-path    Path to the configuration file (default: config.yaml)");
         println!("  ext-dir        Path to the extensions directory (default: ext)");
         println!();
