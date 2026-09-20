@@ -92,13 +92,6 @@ fn init_tracing(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    // Initialize tracing subscriber before any extensions load.
-    let config_path = resolve_default("config.yaml");
-    if let Err(err) = init_tracing(&config_path) {
-        eprintln!("jan-klod: failed to initialize observability: {err}");
-        return ExitCode::FAILURE;
-    }
-
     match args.first().map(String::as_str) {
         Some("serve") => serve(&args[1..]),
         Some("rpc") => rpc(&args[1..]),
@@ -127,6 +120,13 @@ fn main() -> ExitCode {
 fn acp() -> ExitCode {
     let config_path = resolve_default("config.yaml");
     let ext_dir = resolve_default("ext");
+
+    // Initialize tracing subscriber before any extensions load.
+    if let Err(err) = init_tracing(&config_path) {
+        eprintln!("jan-klod: failed to initialize observability: {err}");
+        return ExitCode::FAILURE;
+    }
+
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -172,6 +172,13 @@ fn acp() -> ExitCode {
 fn mcp() -> ExitCode {
     let config_path = resolve_default("config.yaml");
     let ext_dir = resolve_default("ext");
+
+    // Initialize tracing subscriber before any extensions load.
+    if let Err(err) = init_tracing(&config_path) {
+        eprintln!("jan-klod: failed to initialize observability: {err}");
+        return ExitCode::FAILURE;
+    }
+
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -552,6 +559,13 @@ fn ask(args: &[String]) -> ExitCode {
     }
     let config_path = resolve_default("config.yaml");
     let ext_dir = resolve_default("ext");
+
+    // Initialize tracing subscriber before any extensions load.
+    if let Err(err) = init_tracing(&config_path) {
+        eprintln!("jan-klod: failed to initialize observability: {err}");
+        return ExitCode::FAILURE;
+    }
+
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -643,6 +657,12 @@ fn verify(args: &[String]) -> ExitCode {
         .collect();
     let config_path = arg_or(&paths, 0, "config.yaml");
     let ext_dir = arg_or(&paths, 1, "ext");
+
+    // Initialize tracing subscriber before any extensions load.
+    if let Err(err) = init_tracing(&config_path) {
+        eprintln!("jan-klod: failed to initialize observability: {err}");
+        return ExitCode::FAILURE;
+    }
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
@@ -893,6 +913,12 @@ fn boot_plan(args: &[String]) -> ExitCode {
     let config_path = arg_or(args, 0, "config.yaml");
     let ext_dir = arg_or(args, 1, "ext");
 
+    // Initialize tracing subscriber before any extensions load.
+    if let Err(err) = init_tracing(&config_path) {
+        eprintln!("jan-klod: failed to initialize observability: {err}");
+        return ExitCode::FAILURE;
+    }
+
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -935,6 +961,12 @@ fn boot_plan(args: &[String]) -> ExitCode {
 fn rpc(args: &[String]) -> ExitCode {
     let config_path = arg_or(args, 0, "config.yaml");
     let ext_dir = arg_or(args, 1, "ext");
+
+    // Initialize tracing subscriber before any extensions load.
+    if let Err(err) = init_tracing(&config_path) {
+        eprintln!("jan-klod: failed to initialize observability: {err}");
+        return ExitCode::FAILURE;
+    }
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
@@ -1093,6 +1125,12 @@ fn serve(args: &[String]) -> ExitCode {
     let ext_dir = arg_or(&positional, 1, "ext");
     let bind = flagged_bind.unwrap_or_else(|| arg(&positional, 2, "127.0.0.1:8787"));
 
+    // Initialize tracing subscriber before any extensions load.
+    if let Err(err) = init_tracing(&config_path) {
+        eprintln!("jan-klod: failed to initialize observability: {err}");
+        return ExitCode::FAILURE;
+    }
+
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -1160,6 +1198,12 @@ fn telegram(args: &[String]) -> ExitCode {
         eprintln!("jan-klod: set TELEGRAM_BOT_TOKEN to run the telegram bot");
         return ExitCode::FAILURE;
     };
+
+    // Initialize tracing subscriber before any extensions load.
+    if let Err(err) = init_tracing(&config_path) {
+        eprintln!("jan-klod: failed to initialize observability: {err}");
+        return ExitCode::FAILURE;
+    }
 
     let runtime = match Runtime::boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
