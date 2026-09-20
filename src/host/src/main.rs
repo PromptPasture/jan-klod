@@ -1207,20 +1207,24 @@ fn telegram(args: &[String]) -> ExitCode {
     }
 
     // Load config to extract telegram.allowed-senders (#257).
-    // If telegram section exists, use its allowlist (empty by default denies all).
-    // If missing, allow all (backward compat).
+    // Empty by default (denies all senders). An absent telegram section also defaults
+    // to deny all, aligning with the security model: "unlisted sender is refused before
+    // a session is created" (#257).
     let allowed_senders_opt = match Config::from_path(&config_path) {
-        Ok(config) => config
-            .agent
-            .get("telegram")
-            .and_then(|telegram_value| telegram_value.get("allowed-senders"))
-            .and_then(|senders_value| senders_value.as_array())
-            .map(|senders_array| {
-                senders_array
-                    .iter()
-                    .filter_map(serde_json::Value::as_i64)
-                    .collect::<Vec<_>>()
-            }),
+        Ok(config) => Some(
+            config
+                .agent
+                .get("telegram")
+                .and_then(|telegram_value| telegram_value.get("allowed-senders"))
+                .and_then(|senders_value| senders_value.as_array())
+                .map(|senders_array| {
+                    senders_array
+                        .iter()
+                        .filter_map(serde_json::Value::as_i64)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(), // Default to empty list if missing
+        ),
         Err(err) => {
             eprintln!("jan-klod: config load failed: {err}");
             return ExitCode::FAILURE;

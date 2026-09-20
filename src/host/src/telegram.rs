@@ -84,9 +84,10 @@ pub fn next_offset(updates: &[Update]) -> Option<i64> {
 ///
 /// `allowed_senders`: The list of sender ids permitted to drive turns. Senders not
 /// on the list are refused before a session is created, as per #257 (Telegram sender
-/// allowlist). If `None`, all senders are permitted (backward compat for tests).
-/// If 22b (#185) has moved the bot to a guest, the allowlist moves to the guest's
-/// config and the principal storage moves to the guest's session context — same rule.
+/// allowlist). An empty list denies all senders; the allowlist is loaded from config
+/// and defaults to empty (deny all) if the telegram section is absent. If 22b (#185)
+/// has moved the bot to a guest, the allowlist moves to the guest's config and the
+/// principal storage moves to the guest's session context — same rule.
 ///
 /// # Errors
 /// Returns a transport error string if `getUpdates` or a `sendMessage` fails.
@@ -126,15 +127,14 @@ pub fn poll_once(
             fetch,
             token,
             chat_id: update.chat_id,
-            sender_id: update.sender_id,
-            principal: principal.clone(),
             cursor: Rc::clone(&cursor),
             deferred: Rc::clone(&deferred),
         };
-        let answer = match agent.run_with_driver(&mut driver, &session, &update.text) {
-            RunResult::Answered { text, .. } => text,
-            RunResult::Failed(reason) => format!("(sorry — the turn failed: {reason})"),
-        };
+        let answer =
+            match agent.run_with_driver_principal(&mut driver, &session, &update.text, principal) {
+                RunResult::Answered { text, .. } => text,
+                RunResult::Failed(reason) => format!("(sorry — the turn failed: {reason})"),
+            };
         send_message(fetch, token, update.chat_id, &answer)?;
         // Anything that arrived while this turn was waiting runs next, in order.
         queue.extend(deferred.borrow_mut().drain(..));
@@ -165,16 +165,11 @@ fn send_message(fetch: Fetch, token: &str, chat_id: i64, text: &str) -> Result<(
 
 /// Puts an interceptor's question to the chat and waits for the user's next
 /// message there to answer it.
-#[allow(dead_code)]
 struct ChatDriver<'a> {
     fetch: Fetch<'a>,
     token: &'a str,
     /// The chat being asked — only its messages answer the question.
     chat_id: i64,
-    /// Sender id of this update (from message.from.id).
-    sender_id: i64,
-    /// Principal of the sender (`telegram:<sender_id>`), available for 28c downstream.
-    principal: Option<String>,
     /// Shared poll offset, advanced as this driver consumes updates.
     cursor: Rc<Cell<i64>>,
     /// Updates from other chats seen while waiting, to run after this turn.
