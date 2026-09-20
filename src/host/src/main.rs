@@ -100,6 +100,7 @@ fn main() -> ExitCode {
         // requires documented commands to exist, not the reverse.
         Some(jan_klod_core::sandbox_landlock::CONFINE_SUBCOMMAND) => confine(&args[1..]),
         Some("telegram") => telegram(&args[1..]),
+        Some("setup") => setup(&args[1..]),
         Some("verify") => verify(&args[1..]),
         Some("ask") => ask(&args[1..]),
         Some("ext") => ext(&args[1..]),
@@ -1294,6 +1295,48 @@ fn telegram(args: &[String]) -> ExitCode {
     }
 }
 
+fn setup(args: &[String]) -> ExitCode {
+    // Handle --help flag
+    if args.iter().any(|arg| arg == "--help") {
+        println!("Usage: jan-klod-gateway setup [distribution] [config-path] [ext-dir]");
+        println!();
+        println!("Perform a configuration audit on the provided paths.");
+        println!();
+        println!("Arguments:");
+        println!("  distribution   Name of the distribution (e.g., coding, assistant) [optional]");
+        println!("  config-path    Path to the configuration file (default: config.yaml)");
+        println!("  ext-dir        Path to the extensions directory (default: ext)");
+        println!();
+        println!("Options:");
+        println!("  --help         Show this help message");
+        return ExitCode::SUCCESS;
+    }
+
+    // Extract arguments: [distribution] [config-path] [ext-dir]
+    // distribution is optional
+    let non_flag_args: Vec<&String> = args.iter().filter(|arg| !arg.starts_with("--")).collect();
+
+    let distribution = non_flag_args.first().map(|s| s.as_str());
+    let config_path = if distribution.is_some() {
+        non_flag_args.get(1).map_or("config.yaml", |s| s.as_str())
+    } else {
+        non_flag_args.first().map_or("config.yaml", |s| s.as_str())
+    };
+    let ext_dir = if distribution.is_some() {
+        non_flag_args.get(2).map_or("ext", |s| s.as_str())
+    } else {
+        non_flag_args.get(1).map_or("ext", |s| s.as_str())
+    };
+
+    match crate::setup::audit(distribution, config_path, ext_dir) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("jan-klod: setup audit failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Positional arg `index` (0-based within the subcommand's args), or `default`.
 fn arg(args: &[String], index: usize, default: &str) -> String {
     args.get(index)
@@ -1400,6 +1443,8 @@ fn arg_or(args: &[String], index: usize, default: &str) -> String {
         .cloned()
         .unwrap_or_else(|| resolve_default(default))
 }
+
+mod setup;
 
 #[cfg(test)]
 mod tests {
