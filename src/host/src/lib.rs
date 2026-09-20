@@ -10,6 +10,7 @@
 //! integration tests drive a surface directly, without a subprocess.
 
 pub mod acp;
+pub mod config_write;
 pub mod mcp;
 pub mod pending;
 pub mod rpc;

@@ -60,6 +60,7 @@ mod session_memory;
 mod session_thread;
 mod sessions;
 mod setup;
+mod setup_idempotence;
 mod shipped_defaults;
 mod storage_scope;
 mod telegram;
