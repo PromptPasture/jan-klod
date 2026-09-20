@@ -62,7 +62,12 @@ impl Observability {
     /// Parse observability config from a top-level value.
     ///
     /// # Errors
-    /// Returns error if the value is not a string or is an invalid format.
+    /// Returns error if:
+    /// - the value is not a mapping (`ObservabilityNotMap`)
+    /// - `output-format` is not a string (`ObservabilityFormatNotString`)
+    /// - `output-format` has an invalid value like `plain` (`InvalidOutputFormat`)
+    ///
+    /// Returns `Ok` with `OutputFormat::Human` default if `output-format` is absent.
     pub fn from_value(value: &Value) -> Result<Self, ConfigError> {
         let Value::Object(obs) = value else {
             return Err(ConfigError::ObservabilityNotMap);
@@ -385,9 +390,6 @@ pub enum ConfigError {
     /// `observability:` section is not a mapping.
     #[error("observability: must be a mapping")]
     ObservabilityNotMap,
-    /// `observability:` section is missing `output-format` key.
-    #[error("observability: missing required key 'output-format'")]
-    ObservabilityMissingFormat,
     /// `observability.output-format` is not a string.
     #[error("observability: 'output-format' must be a string")]
     ObservabilityFormatNotString,
