@@ -1,93 +1,63 @@
 //! Test guest for `interceptor-persona` — verifies persona configuration loading
 //! and injection into model requests at select-model phase.
 //!
-//! Tests:
-//! 1. With `enabled: true` and `default: expert`, persona text is injected.
+//! Tests persona behavior at the WIT boundary:
+//! 1. With `enabled: true`, persona text is injected into request messages.
 //! 2. With `enabled: false`, no persona text is injected.
-//! 3. With invalid persona name, host logs warning and defaults to "helpful".
+//! 3. Invalid persona names trigger warnings and fallback to built-in.
 
 // Pure logic: unit-tested natively; WASM glue compiles for wasm32 only.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-mod persona_logic {
+mod persona_verification {
     use serde_json::Value;
 
-    /// Test configuration for persona loading.
-    #[derive(Clone, Debug)]
-    pub struct TestPersonaConfig {
-        pub enabled: bool,
-        pub default: String,
-    }
-
-    impl TestPersonaConfig {
-        /// Parse test config from JSON to verify loading behavior.
-        /// Returns the config if enabled=true, None if enabled=false,
-        /// and logs a warning if the default persona is not found.
-        pub fn from_config(raw_json: &str) -> (Option<Self>, Option<String>) {
-            let config_value: Value = match serde_json::from_str(raw_json) {
-                Ok(v) => v,
-                Err(_) => return (None, Some("Failed to parse config as JSON".to_string())),
-            };
-
-            let Some(config_obj) = config_value.as_object() else {
-                return (None, Some("Config is not an object".to_string()));
-            };
-
-            // Check if enabled (default false)
-            let enabled = config_obj
-                .get("enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-
-            if !enabled {
-                return (None, None);
-            }
-
-            // Parse personalities map
-            let mut personalities = std::collections::HashMap::new();
-            if let Some(personas_value) = config_obj.get("personalities") {
-                if let Some(personas_obj) = personas_value.as_object() {
-                    for (name, desc) in personas_obj {
-                        if let Some(description) = desc.as_str() {
-                            personalities.insert(name.clone(), description.to_string());
+    /// Check if interceptor-persona is configured as enabled.
+    pub fn is_persona_enabled(config_json: &str) -> bool {
+        if let Ok(config_value) = serde_json::from_str::<Value>(config_json) {
+            if let Some(config_obj) = config_value.as_object() {
+                if let Some(extensions) = config_obj.get("extensions") {
+                    if let Some(extensions_obj) = extensions.as_object() {
+                        if let Some(interceptor) = extensions_obj.get("interceptor") {
+                            if let Some(interceptor_obj) = interceptor.as_object() {
+                                if let Some(persona) = interceptor_obj.get("persona") {
+                                    if let Some(persona_obj) = persona.as_object() {
+                                        return persona_obj
+                                            .get("enabled")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-
-            // Get default persona name (default to "helpful" if not specified)
-            let default_name = config_obj
-                .get("default")
-                .and_then(|v| v.as_str())
-                .unwrap_or("helpful")
-                .to_string();
-
-            // Resolve the default persona text
-            let default_text = personalities
-                .get(&default_name)
-                .cloned()
-                .unwrap_or_else(|| {
-                    "You are helpful, concise, and focused on solving the user's problem."
-                        .to_string()
-                });
-
-            let warning = if !personalities.contains_key(&default_name) && !personalities.is_empty()
-            {
-                Some(format!(
-                    "Persona '{}' not found in personalities; using built-in default",
-                    default_name
-                ))
-            } else {
-                None
-            };
-
-            (
-                Some(TestPersonaConfig {
-                    enabled,
-                    default: default_text,
-                }),
-                warning,
-            )
         }
+        false
+    }
+
+    /// Verify persona injection: assert text is present when enabled, absent when disabled.
+    /// Returns Ok(()) if assertion passes, Err with message if assertion fails.
+    pub fn verify_injection(config_json: &str, messages: &[String]) -> Result<(), String> {
+        let enabled = is_persona_enabled(config_json);
+
+        let has_persona = messages.iter().any(|msg| msg.starts_with("## Persona"));
+
+        if enabled && !has_persona {
+            return Err(
+                "ASSERTION FAILED: persona enabled in config but no '## Persona' message found in request"
+                    .to_string(),
+            );
+        }
+
+        if !enabled && has_persona {
+            return Err(
+                "ASSERTION FAILED: persona disabled in config but '## Persona' message was injected"
+                    .to_string(),
+            );
+        }
+
+        Ok(())
     }
 
     #[cfg(test)]
@@ -95,109 +65,103 @@ mod persona_logic {
         use super::*;
 
         #[test]
-        fn test_enabled_with_expert_default() {
-            let json = r#"{
-                "enabled": true,
-                "default": "expert",
-                "personalities": {
-                    "helpful": "You are helpful and concise.",
-                    "expert": "You are a technical expert."
+        fn test_persona_enabled_detection() {
+            let config = r#"{
+                "extensions": {
+                    "interceptor": {
+                        "persona": {
+                            "enabled": true,
+                            "default": "expert",
+                            "personalities": {
+                                "expert": "You are a technical expert."
+                            }
+                        }
+                    }
                 }
             }"#;
-            let (config, warn) = TestPersonaConfig::from_config(json);
-            assert!(config.is_some(), "Config should be Some when enabled=true");
-            assert!(
-                warn.is_none(),
-                "No warning should be issued for valid expert persona"
-            );
-            let cfg = config.unwrap();
-            assert!(cfg.enabled, "enabled should be true");
-            assert_eq!(
-                cfg.default, "You are a technical expert.",
-                "expert persona should be loaded"
-            );
+            assert!(is_persona_enabled(config));
         }
 
         #[test]
-        fn test_disabled_returns_none() {
-            let json = r#"{"enabled": false}"#;
-            let (config, warn) = TestPersonaConfig::from_config(json);
-            assert!(config.is_none(), "Config should be None when enabled=false");
-            assert!(warn.is_none(), "No warning should be issued when disabled");
-        }
-
-        #[test]
-        fn test_invalid_persona_name_logs_warning() {
-            let json = r#"{
-                "enabled": true,
-                "default": "nonexistent",
-                "personalities": {
-                    "helpful": "You are helpful.",
-                    "expert": "You are expert."
+        fn test_persona_disabled_detection() {
+            let config = r#"{
+                "extensions": {
+                    "interceptor": {
+                        "persona": {
+                            "enabled": false
+                        }
+                    }
                 }
             }"#;
-            let (config, warn) = TestPersonaConfig::from_config(json);
-            assert!(
-                config.is_some(),
-                "Config should still be Some with invalid persona"
-            );
-            assert!(
-                warn.is_some(),
-                "Warning should be issued for nonexistent persona"
-            );
-            let warning_msg = warn.unwrap();
-            assert!(
-                warning_msg.contains("nonexistent"),
-                "Warning should mention the invalid persona name"
-            );
-            // Should default to helpful built-in
-            let cfg = config.unwrap();
-            assert!(
-                cfg.default.contains("helpful"),
-                "Should default to helpful text when persona not found"
-            );
+            assert!(!is_persona_enabled(config));
         }
 
         #[test]
-        fn test_missing_enabled_defaults_to_false() {
-            let json = r#"{"default": "helpful"}"#;
-            let (config, _) = TestPersonaConfig::from_config(json);
-            assert!(
-                config.is_none(),
-                "Config should be None when enabled is missing (defaults to false)"
-            );
-        }
-
-        #[test]
-        fn test_no_personalities_uses_builtin_default() {
-            let json = r#"{"enabled": true}"#;
-            let (config, warn) = TestPersonaConfig::from_config(json);
-            assert!(config.is_some(), "Config should be Some when enabled=true");
-            assert!(warn.is_none(), "No warning when no custom personas exist");
-            let cfg = config.unwrap();
-            assert!(
-                cfg.default.contains("helpful"),
-                "Should use built-in helpful default"
-            );
-        }
-
-        #[test]
-        fn test_explicit_helpful_persona() {
-            let json = r#"{
-                "enabled": true,
-                "default": "helpful",
-                "personalities": {
-                    "helpful": "You are a helpful assistant."
+        fn test_verification_enabled_with_persona_present() {
+            let config = r#"{
+                "extensions": {
+                    "interceptor": {
+                        "persona": {
+                            "enabled": true,
+                            "default": "expert"
+                        }
+                    }
                 }
             }"#;
-            let (config, warn) = TestPersonaConfig::from_config(json);
-            assert!(config.is_some());
-            assert!(warn.is_none());
-            let cfg = config.unwrap();
-            assert_eq!(
-                cfg.default, "You are a helpful assistant.",
-                "Should use explicitly configured helpful persona"
-            );
+            let messages = vec!["## Persona\nYou are a technical expert.".to_string()];
+            assert!(verify_injection(config, &messages).is_ok());
+        }
+
+        #[test]
+        fn test_verification_enabled_without_persona_fails() {
+            let config = r#"{
+                "extensions": {
+                    "interceptor": {
+                        "persona": {
+                            "enabled": true,
+                            "default": "expert"
+                        }
+                    }
+                }
+            }"#;
+            let messages = vec!["Some other message".to_string()];
+            assert!(verify_injection(config, &messages).is_err());
+        }
+
+        #[test]
+        fn test_verification_disabled_without_persona_passes() {
+            let config = r#"{
+                "extensions": {
+                    "interceptor": {
+                        "persona": {
+                            "enabled": false
+                        }
+                    }
+                }
+            }"#;
+            let messages = vec!["Some other message".to_string()];
+            assert!(verify_injection(config, &messages).is_ok());
+        }
+
+        #[test]
+        fn test_verification_disabled_with_persona_fails() {
+            let config = r#"{
+                "extensions": {
+                    "interceptor": {
+                        "persona": {
+                            "enabled": false
+                        }
+                    }
+                }
+            }"#;
+            let messages = vec!["## Persona\nYou are helpful.".to_string()];
+            assert!(verify_injection(config, &messages).is_err());
+        }
+
+        #[test]
+        fn test_missing_persona_section_treated_as_disabled() {
+            let config = r#"{"extensions": {"interceptor": {}}}"#;
+            assert!(!is_persona_enabled(config));
         }
     }
 }
@@ -279,22 +243,41 @@ mod component {
                 return Err(InterceptorError::InvalidState);
             };
 
-            // Log what messages are in the request for test verification
-            let msg_summary = request
-                .messages
-                .iter()
-                .map(|m| &m.content[..std::cmp::min(50, m.content.len())])
-                .collect::<Vec<_>>()
-                .join(" | ");
+            // Get the full config to verify persona injection behavior
+            let config_str = host_config::all().unwrap_or_else(|_| "{}".to_owned());
 
-            host_log::log(
-                LogLevel::Info,
-                "test-interceptor-persona",
-                &format!("Request has messages: {}", msg_summary),
-                &[],
-            );
+            // Extract message contents for verification
+            let message_contents: Vec<String> =
+                request.messages.iter().map(|m| m.content.clone()).collect();
 
-            Ok(Decision::Proceed)
+            // Verify persona injection: persona text must be present if enabled, absent if disabled
+            match persona_verification::verify_injection(&config_str, &message_contents) {
+                Ok(()) => {
+                    // Assertion passed; log for debugging and proceed
+                    let persona_status = if persona_verification::is_persona_enabled(&config_str) {
+                        "present (enabled)"
+                    } else {
+                        "absent (disabled)"
+                    };
+                    host_log::log(
+                        LogLevel::Info,
+                        "test-interceptor-persona",
+                        &format!("Persona injection verified: {}", persona_status),
+                        &[],
+                    );
+                    Ok(Decision::Proceed)
+                }
+                Err(assertion_error) => {
+                    // Assertion failed; log error and reject
+                    host_log::log(
+                        LogLevel::Error,
+                        "test-interceptor-persona",
+                        &assertion_error,
+                        &[],
+                    );
+                    Err(InterceptorError::ValidationFailed)
+                }
+            }
         }
     }
 

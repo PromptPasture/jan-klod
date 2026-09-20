@@ -224,7 +224,41 @@ mod component {
     impl Lifecycle for Component {
         fn init(_ctx: ExtensionContext) -> Result<(), String> {
             let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
-            let (config, warning) = persona::PersonaConfig::from_config(&raw);
+
+            // Extract the persona section from the full config
+            let persona_json =
+                if let Ok(config_value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    if let Some(config_obj) = config_value.as_object() {
+                        if let Some(extensions) = config_obj.get("extensions") {
+                            if let Some(extensions_obj) = extensions.as_object() {
+                                if let Some(interceptor) = extensions_obj.get("interceptor") {
+                                    if let Some(interceptor_obj) = interceptor.as_object() {
+                                        if let Some(persona) = interceptor_obj.get("persona") {
+                                            serde_json::to_string(persona)
+                                                .unwrap_or_else(|_| "{}".to_owned())
+                                        } else {
+                                            "{}".to_owned()
+                                        }
+                                    } else {
+                                        "{}".to_owned()
+                                    }
+                                } else {
+                                    "{}".to_owned()
+                                }
+                            } else {
+                                "{}".to_owned()
+                            }
+                        } else {
+                            "{}".to_owned()
+                        }
+                    } else {
+                        "{}".to_owned()
+                    }
+                } else {
+                    "{}".to_owned()
+                };
+
+            let (config, warning) = persona::PersonaConfig::from_config(&persona_json);
 
             if let Some(warn_msg) = warning {
                 log(LogLevel::Warn, &warn_msg);
