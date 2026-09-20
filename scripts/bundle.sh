@@ -2,7 +2,7 @@
 # Assemble a self-contained jan-klod bundle: core binary + selected guests +
 # pre-filled config + README, tarred as jan-klod-<version>-<os>-<arch>.tar.gz.
 #
-# Usage: bundle.sh <core-binary> <ext-dir> <config> <out-dir>
+# Usage: bundle.sh <core-binary> <ui-binary> <ext-dir> <config> <out-dir> [<skills-dir>]
 #
 # Optional environment:
 #   JK_DIST     the distribution's name, which the archive name carries
@@ -15,6 +15,7 @@ UI_BIN="$2"
 EXT_DIR="$3"
 CONFIG="$4"
 OUT="$5"
+SKILLS_DIR="${6:-}"
 
 VERSION="${JK_VERSION:-0.1.0}"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -58,6 +59,13 @@ if [ -d "$EXT_DIR" ]; then
 		\( -name '*.wasm' -o -name '*.manifest.toml' \) \
 		! -name 'tool-escape-probe.*' \
 		-exec cp {} "$DIR/ext/" \;
+fi
+
+# Copy bundled skills from the distribution's skills/ directory if present.
+# Skills are optional; absence is not an error.
+if [ -n "$SKILLS_DIR" ] && [ -d "$SKILLS_DIR" ]; then
+	mkdir -p "$DIR/skills"
+	find "$SKILLS_DIR" -maxdepth 1 -name '*.md' -exec cp {} "$DIR/skills/" \;
 fi
 
 # Verify the assembled bundle before tarring: a missing guest degrades silently

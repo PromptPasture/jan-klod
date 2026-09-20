@@ -1,5 +1,6 @@
-//! `registry-skills` — discovers Markdown skill files from `.agents/skills/`,
-//! exposes them as tools, and renders them on `invoke`.
+//! `registry-skills` — discovers Markdown skill files from `.agents/skills/`
+//! (workspace level, user override) and `skills/` (distribution level, bundled fallback),
+//! with workspace taking precedence, exposes them as tools, and renders them on `invoke`.
 //!
 //! Each skill file needs YAML front matter (`--- ... ---`) with `name:` and optional `description:`.
 //! `invoke` returns the template with raw JSON arguments appended as context.
@@ -76,40 +77,89 @@ fn yaml_str<'a>(front: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
-/// Scan `.agents/skills/` and load all Markdown files with `name:` in front matter.
+/// Load all Markdown files with `name:` in front matter from both sources.
+/// Merges skills from two sources in priority order:
+/// 1. `.agents/skills/` (workspace level, user override) — checked first
+/// 2. `skills/` (distribution level, bundled fallback) — checked second
+/// If a skill name exists in both, the workspace version wins.
 fn load_skills() -> Vec<Skill> {
-    let Ok(entries) = host_fs::list_dir(".agents/skills") else {
-        return Vec::new();
-    };
-    let mut skills = Vec::new();
-    for entry in entries {
-        if entry.is_dir {
-            continue;
+    use std::collections::HashMap;
+
+    let mut skills_map: HashMap<String, Skill> = HashMap::new();
+
+    // Load from distribution-level skills/ first (lower priority)
+    if let Ok(entries) = host_fs::list_dir("skills") {
+        for entry in entries {
+            if entry.is_dir {
+                continue;
+            }
+            let ext = entry.name.rsplit('.').next().unwrap_or("");
+            if !ext.eq_ignore_ascii_case("md") {
+                continue;
+            }
+            let path = format!("skills/{}", entry.name);
+            let Ok(content) = host_fs::read(&path) else {
+                continue;
+            };
+            let Some((front, body)) = split_frontmatter(&content) else {
+                continue;
+            };
+            let name = match yaml_str(front, "name") {
+                Some(n) if !n.is_empty() => n.to_owned(),
+                _ => continue,
+            };
+            let description = yaml_str(front, "description").unwrap_or("").to_owned();
+            skills_map.insert(
+                name.clone(),
+                Skill {
+                    name,
+                    description,
+                    path: path.clone(),
+                    body: body.to_owned(),
+                },
+            );
+            log(LogLevel::Debug, &format!("loaded skill from {path}"));
         }
-        let ext = entry.name.rsplit('.').next().unwrap_or("");
-        if !ext.eq_ignore_ascii_case("md") {
-            continue;
-        }
-        let path = format!(".agents/skills/{}", entry.name);
-        let Ok(content) = host_fs::read(&path) else {
-            continue;
-        };
-        let Some((front, body)) = split_frontmatter(&content) else {
-            continue;
-        };
-        let name = match yaml_str(front, "name") {
-            Some(n) if !n.is_empty() => n.to_owned(),
-            _ => continue,
-        };
-        let description = yaml_str(front, "description").unwrap_or("").to_owned();
-        skills.push(Skill {
-            name,
-            description,
-            path: path.clone(),
-            body: body.to_owned(),
-        });
-        log(LogLevel::Debug, &format!("loaded skill from {path}"));
     }
+
+    // Load from workspace-level .agents/skills/ second (higher priority, overrides)
+    if let Ok(entries) = host_fs::list_dir(".agents/skills") {
+        for entry in entries {
+            if entry.is_dir {
+                continue;
+            }
+            let ext = entry.name.rsplit('.').next().unwrap_or("");
+            if !ext.eq_ignore_ascii_case("md") {
+                continue;
+            }
+            let path = format!(".agents/skills/{}", entry.name);
+            let Ok(content) = host_fs::read(&path) else {
+                continue;
+            };
+            let Some((front, body)) = split_frontmatter(&content) else {
+                continue;
+            };
+            let name = match yaml_str(front, "name") {
+                Some(n) if !n.is_empty() => n.to_owned(),
+                _ => continue,
+            };
+            let description = yaml_str(front, "description").unwrap_or("").to_owned();
+            skills_map.insert(
+                name.clone(),
+                Skill {
+                    name,
+                    description,
+                    path: path.clone(),
+                    body: body.to_owned(),
+                },
+            );
+            log(LogLevel::Debug, &format!("loaded skill from {path}"));
+        }
+    }
+
+    // Convert HashMap to Vec and return
+    let mut skills: Vec<Skill> = skills_map.into_values().collect();
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
     skills
 }
 

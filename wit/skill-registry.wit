@@ -1,6 +1,7 @@
 package jan-klod:interfaces@0.3.0;
 
-/// Skill catalog — discovers and dispatches named skills from .agents/skills/.
+/// Skill catalog — discovers and dispatches named skills from .agents/skills/
+/// (workspace) and skills/ (distribution), with the workspace taking precedence.
 /// Implemented by: registry-skills
 interface skill-registry {
     enum skill-error {

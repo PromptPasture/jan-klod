@@ -303,7 +303,7 @@ JK_GUI_BIN := $(if $(GUI),$(GUI_BIN),)
 bundle: extensions
 	cd $(HOST_WS) && cargo build --release -p jan-klod-host -p jan-klod
 	@if [ -n "$(GUI)" ]; then $(MAKE) -C $(GUI_DIR) release; fi
-	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT); 	else 	  JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
+	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT) "$(abspath scripts/distributions/$(DIST)/skills)"; 	else 	  JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
 
 # Lint the host workspace, then say what this platform could not lint.
 #

@@ -2,6 +2,7 @@
 
 ## 2026-09-20
 
+- **Implement**: **Slice 30g — first-party skills ship inside the distribution archive** (#267). `registry-skills` now merges skills from two sources in priority order: `.agents/skills/` (workspace level, user override) checked first, and `skills/` (distribution level, bundled fallback) checked second. `scripts/bundle.sh` copies skill files into archives. Each distribution (`coding`, `headless-chat`, `minimal`, `self-extend`) ships three first-party skills: `commit.md` (clear commit message guidance), `review.md` (code review checklist), and `plan.md` (task breakdown patterns). The test `registry_skills_loads_bundled_and_workspace_overrides` verifies bundled skills are loaded and workspace override behavior works correctly.
 - **Implement**: **Slice 30c — interceptor-persona: personality as data, read from config at select-model** (#263). The extension reads a configured default persona at init time and injects it into each turn's context before model selection at the `select-model` phase.
 
 ## 2026-09-19
