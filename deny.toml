@@ -1,8 +1,8 @@
 # cargo-deny policy — the primary supply-chain gate for the Rust host workspace
 # (the repo root, whose members are pkgs/host/core, pkgs/host/config,
-# pkgs/host/host, pkgs/host/protocol, pkgs/host/session and src/tui), the guest
+# pkgs/host/host, pkgs/host/protocol, pkgs/host/session and pkgs/clients/tui), the guest
 # extensions workspace (pkgs/extensions/*, one shared Cargo.lock across all
-# guests), and the GUI shell workspace (src/gui, which owns the Tauri tree and is kept out of the host workspace precisely so that tree is not on
+# guests), and the GUI shell workspace (pkgs/clients/gui, which owns the Tauri tree and is kept out of the host workspace precisely so that tree is not on
 # everyone's build). One shared policy keeps the license / advisory / source rules
 # identical across all three workspaces. Every invocation points here with
 # `--config`, so the file's location is not significant. Closes the Phase 1
@@ -28,7 +28,7 @@
 # to delete the line. Nothing here may be a `vulnerability` or an `unsound` —
 # if a future entry would be, that is a different decision than this one.
 #
-# ⚠ This list is load-bearing for exactly one thing: `src/gui`. If the Tauri
+# ⚠ This list is load-bearing for exactly one thing: `pkgs/clients/gui`. If the Tauri
 # shell is ever dropped, delete this block with it rather than leaving six
 # standing exemptions for a tree nobody builds.
 ignore = [
@@ -84,7 +84,7 @@ confidence-threshold = 0.9
 # jan-klod's own Apache-2.0 code. If we ever patch one of them, that file's
 # source has to ship, and that is the obligation to remember.
 #
-# ⚠ Same scope note as the advisory block: these exist for `src/gui` alone.
+# ⚠ Same scope note as the advisory block: these exist for `pkgs/clients/gui` alone.
 exceptions = [
     { name = "cssparser", allow = ["MPL-2.0"] },
     { name = "cssparser-macros", allow = ["MPL-2.0"] },

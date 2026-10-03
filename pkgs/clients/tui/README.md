@@ -1,4 +1,4 @@
-# `src/tui` — the terminal client
+# `pkgs/clients/tui` — the terminal client
 
 The client you type into. **Separate process** (not extension): spawns `jan-klod-gateway rpc` and speaks newline-delimited JSON-RPC over pipes, or drives an existing gateway. Depends only on `jan-klod-protocol` wire contract (serde only, by design).
 
@@ -72,7 +72,7 @@ than from git:
 
 ## Colour and glyphs come from `theme.rs`, and only from there
 
-`src/tui/src/theme.rs` owns grey ramp (10 steps), accents (4), glyphs, capability detection. Ask for **roles** — `body()`, `border_active()`, `warning()` — or `Glyph`, never `Color` or `✓`.
+`pkgs/clients/tui/src/theme.rs` owns grey ramp (10 steps), accents (4), glyphs, capability detection. Ask for **roles** — `body()`, `border_active()`, `warning()` — or `Glyph`, never `Color` or `✓`.
 
 This is enforced rather than requested: Test `no_colour_literal_survives_outside_this_module` greps crate src/ and tests/, fails if literal appears elsewhere. Also asserts ≥7 scanned files (grep-nothing passes for free).
 

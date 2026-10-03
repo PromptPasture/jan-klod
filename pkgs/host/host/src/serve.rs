@@ -819,11 +819,11 @@ fn accepts_event_stream(headers: &HeaderMap) -> bool {
 }
 
 /// The web client, compiled into the binary via `include_str!`. No directory
-/// needed; resolves at **compile time**. `src/web/dist/` committed rather than
+/// needed; resolves at **compile time**. `pkgs/clients/web/dist/` committed rather than
 /// built in CI to avoid making Node a build dependency. See
 /// `docs/concepts/architecture.md#user-interfaces-separate-clients` (#119).
-const WEB_INDEX: &str = include_str!("../../../../src/web/dist/index.html");
-const WEB_APP_JS: &str = include_str!("../../../../src/web/dist/app.js");
+const WEB_INDEX: &str = include_str!("../../../clients/web/dist/index.html");
+const WEB_APP_JS: &str = include_str!("../../../clients/web/dist/app.js");
 
 /// A static asset, served with its content type.
 fn asset(body: &'static str, content_type: &'static str) -> Response {

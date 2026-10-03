@@ -6,7 +6,7 @@
 
 # The shared cargo-deny policy lives at the repo root — one policy for all three
 # workspaces. Resolve it absolutely so the target works from here.
-DENY_CONFIG := $(abspath $(CURDIR)/../../deny.toml)
+DENY_CONFIG := $(abspath $(CURDIR)/../../../deny.toml)
 
 # Where `stage` puts the binary. `jan-klod --gui` resolves `jan-klod-gui` as a
 # sibling of itself (jan_klod::sibling_bin), which a release bundle satisfies by
@@ -14,7 +14,7 @@ DENY_CONFIG := $(abspath $(CURDIR)/../../deny.toml)
 # `target/` directories. Copying it next to the host workspace's binaries is
 # what makes `make gui && make chat-gui` work without a second rule for how the
 # shell is found.
-CORE_DEBUG := $(abspath $(CURDIR)/../core/target/debug)
+CORE_DEBUG := $(abspath $(CURDIR)/../../../target/debug)
 
 build:
 	cargo build

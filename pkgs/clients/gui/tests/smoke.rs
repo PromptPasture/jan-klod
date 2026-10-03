@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 /// Timeout for webview to start and fetch two URLs (generous for cold `WebKit` on CI).
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Token key read by `src/web/src/api.ts`, restated to catch drift (not imported).
+/// Token key read by `pkgs/clients/web/src/api.ts`, restated to catch drift (not imported).
 const TOKEN_KEY: &str = "jan-klod-token";
 
 /// Whether a window can be opened at all here.
@@ -195,7 +195,7 @@ fn with_no_token_the_page_finds_nothing_rather_than_an_empty_string() {
 /// the window would drift, and a rule written once in
 /// `wit/client-surface.wit` would need enforcing twice.
 ///
-/// Grep-style, like `src/tui/tests/sidebar_projection.rs`, and outside the
+/// Grep-style, like `pkgs/clients/tui/tests/sidebar_projection.rs`, and outside the
 /// file it checks for the same reason. Comments are stripped first: `main.rs`
 /// explains its own boundaries in prose, and a scan that read the explanation
 /// would fail on a correct file.

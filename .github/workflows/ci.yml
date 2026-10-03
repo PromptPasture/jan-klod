@@ -171,23 +171,23 @@ jobs:
         with:
           node-version: '22.23.2'
           cache: npm
-          cache-dependency-path: src/web/package-lock.json
+          cache-dependency-path: pkgs/clients/web/package-lock.json
 
-      - name: Web client tests (src/web)
+      - name: Web client tests (pkgs/clients/web)
         run: make test-web
 
-      # The committed `src/web/dist/` is still what `src/web/src/` builds
+      # The committed `pkgs/clients/web/dist/` is still what `pkgs/clients/web/src/` builds
       # (#127). #119 box 1 committed the bundle on the argument that this
       # repository's other generated artifacts — protocol.schema.json,
       # ext/*.manifest.toml, wit/wkg.lock — each carry a drift check; dist/ was
       # the first one without. `serve.rs` embeds it with include_str!, so
-      # without this an edit to src/web/src/*.ts that is never rebuilt makes the
+      # without this an edit to pkgs/clients/web/src/*.ts that is never rebuilt makes the
       # core serve a stale client with the whole of CI green.
       #
       # Rebuilds in a temp tree and diffs, so the step cannot "fix" the drift by
       # leaving a rebuilt dist/ in the runner's checkout. The script says why it
       # uses `npm ci` rather than `npm install`.
-      - name: Web dist drift (src/web/dist is what src builds)
+      - name: Web dist drift (pkgs/clients/web/dist is what src builds)
         run: make web-dist-drift
 
       # The three cargo workspaces cannot inherit one [workspace.lints] block, so
@@ -285,17 +285,17 @@ jobs:
       - run: make gate
 
   gui:
-    name: GUI shell (src/gui)
+    name: GUI shell (pkgs/clients/gui)
     runs-on: ubuntu-latest
     # A job of its own, unlike `test-web`, and the reason is the tree rather
-    # than a preference: `src/gui` is a separate cargo workspace with 256
+    # than a preference: `pkgs/clients/gui` is a separate cargo workspace with 256
     # packages the host workspace does not have (#141). Folding it into
     # `lint-test` would put that build and a distinct `rust-cache` workspace key
     # on the job every other check waits for; here it runs in parallel on a
     # runner that bills at 1x.
     #
     # Nothing else in CI covers it: `make gate` and `make clippy` are the host
-    # workspace, and `src/gui` is not a member. Without this job the shell would
+    # workspace, and `pkgs/clients/gui` is not a member. Without this job the shell would
     # compile nowhere and its tests would run nowhere, which is the #130 failure
     # — a check that does not run looks exactly like one that passes. The
     # supply-chain job *does* cover it already, because the root `lockfile`,
@@ -309,7 +309,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src/gui
+          workspaces: pkgs/clients/gui
 
       # The build-time half of what #141 measured. `xvfb` is the other half:
       # a webview needs a display server, and without one `make test-gui` skips
@@ -323,7 +323,7 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev xvfb
 
       - name: Format
-        run: make -C src/gui fmt
+        run: make -C pkgs/clients/gui fmt
 
       - name: Lint
         run: make clippy-gui
@@ -350,7 +350,7 @@ jobs:
       # `.github/hooks/pre-push` — the same commands typed twice, free to drift.
       # Both now call the one target (#72).
       #
-      # Three workspaces since #142: the host, the guests, and `src/gui`. The
+      # Three workspaces since #142: the host, the guests, and `pkgs/clients/gui`. The
       # last is not built by any other job in this file, so this is the only
       # place its lock and its licences are checked — and it is the tree that
       # `deny.toml`'s eleven named entries exist for (#141).
@@ -409,7 +409,7 @@ jobs:
       - name: Supervisor supply-chain (mod verify + govulncheck)
         run: make supervisor-supply-chain
 
-      # The npm tree under src/web — the repository's third ecosystem, joining
+      # The npm tree under pkgs/clients/web — the repository's third ecosystem, joining
       # this job rather than becoming an exception to it (#120).
       #
       # node-version is pinned for the reason the three cargo tools above are:

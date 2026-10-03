@@ -6,13 +6,13 @@
 //! This binary is **only a window**. It does not spawn a gateway, resolve an
 //! address, or know what a session is — `jan-klod --gui` does all of that and
 //! then launches this with a URL that is already answering. That split is
-//! deliberate: `src/tui` already owns spawn-or-attach, and a second copy of
+//! deliberate: `pkgs/clients/tui` already owns spawn-or-attach, and a second copy of
 //! that rule would eventually find a different gateway than the REST path does.
 //!
 //! ## The one thing here that is not a window
 //!
 //! The core's token lives in `sessionStorage` under `jan-klod-token`, where the
-//! browser client puts it after prompting (`src/web/src/api.ts`). A window that
+//! browser client puts it after prompting (`pkgs/clients/web/src/api.ts`). A window that
 //! prompted the user for a token it was *already given* would be theatre, so
 //! this seeds it — and seeding a credential into a web page is a boundary, not
 //! a detail:
@@ -32,7 +32,7 @@ use std::process::{Command, ExitCode, Stdio};
 use tauri::{Url, WebviewUrl, WebviewWindowBuilder};
 
 /// Where the web client keeps the gateway token. Must match `TOKEN_KEY` in
-/// `src/web/src/api.ts` — if the two drift, the window silently prompts.
+/// `pkgs/clients/web/src/api.ts` — if the two drift, the window silently prompts.
 const TOKEN_KEY: &str = "jan-klod-token";
 
 /// The environment variable the whole repository already uses for the token:
@@ -104,7 +104,7 @@ struct Args {
 
 /// Read `--url <url>` and `--title <title>`.
 ///
-/// Hand-rolled for the same reason `src/tui` hand-rolls its own: two flags
+/// Hand-rolled for the same reason `pkgs/clients/tui` hand-rolls its own: two flags
 /// do not justify an argument-parsing dependency in a tree this large already.
 fn parse_args(args: &[String]) -> Result<Args, String> {
     const USAGE: &str = "usage: jan-klod-gui --url <url> [--title <title>]";

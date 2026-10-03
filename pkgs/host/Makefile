@@ -1,8 +1,9 @@
 .PHONY: build check test clippy audit deny clean
 
 # Builds, tests, and lints the Rust host workspace — core, config, host,
-# protocol and session, each a direct child of this directory, plus tui until it
-# moves (Phase 32d). The cargo workspace root is the repo root. Strictly that
+# protocol and session, each a direct child of this directory; the terminal client
+# (pkgs/clients/tui) is the workspace's one other member, and the cargo workspace
+# root is the repo root. Strictly that
 # workspace: actually running the integrated system needs the guests staged in
 # ext/, which spans both subtrees — that orchestration lives in the root Makefile.
 

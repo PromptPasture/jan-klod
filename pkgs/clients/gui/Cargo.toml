@@ -13,7 +13,7 @@
 #
 # The two counts above are the committed locks, recounted 2026-09-13; they drift
 # upward as either tree gains dependencies. #141 measured +256 and 406 -> 663
-# before the shell existed, and `src/gui/README.md` keeps that original table as
+# before the shell existed, and `pkgs/clients/gui/README.md` keeps that original table as
 # the dated record. Recount with `cargo metadata --locked` over both manifests
 # rather than trusting either number.
 [workspace]
@@ -43,7 +43,7 @@ tauri = "2"
 # For `serde_json::to_string` on the two values interpolated into the
 # initialization script. Adds **zero** packages: `tauri` already depends on it
 # at this version, so this only makes a transitive crate a named one — measured,
-# not assumed, the same way `src/tui` records `unicode-width`.
+# not assumed, the same way `pkgs/clients/tui` records `unicode-width`.
 #
 # Direct because escaping is our own concern: the token goes into a JavaScript
 # string literal, and `format!` with quotes around it would be an injection the

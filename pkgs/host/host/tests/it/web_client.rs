@@ -1,6 +1,6 @@
 //! The embedded web client is served, and serving it opened nothing else.
 //!
-//! `serve.rs` embeds `src/web/dist/` with `include_str!` and answers `GET /`
+//! `serve.rs` embeds `pkgs/clients/web/dist/` with `include_str!` and answers `GET /`
 //! and `GET /app.js` from it. Those two paths are exempt from the bearer-token
 //! check, because a browser cannot put an `Authorization` header on the
 //! navigation that fetches the page it is about to run.
@@ -36,7 +36,7 @@
 //! [`the_web_client_answers_every_frame_the_core_emits`] pins the one seam the
 //! other two halves cannot see between them.
 //!
-//! **Asserted, but not here.** `src/web/tests/turn.test.ts` drives the client's
+//! **Asserted, but not here.** `pkgs/clients/web/tests/turn.test.ts` drives the client's
 //! own logic — every frame kind rendered, an `ask` answered on a second
 //! request, cancel dropping the connection — against a stub. It is a real test
 //! and it passes, but nothing in `make gate` runs it, so this file does not
@@ -178,7 +178,7 @@ fn the_web_client_is_served_without_a_token() {
 /// the count assertion before the comparison.
 #[test]
 fn the_web_client_answers_every_frame_the_core_emits() {
-    let path = common::repo_root().join("src/web/src/frames.ts");
+    let path = common::repo_root().join("pkgs/clients/web/src/frames.ts");
     let source = std::fs::read_to_string(&path).expect("frames.ts is readable");
 
     let list = source

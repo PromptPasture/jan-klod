@@ -178,12 +178,12 @@ no host-side special case. If you want the proof rather than the instructions,
 
 ```console
 $ npm install -g @bytecodealliance/jco@1.34.0
-$ cd src/web && npm ci
+$ cd pkgs/clients/web && npm ci
 ```
 
-`jco` is expected on `PATH`; `esbuild` is reused from `src/web`'s pinned
+`jco` is expected on `PATH`; `esbuild` is reused from `pkgs/clients/web`'s pinned
 devDependency rather than installed a second time. Both versions are pinned —
-`jco` in `versions.mk`, `esbuild` in `src/web/package.json`.
+`jco` in `versions.mk`, `esbuild` in `pkgs/clients/web/package.json`.
 
 ### 2. Generate it
 

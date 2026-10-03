@@ -1,4 +1,4 @@
-# `src/web` — the browser client
+# `pkgs/clients/web` — the browser client
 
 Dependency-light TypeScript SPA served by core over REST + SSE. Built with `npm run build` → `dist/app.js`.
 

@@ -31,7 +31,7 @@
 //!
 //! ## Why `--gui` launches a second binary
 //!
-//! The Tauri shell lives in `src/gui`, which is a **separate cargo workspace**
+//! The Tauri shell lives in `pkgs/clients/gui`, which is a **separate cargo workspace**
 //! on purpose: Tauri resolves 329 packages nothing else here needs (#141), and
 //! as a member of the host workspace those would be on every `cargo test` and
 //! every CI run. So this crate cannot depend on it, and `--gui` instead does the
@@ -143,7 +143,7 @@ enum Mode {
     Repl,
     /// The full-screen `ratatui` terminal UI.
     Tui,
-    /// The Tauri window around the web client (`src/gui`).
+    /// The Tauri window around the web client (`pkgs/clients/gui`).
     Gui,
 }
 
@@ -294,7 +294,7 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `--gui`: ensure gateway listening, open web client in Tauri window (`src/gui`).
+/// `--gui`: ensure gateway listening, open web client in Tauri window (`pkgs/clients/gui`).
 /// All failures reported; no fallback to TUI (wrong machine info is worse than failing).
 fn gui(addr: Option<&str>, session: Option<&str>) -> ExitCode {
     // A session id would be a promise this cannot keep: the web client picks

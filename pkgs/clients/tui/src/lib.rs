@@ -49,7 +49,7 @@ pub fn gateway_bin() -> PathBuf {
     sibling_bin("jan-klod-gateway")
 }
 
-/// Resolve `jan-klod-gui` (Tauri shell in separate `src/gui` workspace—see [`sibling_bin`]).
+/// Resolve `jan-klod-gui` (Tauri shell in separate `pkgs/clients/gui` workspace—see [`sibling_bin`]).
 /// Optional: `cargo build` doesn't produce it; `--gui` checks and reports if missing.
 #[must_use]
 pub fn gui_bin() -> PathBuf {

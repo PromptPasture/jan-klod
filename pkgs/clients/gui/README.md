@@ -1,6 +1,6 @@
 # `jan-klod-gui` — the desktop window
 
-Tauri 2 window around **the web client the core serves**. Not a third codebase: `src/web` builds, `pkgs/host/core` serves at `/`, this opens a webview. Vision decision 5.
+Tauri 2 window around **the web client the core serves**. Not a third codebase: `pkgs/clients/web` builds, `pkgs/host/core` serves at `/`, this opens a webview. Vision decision 5.
 
 ```sh
 make gui       # build, stage beside host binaries
@@ -47,13 +47,13 @@ Entries carry scope notes (this crate only). If shell drops, exemptions go too (
 jan-klod-gui --url <url> [--title <title>]
 ```
 
-`jan-klod --gui` handles it: `ensure_gateway` (spawn-or-attach, in `src/tui`), then launch with answering URL. Second spawn-or-attach risks finding different gateway—the bug the split avoids.
+`jan-klod --gui` handles it: `ensure_gateway` (spawn-or-attach, in `pkgs/clients/tui`), then launch with answering URL. Second spawn-or-attach risks finding different gateway—the bug the split avoids.
 
 Found like the gateway: **sibling executable, then `PATH`** (`jan_klod::sibling_bin`). Release bundles satisfy this (three binaries side-by-side); dev trees don't (two workspaces). `make gui` staging fixes this (vs. a checkout-only lookup rule).
 
 ## The one thing here that is not a window
 
-Core token lives in `sessionStorage` (`jan-klod-token`, set by `src/web/src/api.ts`). Window with existing token shouldn't ask again—so this seeds it, making the window a credential boundary.
+Core token lives in `sessionStorage` (`jan-klod-token`, set by `pkgs/clients/web/src/api.ts`). Window with existing token shouldn't ask again—so this seeds it, making the window a credential boundary.
 
 Two rules, both tested, both cited from `docs/concepts/security-model.md`:
 

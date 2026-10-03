@@ -335,7 +335,7 @@ fn every_guest_facing_backend_goes_through_the_policy() {
     // `expect` not silent `continue`: hand-named files; rename moving one out
     // leaves check green with nothing scanned (happened with `ui/` → `tui/`).
     // Missing file = broken test, not absent binary.
-    for binary in ["pkgs/host/host/src/main.rs", "src/tui/src/main.rs"] {
+    for binary in ["pkgs/host/host/src/main.rs", "pkgs/clients/tui/src/main.rs"] {
         let path = common::repo_root().join(binary);
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("{} is readable: {e}", path.display()));

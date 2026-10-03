@@ -25,7 +25,7 @@
 //! because the collapsed form exists to be scanned down.
 //!
 //! ```text
-//! ▍ ▸ ✓ edit  src/tui/src/blocks.rs
+//! ▍ ▸ ✓ edit  pkgs/clients/tui/src/blocks.rs
 //! ▍ ▾ ✗ read  missing.txt
 //! ▍   {
 //! ▍     "path": "missing.txt"
@@ -855,7 +855,7 @@ mod tests {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
         let edit = call(
             "edit",
-            Some(r#"{"path":"src/tui/src/blocks.rs","old":"a","new":"b"}"#),
+            Some(r#"{"path":"pkgs/clients/tui/src/blocks.rs","old":"a","new":"b"}"#),
             done("ok"),
         );
         let lines = block(&edit, false, 80, theme);
@@ -863,7 +863,7 @@ mod tests {
         let head = plain(&lines[0]);
         assert!(head.contains("edit"), "the tool is not named: {head:?}");
         assert!(
-            head.contains("src/tui/src/blocks.rs"),
+            head.contains("pkgs/clients/tui/src/blocks.rs"),
             "the path is what the reader came for: {head:?}"
         );
         assert!(

@@ -338,7 +338,7 @@ mod tests {
     ///
     /// No fence is highlighted — tagged or not. Every policy-clean highlighter
     /// measured cost between 136 MB and 540 MB of build output for a terminal
-    /// chat client, and the cheap one failed the licence policy; `src/tui`'s
+    /// chat client, and the cheap one failed the licence policy; `pkgs/clients/tui`'s
     /// reasoning is in README.md. So a code block is marked by its surface and
     /// its indent and by nothing else, and this test is what a future
     /// highlighting slice has to come back and change deliberately.

@@ -85,7 +85,7 @@ test:
 # for the same reason: a build that quietly produced nothing would look exactly
 # like one that worked.
 #
-# Two tools, one of them already here. `esbuild` is `src/web`'s pinned
+# Two tools, one of them already here. `esbuild` is `pkgs/clients/web`'s pinned
 # devDependency and is reused rather than installed again; `jco` is the new
 # one, and is expected on PATH rather than vendored, because 326 MB of
 # `node_modules` per clone is not a cost this repository imposes by default.
@@ -99,7 +99,7 @@ test:
 # above is. The world each one binds comes from its name prefix, the same rule
 # the Rust kinds follow, so a new guest needs no second edit here.
 TS_GUESTS := tool-hello-ts
-ESBUILD := $(ROOT)/src/web/node_modules/.bin/esbuild
+ESBUILD := $(ROOT)/pkgs/clients/web/node_modules/.bin/esbuild
 
 .PHONY: ts-guest
 # One shell block, not four recipe lines: a guard that `exit 0`s only ends its
@@ -110,8 +110,8 @@ ts-guest:
 	  echo "skipping $(TS_GUESTS): jco is not on PATH"; \
 	  echo "  install it with: npm install -g @bytecodealliance/jco@$(JCO_VERSION)"; \
 	elif [ ! -x $(ESBUILD) ]; then \
-	  echo "skipping $(TS_GUESTS): src/web's esbuild is not installed"; \
-	  echo "  install it with: cd src/web && npm ci"; \
+	  echo "skipping $(TS_GUESTS): pkgs/clients/web's esbuild is not installed"; \
+	  echo "  install it with: cd pkgs/clients/web && npm ci"; \
 	else \
 	  set -e; \
 	  mkdir -p $(EXT_DIR); \

@@ -3,7 +3,7 @@
 //! # Nothing here computes a diff
 //!
 //! `tool-git op=diff` runs git and returns git's stdout (already a unified diff).
-//! This parses and renders it; see `src/tui/README.md` for measurements.
+//! This parses and renders it; see `pkgs/clients/tui/README.md` for measurements.
 //!
 //! # The sign is a character, not a colour
 //!

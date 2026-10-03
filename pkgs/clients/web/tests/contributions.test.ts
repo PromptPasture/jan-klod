@@ -243,7 +243,7 @@ test("markup in a label is carried as text, not interpreted or dropped", async (
  * renders markup as characters. One `innerHTML` would undo that silently and
  * no assertion over a stub would notice.
  *
- * Grep-style, like `src/tui/tests/sidebar_projection.rs`. Comments are
+ * Grep-style, like `pkgs/clients/tui/tests/sidebar_projection.rs`. Comments are
  * stripped first, for the reason that file gives about living outside the
  * code it checks: `app.ts` explains in prose *why* it never assigns HTML, and
  * a scan that read its own explanation would fail on a correct file. It did,

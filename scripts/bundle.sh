@@ -44,7 +44,7 @@ cp "$CONFIG" "$DIR/config.yaml"
 if [ -n "${JK_GUI_BIN:-}" ]; then
 	[ -f "$JK_GUI_BIN" ] || {
 		echo "bundle: JK_GUI_BIN is set but '$JK_GUI_BIN' does not exist" >&2
-		echo "bundle: run 'make -C src/gui release' first" >&2
+		echo "bundle: run 'make -C pkgs/clients/gui release' first" >&2
 		exit 1
 	}
 	cp "$JK_GUI_BIN" "$DIR/jan-klod-gui"

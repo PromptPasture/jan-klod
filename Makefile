@@ -14,18 +14,16 @@ include versions.mk
 # is where its sub-makefile and the crates live.
 HOST_WS := .
 HOST_MK := pkgs/host
-# The one host-workspace member that is not under pkgs/host yet (32d moves it).
-TUI := src/tui
 EXT := pkgs/extensions
 SUPERVISOR := pkgs/host/supervisor
-WEB := src/web
+WEB := pkgs/clients/web
 # The Tauri shell (#141, #142). Its own cargo workspace, deliberately: Tauri
 # resolves 329 packages nothing else here needs, and as a member of $(HOST_WS) they
 # would be on every `cargo test` and every CI run. Nothing on the default build
 # path reaches it — `all` does not, `gate` does not — which is the point. Its
 # supply-chain gates are *not* optional in the same way: `lockfile`, `deny` and
 # `audit` below all name it.
-GUI_DIR := src/gui
+GUI_DIR := pkgs/clients/gui
 
 # EXT_DIR mirrors the extensions sub-makefile's staging dir.
 CONFIG := $(abspath config.yaml)
@@ -67,11 +65,11 @@ help:
 	@echo "              the integration suite needs 'gate' or 'harness' instead"
 	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
-	@echo "  test-web    run the browser client's suite (src/web; needs Node, not in 'test')"
-	@echo "  test-gui    run the Tauri shell's suite (src/gui; needs a display, not in 'test')"
+	@echo "  test-web    run the browser client's suite (pkgs/clients/web; needs Node, not in 'test')"
+	@echo "  test-gui    run the Tauri shell's suite (pkgs/clients/gui; needs a display, not in 'test')"
 	@echo "  clippy-gui  lint the Tauri shell (-D warnings)"
 	@echo "  clippy-guests lint the wasm guests, native + wasm32 (-D warnings)"
-	@echo "  web-dist-drift  check src/web/dist/ is still what src/web/src/ builds"
+	@echo "  web-dist-drift  check pkgs/clients/web/dist/ is still what pkgs/clients/web/src/ builds"
 	@echo "  lints-drift     check the [workspace.lints] blocks of the three cargo workspaces agree"
 	@echo "  registry-index  write the registry index for ext/ (REGISTRY_INDEX=path)"
 	@echo "  registry-index-drift  check that index generation is deterministic"
@@ -85,7 +83,7 @@ help:
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
 	@echo "  sbom        generate sbom.cdx.json for Rust workspace (cargo-cyclonedx)"
-	@echo "  web-supply-chain  npm lockfile sync + npm audit for src/web"
+	@echo "  web-supply-chain  npm lockfile sync + npm audit for pkgs/clients/web"
 	@echo "  supervisor-supply-chain  go mod verify + govulncheck for pkgs/host/supervisor"
 	@echo "  run         boot the core against config.yaml + ext/"
 	@echo "  chat-gui    open the web client in a window (builds the shell first)"
@@ -332,7 +330,7 @@ bundle: extensions
 # answer is "CI covers these", said out loud on every run.
 clippy: check-spike-deps
 	$(MAKE) -C $(HOST_MK) clippy
-	@sh scripts/unlinted-elsewhere.sh $(HOST_MK) $(TUI)
+	@sh scripts/unlinted-elsewhere.sh $(HOST_MK) pkgs/clients/tui
 
 # --- Supply-chain gates (CI enforces all of these) ---
 
@@ -354,7 +352,7 @@ lockfile:
 
 # Each subtree owns its own audit/deny invocation; root fans out to all three.
 #
-# `src/gui` is here and not optional. It is the tree that made `deny.toml` grow
+# `pkgs/clients/gui` is here and not optional. It is the tree that made `deny.toml` grow
 # eleven named entries (#141), so a policy run that skipped it would be checking
 # every workspace except the one the policy was widened for.
 audit deny:
@@ -364,7 +362,7 @@ audit deny:
 
 # CycloneDX SBOM for all Rust crates. Install once: cargo install cargo-cyclonedx
 #
-# `src/gui` is generated too, and it is not a formality: `jan-klod-gui` is a
+# `pkgs/clients/gui` is generated too, and it is not a formality: `jan-klod-gui` is a
 # binary a `-gui` archive ships, and it carries 329 packages none of the others
 # do (#141). An SBOM that describes the gateway and the client but not the third
 # binary in the same tarball answers the question it exists to answer — "what is
@@ -383,8 +381,8 @@ audit deny:
 # the five and the SBOM lost them. A glob that quietly describes less than it
 # claims is the failure this repository keeps paying for, so the count is
 # asserted rather than trusted.
-# The glob names each group directory once; 32c/32d extend it as groups move.
-SBOM_DOCS := $(HOST_MK)/*/*.cdx.json $(TUI)/*.cdx.json src/gui/*.cdx.json
+# One glob per group directory: every package that writes a document beside its manifest.
+SBOM_DOCS := $(HOST_MK)/*/*.cdx.json pkgs/clients/*/*.cdx.json
 sbom:
 	cd $(HOST_WS) && cargo cyclonedx --format json --quiet
 	cd $(GUI_DIR) && cargo cyclonedx --format json --quiet
@@ -403,7 +401,7 @@ sbom:
 # gate that passes.
 #
 # Advisories only. `npm audit` is the analogue of `cargo audit`; there is no
-# analogue here of `cargo deny`'s licence and source policy, so src/web's
+# analogue here of `cargo deny`'s licence and source policy, so pkgs/clients/web's
 # dependencies are checked for known vulnerabilities and for nothing else.
 #
 # `npm ci --dry-run` first, and it is load-bearing rather than belt-and-braces:
@@ -414,7 +412,7 @@ sbom:
 # tree that builds. `--dry-run` because resolving the tree is the whole point;
 # installing it is not, and `npm audit` needs no node_modules.
 #
-# DO NOT add --omit=dev or --production here. Every one of src/web's 29
+# DO NOT add --omit=dev or --production here. Every one of pkgs/clients/web's 29
 # packages is a devDependency (esbuild + typescript; there are no runtime
 # dependencies at all), so omitting them makes this command scan an empty set,
 # report "found 0 vulnerabilities" and exit 0 forever. The usual advice — audit

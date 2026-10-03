@@ -6,14 +6,14 @@ members = [
     "pkgs/host/host",
     "pkgs/host/protocol",
     "pkgs/host/session",
-    "src/tui",
+    "pkgs/clients/tui",
 ]
 # Both are cargo workspaces in their own right, sitting under this one's
 # directory. Each declares its own `[workspace]`, so cargo's upward search stops
 # there and neither is silently adopted as a member — naming them here says so
 # out loud, and makes a future glob in `members` safe. `pkgs/host/supervisor`
-# (Go) and `src/web` (TypeScript) carry no manifest and need no entry.
-exclude = ["pkgs/extensions", "src/gui"]
+# (Go) and `pkgs/clients/web` (TypeScript) carry no manifest and need no entry.
+exclude = ["pkgs/extensions", "pkgs/clients/gui"]
 
 [workspace.package]
 edition = "2021"

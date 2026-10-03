@@ -175,7 +175,7 @@ UIs are **not extensions, not part of core.** They are optional separate **clien
 
 `jan-klod --gui` opens the **same** front-end the browser gets — the one core serves at `/` — in a system webview. No third codebase (Vision decision 5).
 
-The Tauri shell is `src/gui`, **its own cargo workspace**, not a host member. Not tidiness: Tauri adds **329 packages** not needed otherwise; as a member they'd land in `src/Cargo.lock` (406 → 735) and be resolved/built by every `cargo test`, `cargo clippy --workspace`, and CI run regardless of window changes. Kept separate, they're behind `make gui` only.
+The Tauri shell is `pkgs/clients/gui`, **its own cargo workspace**, not a host member. Not tidiness: Tauri adds **329 packages** not needed otherwise; as a member they'd land in `src/Cargo.lock` (406 → 735) and be resolved/built by every `cargo test`, `cargo clippy --workspace`, and CI run regardless of window changes. Kept separate, they're behind `make gui` only.
 
 Cost measured before implementation ([#141]):
 
@@ -200,9 +200,9 @@ On macOS the webview is WKWebView (no install needed). On Linux it is `webkit2gt
 
 #### The window is handed the token, and only on the core's origin
 
-The web client keeps the gateway token in `sessionStorage` and prompts for 401 (`src/web/src/api.ts`). A window launched with a token shouldn't force a retype, so the shell seeds it via Tauri initialization script — making the window a credential boundary.
+The web client keeps the gateway token in `sessionStorage` and prompts for 401 (`pkgs/clients/web/src/api.ts`). A window launched with a token shouldn't force a retype, so the shell seeds it via Tauri initialization script — making the window a credential boundary.
 
-Two rules (both in `src/gui/src/main.rs`, both tested):
+Two rules (both in `pkgs/clients/gui/src/main.rs`, both tested):
 
 - The seed **checks `location.origin` first.** Initialization scripts run in every webview frame, so an unguarded one would hand the token to embedded pages.
 - Navigation **off the core's origin is refused** and handed to the system browser (second-line guard).
@@ -211,13 +211,13 @@ Two rules (both in `src/gui/src/main.rs`, both tested):
 
 #### The web client's bundle is committed, and the alternative costs more than it looks
 
-`src/web` builds to 5.5 kB ES module with no runtime dependencies; core embeds it via `include_str!` so the binary carries the page — no directory to ship. `include_str!` resolves at **compile time** — the bundle is either in the tree when `cargo build` runs or not; a decision, not a detail.
+`pkgs/clients/web` builds to 5.5 kB ES module with no runtime dependencies; core embeds it via `include_str!` so the binary carries the page — no directory to ship. `include_str!` resolves at **compile time** — the bundle is either in the tree when `cargo build` runs or not; a decision, not a detail.
 
 **Committed** for two reasons. First: the alternative is not "build in CI" — it is **Node becoming a core-build dependency**. Every `cargo build`, `make gate`, and CI job would need `npm run build` first; none install Node today. Large tax on everyone who never touches the web client so one generated file stays absent from git.
 
 Second: this repo does this three times already. `pkgs/host/protocol/schema/protocol.schema.json` is generated and committed with a drift test; `ext/*.manifest.toml` from real imports; `wit/wkg.lock` likewise. "No generated artifacts" isn't this repo's property, so preserving it here buys nothing while costing the first reason.
 
-**What the choice costs.** Committed bundles can go stale: editing `src/web/src` and forgetting to rebuild serves the old page silently. `make web-dist-drift` catches it (#127): rebuilds into a temp tree and diffs (same regenerate-and-compare as the schema test). Works because esbuild is reproducible — macOS-built, Linux rebuilds byte-for-byte.
+**What the choice costs.** Committed bundles can go stale: editing `pkgs/clients/web/src` and forgetting to rebuild serves the old page silently. `make web-dist-drift` catches it (#127): rebuilds into a temp tree and diffs (same regenerate-and-compare as the schema test). Works because esbuild is reproducible — macOS-built, Linux rebuilds byte-for-byte.
 
 Unlike the schema's, it needs **Node**, so it's not on `make gate`; it runs in CI's lint-test job, not locally. Narrower guard: catches staleness on every push/PR, not at commit. That asymmetry is the real cost.
 

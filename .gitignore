@@ -618,7 +618,6 @@ sbom.spdx.json
 sbom.cdx.json
 # Every crate in both Rust workspaces is a direct child of src/, and
 # cargo-cyclonedx writes each document beside its own manifest.
-src/*/*.cdx.json
 pkgs/*/*/*.cdx.json
 
 # Every workspace's Cargo.lock IS committed — these binaries are applications,
@@ -634,13 +633,13 @@ pkgs/*/*/*.cdx.json
 # a deliberate line here rather than a default that flipped.
 !/Cargo.lock
 !pkgs/extensions/Cargo.lock
-!src/gui/Cargo.lock
+!pkgs/clients/gui/Cargo.lock
 
 # Tauri's build-time output: `tauri-build` regenerates `gen/schemas/` from
 # tauri.conf.json on every compile, and one of the files it writes is named for
 # the platform that ran it (macOS-schema.json). Committing them would put a
 # per-OS artifact in the tree and make every cross-platform build show a diff.
-src/gui/gen/
+pkgs/clients/gui/gen/
 
 # The default session store (`storage.path`), written by any real boot —
 # `make run`, `make serve`, or a gateway started by hand. Unanchored, for the
@@ -666,7 +665,7 @@ wasmtime-cache/
 /.agents/TODO.md
 /.agents/LOOP.md
 
-# `src/web/dist/` is deliberately NOT ignored — the core embeds it with
+# `pkgs/clients/web/dist/` is deliberately NOT ignored — the core embeds it with
 # `include_bytes!`, which resolves at compile time, so an absent bundle would
 # make Node a dependency of every `cargo build`. Committed like this
 # repository's other generated artifacts (protocol.schema.json, ext/*.manifest.toml,
