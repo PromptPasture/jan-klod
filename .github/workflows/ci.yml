@@ -226,6 +226,9 @@ jobs:
   harness:
     name: Component harness (exit gate)
     runs-on: ubuntu-latest
+    # nextest is configured never to terminate a slow test (.config/nextest.toml),
+    # so a hung test would otherwise run to GitHub's six-hour limit (#286).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
