@@ -404,6 +404,18 @@ A one-shot conversion runs at boot (`event_log::migrate_transcripts`, from `Runt
 
 Required, not optional: with log-based read surfaces, unconverted databases have unlisted, unreadable sessions. Unrecoverable is what the old format never held — tool calls, warnings, `ask` and answer — so migrated turns are exactly two events, with `done` carrying `agentic: false` because the transcript didn't record them.
 
+## Repository layout
+
+Implementation lives under `pkgs/`, in three groups; every package has the same shape (`src/`, `tests/`, `examples/`, `docs/`, `README.md` and its manifest — a directory exists only when it has content).
+
+| Group | Holds |
+|---|---|
+| `pkgs/host/*` | The host crates (`core`, `config`, `host`, `protocol`, `session`) and the Go `supervisor` |
+| `pkgs/extensions/*` | Every guest, flat, named by kind (`tool-*`, `interceptor-*`, `provider-*`, `registry-*`) |
+| `pkgs/clients/*` | The terminal (`tui`), web and Tauri (`gui`) clients |
+
+There are **three cargo workspaces**: the repo-root `Cargo.toml` (the host crates and `tui`), `pkgs/extensions/Cargo.toml` (the guests, built for `wasm32-wasip2`), and `pkgs/clients/gui/Cargo.toml` (kept apart for the reason given under [User interfaces](#user-interfaces-separate-clients)). Cargo cannot share `[workspace.lints]` across workspaces, so the three blocks are kept identical by `make lints-drift`; every other lint and supply-chain config (`deny.toml`, `.golangci.yml`, `.config/nextest.toml`) sits at the root and covers all of them. `wit/` (the contracts), `ext/` (staged components), `scripts/` and `docs/` stay at the root.
+
 ## Stack
 
 | Layer | Technology |

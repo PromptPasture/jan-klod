@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-03
+
+- **Refactor**: **Phase 32 — `src/` becomes `pkgs/`** ([#274](https://github.com/PromptPasture/jan-klod/issues/274)). Packages are grouped `pkgs/host/*`, `pkgs/extensions/*` and `pkgs/clients/*`; the repo-root `Cargo.toml` is the host workspace, the guests and the Tauri shell keep their own. Every package has a README, and three package-specific wiki pages moved into their package's `docs/`. `make lints-drift` keeps the three `[workspace.lints]` blocks identical. Paths in this changelog's earlier entries are as they were when written.
+
 ## 2026-09-20
 
 - **Implement**: **Slice 28e — Telegram sender allowlist: the sender id the Bot API asserts becomes the principal `telegram:<sender_id>`** (#257). `headless-chat` ships `telegram.allowed-senders: []` empty by default, refusing all senders until an operator explicitly lists them. Before a session is created, an unlisted sender is refused with a log message. The principal is passed through `run_with_driver_principal` to the conductor for downstream access in the interceptor. Test: `host/tests/it/telegram.rs::telegram_sender_allowlist_refuses_unlisted_and_accepts_listed`.

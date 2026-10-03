@@ -64,7 +64,7 @@ Carried forward:
 - [x] **LLM classifier** — constrained call; ambiguous/failed → `agentic`.
 
 Recast:
-- [x] New guest `src/extensions/interceptor-intent-router/` exporting `interceptor-world`; router module moved verbatim (17 tests pass).
+- [x] New guest `pkgs/extensions/interceptor-intent-router/` exporting `interceptor-world`; router module moved verbatim (17 tests pass).
 - [x] `subscribed-phases()` → `[before-loop]`; `intercept`: `simple` → `block`, `agentic` → `proceed`.
 - [x] LLM classifier via routed `llm-provider` import (replaces in-manager call).
 - [x] Build `make interceptor-intent-router[-docker]`; staged component exports `interceptor` + `extension-lifecycle`.

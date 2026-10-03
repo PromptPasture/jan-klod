@@ -1,6 +1,6 @@
 # Decisions
 
-Session handoffs and architecture decision records, newest first.
+Session handoffs and architecture decision records, newest first. File paths in them follow the `pkgs/` layout (Phase 32), rewritten where the path existed before it.
 
 - [2026-09-18 — Vision: The Enterprise Box](2026-09-18-enterprise-box/Vision.md) — the product's other half: enterprise capability ships as extensions, with four host-side exceptions (principal extraction, secrets backends, log integrity, structured logging). Answers the parked memory question (episodic yes, curation no), retires the observability claim, and phases the work as Phases 26–31 — trusted delivery, secrets, identity, audit, batteries, distribution
 - [2026-09-18 — Two turns at once](2026-09-18-two-turns-at-once/Decision.md) — per-session `AgentSession`s rather than a resumable turn; measured **1.35 MB and 3.5 ms** per extra agent, `Runtime` already `Send + Sync`, store already shared. Consequences: interceptor and tool state become per-session, adoption needs coordination
