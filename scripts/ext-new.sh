@@ -73,6 +73,25 @@ case "$KIND" in
 esac
 
 
+# Every package carries a README (Phase 32): what it is, how it builds, where its
+# capabilities are recorded. The description line is the same placeholder the
+# manifest carries; an author replaces both.
+write_readme() {
+    cat > "$EXT/$NAME/README.md" <<EOF
+# $NAME
+
+A $KIND extension. Replace this description with what it does.
+
+A \`$KIND\` extension: a WebAssembly component built against [\`wit/\`](../../../wit).
+
+\`\`\`sh
+$1
+\`\`\`
+
+The capabilities it needs are read from the built component into \`ext/$NAME.manifest.toml\`; they are not listed here.
+EOF
+}
+
 # --- TypeScript ---------------------------------------------------------------
 #
 # A second language, generated the same way. What differs from the Rust path is
@@ -197,6 +216,7 @@ EOF
         ' "$EXT/Makefile" > "$EXT/Makefile.tmp" && mv "$EXT/Makefile.tmp" "$EXT/Makefile"
     fi
 
+    write_readme "make -C pkgs/extensions ts-guest"
     echo "ext-new: wrote $EXT/$NAME ($KIND, $WORLD, TypeScript)"
     echo "ext-new: registered in TS_GUESTS"
     echo "ext-new: next — \`make -C pkgs/extensions ts-guest\` builds it (needs jco)"
@@ -367,6 +387,7 @@ EOF
         ' "$EXT/Makefile" > "$EXT/Makefile.tmp" && mv "$EXT/Makefile.tmp" "$EXT/Makefile"
     fi
 
+    write_readme "make -C pkgs/extensions py-guest"
     echo "ext-new: wrote $EXT/$NAME ($KIND, $WORLD, Python)"
     echo "ext-new: registered in PY_GUESTS"
     echo "ext-new: next — \`make -C pkgs/extensions py-guest\` builds it (needs componentize-py)"
@@ -621,6 +642,7 @@ else
     rustfmt --edition 2021 "$EXT/$NAME/src/lib.rs"
 fi
 
+write_readme "make -C pkgs/extensions all   # builds every guest and stages ext/$NAME.wasm with its manifest"
 echo "ext-new: wrote $EXT/$NAME ($KIND, $WORLD)"
 echo "ext-new: registered in the extensions workspace and GUESTS"
 echo "ext-new: next — \`make extensions\` builds it and generates its manifest"

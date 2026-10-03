@@ -7,7 +7,7 @@ created: 2026-06-29T00:00:00Z
 updated: 2026-09-18T00:00:00Z
 ---
 
-`config.yaml` declares which extensions run and how. The **core** loads it and turns it into **extension instances**; everything domain-specific is opaque and handed to the instance through [`host-config`](contracts.md#host-provided-interfaces).
+`config.yaml` declares which extensions run and how. The **core** loads it and turns it into **extension instances**; everything domain-specific is opaque and handed to the instance through [`host-config`](../../../../docs/concepts/contracts.md#host-provided-interfaces).
 
 ## File shape
 
@@ -45,7 +45,7 @@ The core interprets exactly two keys per entry; **everything else is opaque**.
 
 The directory the core resolves components against — **build output**: `make ext` puts `.wasm` per guest, plus `<name>.manifest.toml` declaring what it needs. Neither is tracked in git; `make -C pkgs/extensions clean` removes both. `ext/` is a directory one command produces, not a place to keep things.
 
-A manifest is generated from the component's imports, describes the `.wasm`, and cannot drift; see [Contracts → The extension manifest](contracts.md#the-extension-manifest). Reading one answers "what does this want?" without a WASM parser:
+A manifest is generated from the component's imports, describes the `.wasm`, and cannot drift; see [Contracts → The extension manifest](../../../../docs/concepts/contracts.md#the-extension-manifest). Reading one answers "what does this want?" without a WASM parser:
 
 ```console
 $ cat ext/tool-shell.manifest.toml | grep -A2 capabilities
@@ -54,7 +54,7 @@ capabilities = [
 ]
 ```
 
-**The host checks it at boot**: components without a manifest, ones that under-declare imports, or those built against incompatible `jan-klod:interfaces` are refused, not loaded. See [Contracts → The extension manifest](contracts.md#the-extension-manifest) for format and exceptions.
+**The host checks it at boot**: components without a manifest, ones that under-declare imports, or those built against incompatible `jan-klod:interfaces` are refused, not loaded. See [Contracts → The extension manifest](../../../../docs/concepts/contracts.md#the-extension-manifest) for format and exceptions.
 
 | Key | Meaning | Default |
 |---|---|---|
@@ -184,7 +184,7 @@ The loader enforces core-level rules only; domain rules live in consuming extens
 
 - **Secrets come from the configured backend, granted per instance** — the top-level `secrets:` block names the backend (e.g. `backend: env` for environment variables); `host-secrets` is core's own interface, granted only to instances with `secrets: true`. An ungranted instance sees `denied` for every call; enumeration is not possible.
 
-`providers` and `routing` (fallback chain and task→model routing) are **top-level, not under `extensions`**. Core preserves them for `interceptor-task-router` (via `host-config`) without validating references — routing is interceptor domain logic. See [Architecture → Provider fallback](architecture.md#provider-fallback) and [Task routing](architecture.md#task-routing).
+`providers` and `routing` (fallback chain and task→model routing) are **top-level, not under `extensions`**. Core preserves them for `interceptor-task-router` (via `host-config`) without validating references — routing is interceptor domain logic. See [Architecture → Provider fallback](../../../../docs/concepts/architecture.md#provider-fallback) and [Task routing](../../../../docs/concepts/architecture.md#task-routing).
 
 ## Command execution (`execution:`)
 
@@ -251,7 +251,7 @@ WARN [core] `execution.sandbox.mode: os` was requested, but this build has no
 sandbox backend for macos — a command is confined only by the confirmation prompt
 ```
 
-Two paths are granted to every confined command whatever `writable` says, because a command that cannot use them does not run at all: `/dev/null`, and `TMPDIR`, which the host points at `<workspace>/.jan-klod/tmp` rather than inheriting. Both have a row in [the security model](security-model.md).
+Two paths are granted to every confined command whatever `writable` says, because a command that cannot use them does not run at all: `/dev/null`, and `TMPDIR`, which the host points at `<workspace>/.jan-klod/tmp` rather than inheriting. Both have a row in [the security model](../../../../docs/concepts/security-model.md).
 
 Two configurations refuse rather than degrade, both reported at boot: `require: true` without a backend, and an unreadable `sandbox` block (unrecognised `mode`, or `writable` leaving workspace). Both deny `host-process` — an unhonoured policy must not read as a grant.
 
@@ -296,7 +296,7 @@ If the bot has been moved to a guest by the time this slice lands (22b, #185), t
 
 ## Interceptors
 
-Interceptors (`interceptor.*` category) are extensions with an `enabled` flag. Config **only enables/disables** them — never orders them. Dispatch order is **structural**: across phases by `phase` enum order, within a phase by extension **load order** (see [`wit/interceptor.wit`](contracts.md) and [Roadmap → Phase 2](roadmap.md#phase-2--first-real-value-the-agent-loop)). No config key sequences steps, so ordering can't drift.
+Interceptors (`interceptor.*` category) are extensions with an `enabled` flag. Config **only enables/disables** them — never orders them. Dispatch order is **structural**: across phases by `phase` enum order, within a phase by extension **load order** (see [`wit/interceptor.wit`](../../../../docs/concepts/contracts.md) and [Roadmap → Phase 2](../../../../docs/concepts/roadmap.md#phase-2--first-real-value-the-agent-loop)). No config key sequences steps, so ordering can't drift.
 
 ```yaml
 extensions:
@@ -396,7 +396,7 @@ internal error and the host fails closed at `tool-call`. A typo stops tool calls
 until it is fixed rather than leaving a guardrail that is silently absent.
 
 Full rule reference, including how the lists compose:
-[`pkgs/extensions/interceptor-guardrails/README.md`](../../pkgs/extensions/interceptor-guardrails/README.md).
+[`pkgs/extensions/interceptor-guardrails/README.md`](../../../extensions/interceptor-guardrails/README.md).
 
 ## Capability groups
 
@@ -452,6 +452,6 @@ Sent on every turn, capped at 16 kB and truncated rather than silently halved.
 
 **Workspace root only** — not nearest ancestor. Earlier versions promised ancestor search; climbing above the root is exactly what path jails prevent, and repos checked out inside other projects would silently inherit instructions. This page also mentioned a `session-start` interceptor phase (gone): both files are read at agent build.
 
-See [Architecture](architecture.md) for the extension taxonomy and
-[Contracts](contracts.md) for the `host-config` interface the sections are
+See [Architecture](../../../../docs/concepts/architecture.md) for the extension taxonomy and
+[Contracts](../../../../docs/concepts/contracts.md) for the `host-config` interface the sections are
 served through.

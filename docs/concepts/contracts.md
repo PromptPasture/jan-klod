@@ -166,7 +166,7 @@ interface extension-lifecycle {
 
 There is **no WIT UI contract.** UIs are not extensions and run in their own processes; they reach core the same way any external client does — over the core's host-side client surface. Today that surface is the REST + SSE API; it is built into the core binary since Phase 3.
 
-**Phase 13 — the client protocol is a contract of the same rank as WIT.** The `jan-klod-protocol` crate (`pkgs/host/protocol`) holds the typed commands and notifications, `PROTOCOL_VERSION`, and a JSON Schema export in [`schema/protocol.schema.json`](../../src/protocol/schema/protocol.schema.json) — which is what a non-Rust client generates its types from.
+**Phase 13 — the client protocol is a contract of the same rank as WIT.** The `jan-klod-protocol` crate (`pkgs/host/protocol`) holds the typed commands and notifications, `PROTOCOL_VERSION`, and a JSON Schema export in [`schema/protocol.schema.json`](../../pkgs/host/protocol/schema/protocol.schema.json) — which is what a non-Rust client generates its types from.
 
 ### Transports
 

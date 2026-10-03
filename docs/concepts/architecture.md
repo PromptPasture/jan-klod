@@ -20,7 +20,7 @@ Linux kernel model: **core** is a minimal container with no domain logic; all ag
 Core runs as a **standalone user-privilege process** (not a daemon) and is **headless-capable** — Raspberry Pi or container runs only this. It contains:
 
 - Extension lifecycle (load, enable, disable, unload)
-- Configuration loading (`config.yaml`) — see [Configuration](configuration.md)
+- Configuration loading (`config.yaml`) — see [Configuration](../../pkgs/host/config/docs/configuration.md)
 - WASM host (Wasmtime) — capability sandbox for extensions
 - Event bus (extension-to-extension, observation-only)
 - **Agent loop mechanism** — thin conductor (`stream → tools → loop`) + **interceptor dispatch** (see [Agent loop architecture](#agent-loop-architecture))
@@ -53,7 +53,7 @@ L0 Kernel         lifecycle | capability broker | loop conductor | SQLite store 
 
 Extensions are **WASM components** (`.wasm` files) in `ext/`, loaded at runtime by Wasmtime and sandboxed — they can only do what WIT explicitly grants. Each can be authored in **any language with a Component Model toolchain**, and all are interchangeable against the same WIT contract. See [Contracts](contracts.md) for interface definitions.
 
-Three languages are proven rather than claimed, each by a guest the gate runs a turn through: **Rust** (`wit-bindgen`, every first-party extension), **TypeScript** (`jco`, `tool-hello-ts`) and **Python** (`componentize-py`, `tool-hello-py`), plus a TinyGo spike. Note that only Rust uses `wit-bindgen` — the other two toolchains generate or embed their own bindings, which is why the claim is about the Component Model and not about one binding generator. [Writing an extension](../guides/writing-an-extension.md#meet-the-cost-first) has what each language costs; the non-Rust components are 12.7 MB and 18.5 MB against Rust's 55 KB, so this is a real choice rather than a free one.
+Three languages are proven rather than claimed, each by a guest the gate runs a turn through: **Rust** (`wit-bindgen`, every first-party extension), **TypeScript** (`jco`, `tool-hello-ts`) and **Python** (`componentize-py`, `tool-hello-py`), plus a TinyGo spike. Note that only Rust uses `wit-bindgen` — the other two toolchains generate or embed their own bindings, which is why the claim is about the Component Model and not about one binding generator. [Writing an extension](../../pkgs/extensions/docs/writing-an-extension.md#meet-the-cost-first) has what each language costs; the non-Rust components are 12.7 MB and 18.5 MB against Rust's 55 KB, so this is a real choice rather than a free one.
 
 ### One tool is not an extension
 
@@ -429,7 +429,7 @@ Required, not optional: with log-based read surfaces, unconverted databases have
 
 ## Provider fallback
 
-When a provider/model fails (unavailable, rate-limited, quota exceeded, OOM), the **core loop** falls back through a two-level priority list in `config.yaml`, re-issuing to the next entry. Fallback is core *mechanism*, not an interceptor: it re-issues the *same* failed request (on-provider-error retry, same category as retry/validate), which `prepare-next-turn` interceptors cannot do. Entries reference **provider instance names** (`extensions.provider.<name>`), not wasm components — see [Configuration](configuration.md):
+When a provider/model fails (unavailable, rate-limited, quota exceeded, OOM), the **core loop** falls back through a two-level priority list in `config.yaml`, re-issuing to the next entry. Fallback is core *mechanism*, not an interceptor: it re-issues the *same* failed request (on-provider-error retry, same category as retry/validate), which `prepare-next-turn` interceptors cannot do. Entries reference **provider instance names** (`extensions.provider.<name>`), not wasm components — see [Configuration](../../pkgs/host/config/docs/configuration.md):
 
 ```yaml
 providers:
@@ -561,4 +561,4 @@ Extensions pick up `config.yaml` changes without restart. Core watches the confi
 - **Standard:** `core` binary + `ext/*.wasm` + `config.yaml` (deploy unit). UI binary is separate, optional.
 - **Bundle:** pre-packaged ZIP with core + curated `.wasm` + pre-filled config; UI bundles include the UI client.
 
-See [Configurator](configurator.md) for archive generation and [Blue/Green Deployment](blue-green-deployment.md) for updates.
+See [Configurator](configurator.md) for archive generation and [Blue/Green Deployment](../../pkgs/host/supervisor/docs/blue-green-deployment.md) for updates.

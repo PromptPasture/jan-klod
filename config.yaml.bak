@@ -65,7 +65,7 @@ extensions:
 
   # ---- Interceptors: sandboxed decision hooks the core loop dispatches by phase.
   #      enabled/disabled ONLY — ordering is structural (phase order + load order),
-  #      never configured here. See docs/concepts/configuration.md#interceptors.
+  #      never configured here. See pkgs/host/config/docs/configuration.md#interceptors.
   #
   #      `persist: true` on an instance lets its `host-storage` writes reach the
   #      session store instead of a private map that dies with the process. It is

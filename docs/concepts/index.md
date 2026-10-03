@@ -4,7 +4,7 @@
 - [Architecture](architecture.md) — system design, extension model, agent loop
 - [Security model](security-model.md) — component grants, enforcement, tests, and gaps
 - [Contracts](contracts.md) — stable WIT interfaces between core and extensions
-- [Configuration](configuration.md) — `config.yaml` format and core loading into instances
+- [Configuration](../../pkgs/host/config/docs/configuration.md) — `config.yaml` format and core loading into instances
 - [Small-Model Harness](small-model-harness.md) — design principles for 9–12B LLM agent loops
-- [Blue/Green Deployment](blue-green-deployment.md) — zero-downtime update and rollback
+- [Blue/Green Deployment](../../pkgs/host/supervisor/docs/blue-green-deployment.md) — zero-downtime update and rollback
 - [Configurator](configurator.md) — web UI for generating deployment archives

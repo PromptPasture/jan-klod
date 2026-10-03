@@ -617,6 +617,39 @@ fn every_declared_instance_resolves_to_a_component() {
     );
 }
 
+/// Every page these checks cover: the wiki (`docs/`, `docs/concepts`,
+/// `docs/guides`) and each package's own `docs/` — package-specific pages live
+/// beside their package since Phase 32, and moving a page must not move it out
+/// of the check. The changelog records history and is excluded.
+fn doc_pages(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = ["docs", "docs/concepts", "docs/guides"]
+        .iter()
+        .map(|d| root.join(d))
+        .collect();
+    for group in ["host", "clients", "extensions"] {
+        let group = root.join("pkgs").join(group);
+        dirs.push(group.join("docs"));
+        if let Ok(entries) = std::fs::read_dir(&group) {
+            dirs.extend(entries.flatten().map(|e| e.path().join("docs")));
+        }
+    }
+    let mut pages = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md")
+                && path.file_name().is_some_and(|n| n != "changelog.md")
+            {
+                pages.push(path);
+            }
+        }
+    }
+    pages
+}
+
 /// Every command the docs tell a user to run exists. A missing command sends a
 /// reader into the boot plan with no way to check first.
 ///
@@ -629,20 +662,7 @@ fn every_documented_command_exists() {
         .expect("the gateway's main is readable");
     let makefile = std::fs::read_to_string(root.join("Makefile")).expect("Makefile is readable");
 
-    let mut pages = Vec::new();
-    for dir in ["docs", "docs/concepts", "docs/guides"] {
-        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "md")
-                && path.file_name().is_some_and(|n| n != "changelog.md")
-            {
-                pages.push(path);
-            }
-        }
-    }
+    let mut pages = doc_pages(&root);
     pages.push(root.join("README.md"));
 
     let mut checked = 0;
@@ -707,19 +727,7 @@ fn every_documented_command_exists() {
 fn no_shell_block_recommends_positional_serve_paths() {
     let root = common::repo_root();
     let mut pages = vec![root.join("README.md")];
-    for dir in ["docs", "docs/concepts", "docs/guides"] {
-        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "md")
-                && path.file_name().is_some_and(|n| n != "changelog.md")
-            {
-                pages.push(path);
-            }
-        }
-    }
+    pages.extend(doc_pages(&root));
 
     for page in &pages {
         let Ok(text) = std::fs::read_to_string(page) else {

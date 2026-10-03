@@ -71,7 +71,7 @@ extensions:
       enabled: true
     # Content policy. `permission` above asks whether an action may happen;
     # this looks at what the text says. Keys and the full rule reference:
-    # docs/concepts/configuration.md#guardrails.
+    # pkgs/host/config/docs/configuration.md#guardrails.
     guardrails:
       enabled: true
       # Unlike `coding`, this distribution has a shell, so a

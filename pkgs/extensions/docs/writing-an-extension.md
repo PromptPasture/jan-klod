@@ -367,6 +367,6 @@ Same host suite, same `config.yaml` key (`tool: greet-py:` resolves to
 
 ## Where to look next
 
-- [Contracts](../concepts/contracts.md) — the WIT interfaces, and the version rule your crate is built against.
-- [Configuration](../concepts/configuration.md) — every key, including what each capability's grant looks like.
-- [Security model](../concepts/security-model.md) — what your extension is and is not given, and the test that proves each one.
+- [Contracts](../../../docs/concepts/contracts.md) — the WIT interfaces, and the version rule your crate is built against.
+- [Configuration](../../host/config/docs/configuration.md) — every key, including what each capability's grant looks like.
+- [Security model](../../../docs/concepts/security-model.md) — what your extension is and is not given, and the test that proves each one.
