@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift lints-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -67,6 +67,7 @@ help:
 	@echo "  clippy-gui  lint the Tauri shell (-D warnings)"
 	@echo "  clippy-guests lint the wasm guests, native + wasm32 (-D warnings)"
 	@echo "  web-dist-drift  check src/web/dist/ is still what src/web/src/ builds"
+	@echo "  lints-drift     check the [workspace.lints] blocks of the three cargo workspaces agree"
 	@echo "  registry-index  write the registry index for ext/ (REGISTRY_INDEX=path)"
 	@echo "  registry-index-drift  check that index generation is deterministic"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
@@ -212,6 +213,11 @@ clippy-guests:
 # rebuild happens in a temp tree and why `npm ci` is not `npm install`.
 web-dist-drift:
 	sh scripts/web-dist-drift.sh
+
+# Cargo cannot share [workspace.lints] across the three workspaces, so this is
+# what keeps the policy one policy (#275). Cheap: no build, no toolchain.
+lints-drift:
+	sh scripts/lints-drift.sh
 
 # --- Registry index (Slice 16d-1) ---
 #
@@ -594,6 +600,7 @@ gate-push:
 	$(MAKE) clippy-gui
 	$(MAKE) gate
 	$(MAKE) registry-index-drift
+	$(MAKE) lints-drift
 	$(MAKE) lockfile
 	$(MAKE) deny
 	$(MAKE) audit

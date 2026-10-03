@@ -190,6 +190,11 @@ jobs:
       - name: Web dist drift (src/web/dist is what src builds)
         run: make web-dist-drift
 
+      # The three cargo workspaces cannot inherit one [workspace.lints] block, so
+      # this fails when they stop declaring the same policy.
+      - name: Lint policy drift ([workspace.lints] in every workspace)
+        run: make lints-drift
+
       # The registry index is a function of the staged components and nothing
       # else (#137). Named here rather than folded into another target for the
       # reason #130 recorded: a gate `ci.yml` does not call by name does not
