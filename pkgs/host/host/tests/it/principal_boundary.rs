@@ -70,9 +70,15 @@ fn send_message(port: u16, session: &str, auth: Option<&str>, message: &str) -> 
         body.len()
     );
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects to localhost");
+    // A lost response must fail the test, not hang it (#286).
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(60)))
+        .unwrap();
     stream.write_all(raw.as_bytes()).unwrap();
     let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
+    stream
+        .read_to_string(&mut response)
+        .expect("the response arrives within 60s");
     response
 }
 

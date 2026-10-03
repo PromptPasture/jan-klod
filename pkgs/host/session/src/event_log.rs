@@ -1334,7 +1334,10 @@ mod migration_tests {
             .set("ext/interceptor.permission/grants", "turn-1", "{}")
             .unwrap();
         assert_eq!(migrate_transcripts(&store).unwrap(), 0);
-        assert!(store.event_sessions().unwrap().is_empty());
+        assert_eq!(
+            store.event_sessions().unwrap(),
+            [] as [std::string::String; 0]
+        );
     }
 
     /// A namespace with keys that are not turns — anything host-storage wrote —

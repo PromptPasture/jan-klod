@@ -191,6 +191,6 @@ mod tests {
 
     #[test]
     fn a_zero_cell_budget_renders_nothing() {
-        assert!(inert_within("anything", 0, "…").is_empty());
+        assert_eq!(inert_within("anything", 0, "…"), "");
     }
 }

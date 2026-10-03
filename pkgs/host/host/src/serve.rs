@@ -137,7 +137,12 @@ impl App {
             return;
         }
         if self.served.fetch_add(1, Ordering::Relaxed) + 1 >= self.limit {
-            self.stop.notify_waiters();
+            // `notify_one`, not `notify_waiters`: only the first stores a permit.
+            // A response that completes before the graceful-shutdown future has
+            // first been polled (a 401, `/health` — anything instant, on a loaded
+            // runner) would otherwise notify nobody, and the surface would serve
+            // forever (#286).
+            self.stop.notify_one();
         }
     }
 }
@@ -284,8 +289,9 @@ impl Surface {
             if let Some(alongside) = alongside {
                 alongside(port);
                 // Done means stop. Without a closure — the production
-                // loop — nothing here ever asks it to.
-                stop.notify_waiters();
+                // loop — nothing here ever asks it to. `notify_one` keeps the
+                // permit if the server has not started waiting yet (#286).
+                stop.notify_one();
             }
             serving.join()
         });

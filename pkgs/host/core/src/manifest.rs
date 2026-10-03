@@ -324,7 +324,7 @@ capabilities = [
              kind = \"tool\"\ncapabilities = []\n",
         );
         let manifest = Manifest::beside(&component).unwrap().expect("present");
-        assert!(manifest.capabilities.is_empty());
+        assert_eq!(manifest.capabilities, [] as [std::string::String; 0]);
         assert_eq!(
             manifest.undeclared(&["host-fs".to_owned()]),
             vec!["host-fs"],
@@ -364,7 +364,10 @@ capabilities = [
              kind = \"tool\"\ncapabilities = [\"host-fs\", \"host-http\", \"host-process\"]\n",
         );
         let manifest = Manifest::beside(&component).unwrap().unwrap();
-        assert!(manifest.undeclared(&["host-fs".to_owned()]).is_empty());
+        assert_eq!(
+            manifest.undeclared(&["host-fs".to_owned()]),
+            [] as [&str; 0]
+        );
     }
 
     /// Hand-authored TOML is the case the parser choice was made for: a comment

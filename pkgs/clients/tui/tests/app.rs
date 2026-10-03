@@ -32,7 +32,7 @@ fn blank_submit_sends_nothing() {
     let mut app = App::default();
     "   ".chars().for_each(|c| app.push_char(c));
     assert_eq!(app.take_submission(), None);
-    assert!(app.transcript.is_empty());
+    assert_eq!(app.transcript, [] as [jan_klod::app::Entry; 0]);
 }
 
 #[test]

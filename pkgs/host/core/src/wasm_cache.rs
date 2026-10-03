@@ -4,7 +4,7 @@
 //! # Why built-in cache, not #60's fallback
 //!
 //! #60 asked to evaluate Wasmtime's built-in cache first (adopt if sufficient).
-//! Checked against Wasmtime 46.0.3: API is `Cache::from_file` / `CacheConfig`
+//! Checked against Wasmtime 49.0.2: API is `Cache::from_file` / `CacheConfig`
 //! plus `Config::cache(Some(cache))`, confirmed in source.
 //!
 //! * It caches **components**, not only core modules — Wasmtime's test suite

@@ -281,7 +281,10 @@ fn event_sessions_lists_each_session_once() {
 fn event_sessions_is_empty_when_nothing_is_logged() {
     let store = Store::open_in_memory().unwrap();
     store.set("ns", "k", "v").unwrap();
-    assert!(store.event_sessions().unwrap().is_empty());
+    assert_eq!(
+        store.event_sessions().unwrap(),
+        [] as [std::string::String; 0]
+    );
 }
 
 #[test]
@@ -394,7 +397,10 @@ fn a_fork_bound_outside_the_log_copies_what_there_is() {
 
     assert_eq!(store.fork_events("parent", 99, "all").unwrap(), 2);
     assert_eq!(store.fork_events("parent", 0, "none").unwrap(), 0);
-    assert!(store.session_events("none").unwrap().is_empty());
+    assert_eq!(
+        store.session_events("none").unwrap(),
+        [] as [jk_session::store::LoggedEvent; 0]
+    );
 }
 
 // ─── `recent_turns`: the SQL bound, checked against the in-memory rule (#85) ─

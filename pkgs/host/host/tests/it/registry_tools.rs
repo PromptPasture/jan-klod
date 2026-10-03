@@ -172,6 +172,6 @@ fn a_name_the_index_does_not_list_is_refused() {
         "the refusal should name the index it searched: {}",
         out.content
     );
-    assert!(tools.take_installed().is_empty());
+    assert_eq!(tools.take_installed(), [] as [std::string::String; 0]);
     assert!(!scratch.ext.join("tool-nothing.wasm").exists());
 }

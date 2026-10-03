@@ -476,8 +476,8 @@ mod bound_tests {
 
     #[test]
     fn a_zero_bound_is_empty_and_an_empty_log_stays_empty() {
-        assert!(last_turns(&log_of(3), 0).is_empty());
-        assert!(last_turns(&[], 20).is_empty());
+        assert_eq!(last_turns(&log_of(3), 0), []);
+        assert_eq!(last_turns(&[], 20), []);
     }
 
     /// Logs with no turn boundary (all events) are one turn in progress;

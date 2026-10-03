@@ -175,7 +175,7 @@ fn wanted(url: &str, allow_unsigned: bool) -> Result<Vec<(String, String)>, ExtE
 ///
 /// Every redirect re-checked (#107); `Authorization` doesn't survive hops.
 /// Testable with fake client; [`install_from_url`] takes it as argument.
-#[must_use]
+#[must_use = "the policy-bound client does nothing until it is handed to an installer"]
 pub fn policy_bound_http() -> crate::route::HttpFn {
     Box::new(|method, url, headers, body, timeout| {
         crate::http::fetch_within(
