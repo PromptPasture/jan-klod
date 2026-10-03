@@ -53,7 +53,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src
+          workspaces: .
 
       # `make test` runs the suite under cargo-nextest — one process per test,
       # and a filter matching nothing exits non-zero instead of reporting green.
@@ -67,7 +67,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9.143
 
-      # `make -C src/extensions all` generates each guest's capability manifest
+      # `make -C pkgs/extensions all` generates each guest's capability manifest
       # by reading the component's own imports out of `wasm-tools component wit`,
       # so staging the guests now needs this. Pinned like everything else here:
       # these Makefiles parse its output. Keep in step with WASM_TOOLS_VERSION in
@@ -106,7 +106,7 @@ jobs:
           cache: enable
 
       - name: Fetch spike WIT deps
-        run: make -C src/extensions spike-deps
+        run: make -C pkgs/extensions spike-deps
 
       # Validate the WIT contracts, and warn if an edit to them did not bump the
       # package version. No job ran `make wit` before this: `make test` and
@@ -122,9 +122,9 @@ jobs:
       # pre-commit hook did until it was fixed. The `gate` job below was unaffected:
       # it stages guests first.
       - name: Stage guest components
-        run: make -C src/extensions all
+        run: make -C pkgs/extensions all
 
-      # #79 gated the host's integration suite (host/tests/it/) behind the
+      # #79 gated the host's integration suite (pkgs/host/host/tests/it/) behind the
       # `integration` cargo feature, so plain `make test` now builds and runs unit
       # tests only — host workspace + guest native tests + the Go supervisor, no
       # wasmtime link, no ~200M `it-*` binary. Deliberately not passing the feature
@@ -137,7 +137,7 @@ jobs:
       # little over one. So `harness` remains the sole job that exercises the full
       # suite — its `make gate` has its own zero-test guard, so a broken
       # `--features` flag fails loudly rather than this job silently covering for
-      # it. `make clippy` below still type-checks tests/it (see src/Makefile),
+      # it. `make clippy` below still type-checks tests/it (see pkgs/host/Makefile),
       # so a compile error there still fails this job even though nothing here
       # links or runs it.
       #
@@ -149,7 +149,7 @@ jobs:
       # The browser client's suite (#127). It ran nowhere until this step: the
       # tests existed and passed, but no Makefile target and no workflow named
       # them, so every frame kind, the `ask` roundtrip and cancel were unguarded
-      # — which is why host/tests/it/web_client.rs does not lean on them.
+      # — which is why pkgs/host/host/tests/it/web_client.rs does not lean on them.
       #
       # Here rather than in a job of its own: `make test-web` is one command
       # that needs Node and nothing else, and a separate job would pay another
@@ -171,24 +171,29 @@ jobs:
         with:
           node-version: '22.23.2'
           cache: npm
-          cache-dependency-path: src/web/package-lock.json
+          cache-dependency-path: pkgs/clients/web/package-lock.json
 
-      - name: Web client tests (src/web)
+      - name: Web client tests (pkgs/clients/web)
         run: make test-web
 
-      # The committed `src/web/dist/` is still what `src/web/src/` builds
+      # The committed `pkgs/clients/web/dist/` is still what `pkgs/clients/web/src/` builds
       # (#127). #119 box 1 committed the bundle on the argument that this
       # repository's other generated artifacts — protocol.schema.json,
       # ext/*.manifest.toml, wit/wkg.lock — each carry a drift check; dist/ was
       # the first one without. `serve.rs` embeds it with include_str!, so
-      # without this an edit to src/web/src/*.ts that is never rebuilt makes the
+      # without this an edit to pkgs/clients/web/src/*.ts that is never rebuilt makes the
       # core serve a stale client with the whole of CI green.
       #
       # Rebuilds in a temp tree and diffs, so the step cannot "fix" the drift by
       # leaving a rebuilt dist/ in the runner's checkout. The script says why it
       # uses `npm ci` rather than `npm install`.
-      - name: Web dist drift (src/web/dist is what src builds)
+      - name: Web dist drift (pkgs/clients/web/dist is what src builds)
         run: make web-dist-drift
+
+      # The three cargo workspaces cannot inherit one [workspace.lints] block, so
+      # this fails when they stop declaring the same policy.
+      - name: Lint policy drift ([workspace.lints] in every workspace)
+        run: make lints-drift
 
       # The registry index is a function of the staged components and nothing
       # else (#137). Named here rather than folded into another target for the
@@ -225,7 +230,7 @@ jobs:
       # crates that build in seconds, so they are not worth enumerating here.
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src
+          workspaces: .
 
       # `make gate` runs under cargo-nextest; see the lint-test job for why, and
       # for why the version is pinned.
@@ -264,7 +269,7 @@ jobs:
           cache: enable
 
       - name: Fetch spike WIT deps
-        run: make -C src/extensions spike-deps
+        run: make -C pkgs/extensions spike-deps
 
       # Exit gate: builds every guest to wasm32-wasip2, then runs the full offline
       # integration surface across all v1 guarantees — the thin loop with provider
@@ -272,7 +277,7 @@ jobs:
       # steering, the file-workspace substrate, and the tool fleet.
       #
       # `make harness` used to run first. It names nine test targets, every one a
-      # file in src/host/tests/ that this job's `cargo test --workspace`
+      # file in pkgs/host/host/tests/ that this job's `cargo test --workspace`
       # already runs — so it was a second build and run of nine wasmtime-linked
       # binaries, and it ran *without* JK_REQUIRE_GUESTS, meaning its own tests
       # could skip and still report success. `gate` stages the guests itself
@@ -280,17 +285,17 @@ jobs:
       - run: make gate
 
   gui:
-    name: GUI shell (src/gui)
+    name: GUI shell (pkgs/clients/gui)
     runs-on: ubuntu-latest
     # A job of its own, unlike `test-web`, and the reason is the tree rather
-    # than a preference: `src/gui` is a separate cargo workspace with 256
+    # than a preference: `pkgs/clients/gui` is a separate cargo workspace with 256
     # packages the host workspace does not have (#141). Folding it into
     # `lint-test` would put that build and a distinct `rust-cache` workspace key
     # on the job every other check waits for; here it runs in parallel on a
     # runner that bills at 1x.
     #
     # Nothing else in CI covers it: `make gate` and `make clippy` are the host
-    # workspace, and `src/gui` is not a member. Without this job the shell would
+    # workspace, and `pkgs/clients/gui` is not a member. Without this job the shell would
     # compile nowhere and its tests would run nowhere, which is the #130 failure
     # — a check that does not run looks exactly like one that passes. The
     # supply-chain job *does* cover it already, because the root `lockfile`,
@@ -304,7 +309,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src/gui
+          workspaces: pkgs/clients/gui
 
       # The build-time half of what #141 measured. `xvfb` is the other half:
       # a webview needs a display server, and without one `make test-gui` skips
@@ -318,7 +323,7 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev xvfb
 
       - name: Format
-        run: make -C src/gui fmt
+        run: make -C pkgs/clients/gui fmt
 
       - name: Lint
         run: make clippy-gui
@@ -345,7 +350,7 @@ jobs:
       # `.github/hooks/pre-push` — the same commands typed twice, free to drift.
       # Both now call the one target (#72).
       #
-      # Three workspaces since #142: the host, the guests, and `src/gui`. The
+      # Three workspaces since #142: the host, the guests, and `pkgs/clients/gui`. The
       # last is not built by any other job in this file, so this is the only
       # place its lock and its licences are checked — and it is the tree that
       # `deny.toml`'s eleven named entries exist for (#141).
@@ -373,16 +378,16 @@ jobs:
       - name: cargo-audit (RUSTSEC)
         run: make audit
 
-      # Go modules under src/extensions (currently only the Slice 1a canary):
+      # Go modules under pkgs/extensions (currently only the Slice 1a canary):
       # verified module sums + govulncheck, readonly. cache-dependency-path globs
       # every go.sum; the Makefile target globs every go.mod — no path is pinned.
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-          cache-dependency-path: src/extensions/*/go.sum
+          cache-dependency-path: pkgs/extensions/*/go.sum
 
       - name: Go supply-chain (mod verify + govulncheck)
-        run: make -C src/extensions go-supply-chain
+        run: make -C pkgs/extensions go-supply-chain
 
       # The supervisor's own Go leg (#130). It was the last line of the root
       # `supply-chain` target, and this job calls the legs by name and never
@@ -396,15 +401,15 @@ jobs:
       # different modules with different makefiles, and naming it here is the
       # half that stops it going missing again.
       #
-      # No cache key for it. `setup-go` above globs `src/extensions/*/go.sum`,
-      # and src/supervisor has no go.sum at all — it is a dependency-free
+      # No cache key for it. `setup-go` above globs `pkgs/extensions/*/go.sum`,
+      # and pkgs/host/supervisor has no go.sum at all — it is a dependency-free
       # binary, so `go mod verify` passes trivially and the work is
       # govulncheck's standard-library scan, which is where a Go toolchain CVE
       # would land.
       - name: Supervisor supply-chain (mod verify + govulncheck)
         run: make supervisor-supply-chain
 
-      # The npm tree under src/web — the repository's third ecosystem, joining
+      # The npm tree under pkgs/clients/web — the repository's third ecosystem, joining
       # this job rather than becoming an exception to it (#120).
       #
       # node-version is pinned for the reason the three cargo tools above are:

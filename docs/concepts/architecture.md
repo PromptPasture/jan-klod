@@ -20,7 +20,7 @@ Linux kernel model: **core** is a minimal container with no domain logic; all ag
 Core runs as a **standalone user-privilege process** (not a daemon) and is **headless-capable** — Raspberry Pi or container runs only this. It contains:
 
 - Extension lifecycle (load, enable, disable, unload)
-- Configuration loading (`config.yaml`) — see [Configuration](configuration.md)
+- Configuration loading (`config.yaml`) — see [Configuration](../../pkgs/host/config/docs/configuration.md)
 - WASM host (Wasmtime) — capability sandbox for extensions
 - Event bus (extension-to-extension, observation-only)
 - **Agent loop mechanism** — thin conductor (`stream → tools → loop`) + **interceptor dispatch** (see [Agent loop architecture](#agent-loop-architecture))
@@ -53,7 +53,7 @@ L0 Kernel         lifecycle | capability broker | loop conductor | SQLite store 
 
 Extensions are **WASM components** (`.wasm` files) in `ext/`, loaded at runtime by Wasmtime and sandboxed — they can only do what WIT explicitly grants. Each can be authored in **any language with a Component Model toolchain**, and all are interchangeable against the same WIT contract. See [Contracts](contracts.md) for interface definitions.
 
-Three languages are proven rather than claimed, each by a guest the gate runs a turn through: **Rust** (`wit-bindgen`, every first-party extension), **TypeScript** (`jco`, `tool-hello-ts`) and **Python** (`componentize-py`, `tool-hello-py`), plus a TinyGo spike. Note that only Rust uses `wit-bindgen` — the other two toolchains generate or embed their own bindings, which is why the claim is about the Component Model and not about one binding generator. [Writing an extension](../guides/writing-an-extension.md#meet-the-cost-first) has what each language costs; the non-Rust components are 12.7 MB and 18.5 MB against Rust's 55 KB, so this is a real choice rather than a free one.
+Three languages are proven rather than claimed, each by a guest the gate runs a turn through: **Rust** (`wit-bindgen`, every first-party extension), **TypeScript** (`jco`, `tool-hello-ts`) and **Python** (`componentize-py`, `tool-hello-py`), plus a TinyGo spike. Note that only Rust uses `wit-bindgen` — the other two toolchains generate or embed their own bindings, which is why the claim is about the Component Model and not about one binding generator. [Writing an extension](../../pkgs/extensions/docs/writing-an-extension.md#meet-the-cost-first) has what each language costs; the non-Rust components are 12.7 MB and 18.5 MB against Rust's 55 KB, so this is a real choice rather than a free one.
 
 ### One tool is not an extension
 
@@ -90,7 +90,7 @@ There is no inbound-listener or long-lived-socket capability: the built inbound 
 
 ### What extensions cannot do
 
-Asserted by `host/tests/it/sandbox_boundary.rs`, which drives `tool-escape-probe` — a component written to attempt each with plain `std` rather than via typed import:
+Asserted by `pkgs/host/host/tests/it/sandbox_boundary.rs`, which drives `tool-escape-probe` — a component written to attempt each with plain `std` rather than via typed import:
 
 - Direct filesystem access
 - Open arbitrary network connections (`wasi:sockets` wired, all refused)
@@ -175,7 +175,7 @@ UIs are **not extensions, not part of core.** They are optional separate **clien
 
 `jan-klod --gui` opens the **same** front-end the browser gets — the one core serves at `/` — in a system webview. No third codebase (Vision decision 5).
 
-The Tauri shell is `src/gui`, **its own cargo workspace**, not a host member. Not tidiness: Tauri adds **329 packages** not needed otherwise; as a member they'd land in `src/Cargo.lock` (406 → 735) and be resolved/built by every `cargo test`, `cargo clippy --workspace`, and CI run regardless of window changes. Kept separate, they're behind `make gui` only.
+The Tauri shell is `pkgs/clients/gui`, **its own cargo workspace**, not a host member. Not tidiness: Tauri adds **329 packages** not needed otherwise; as a member they'd land in `src/Cargo.lock` (406 → 735) and be resolved/built by every `cargo test`, `cargo clippy --workspace`, and CI run regardless of window changes. Kept separate, they're behind `make gui` only.
 
 Cost measured before implementation ([#141]):
 
@@ -200,9 +200,9 @@ On macOS the webview is WKWebView (no install needed). On Linux it is `webkit2gt
 
 #### The window is handed the token, and only on the core's origin
 
-The web client keeps the gateway token in `sessionStorage` and prompts for 401 (`src/web/src/api.ts`). A window launched with a token shouldn't force a retype, so the shell seeds it via Tauri initialization script — making the window a credential boundary.
+The web client keeps the gateway token in `sessionStorage` and prompts for 401 (`pkgs/clients/web/src/api.ts`). A window launched with a token shouldn't force a retype, so the shell seeds it via Tauri initialization script — making the window a credential boundary.
 
-Two rules (both in `src/gui/src/main.rs`, both tested):
+Two rules (both in `pkgs/clients/gui/src/main.rs`, both tested):
 
 - The seed **checks `location.origin` first.** Initialization scripts run in every webview frame, so an unguarded one would hand the token to embedded pages.
 - Navigation **off the core's origin is refused** and handed to the system browser (second-line guard).
@@ -211,13 +211,13 @@ Two rules (both in `src/gui/src/main.rs`, both tested):
 
 #### The web client's bundle is committed, and the alternative costs more than it looks
 
-`src/web` builds to 5.5 kB ES module with no runtime dependencies; core embeds it via `include_str!` so the binary carries the page — no directory to ship. `include_str!` resolves at **compile time** — the bundle is either in the tree when `cargo build` runs or not; a decision, not a detail.
+`pkgs/clients/web` builds to 5.5 kB ES module with no runtime dependencies; core embeds it via `include_str!` so the binary carries the page — no directory to ship. `include_str!` resolves at **compile time** — the bundle is either in the tree when `cargo build` runs or not; a decision, not a detail.
 
 **Committed** for two reasons. First: the alternative is not "build in CI" — it is **Node becoming a core-build dependency**. Every `cargo build`, `make gate`, and CI job would need `npm run build` first; none install Node today. Large tax on everyone who never touches the web client so one generated file stays absent from git.
 
-Second: this repo does this three times already. `src/protocol/schema/protocol.schema.json` is generated and committed with a drift test; `ext/*.manifest.toml` from real imports; `wit/wkg.lock` likewise. "No generated artifacts" isn't this repo's property, so preserving it here buys nothing while costing the first reason.
+Second: this repo does this three times already. `pkgs/host/protocol/schema/protocol.schema.json` is generated and committed with a drift test; `ext/*.manifest.toml` from real imports; `wit/wkg.lock` likewise. "No generated artifacts" isn't this repo's property, so preserving it here buys nothing while costing the first reason.
 
-**What the choice costs.** Committed bundles can go stale: editing `src/web/src` and forgetting to rebuild serves the old page silently. `make web-dist-drift` catches it (#127): rebuilds into a temp tree and diffs (same regenerate-and-compare as the schema test). Works because esbuild is reproducible — macOS-built, Linux rebuilds byte-for-byte.
+**What the choice costs.** Committed bundles can go stale: editing `pkgs/clients/web/src` and forgetting to rebuild serves the old page silently. `make web-dist-drift` catches it (#127): rebuilds into a temp tree and diffs (same regenerate-and-compare as the schema test). Works because esbuild is reproducible — macOS-built, Linux rebuilds byte-for-byte.
 
 Unlike the schema's, it needs **Node**, so it's not on `make gate`; it runs in CI's lint-test job, not locally. Narrower guard: catches staleness on every push/PR, not at commit. That asymmetry is the real cost.
 
@@ -316,7 +316,7 @@ Two differences from `rpc` (both MCP's shape):
 - **A frame may have no `id`.** `notifications/initialized` arrives after handshake with no answer. `rpc` refuses null id on purpose (uncorrelatable answer worse than none); carrying that rule across would reject every client's first message.
 - **A failed tool is a *successful* response with `isError: true`.** Opposite of `protocol::jsonrpc`'s `Outcome` (result and error mutually exclusive, making "both" and "neither" unrepresentable). Mapping a refused turn to a JSON-RPC error would make every permission refusal read to editors as a broken server.
 
-The driver is **headless by construction**: stdin carries protocol frames, so prompting would read a client's next request as the answer. Default answer is refusal, so the right policy and protocol behaviour come from one choice — editors couldn't answer anyway. `host/tests/it/mcp.rs::a_write_requiring_turn_is_refused_and_nothing_is_written` asserts the effect: the model asks to write a real path and the file isn't there.
+The driver is **headless by construction**: stdin carries protocol frames, so prompting would read a client's next request as the answer. Default answer is refusal, so the right policy and protocol behaviour come from one choice — editors couldn't answer anyway. `pkgs/host/host/tests/it/mcp.rs::a_write_requiring_turn_is_refused_and_nothing_is_written` asserts the effect: the model asks to write a real path and the file isn't there.
 
 **No security-model row, deliberately.** This surface grants nothing new — it re-exposes the existing turn path behind the same permission gate; the test above is evidence. A row asserting an unenforced boundary is worse than no row; recorded here so "no row" is a decision, not an omission.
 
@@ -367,7 +367,7 @@ Deliberately **not an extension**; the `store-*` component family never existed.
 
 ### Compile cache
 
-Configured in the same `storage:` block: `cache-dir` (default `wasmtime-cache`, beside `config.yaml`) is where Wasmtime caches compiled components ([#60](https://github.com/PromptPasture/jan-klod/issues/60)), so second boots skip Cranelift recompilation. Wasmtime's own built-in cache (`Cache`/`CacheConfig`, `Config::cache`) wired at `Runtime::boot` — not a bespoke `.cwasm` cache. Evaluated first per the issue and adopted because it keys on everything affecting codegen (component bytes, target triple, compiler/ISA flags, Wasmtime version) and treats corrupt/foreign artefacts as misses, never errors. See `core/src/wasm_cache.rs` for evaluation and [Security model](security-model.md) for what cache hits trust.
+Configured in the same `storage:` block: `cache-dir` (default `wasmtime-cache`, beside `config.yaml`) is where Wasmtime caches compiled components ([#60](https://github.com/PromptPasture/jan-klod/issues/60)), so second boots skip Cranelift recompilation. Wasmtime's own built-in cache (`Cache`/`CacheConfig`, `Config::cache`) wired at `Runtime::boot` — not a bespoke `.cwasm` cache. Evaluated first per the issue and adopted because it keys on everything affecting codegen (component bytes, target triple, compiler/ISA flags, Wasmtime version) and treats corrupt/foreign artefacts as misses, never errors. See `pkgs/host/core/src/wasm_cache.rs` for evaluation and [Security model](security-model.md) for what cache hits trust.
 
 ### Two tables
 
@@ -404,6 +404,18 @@ A one-shot conversion runs at boot (`event_log::migrate_transcripts`, from `Runt
 
 Required, not optional: with log-based read surfaces, unconverted databases have unlisted, unreadable sessions. Unrecoverable is what the old format never held — tool calls, warnings, `ask` and answer — so migrated turns are exactly two events, with `done` carrying `agentic: false` because the transcript didn't record them.
 
+## Repository layout
+
+Implementation lives under `pkgs/`, in three groups; every package has the same shape (`src/`, `tests/`, `examples/`, `docs/`, `README.md` and its manifest — a directory exists only when it has content).
+
+| Group | Holds |
+|---|---|
+| `pkgs/host/*` | The host crates (`core`, `config`, `host`, `protocol`, `session`) and the Go `supervisor` |
+| `pkgs/extensions/*` | Every guest, flat, named by kind (`tool-*`, `interceptor-*`, `provider-*`, `registry-*`) |
+| `pkgs/clients/*` | The terminal (`tui`), web and Tauri (`gui`) clients |
+
+There are **three cargo workspaces**: the repo-root `Cargo.toml` (the host crates and `tui`), `pkgs/extensions/Cargo.toml` (the guests, built for `wasm32-wasip2`), and `pkgs/clients/gui/Cargo.toml` (kept apart for the reason given under [User interfaces](#user-interfaces-separate-clients)). Cargo cannot share `[workspace.lints]` across workspaces, so the three blocks are kept identical by `make lints-drift`; every other lint and supply-chain config (`deny.toml`, `.golangci.yml`, `.config/nextest.toml`) sits at the root and covers all of them. `wit/` (the contracts), `ext/` (staged components), `scripts/` and `docs/` stay at the root.
+
 ## Stack
 
 | Layer | Technology |
@@ -429,7 +441,7 @@ Required, not optional: with log-based read surfaces, unconverted databases have
 
 ## Provider fallback
 
-When a provider/model fails (unavailable, rate-limited, quota exceeded, OOM), the **core loop** falls back through a two-level priority list in `config.yaml`, re-issuing to the next entry. Fallback is core *mechanism*, not an interceptor: it re-issues the *same* failed request (on-provider-error retry, same category as retry/validate), which `prepare-next-turn` interceptors cannot do. Entries reference **provider instance names** (`extensions.provider.<name>`), not wasm components — see [Configuration](configuration.md):
+When a provider/model fails (unavailable, rate-limited, quota exceeded, OOM), the **core loop** falls back through a two-level priority list in `config.yaml`, re-issuing to the next entry. Fallback is core *mechanism*, not an interceptor: it re-issues the *same* failed request (on-provider-error retry, same category as retry/validate), which `prepare-next-turn` interceptors cannot do. Entries reference **provider instance names** (`extensions.provider.<name>`), not wasm components — see [Configuration](../../pkgs/host/config/docs/configuration.md):
 
 ```yaml
 providers:
@@ -561,4 +573,4 @@ Extensions pick up `config.yaml` changes without restart. Core watches the confi
 - **Standard:** `core` binary + `ext/*.wasm` + `config.yaml` (deploy unit). UI binary is separate, optional.
 - **Bundle:** pre-packaged ZIP with core + curated `.wasm` + pre-filled config; UI bundles include the UI client.
 
-See [Configurator](configurator.md) for archive generation and [Blue/Green Deployment](blue-green-deployment.md) for updates.
+See [Configurator](configurator.md) for archive generation and [Blue/Green Deployment](../../pkgs/host/supervisor/docs/blue-green-deployment.md) for updates.

@@ -128,7 +128,7 @@ Test decision before porting:
 
 ### TinyGo's role
 
-TinyGo **not** community author proxy; separate supervisor/updater: stages version, blue/green flip, restart, health-check, rollback. Must survive core swap (switcher can't be switched binary). See [Blue/Green Deployment](../../concepts/blue-green-deployment.md).
+TinyGo **not** community author proxy; separate supervisor/updater: stages version, blue/green flip, restart, health-check, rollback. Must survive core swap (switcher can't be switched binary). See [Blue/Green Deployment](../../../pkgs/host/supervisor/docs/blue-green-deployment.md).
 
 ---
 

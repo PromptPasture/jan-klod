@@ -4,7 +4,7 @@
 #
 # Same shape as scripts/web-dist-drift.sh and ext-new-selftest.sh: regenerate,
 # compare, fail on a difference. What is different here is what it compares
-# against. `src/web/dist/` is committed, so its drift check diffs a rebuild
+# against. `pkgs/clients/web/dist/` is committed, so its drift check diffs a rebuild
 # against the committed bytes. `ext/*.wasm` and `ext/*.manifest.toml` are
 # **not** committed (see .gitignore), and a Rust wasm build is not byte-stable
 # across machines, so a committed index.json would carry digests that differ per

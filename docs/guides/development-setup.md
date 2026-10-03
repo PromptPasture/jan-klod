@@ -29,7 +29,7 @@ for the language policy.
 | **Go** ≥ 1.23 | toolchain TinyGo builds on | optional — TinyGo polyglot canary only | `brew` |
 | **TinyGo** ≥ 0.34 | compiles the `spike` guest to a **component** (`wasip2`); `make gate` rebuilds it from source when installed | optional — polyglot canary, not a first-party extension path | `brew` |
 
-The core embeds Wasmtime as a library, so the CLI is optional — it's only useful for inspecting `.wasm` files. `cargo-component` is **not needed**: since Rust 1.82, `wasm32-wasip2` emits components directly (`src/extensions/Makefile:194`).
+The core embeds Wasmtime as a library, so the CLI is optional — it's only useful for inspecting `.wasm` files. `cargo-component` is **not needed**: since Rust 1.82, `wasm32-wasip2` emits components directly (`pkgs/extensions/Makefile:194`).
 
 ## Install
 
@@ -97,7 +97,7 @@ tinygo version         # optional, TinyGo canary  (verified: 0.41.1)
 
 A green run of the required four means the toolchain is ready to build first-party
 (Rust) extensions. Then build per the project [Makefile](../../Makefile) (`cargo
-build` for core; `make -C src/extensions` for guests).
+build` for core; `make -C pkgs/extensions` for guests).
 
 ## What a green local gate does not cover
 
@@ -112,7 +112,7 @@ rather than inferred:
 
 ```console
 clippy: not linted on macos — gated to another platform, covered by CI:
-  src/host/tests/it/sandbox_landlock.rs
+  pkgs/host/host/tests/it/sandbox_landlock.rs
 ```
 
 Cross-linting instead would need a C cross-toolchain for a transitive build
@@ -141,14 +141,14 @@ tests both the committed `spike.wasm` and rebuilds it from source (if `tinygo`
 and `wkg` are installed), verifying WIT changes across toolchains.
 
 `spike.wasm` is the only guest component tracked in the repo, built with
-`-no-debug -opt=z` (~75 KB). Regenerate it with `make -C src/extensions spike-guest`
-and commit the result; `make -C src/extensions clean` preserves it.
+`-no-debug -opt=z` (~75 KB). Regenerate it with `make -C pkgs/extensions spike-guest`
+and commit the result; `make -C pkgs/extensions clean` preserves it.
 
 ### Rust (default)
 
 Since Rust 1.82, `wasm32-wasip2` emits components directly. A guest is a `cdylib`
-implementing the world's `Guest` traits. Examples: `src/extensions/tool-find/`
-(uses `host-fs`) and `src/extensions/provider-openai/` (uses `host-http`):
+implementing the world's `Guest` traits. Examples: `pkgs/extensions/tool-find/`
+(uses `host-fs`) and `pkgs/extensions/provider-openai/` (uses `host-http`):
 
 ```shell
 rustup target add wasm32-wasip2          # one-time

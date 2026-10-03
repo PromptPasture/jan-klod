@@ -1,11 +1,11 @@
 #!/bin/sh
-# Drift check for the committed src/web/dist/.
+# Drift check for the committed pkgs/clients/web/dist/.
 #
 # #119 box 1 chose to commit the bundle, and the argument it recorded was that
 # this repository already commits generated artifacts — protocol.schema.json,
 # ext/*.manifest.toml, wit/wkg.lock — each with a drift check. dist/ was the
-# first one without, and src/host/src/serve.rs embeds it with include_str!,
-# so the failure mode is specific and silent: edit src/web/src/*.ts, do not
+# first one without, and pkgs/host/host/src/serve.rs embeds it with include_str!,
+# so the failure mode is specific and silent: edit pkgs/clients/web/src/*.ts, do not
 # rebuild, and the core serves a stale client forever with everything green.
 #
 # Same shape as ext-new-selftest.sh and protocol.schema.json's test: rebuild,
@@ -23,11 +23,11 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WEB="$ROOT/src/web"
+WEB="$ROOT/pkgs/clients/web"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-echo "web-dist-drift: rebuilding src/web from its sources in a temp tree"
+echo "web-dist-drift: rebuilding pkgs/clients/web from its sources in a temp tree"
 
 # node_modules deliberately not copied: `npm ci` below installs from the
 # lockfile, which is the whole point. tests/ is not copied either — tsconfig.json
@@ -38,10 +38,10 @@ mkdir -p "$WORK/dist"
 
 for file in app.js index.html; do
     if ! diff -u "$WEB/dist/$file" "$WORK/dist/$file"; then
-        echo "web-dist-drift: src/web/dist/$file has drifted from src/web/src/" >&2
+        echo "web-dist-drift: pkgs/clients/web/dist/$file has drifted from pkgs/clients/web/src/" >&2
         echo "  serve.rs embeds dist/ with include_str!, so a stale bundle ships silently." >&2
         echo "  Rebuild it rather than editing it by hand:" >&2
-        echo "    cd src/web && npm ci && npm run build && git add dist" >&2
+        echo "    cd pkgs/clients/web && npm ci && npm run build && git add dist" >&2
         exit 1
     fi
 done

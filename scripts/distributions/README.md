@@ -21,4 +21,4 @@ make bundle DIST=coding GUI=1     # -> jan-klod-<v>-<os>-<arch>-coding-gui.tar.g
 
 **Not `dist/`** — that's `make bundle`'s git-ignored output directory (definitions there vanish on clean).
 
-`host/tests/it/docs_match_config.rs` checks every `config.yaml`: README, quickstart, landing page, installer must each name a provider key **all** shipped configs have (per-config, not pooled—pooling hides mismatches).
+`pkgs/host/host/tests/it/docs_match_config.rs` checks every `config.yaml`: README, quickstart, landing page, installer must each name a provider key **all** shipped configs have (per-config, not pooled—pooling hides mismatches).

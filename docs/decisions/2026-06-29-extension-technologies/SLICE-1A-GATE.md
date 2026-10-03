@@ -18,8 +18,8 @@ Minimal vertical slice works end-to-end: sync Rust+Wasmtime host loads TinyGo co
 | Path | Role |
 |---|---|
 | `wit/spike/world.wit` | Throwaway gate world: `export complete: func(prompt: string) -> string`, plus `include wasi:cli/imports@0.2.0`. Separate package (`jan-klod:spike`) — not part of canonical `jan-klod:interfaces`. |
-| `src/core/` | Cargo workspace; `host` crate → `jan-klod` binary. Embeds `wasmtime` (sync) + `wasmtime-wasi`; `bindgen!` generates the typed guest binding. |
-| `src/extensions/spike/` | TinyGo guest. `wit-bindgen-go` bindings + a 3-line `Exports.Complete` that echoes. |
+| `pkgs/host/core/` | Cargo workspace; `host` crate → `jan-klod` binary. Embeds `wasmtime` (sync) + `wasmtime-wasi`; `bindgen!` generates the typed guest binding. |
+| `pkgs/extensions/spike/` | TinyGo guest. `wit-bindgen-go` bindings + a 3-line `Exports.Complete` that echoes. |
 | `Makefile` `gate` target | Reproduces the check: `wkg wit fetch` → `tinygo build -target=wasip2` → `cargo run`. |
 
 ## Evidence
@@ -66,6 +66,6 @@ make gate   # prints: echo: hello, component model
 ## Cleanup (at the start of Slice 1b)
 
 The spike is disposable. When the real `provider`/`store` components land, delete
-`src/extensions/spike/`, `wit/spike/`, and the host's spike `bindgen!` path +
+`pkgs/extensions/spike/`, `wit/spike/`, and the host's spike `bindgen!` path +
 `Spike` call. The Cargo workspace, the `wasmtime`/`wasmtime-wasi` wiring, the
 `WasiView` host state, and the `wkg`/TinyGo build recipe all carry forward.

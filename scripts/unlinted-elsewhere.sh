@@ -11,10 +11,10 @@
 # the one that just ran. Making it fail would block work on every platform
 # for code that is correct on the platform that compiles it.
 #
-# Usage: unlinted-elsewhere.sh <workspace-dir>
+# Usage: unlinted-elsewhere.sh <dir>...
 set -eu
 
-WS="${1:?usage: unlinted-elsewhere.sh <workspace-dir>}"
+WS="${*:?usage: unlinted-elsewhere.sh <dir>...}"
 HERE="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$HERE" in
     darwin) THIS="macos" ;;
@@ -24,7 +24,7 @@ esac
 
 # Only whole-file gates. A `#[cfg]` on an inner item is not worth chasing with
 # a grep, and the file-level ones are where whole modules go unread.
-found=$(grep -rl '^#!\[cfg(target_os = ' "$WS" --include='*.rs' 2>/dev/null || true)
+found=$(grep -rl '^#!\[cfg(target_os = ' $WS --include='*.rs' 2>/dev/null || true)
 [ -n "$found" ] || exit 0
 
 listed=""

@@ -91,7 +91,7 @@ and `ext/` at the repo root.
 | `src/internal/host/extension.go` | load / instantiate / call / lifecycle of an extension |
 | `src/internal/abi/abi.go` | pointer+length packing convention |
 | `src/extensions/store-memory/` | in-memory `memory-store` guest (separate module) |
-| `src/extensions/provider-openai/` | OpenAI-compatible `llm-provider` guest (non-streaming) |
+| `pkgs/extensions/provider-openai/` | OpenAI-compatible `llm-provider` guest (non-streaming) |
 | `src/extensions/probe-host/` | test-fixture guest exercising host-log/config/http |
 | `jan-klod.yaml` | runtime config: which extensions load + their settings |
 | `Makefile` | `make all` builds guests `.wasm` + host; `make run`; `make test` |

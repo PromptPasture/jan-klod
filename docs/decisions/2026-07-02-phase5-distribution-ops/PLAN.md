@@ -4,7 +4,7 @@ Execution checklist for Phase 5. Update flags here and in [Status tracker](../..
 
 **Prerequisite:** Phases 1–4 done (2026-07-02) — runtime functionally complete. Missing: **ship** it + **keep updated**.
 
-References: [Blue/Green Deployment](../../concepts/blue-green-deployment.md) · [Configurator](../../concepts/configurator.md).
+References: [Blue/Green Deployment](../../../pkgs/host/supervisor/docs/blue-green-deployment.md) · [Configurator](../../concepts/configurator.md).
 
 ## Goal
 
@@ -22,7 +22,7 @@ Ship jan-klod with updates: **tiny supervisor/updater** (stage, flip, health-che
 |---|---|---|---|
 | Supervisor language | Slice 5a | **Go** (static binary) | Cross-compiles to dependency-free binary, survives core swap. Roadmap names it. |
 | Health-check | Slice 5a | `GET /health` on REST surface (+ process-liveness). | Cheap; confirms swapped core booted + serves. |
-| Slot/state | Slice 5a | `~/.jan-klod/{blue,green}` + `active` symlink + `state.yaml` | Matches [blue-green.md](../../concepts/blue-green-deployment.md); symlink flip instant rollback. |
+| Slot/state | Slice 5a | `~/.jan-klod/{blue,green}` + `active` symlink + `state.yaml` | Matches [blue-green.md](../../../pkgs/host/supervisor/docs/blue-green-deployment.md); symlink flip instant rollback. |
 | Configurator v1 | Slice 5b | **Curated pre-built bundles** (downloadable per preset/os/arch). Web UI later. | Static bundles shippable now; ZIP-builder needs backend service. |
 
 ## Status
@@ -69,4 +69,4 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 - Strict lint (Go supervisor: `golangci-lint`); Rust clippy-clean.
 - Supply-chain gates to supervisor.
-- [x] Updated [Blue/Green](../../concepts/blue-green-deployment.md) + [Configurator](../../concepts/configurator.md) docs: `ext/` holds guests only; core binary has persistence/REST/Telegram/delegation.
+- [x] Updated [Blue/Green](../../../pkgs/host/supervisor/docs/blue-green-deployment.md) + [Configurator](../../concepts/configurator.md) docs: `ext/` holds guests only; core binary has persistence/REST/Telegram/delegation.

@@ -1,26 +1,29 @@
-.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift lints-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
-# Orchestrates two sub-makefiles: src/Makefile (the Rust host workspace) and
-# src/extensions/Makefile (guest components, staged in ext/). Also owns the
+# Orchestrates two sub-makefiles: pkgs/host/Makefile (the Rust host workspace) and
+# pkgs/extensions/Makefile (guest components, staged in ext/). Also owns the
 # root WIT contracts and the integration targets spanning both subtrees.
 
-# Pinned tool versions, shared with src/extensions/Makefile, which includes the
+# Pinned tool versions, shared with pkgs/extensions/Makefile, which includes the
 # same file. See versions.mk for why it is a file and not a block here.
 include versions.mk
 
-HOST_WS := src
-EXT := src/extensions
-SUPERVISOR := src/supervisor
-WEB := src/web
+# The host cargo workspace is rooted here, at the repo root (Phase 32). HOST_MK
+# is where its sub-makefile and the crates live.
+HOST_WS := .
+HOST_MK := pkgs/host
+EXT := pkgs/extensions
+SUPERVISOR := pkgs/host/supervisor
+WEB := pkgs/clients/web
 # The Tauri shell (#141, #142). Its own cargo workspace, deliberately: Tauri
 # resolves 329 packages nothing else here needs, and as a member of $(HOST_WS) they
 # would be on every `cargo test` and every CI run. Nothing on the default build
 # path reaches it — `all` does not, `gate` does not — which is the point. Its
 # supply-chain gates are *not* optional in the same way: `lockfile`, `deny` and
 # `audit` below all name it.
-GUI_DIR := src/gui
+GUI_DIR := pkgs/clients/gui
 
 # EXT_DIR mirrors the extensions sub-makefile's staging dir.
 CONFIG := $(abspath config.yaml)
@@ -62,11 +65,12 @@ help:
 	@echo "              the integration suite needs 'gate' or 'harness' instead"
 	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
-	@echo "  test-web    run the browser client's suite (src/web; needs Node, not in 'test')"
-	@echo "  test-gui    run the Tauri shell's suite (src/gui; needs a display, not in 'test')"
+	@echo "  test-web    run the browser client's suite (pkgs/clients/web; needs Node, not in 'test')"
+	@echo "  test-gui    run the Tauri shell's suite (pkgs/clients/gui; needs a display, not in 'test')"
 	@echo "  clippy-gui  lint the Tauri shell (-D warnings)"
 	@echo "  clippy-guests lint the wasm guests, native + wasm32 (-D warnings)"
-	@echo "  web-dist-drift  check src/web/dist/ is still what src/web/src/ builds"
+	@echo "  web-dist-drift  check pkgs/clients/web/dist/ is still what pkgs/clients/web/src/ builds"
+	@echo "  lints-drift     check the [workspace.lints] blocks of the three cargo workspaces agree"
 	@echo "  registry-index  write the registry index for ext/ (REGISTRY_INDEX=path)"
 	@echo "  registry-index-drift  check that index generation is deterministic"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
@@ -79,8 +83,8 @@ help:
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
 	@echo "  sbom        generate sbom.cdx.json for Rust workspace (cargo-cyclonedx)"
-	@echo "  web-supply-chain  npm lockfile sync + npm audit for src/web"
-	@echo "  supervisor-supply-chain  go mod verify + govulncheck for src/supervisor"
+	@echo "  web-supply-chain  npm lockfile sync + npm audit for pkgs/clients/web"
+	@echo "  supervisor-supply-chain  go mod verify + govulncheck for pkgs/host/supervisor"
 	@echo "  run         boot the core against config.yaml + ext/"
 	@echo "  chat-gui    open the web client in a window (builds the shell first)"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
@@ -101,7 +105,7 @@ wit:
 	sh scripts/wit-version-check.sh
 
 # wit/spike/deps (wasi:cli & co) is gitignored and only ever populated by `make
-# setup` (below) or `make -C src/extensions spike-deps` — nothing on the plain
+# setup` (below) or `make -C pkgs/extensions spike-deps` — nothing on the plain
 # build path fetches it. Without this check, a fresh clone that skipped setup
 # hits `bindgen!`'s compile-time WIT resolution instead: "failed to resolve
 # directory while parsing WIT for path .../wit/spike", which names no fix.
@@ -111,7 +115,7 @@ check-spike-deps:
 	@test -d wit/spike/deps || { \
 	  echo "error: wit/spike/deps is missing (gitignored, not from git checkout)." >&2; \
 	  echo "  Run 'make setup' once per clone, or if you already have wkg:" >&2; \
-	  echo "  make -C src/extensions spike-deps" >&2; \
+	  echo "  make -C pkgs/extensions spike-deps" >&2; \
 	  exit 1; \
 	}
 
@@ -119,7 +123,7 @@ all: core extensions
 
 # --- Build (delegated to the sub-makefiles) ---
 core:
-	$(MAKE) -C $(HOST_WS) build
+	$(MAKE) -C $(HOST_MK) build
 
 extensions:
 	$(MAKE) -C $(EXT) all
@@ -159,7 +163,7 @@ ext-new:
 test: test-core test-guests
 
 test-core:
-	$(MAKE) -C $(HOST_WS) test
+	$(MAKE) -C $(HOST_MK) test
 
 # The legs `gate` doesn't cover: guest native tests + the Go supervisor.
 test-guests:
@@ -200,7 +204,7 @@ clippy-gui:
 	$(MAKE) -C $(GUI_DIR) clippy
 
 # The guests are their own cargo workspace too, and declare the same strict
-# lint policy — see `src/extensions/Makefile` for why this runs twice.
+# lint policy — see `pkgs/extensions/Makefile` for why this runs twice.
 clippy-guests:
 	$(MAKE) -C $(EXT) clippy
 
@@ -212,6 +216,11 @@ clippy-guests:
 # rebuild happens in a temp tree and why `npm ci` is not `npm install`.
 web-dist-drift:
 	sh scripts/web-dist-drift.sh
+
+# Cargo cannot share [workspace.lints] across the three workspaces, so this is
+# what keeps the policy one policy (#275). Cheap: no build, no toolchain.
+lints-drift:
+	sh scripts/lints-drift.sh
 
 # --- Registry index (Slice 16d-1) ---
 #
@@ -276,7 +285,7 @@ BUNDLE_OUT ?= $(abspath dist)
 # `make bundle DIST=coding` builds from a named distribution — a guest list and
 # a config under scripts/distributions/. With no DIST this keeps doing exactly
 # what it did before: the repository's own config.yaml and the whole of ext/.
-# That default is asserted by host/tests/it/bundle_distributions.rs rather than
+# That default is asserted by pkgs/host/host/tests/it/bundle_distributions.rs rather than
 # left as an intention.
 DIST ?=
 
@@ -320,8 +329,8 @@ bundle: extensions
 # is a large install to catch a class of error CI catches for free — so the
 # answer is "CI covers these", said out loud on every run.
 clippy: check-spike-deps
-	$(MAKE) -C $(HOST_WS) clippy
-	@sh scripts/unlinted-elsewhere.sh $(HOST_WS)
+	$(MAKE) -C $(HOST_MK) clippy
+	@sh scripts/unlinted-elsewhere.sh $(HOST_MK) pkgs/clients/tui
 
 # --- Supply-chain gates (CI enforces all of these) ---
 
@@ -330,7 +339,7 @@ clippy: check-spike-deps
 # audited/denied tree that differs from the one that actually builds. Two
 # workspaces: the host workspace and the guest extensions workspace (one
 # shared Cargo.lock across all guests, so a new guest added to
-# src/extensions/Cargo.toml's members is covered without editing this list).
+# pkgs/extensions/Cargo.toml's members is covered without editing this list).
 # This used to be a loop inlined in both `pre-push` and `ci.yml`'s
 # supply-chain job — the same commands typed twice, free to drift the way
 # the rest of #72 was about. Named here, both now call it.
@@ -343,17 +352,17 @@ lockfile:
 
 # Each subtree owns its own audit/deny invocation; root fans out to all three.
 #
-# `src/gui` is here and not optional. It is the tree that made `deny.toml` grow
+# `pkgs/clients/gui` is here and not optional. It is the tree that made `deny.toml` grow
 # eleven named entries (#141), so a policy run that skipped it would be checking
 # every workspace except the one the policy was widened for.
 audit deny:
-	$(MAKE) -C $(HOST_WS) $@
+	$(MAKE) -C $(HOST_MK) $@
 	$(MAKE) -C $(EXT) $@
 	$(MAKE) -C $(GUI_DIR) $@
 
 # CycloneDX SBOM for all Rust crates. Install once: cargo install cargo-cyclonedx
 #
-# `src/gui` is generated too, and it is not a formality: `jan-klod-gui` is a
+# `pkgs/clients/gui` is generated too, and it is not a formality: `jan-klod-gui` is a
 # binary a `-gui` archive ships, and it carries 329 packages none of the others
 # do (#141). An SBOM that describes the gateway and the client but not the third
 # binary in the same tarball answers the question it exists to answer — "what is
@@ -368,18 +377,20 @@ audit deny:
 # all seven and nothing else.
 # It has to be exactly one level. `src/**/...` is what was here before, and in
 # `sh` (no `globstar`) `**` is just `*`, so it was never recursive; when the
-# members moved out from under `src/core/` it silently stopped matching four of
+# members moved out from under `pkgs/host/core/` it silently stopped matching four of
 # the five and the SBOM lost them. A glob that quietly describes less than it
 # claims is the failure this repository keeps paying for, so the count is
 # asserted rather than trusted.
+# One glob per group directory: every package that writes a document beside its manifest.
+SBOM_DOCS := $(HOST_MK)/*/*.cdx.json pkgs/clients/*/*.cdx.json
 sbom:
 	cd $(HOST_WS) && cargo cyclonedx --format json --quiet
 	cd $(GUI_DIR) && cargo cyclonedx --format json --quiet
-	@n=$$(ls $(HOST_WS)/*/*.cdx.json | wc -l | tr -d ' '); \
+	@n=$$(ls $(SBOM_DOCS) | wc -l | tr -d ' '); \
 	  test "$$n" -eq 7 \
 	    || { echo "sbom: expected 7 per-crate documents, found $$n:" >&2; \
-	         ls $(HOST_WS)/*/*.cdx.json >&2; exit 1; }
-	cat $(HOST_WS)/*/*.cdx.json | \
+	         ls $(SBOM_DOCS) >&2; exit 1; }
+	cat $(SBOM_DOCS) | \
 	  jaq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
 	  > sbom.cdx.json
 
@@ -390,7 +401,7 @@ sbom:
 # gate that passes.
 #
 # Advisories only. `npm audit` is the analogue of `cargo audit`; there is no
-# analogue here of `cargo deny`'s licence and source policy, so src/web's
+# analogue here of `cargo deny`'s licence and source policy, so pkgs/clients/web's
 # dependencies are checked for known vulnerabilities and for nothing else.
 #
 # `npm ci --dry-run` first, and it is load-bearing rather than belt-and-braces:
@@ -401,7 +412,7 @@ sbom:
 # tree that builds. `--dry-run` because resolving the tree is the whole point;
 # installing it is not, and `npm audit` needs no node_modules.
 #
-# DO NOT add --omit=dev or --production here. Every one of src/web's 29
+# DO NOT add --omit=dev or --production here. Every one of pkgs/clients/web's 29
 # packages is a devDependency (esbuild + typescript; there are no runtime
 # dependencies at all), so omitting them makes this command scan an empty set,
 # report "found 0 vulnerabilities" and exit 0 forever. The usual advice — audit
@@ -421,13 +432,13 @@ web-supply-chain:
 # together.
 #
 # `go run …@$(GOVULNCHECK_VERSION)` rather than a `govulncheck` off `PATH`,
-# matching src/extensions' `go-supply-chain`: no runner has govulncheck
+# matching pkgs/extensions' `go-supply-chain`: no runner has govulncheck
 # installed, and the neighbouring leg already resolves the tool this way. That
 # answered #131's second question — the supervisor does use the same call — and
 # #131 then closed the first one by pinning the version both sites share, in
 # versions.mk.
 #
-# `src/supervisor` has no `go.sum`: it is a dependency-free binary, so
+# `pkgs/host/supervisor` has no `go.sum`: it is a dependency-free binary, so
 # `go mod verify` passes trivially and the real work here is govulncheck's
 # **standard library** scan, which is what a Go toolchain CVE would land in.
 supervisor-supply-chain: export GOFLAGS = -mod=readonly
@@ -452,7 +463,7 @@ supply-chain: deny audit sbom web-supply-chain supervisor-supply-chain
 #   host_process       — guest command through host-process; denied when disabled
 #   tool_fleet         — ToolFleet dispatches a call to the matching tool-* guest
 #   tool_wiring        — build_agent wires an enabled tool.* into the fleet
-# These are modules of one test binary (src/host/tests/it/main.rs), run by
+# These are modules of one test binary (pkgs/host/host/tests/it/main.rs), run by
 # --test name filter. A typo'd filter can still match other modules and exit 0,
 # so each name is checked against the filesystem before the run.
 HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegram \
@@ -460,8 +471,8 @@ HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegra
 harness: export JK_REQUIRE_GUESTS = 1
 harness: check-spike-deps extensions
 	@for m in $(HARNESS_MODULES); do \
-	  test -f $(HOST_WS)/host/tests/it/$$m.rs \
-	    || { echo "harness: no module $$m.rs in $(HOST_WS)/host/tests/it/" >&2; exit 1; }; \
+	  test -f $(HOST_MK)/host/tests/it/$$m.rs \
+	    || { echo "harness: no module $$m.rs in $(HOST_MK)/host/tests/it/" >&2; exit 1; }; \
 	done
 	cd $(HOST_WS) && cargo nextest run -p jan-klod-host --features jan-klod-host/integration $(addsuffix ::,$(HARNESS_MODULES))
 
@@ -547,7 +558,7 @@ gate: check-spike-deps extensions
 
 # The pre-commit gate: both `cargo fmt --check` invocations, then a rebuilt
 # (not just removed) ext/ — an absent ext/ makes
-# scripts/manifests-selftest.sh (run by `make -C src/extensions test`, part of
+# scripts/manifests-selftest.sh (run by `make -C pkgs/extensions test`, part of
 # `make test` below) skip instead of checking anything, so `rm -rf` alone
 # would let a missing manifest report green. JK_REQUIRE_GUESTS=1 is what turns
 # a skipped self-test into a failure rather than trusting the rebuild alone to
@@ -558,7 +569,7 @@ gate-commit:
 	cargo fmt --manifest-path $(EXT)/Cargo.toml --all -- --check
 	rm -rf $(EXT_DIR)
 	$(MAKE) -C $(EXT) all
-	$(MAKE) -C $(HOST_WS) check
+	$(MAKE) -C $(HOST_MK) check
 	$(MAKE) test
 
 # The pre-push gate: a push pays the full gate unconditionally, no skip check.
@@ -579,7 +590,7 @@ gate-commit:
 # cost belongs on a push and not on a commit.
 #
 # **This does not make a green push imply a green CI**, and it is worth
-# knowing why. `src/host/tests/it/sandbox_landlock.rs` is
+# knowing why. `pkgs/host/host/tests/it/sandbox_landlock.rs` is
 # `#![cfg(target_os = "linux")]`, so on macOS clippy never compiles it and
 # never reads it; CI runs Linux and does. No target added here closes that,
 # because the gap is the platform rather than the target list (#207).
@@ -594,6 +605,7 @@ gate-push:
 	$(MAKE) clippy-gui
 	$(MAKE) gate
 	$(MAKE) registry-index-drift
+	$(MAKE) lints-drift
 	$(MAKE) lockfile
 	$(MAKE) deny
 	$(MAKE) audit
@@ -666,7 +678,7 @@ install-hooks:
 	git config core.hooksPath .github/hooks
 
 clean:
-	$(MAKE) -C $(HOST_WS) clean
+	$(MAKE) -C $(HOST_MK) clean
 	$(MAKE) -C $(EXT) clean
 	$(MAKE) -C $(GUI_DIR) clean
 	rm -rf $(CACHE_DIR)

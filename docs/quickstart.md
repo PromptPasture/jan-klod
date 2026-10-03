@@ -207,7 +207,7 @@ jan-klod-gateway ext install https://example.com/ext/tool-thing.wasm
 
 A URL names the component; the manifest and signatures fetch from beside it. Only public destinations are allowed, checked before fetching and on every redirect.
 
-Signed is the default; `--allow-unsigned` deliberately bypasses it and requires `--sha256`, since waiving the signature leaves the digest as the only evidence. Name trusted keys in `registry.trusted-keys` and the flags become unnecessary — see [Configuration → Putting something in `ext/`](concepts/configuration.md#putting-something-in-ext-registry). Refused installs leave `ext/` unchanged.
+Signed is the default; `--allow-unsigned` deliberately bypasses it and requires `--sha256`, since waiving the signature leaves the digest as the only evidence. Name trusted keys in `registry.trusted-keys` and the flags become unnecessary — see [Configuration → Putting something in `ext/`](../pkgs/host/config/docs/configuration.md#putting-something-in-ext-registry). Refused installs leave `ext/` unchanged.
 
 ## 7. Resume a session
 

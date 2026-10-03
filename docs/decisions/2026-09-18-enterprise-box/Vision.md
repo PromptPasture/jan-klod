@@ -34,8 +34,8 @@ Two products out of one repository, stated by the owner:
 
 ## Context — the foundation holds, the box does not exist
 
-The kernel earns its ground rule. `src/core/src/conductor.rs` is a ReAct state machine that hands
-every decision to an interceptor guest through `src/core/src/intercept.rs`; there is no model name,
+The kernel earns its ground rule. `pkgs/host/core/src/conductor.rs` is a ReAct state machine that hands
+every decision to an interceptor guest through `pkgs/host/core/src/intercept.rs`; there is no model name,
 no endpoint and no agent policy in it. Provider fallback is try-in-order. The only production code
 that names a specific extension is the `ext install` / `ext search` pair in `native_tools.rs`, which
 is host-side because it writes. *Zero agent behaviour* is true.
@@ -51,12 +51,12 @@ What is missing is on the other side, and it is missing from the tracker as well
   refuse by construction
   ([#93](https://github.com/PromptPasture/jan-klod/issues/93)). The distribution machinery is
   complete and inert.
-- **There is one shared bearer token.** `authorised()` in `src/host/src/serve.rs` compares a secret;
+- **There is one shared bearer token.** `authorised()` in `pkgs/host/host/src/serve.rs` compares a secret;
   it does not establish a principal. Every caller sees every session.
-- **Telegram checks nothing.** `src/host/src/telegram.rs` turns every chat id into a session and
+- **Telegram checks nothing.** `pkgs/host/host/src/telegram.rs` turns every chat id into a session and
   answers every sender who finds the bot; there is no allowlist to configure. `headless-chat` is
   reached over nothing else.
-- **Secrets are `${VAR}` expansion** (`src/config/src/lib.rs`) and nothing systematically keeps a key
+- **Secrets are `${VAR}` expansion** (`pkgs/host/config/src/lib.rs`) and nothing systematically keeps a key
   out of the event log, an SSE frame or a rebuilt transcript.
 - **The log records everything and nothing reads it out**
   ([#186](https://github.com/PromptPasture/jan-klod/issues/186)).
@@ -73,8 +73,8 @@ for Pi, and the closest thing to a specification for this box — safer editing 
 prompts ship in the `coding` distribution; planning, web fetching and MCP exist as guests
 (`tool-plan`, `tool-fetch`, `registry-mcp`) that no distribution's `guests` list carries, so they are
 built and not shipped. **Persistent memory, web search, scheduled tasks and sub-agents do not
-exist.** `src/core/src/delegate.rs` is written and unit-tested and never instantiated,
-because `CATEGORIES` at `src/core/src/lib.rs:259` is `["provider", "interceptor", "registry",
+exist.** `pkgs/host/core/src/delegate.rs` is written and unit-tested and never instantiated,
+because `CATEGORIES` at `pkgs/host/core/src/lib.rs:259` is `["provider", "interceptor", "registry",
 "tool"]` and `agent` is not among them.
 
 ## Where enterprise capability lives
@@ -168,7 +168,7 @@ whole thing installs with no network.
 - **26a** — a minisign keypair, its public half committed, its private half a CI secret.
 - **26b** — the release carries `sbom.cdx.json` and a `.minisig` beside every archive and component.
   Today `ci.yml` generates the SBOM and keeps it as a workflow artifact, `release.yml` does not
-  publish it, and `make sbom` covers the Rust crates only — the npm dependencies of `src/web` have to
+  publish it, and `make sbom` covers the Rust crates only — the npm dependencies of `pkgs/clients/web` have to
   be in it before it is the release's bill of materials.
 - **26c** — `v0.1.0` is tagged and `release.yml` publishes all distributions per platform.
 - **26d** — the shipped `config.yaml` names a default `registry.url` and lists the published key in
@@ -224,7 +224,7 @@ basis.
   operator commands on the host and are the operating system's to protect, not RBAC's.
 - **28e** — Telegram: the sender id the Bot API asserts becomes the principal `telegram:<id>`, and
   `headless-chat` ships an empty allowlist that refuses every sender until an operator lists one.
-  Lands in `src/host/src/telegram.rs` if 22b
+  Lands in `pkgs/host/host/src/telegram.rs` if 22b
   ([#185](https://github.com/PromptPasture/jan-klod/issues/185)) has not yet moved the bot into a
   guest, and in the guest's config if it has — the rule is the same either way.
 
@@ -261,7 +261,7 @@ come first among those that can.
 - **30b** — `tool-web-search` over `host-http`, its provider and key configuration.
 - **30c** — `interceptor-persona`: personality as data, read from config at `before-loop`.
 - **30d** — sub-agents: `agent` becomes a category with a world and a boot arm, and
-  `src/core/src/delegate.rs` is finally instantiated. *Waits on Phase 22.*
+  `pkgs/host/core/src/delegate.rs` is finally instantiated. *Waits on Phase 22.*
 - **30e** — scheduled tasks. *Waits on Phase 22, and on the clock question below.*
 - **30f** — the provider fleet: Bedrock and Vertex as their own guests, since SigV4 and Google OAuth
   are not a base-URL change; self-hosted OpenAI-compatible endpoints already work through
@@ -283,7 +283,7 @@ shipped skill — with no extension installed by hand and no `config.yaml` edite
   empty, the Phase 30 guests and the three built-but-unshipped ones (`tool-plan`, `tool-fetch`,
   `registry-mcp`) in its `guests` list, the MCP servers it expects named in `registry-mcp`'s
   `servers`, and the 30g skill set inside the archive. Every one of these is a knob an earlier phase
-  built or that `src/core/src/egress.rs` already holds — 31a *configures*, it does not implement.
+  built or that `pkgs/host/core/src/egress.rs` already holds — 31a *configures*, it does not implement.
 - **31b** — `jan-klod-gateway setup` audits the current state and prints what would run. It writes
   nothing. It is a host-side subcommand rather than a guest, and for a structural reason rather than
   convenience: it is the thing that decides which guests load, so it has to run before there are any.
@@ -332,7 +332,7 @@ Each of these was proposed during the research for it and is refused, so that it
   decision a second scope, and the two have to be documented as layers or they will be confused.
 - **Redaction is lossy and silent when wrong.** A pattern that does not match removes nothing and
   says nothing. The guardrails rule set fails closed on a malformed set only where the dispatcher
-  does: `src/core/src/intercept.rs` blocks on an interceptor error at `tool-call` and proceeds at
+  does: `pkgs/host/core/src/intercept.rs` blocks on an interceptor error at `tool-call` and proceeds at
   every other phase, which is where the guest redacts text today. So the redaction 27d moves to
   `PersistingSink` cannot inherit a fail-closed rule — it has to state one, and 27d does.
 - **A hash chain proves less than it looks like.** The host owns the database; the chain detects
@@ -359,7 +359,7 @@ Each of these was proposed during the research for it and is refused, so that it
   Spring-Initializr-style UI and Phase 31 builds a CLI wizard; both select capability groups and emit
   an archive. Lean: one group definition, two renderers, the CLI first — but the record does not
   decide it, and that document still describes only the UI.
-- **Per-extension egress.** `src/core/src/egress.rs` is a global policy plus named origins. An
+- **Per-extension egress.** `pkgs/host/core/src/egress.rs` is a global policy plus named origins. An
   extension granted `host-secrets` still reaches every address that policy allows, which is not how
   any other capability works. Phase 31 pins the global policy; whether egress becomes per-extension
   is unanswered.

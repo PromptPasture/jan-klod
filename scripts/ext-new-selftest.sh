@@ -171,11 +171,11 @@ fi
 
 echo "ext-new-selftest: the committed tool-hello is what the generator emits"
 EXT_ROOT="$WORK/drift" sh "$ROOT/scripts/ext-new.sh" tool-hello tool >/dev/null
-for file in Cargo.toml src/lib.rs; do
-    if ! diff -u "$ROOT/src/extensions/tool-hello/$file" "$WORK/drift/tool-hello/$file"; then
-        echo "ext-new-selftest: src/extensions/tool-hello/$file has drifted from ext-new.sh" >&2
+for file in Cargo.toml README.md src/lib.rs; do
+    if ! diff -u "$ROOT/pkgs/extensions/tool-hello/$file" "$WORK/drift/tool-hello/$file"; then
+        echo "ext-new-selftest: pkgs/extensions/tool-hello/$file has drifted from ext-new.sh" >&2
         echo "  Regenerate it rather than editing it by hand:" >&2
-        echo "    rm -r src/extensions/tool-hello && make ext-new NAME=tool-hello KIND=tool" >&2
+        echo "    rm -r pkgs/extensions/tool-hello && make ext-new NAME=tool-hello KIND=tool" >&2
         exit 1
     fi
 done

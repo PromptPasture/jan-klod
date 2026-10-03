@@ -1,0 +1,53 @@
+[package]
+name = "jan-klod"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A UI is NOT an extension — it is a separate client *process* that drives a
+# core (the LSP/server model): over stdio, having spawned it, or over REST if one
+# is already running. This crate depends on neither `jan-klod-core` nor Wasmtime:
+# it speaks only the wire contract.
+[[bin]]
+name = "jan-klod"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+# The wire contract. Serde-only by design (#41), which is what lets a client
+# depend on it without pulling in the core or Wasmtime — the rule this crate's
+# comment above states. The stdio transport frames commands with it.
+jan-klod-protocol = { path = "../../host/protocol" }
+# Terminal UI for the `tui` mode (binary only). Bundles the crossterm backend +
+# event types (used via `ratatui::crossterm`). The pure App model in `app` needs
+# no TUI deps and is unit-tested without a terminal.
+ratatui = "0.30"
+# Both are already in the tree as `ratatui-core` dependencies at these exact
+# versions, so naming them here adds **zero** packages — measured, not assumed
+# (#147). They are direct because wrapping is our own concern: `char` count,
+# `str::len()` and display width are three different numbers, and an emoji is
+# one grapheme, several chars, several bytes and two cells.
+unicode-width = "0.2"
+unicode-segmentation = "1"
+# Markdown for the transcript. Default features off: the extras are HTML output
+# and a `getopts`-driven binary, neither of which a terminal client wants.
+# Chosen over `tui-markdown` in #146, which fails the root `deny.toml`
+# unmodified — it depends on `syntect`, which carries RUSTSEC-2025-0141 and
+# RUSTSEC-2024-0320 with no safe upgrade. The cost of both is in README.md.
+pulldown-cmark = { version = "0.13", default-features = false }
+# `.gitignore`-aware directory walking for `@` path completion (#153). +9
+# packages, and `cargo deny` passes the root policy unmodified — measured, not
+# assumed. Taken rather than hand-rolled: a half-correct `.gitignore` is worse
+# than an explicit simpler rule, because a user trusts it and a file they
+# believe is hidden being offered is a different class of mistake. It is also
+# what makes the feature usable in a real repository at all — an unfiltered
+# walk offers `target/` and nothing else fits in the list.
+ignore = "0.4"
+
+[dev-dependencies]
+# The round-trip test stands up a canned HTTP server to drive the client against.
+tiny_http = "0.12"
+
+[lints]
+workspace = true

@@ -8,7 +8,7 @@ package jan-klod:interfaces@0.4.0;
 /// This interface offers the same vocabulary *inward*, to a granted guest. The
 /// symmetry is the point: a Telegram bot and a terminal client want the same
 /// six things, and one of them happens to run in a component. Where the shapes
-/// differ, `jan-klod-protocol` (`src/protocol/src/lib.rs`) is right and this
+/// differ, `jan-klod-protocol` (`pkgs/host/protocol/src/lib.rs`) is right and this
 /// follows it.
 ///
 /// It is the most powerful capability in the set — a holder drives the loop,

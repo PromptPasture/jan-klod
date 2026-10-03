@@ -24,24 +24,24 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src/core/src/sandbox*.rs'
-      - 'src/host/tests/it/sandbox_*.rs'
+      - 'pkgs/host/core/src/sandbox*.rs'
+      - 'pkgs/host/host/tests/it/sandbox_*.rs'
       # The boot-path confinement pair lives here, not in a sandbox_* file
       # (#125). It is the only evidence that the runner
       # `Runtime::open_process_runner` actually builds is confined, and
       # security-model.md's command-effects row cites it as exactly that.
-      - 'src/host/tests/it/execution_config.rs'
+      - 'pkgs/host/host/tests/it/execution_config.rs'
       - 'wit/host-process.wit'
       - '.github/workflows/ci-macos.yml'
   pull_request:
     paths:
-      - 'src/core/src/sandbox*.rs'
-      - 'src/host/tests/it/sandbox_*.rs'
+      - 'pkgs/host/core/src/sandbox*.rs'
+      - 'pkgs/host/host/tests/it/sandbox_*.rs'
       # The boot-path confinement pair lives here, not in a sandbox_* file
       # (#125). It is the only evidence that the runner
       # `Runtime::open_process_runner` actually builds is confined, and
       # security-model.md's command-effects row cites it as exactly that.
-      - 'src/host/tests/it/execution_config.rs'
+      - 'pkgs/host/host/tests/it/execution_config.rs'
       - 'wit/host-process.wit'
       - '.github/workflows/ci-macos.yml'
   workflow_dispatch:
@@ -72,7 +72,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src
+          workspaces: .
 
       # Pinned exactly as in ci.yml: these Makefiles parse nextest's output, and
       # the count guard below reads `nextest list`. Keep in step with
@@ -81,7 +81,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9.143
 
-      # `make -C src/extensions all` generates each guest's manifest from the
+      # `make -C pkgs/extensions all` generates each guest's manifest from the
       # component's real imports via `wasm-tools component wit`. Keep in step
       # with WASM_TOOLS_VERSION in versions.mk.
       - uses: taiki-e/install-action@v2
@@ -104,10 +104,10 @@ jobs:
           cache: enable
 
       - name: Fetch spike WIT deps
-        run: make -C src/extensions spike-deps
+        run: make -C pkgs/extensions spike-deps
 
       - name: Stage guest components
-        run: make -C src/extensions all
+        run: make -C pkgs/extensions all
 
       # Assert the count, not the exit code — the same positive guard `make gate`
       # uses for the integration suite, and for the same reason. These tests are
@@ -136,7 +136,6 @@ jobs:
       # nothing sets `CARGO_TERM_COLOR` there.
       - name: Guard — the Seatbelt tests must exist on this runner
         run: |
-          cd src
           cargo nextest list -p jan-klod-host \
             --features jan-klod-host/integration --bins --tests \
             --color never > /tmp/nextest-list.txt
@@ -169,7 +168,7 @@ jobs:
       # run against Landlock on every push via ci.yml's `harness` job.
       - name: Seatbelt sandbox tests, and the boot path that resolves them
         run: |
-          cd src && cargo nextest run -p jan-klod-host \
+          cargo nextest run -p jan-klod-host \
             --features jan-klod-host/integration sandbox_seatbelt:: execution_config::
         env:
           JK_REQUIRE_GUESTS: "1"
@@ -177,4 +176,4 @@ jobs:
       # The core's own unit tests on macOS — cheap next to the above, and the
       # half of `sandbox.rs` that picks a backend is itself per-OS.
       - name: Core unit tests
-        run: cd src && cargo test -p jan-klod-core
+        run: cargo test -p jan-klod-core

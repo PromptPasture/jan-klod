@@ -25,7 +25,7 @@ Every number below is reproducible; none of it is an estimate. The measurements 
 
 ### 2. axum costs 16 packages, not 53
 
-A greenfield `axum` + `tokio` lockfile holds 53 packages; 36 of them are already in `src/core/Cargo.lock` — `tokio` itself arrives transitively through `wasmtime-wasi`, along with most of hyper's supporting cast. The marginal cost is **16 packages** on a 406-package workspace: **+3.9%**.
+A greenfield `axum` + `tokio` lockfile holds 53 packages; 36 of them are already in `Cargo.lock` — `tokio` itself arrives transitively through `wasmtime-wasi`, along with most of hyper's supporting cast. The marginal cost is **16 packages** on a 406-package workspace: **+3.9%**.
 
 ```
 atomic-waker  axum  axum-core  http-body  http-body-util  hyper  hyper-util
@@ -68,7 +68,7 @@ The async layer handles connections; a turn runs on a thread that owns its sessi
 
 - `serve.rs` (851 lines)—the route table, and `PromptDriver`/`wait_for_answer`.
 - `mcp.rs`, `rpc.rs`, `acp.rs`, `telegram.rs`—the four drivers sharing writers through `Rc<RefCell<_>>`, and comments in all asserting a constraint this record retires.
-- `host/src/main.rs:854`—where the server is constructed.
+- `pkgs/host/host/src/main.rs:854`—where the server is constructed.
 - Seven test files using `tiny_http::Server` as a fixture; these can keep it as a dev-dependency.
 - **No test asserts the current one-request-at-a-time contract.** `409` appears only in `serve.rs` and one `rpc.rs` comment, so the behavior is currently unverified either way. The replacement needs the tests the original never had.
 

@@ -66,7 +66,7 @@ config to disable and one directory to delete.
 
 ## Edit reliability (`tool-edit`) — built
 
-Small models produce shaky edits: hallucinated line numbers, re-emitted files, or anchors to moved text. The sandboxed [`tool-edit`](../../src/extensions/tool-edit/src/lib.rs) guest mitigates this with a **hash-anchored patch format** — constrained decoding applied to edits.
+Small models produce shaky edits: hallucinated line numbers, re-emitted files, or anchors to moved text. The sandboxed [`tool-edit`](../../pkgs/extensions/tool-edit/src/lib.rs) guest mitigates this with a **hash-anchored patch format** — constrained decoding applied to edits.
 
 Two properties make it reliable:
 
