@@ -24,8 +24,8 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-wasmtime = "46"
-wasmtime-wasi = "46"
+wasmtime = "49"
+wasmtime-wasi = "49"
 # `derive` adds no package to the audited tree: serde and serde_derive are both
 # already in Cargo.lock, pulled in by serde_json and serde_yaml_ng.
 serde = { version = "1", features = ["derive"] }
