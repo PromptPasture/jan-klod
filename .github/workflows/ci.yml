@@ -53,7 +53,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src
+          workspaces: .
 
       # `make test` runs the suite under cargo-nextest — one process per test,
       # and a filter matching nothing exits non-zero instead of reporting green.
@@ -124,7 +124,7 @@ jobs:
       - name: Stage guest components
         run: make -C src/extensions all
 
-      # #79 gated the host's integration suite (host/tests/it/) behind the
+      # #79 gated the host's integration suite (pkgs/host/host/tests/it/) behind the
       # `integration` cargo feature, so plain `make test` now builds and runs unit
       # tests only — host workspace + guest native tests + the Go supervisor, no
       # wasmtime link, no ~200M `it-*` binary. Deliberately not passing the feature
@@ -137,7 +137,7 @@ jobs:
       # little over one. So `harness` remains the sole job that exercises the full
       # suite — its `make gate` has its own zero-test guard, so a broken
       # `--features` flag fails loudly rather than this job silently covering for
-      # it. `make clippy` below still type-checks tests/it (see src/Makefile),
+      # it. `make clippy` below still type-checks tests/it (see pkgs/host/Makefile),
       # so a compile error there still fails this job even though nothing here
       # links or runs it.
       #
@@ -149,7 +149,7 @@ jobs:
       # The browser client's suite (#127). It ran nowhere until this step: the
       # tests existed and passed, but no Makefile target and no workflow named
       # them, so every frame kind, the `ask` roundtrip and cancel were unguarded
-      # — which is why host/tests/it/web_client.rs does not lean on them.
+      # — which is why pkgs/host/host/tests/it/web_client.rs does not lean on them.
       #
       # Here rather than in a job of its own: `make test-web` is one command
       # that needs Node and nothing else, and a separate job would pay another
@@ -230,7 +230,7 @@ jobs:
       # crates that build in seconds, so they are not worth enumerating here.
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src
+          workspaces: .
 
       # `make gate` runs under cargo-nextest; see the lint-test job for why, and
       # for why the version is pinned.
@@ -277,7 +277,7 @@ jobs:
       # steering, the file-workspace substrate, and the tool fleet.
       #
       # `make harness` used to run first. It names nine test targets, every one a
-      # file in src/host/tests/ that this job's `cargo test --workspace`
+      # file in pkgs/host/host/tests/ that this job's `cargo test --workspace`
       # already runs — so it was a second build and run of nine wasmtime-linked
       # binaries, and it ran *without* JK_REQUIRE_GUESTS, meaning its own tests
       # could skip and still report success. `gate` stages the guests itself
@@ -402,7 +402,7 @@ jobs:
       # half that stops it going missing again.
       #
       # No cache key for it. `setup-go` above globs `src/extensions/*/go.sum`,
-      # and src/supervisor has no go.sum at all — it is a dependency-free
+      # and pkgs/host/supervisor has no go.sum at all — it is a dependency-free
       # binary, so `go mod verify` passes trivially and the work is
       # govulncheck's standard-library scan, which is where a Go toolchain CVE
       # would land.

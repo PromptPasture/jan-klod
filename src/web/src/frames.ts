@@ -5,7 +5,7 @@
  * # Why this file is a discriminated union and not `any`
  *
  * `jan_klod_protocol::SSE_FRAME_KINDS` names seven frames, and its own docs
- * say what the two tests around it are for: `core/tests/protocol_events.rs`
+ * say what the two tests around it are for: `pkgs/host/core/tests/protocol_events.rs`
  * proves the core produces exactly these, and a client test proves a client
  * "has an answer for each" — *"shipping a client that ignores it fails the
  * second"*. This repository has already shipped that defect: the TUI reported

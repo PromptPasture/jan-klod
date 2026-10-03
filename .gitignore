@@ -619,6 +619,7 @@ sbom.cdx.json
 # Every crate in both Rust workspaces is a direct child of src/, and
 # cargo-cyclonedx writes each document beside its own manifest.
 src/*/*.cdx.json
+pkgs/*/*/*.cdx.json
 
 # Every workspace's Cargo.lock IS committed — these binaries are applications,
 # not libraries, and `make lockfile` asserts each lock is current with
@@ -631,7 +632,7 @@ src/*/*.cdx.json
 # which is a step nobody will remember and a lock that silently never lands.
 # Named per workspace rather than deleting the line above, so adding a fourth is
 # a deliberate line here rather than a default that flipped.
-!src/Cargo.lock
+!/Cargo.lock
 !src/extensions/Cargo.lock
 !src/gui/Cargo.lock
 
@@ -645,7 +646,7 @@ src/gui/gen/
 # `make run`, `make serve`, or a gateway started by hand. Unanchored, for the
 # reason `wasmtime-cache/` below is: the default sits beside whichever
 # config.yaml was booted, so it lands wherever the gateway was started. The
-# root-anchored rule this replaces is how a stray copy rode into src/host/
+# root-anchored rule this replaces is how a stray copy rode into pkgs/host/host/
 # through a directory move and stayed tracked until 2026-09-13.
 jan-klod.db
 

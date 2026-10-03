@@ -166,7 +166,7 @@ interface extension-lifecycle {
 
 There is **no WIT UI contract.** UIs are not extensions and run in their own processes; they reach core the same way any external client does — over the core's host-side client surface. Today that surface is the REST + SSE API; it is built into the core binary since Phase 3.
 
-**Phase 13 — the client protocol is a contract of the same rank as WIT.** The `jan-klod-protocol` crate (`src/protocol`) holds the typed commands and notifications, `PROTOCOL_VERSION`, and a JSON Schema export in [`schema/protocol.schema.json`](../../src/protocol/schema/protocol.schema.json) — which is what a non-Rust client generates its types from.
+**Phase 13 — the client protocol is a contract of the same rank as WIT.** The `jan-klod-protocol` crate (`pkgs/host/protocol`) holds the typed commands and notifications, `PROTOCOL_VERSION`, and a JSON Schema export in [`schema/protocol.schema.json`](../../src/protocol/schema/protocol.schema.json) — which is what a non-Rust client generates its types from.
 
 ### Transports
 
@@ -215,7 +215,7 @@ An answer that arrives when nothing asked is refused on both — `409` over REST
 | `session/updated` | `session`, `preview` | — |
 | `surface/contributions` | `extensions` | — |
 
-REST + SSE is a **projection** of this, not a second contract, and it keeps its own older spellings — `delta`, `tool`, `prompt` — deliberately. Neither side is being renamed to match: `core/tests/protocol_events.rs` asserts every key an SSE frame carries reaches the notification with an equal value, which is what holds the two together.
+REST + SSE is a **projection** of this, not a second contract, and it keeps its own older spellings — `delta`, `tool`, `prompt` — deliberately. Neither side is being renamed to match: `pkgs/host/core/tests/protocol_events.rs` asserts every key an SSE frame carries reaches the notification with an equal value, which is what holds the two together.
 
 **Declared results**: `protocol/hello` answers `HelloResult`; `session/get` answers `SessionGetResult` — `{ id, messages }`, each message `{ seq, role, content, tool-call-id? }`.
 

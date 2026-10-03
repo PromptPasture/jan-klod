@@ -56,7 +56,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src
+          workspaces: .
 
       # `make extensions` generates each guest's capability manifest with
       # `scripts/manifests.sh`, which refuses to run without `wasm-tools` (it

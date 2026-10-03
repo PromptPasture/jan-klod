@@ -75,9 +75,9 @@ Compiling is not the same as working. Test with the host suite:
 $ cd src && cargo nextest run -p jan-klod-host --features jan-klod-host/integration generated_guest::
 ```
 
-`src/host/tests/it/generated_guest.rs` is a template. Copy it, change the three
+`pkgs/host/host/tests/it/generated_guest.rs` is a template. Copy it, change the three
 things marked yours (component, instance id, assertions), and add `mod your_module;`
-to `src/host/tests/it/main.rs`. Do not create a new file — one test binary is
+to `pkgs/host/host/tests/it/main.rs`. Do not create a new file — one test binary is
 intentional because `wasmtime` links statically.
 
 Read the failure table before trusting your copy — an empty harness passes as silently as a working one.
@@ -152,7 +152,7 @@ artefact from the far smaller toolchain.
 
 **Where the time goes, and where it does not.** Not staging: `Runtime::boot`
 loads the instances `config.yaml` enables, not the contents of `ext/`
-(`src/core/src/lib.rs:324`), so a staged component nothing enables costs
+(`pkgs/host/core/src/lib.rs:324`), so a staged component nothing enables costs
 nothing. The cost is Cranelift compiling the component at boot in the one
 test that *does* enable it, against a compile cache that is cold because each
 test boots into a fresh temp config directory.
@@ -172,7 +172,7 @@ The Component Model is language-neutral and this repository proves it rather
 than asserting it: `src/extensions/tool-hello-ts` is the TypeScript twin of
 `tool-hello`, built against the same `wit/`, dispatched by the same fleet, with
 no host-side special case. If you want the proof rather than the instructions,
-`src/host/tests/it/polyglot_ts.rs` runs a turn through it.
+`pkgs/host/host/tests/it/polyglot_ts.rs` runs a turn through it.
 
 ### 1. Install the toolchain
 
@@ -279,7 +279,7 @@ know which language your component was written in, which is the whole point.
 ## In Python
 
 `src/extensions/tool-hello-py` is the third twin of `tool-hello`, built with
-`componentize-py` against the same `wit/`. `src/host/tests/it/polyglot_py.rs`
+`componentize-py` against the same `wit/`. `pkgs/host/host/tests/it/polyglot_py.rs`
 runs a turn through it. The costs are in [the table above](#meet-the-cost-first) —
 the largest component of the three, from the smallest toolchain.
 

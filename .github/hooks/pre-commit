@@ -8,7 +8,7 @@
 # CI the way #65 did. Since #79, `gate-commit`'s `make test` is unit tests
 # only: the host workspace's `#[cfg(test)]` units, the guests' native tests,
 # and the Go supervisor's `go vet`/`go test`. The host integration suite
-# (host/tests/it/, ~160 tests) needs the `integration` cargo feature, which
+# (pkgs/host/host/tests/it/, ~160 tests) needs the `integration` cargo feature, which
 # `gate-commit` does not pass — that suite runs at `git push` instead, via
 # `pre-push`'s `gate-push` target (`make gate`).
 

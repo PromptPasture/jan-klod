@@ -112,7 +112,7 @@ rather than inferred:
 
 ```console
 clippy: not linted on macos — gated to another platform, covered by CI:
-  src/host/tests/it/sandbox_landlock.rs
+  pkgs/host/host/tests/it/sandbox_landlock.rs
 ```
 
 Cross-linting instead would need a C cross-toolchain for a transitive build

@@ -40,6 +40,6 @@ absolute() {
 }
 
 exec cargo run --quiet \
-    --manifest-path "$ROOT/src/Cargo.toml" \
+    --manifest-path "$ROOT/Cargo.toml" \
     -p jan-klod-core --features examples --example registry_index \
     -- "$(absolute "$1")" "$2" "$3" "$(absolute "$4")"

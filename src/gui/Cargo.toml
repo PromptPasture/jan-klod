@@ -1,7 +1,7 @@
 # The GUI shell's own workspace — deliberately not a member of the host workspace.
 #
 # Tauri resolves 329 packages that nothing else in this repository needs. As a
-# member of the host workspace those would land in `src/Cargo.lock` (406 ->
+# member of the host workspace those would land in `Cargo.lock` (406 ->
 # 735) and every `cargo test`, `cargo clippy --workspace` and CI run would
 # resolve and build them, whether or not anyone touched the window. A
 # separate workspace keeps that tree behind `make gui`, at the cost of a second

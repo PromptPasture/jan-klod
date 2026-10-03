@@ -56,7 +56,7 @@ registry:
 # could not tell whether that was decided or forgotten, and a diff that turns
 # it on would show a key appearing rather than a value changing.
 #
-# `host/tests/it/bundle_distributions.rs` asserts this, which is a better guard
+# `pkgs/host/host/tests/it/bundle_distributions.rs` asserts this, which is a better guard
 # than a second lock: it fails loudly where a contradictory sandbox pair would
 # hold quietly and mislead the next reader about what this distribution wanted.
 execution:

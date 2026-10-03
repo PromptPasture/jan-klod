@@ -51,7 +51,7 @@ the gateway in the directory you mean.
 
 ## Verifying by hand
 
-The offline fixtures in `host/tests/it/acp.rs` test the protocol directly
+The offline fixtures in `pkgs/host/host/tests/it/acp.rs` test the protocol directly
 (handshake, streamed turns, permissions, cancels), but a real editor's ACP
 implementation requires manual verification on first connection.
 

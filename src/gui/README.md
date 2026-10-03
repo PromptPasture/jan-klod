@@ -1,6 +1,6 @@
 # `jan-klod-gui` — the desktop window
 
-Tauri 2 window around **the web client the core serves**. Not a third codebase: `src/web` builds, `src/core` serves at `/`, this opens a webview. Vision decision 5.
+Tauri 2 window around **the web client the core serves**. Not a third codebase: `src/web` builds, `pkgs/host/core` serves at `/`, this opens a webview. Vision decision 5.
 
 ```sh
 make gui       # build, stage beside host binaries
@@ -14,13 +14,13 @@ Tauri cost, measured in [#141] **before** this was written, against host baselin
 | | |
 |---|---:|
 | Packages added to this repository, after dedup | **+256** |
-| `src/Cargo.lock` if this were a member | 406 → **663** |
+| `Cargo.lock` if this were a member | 406 → **663** |
 | Clean release build (this crate alone) | 57.6 s wall, **332 CPU-s**, 838 MB `target/` |
 | Clean debug build | 34.2 s wall, 152 CPU-s, 768 MB |
 | Release binary | **9.6 MB** |
 | `deny.toml` entries required | **11** |
 
-That table is the original measurement and is deliberately not recounted. Both locks have grown since: as of 2026-09-13 the shell adds **+329**, and `src/Cargo.lock` as a member would be 406 → **735**. The build and binary rows have not been remeasured.
+That table is the original measurement and is deliberately not recounted. Both locks have grown since: as of 2026-09-13 the shell adds **+329**, and `Cargo.lock` as a member would be 406 → **735**. The build and binary rows have not been remeasured.
 
 As a host member, those packages would build on every test/clippy/CI run—by everyone, even those never opening a window. Separate, they hide behind `make gui`. Cost is a second `target/` (like `src/extensions` already trades).
 

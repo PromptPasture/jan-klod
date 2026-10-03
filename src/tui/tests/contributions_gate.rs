@@ -8,7 +8,7 @@
 //!
 //! # Why a hand-built contribution rather than a real guest
 //!
-//! `host/tests/it/client_surface.rs` already drives a real component's
+//! `pkgs/host/host/tests/it/client_surface.rs` already drives a real component's
 //! declarations through the host and out to a client. What is under test here
 //! is the **renderer** — at two terminal sizes, in two themes, against text an
 //! honest extension would never send. A wasm build in the way of that would
@@ -144,7 +144,7 @@ fn colour_carries_nothing_a_colourless_render_loses() {
 }
 
 /// Invocable: choosing the entry raises the ask the event loop sends. The
-/// transport is not exercised here — `host/tests/it/client_surface.rs` does
+/// transport is not exercised here — `pkgs/host/host/tests/it/client_surface.rs` does
 /// that end to end; this is the client half.
 #[test]
 fn a_contributed_command_can_be_chosen_from_the_menu() {

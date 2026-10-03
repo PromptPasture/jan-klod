@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := all
 
-# Orchestrates two sub-makefiles: src/Makefile (the Rust host workspace) and
+# Orchestrates two sub-makefiles: pkgs/host/Makefile (the Rust host workspace) and
 # src/extensions/Makefile (guest components, staged in ext/). Also owns the
 # root WIT contracts and the integration targets spanning both subtrees.
 
@@ -10,9 +10,14 @@
 # same file. See versions.mk for why it is a file and not a block here.
 include versions.mk
 
-HOST_WS := src
+# The host cargo workspace is rooted here, at the repo root (Phase 32). HOST_MK
+# is where its sub-makefile and the crates live.
+HOST_WS := .
+HOST_MK := pkgs/host
+# The one host-workspace member that is not under pkgs/host yet (32d moves it).
+TUI := src/tui
 EXT := src/extensions
-SUPERVISOR := src/supervisor
+SUPERVISOR := pkgs/host/supervisor
 WEB := src/web
 # The Tauri shell (#141, #142). Its own cargo workspace, deliberately: Tauri
 # resolves 329 packages nothing else here needs, and as a member of $(HOST_WS) they
@@ -81,7 +86,7 @@ help:
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
 	@echo "  sbom        generate sbom.cdx.json for Rust workspace (cargo-cyclonedx)"
 	@echo "  web-supply-chain  npm lockfile sync + npm audit for src/web"
-	@echo "  supervisor-supply-chain  go mod verify + govulncheck for src/supervisor"
+	@echo "  supervisor-supply-chain  go mod verify + govulncheck for pkgs/host/supervisor"
 	@echo "  run         boot the core against config.yaml + ext/"
 	@echo "  chat-gui    open the web client in a window (builds the shell first)"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
@@ -120,7 +125,7 @@ all: core extensions
 
 # --- Build (delegated to the sub-makefiles) ---
 core:
-	$(MAKE) -C $(HOST_WS) build
+	$(MAKE) -C $(HOST_MK) build
 
 extensions:
 	$(MAKE) -C $(EXT) all
@@ -160,7 +165,7 @@ ext-new:
 test: test-core test-guests
 
 test-core:
-	$(MAKE) -C $(HOST_WS) test
+	$(MAKE) -C $(HOST_MK) test
 
 # The legs `gate` doesn't cover: guest native tests + the Go supervisor.
 test-guests:
@@ -282,7 +287,7 @@ BUNDLE_OUT ?= $(abspath dist)
 # `make bundle DIST=coding` builds from a named distribution — a guest list and
 # a config under scripts/distributions/. With no DIST this keeps doing exactly
 # what it did before: the repository's own config.yaml and the whole of ext/.
-# That default is asserted by host/tests/it/bundle_distributions.rs rather than
+# That default is asserted by pkgs/host/host/tests/it/bundle_distributions.rs rather than
 # left as an intention.
 DIST ?=
 
@@ -326,8 +331,8 @@ bundle: extensions
 # is a large install to catch a class of error CI catches for free — so the
 # answer is "CI covers these", said out loud on every run.
 clippy: check-spike-deps
-	$(MAKE) -C $(HOST_WS) clippy
-	@sh scripts/unlinted-elsewhere.sh $(HOST_WS)
+	$(MAKE) -C $(HOST_MK) clippy
+	@sh scripts/unlinted-elsewhere.sh $(HOST_MK) $(TUI)
 
 # --- Supply-chain gates (CI enforces all of these) ---
 
@@ -353,7 +358,7 @@ lockfile:
 # eleven named entries (#141), so a policy run that skipped it would be checking
 # every workspace except the one the policy was widened for.
 audit deny:
-	$(MAKE) -C $(HOST_WS) $@
+	$(MAKE) -C $(HOST_MK) $@
 	$(MAKE) -C $(EXT) $@
 	$(MAKE) -C $(GUI_DIR) $@
 
@@ -374,18 +379,20 @@ audit deny:
 # all seven and nothing else.
 # It has to be exactly one level. `src/**/...` is what was here before, and in
 # `sh` (no `globstar`) `**` is just `*`, so it was never recursive; when the
-# members moved out from under `src/core/` it silently stopped matching four of
+# members moved out from under `pkgs/host/core/` it silently stopped matching four of
 # the five and the SBOM lost them. A glob that quietly describes less than it
 # claims is the failure this repository keeps paying for, so the count is
 # asserted rather than trusted.
+# The glob names each group directory once; 32c/32d extend it as groups move.
+SBOM_DOCS := $(HOST_MK)/*/*.cdx.json $(TUI)/*.cdx.json src/gui/*.cdx.json
 sbom:
 	cd $(HOST_WS) && cargo cyclonedx --format json --quiet
 	cd $(GUI_DIR) && cargo cyclonedx --format json --quiet
-	@n=$$(ls $(HOST_WS)/*/*.cdx.json | wc -l | tr -d ' '); \
+	@n=$$(ls $(SBOM_DOCS) | wc -l | tr -d ' '); \
 	  test "$$n" -eq 7 \
 	    || { echo "sbom: expected 7 per-crate documents, found $$n:" >&2; \
-	         ls $(HOST_WS)/*/*.cdx.json >&2; exit 1; }
-	cat $(HOST_WS)/*/*.cdx.json | \
+	         ls $(SBOM_DOCS) >&2; exit 1; }
+	cat $(SBOM_DOCS) | \
 	  jaq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
 	  > sbom.cdx.json
 
@@ -433,7 +440,7 @@ web-supply-chain:
 # #131 then closed the first one by pinning the version both sites share, in
 # versions.mk.
 #
-# `src/supervisor` has no `go.sum`: it is a dependency-free binary, so
+# `pkgs/host/supervisor` has no `go.sum`: it is a dependency-free binary, so
 # `go mod verify` passes trivially and the real work here is govulncheck's
 # **standard library** scan, which is what a Go toolchain CVE would land in.
 supervisor-supply-chain: export GOFLAGS = -mod=readonly
@@ -458,7 +465,7 @@ supply-chain: deny audit sbom web-supply-chain supervisor-supply-chain
 #   host_process       — guest command through host-process; denied when disabled
 #   tool_fleet         — ToolFleet dispatches a call to the matching tool-* guest
 #   tool_wiring        — build_agent wires an enabled tool.* into the fleet
-# These are modules of one test binary (src/host/tests/it/main.rs), run by
+# These are modules of one test binary (pkgs/host/host/tests/it/main.rs), run by
 # --test name filter. A typo'd filter can still match other modules and exit 0,
 # so each name is checked against the filesystem before the run.
 HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegram \
@@ -466,8 +473,8 @@ HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegra
 harness: export JK_REQUIRE_GUESTS = 1
 harness: check-spike-deps extensions
 	@for m in $(HARNESS_MODULES); do \
-	  test -f $(HOST_WS)/host/tests/it/$$m.rs \
-	    || { echo "harness: no module $$m.rs in $(HOST_WS)/host/tests/it/" >&2; exit 1; }; \
+	  test -f $(HOST_MK)/host/tests/it/$$m.rs \
+	    || { echo "harness: no module $$m.rs in $(HOST_MK)/host/tests/it/" >&2; exit 1; }; \
 	done
 	cd $(HOST_WS) && cargo nextest run -p jan-klod-host --features jan-klod-host/integration $(addsuffix ::,$(HARNESS_MODULES))
 
@@ -564,7 +571,7 @@ gate-commit:
 	cargo fmt --manifest-path $(EXT)/Cargo.toml --all -- --check
 	rm -rf $(EXT_DIR)
 	$(MAKE) -C $(EXT) all
-	$(MAKE) -C $(HOST_WS) check
+	$(MAKE) -C $(HOST_MK) check
 	$(MAKE) test
 
 # The pre-push gate: a push pays the full gate unconditionally, no skip check.
@@ -585,7 +592,7 @@ gate-commit:
 # cost belongs on a push and not on a commit.
 #
 # **This does not make a green push imply a green CI**, and it is worth
-# knowing why. `src/host/tests/it/sandbox_landlock.rs` is
+# knowing why. `pkgs/host/host/tests/it/sandbox_landlock.rs` is
 # `#![cfg(target_os = "linux")]`, so on macOS clippy never compiles it and
 # never reads it; CI runs Linux and does. No target added here closes that,
 # because the gap is the platform rather than the target list (#207).
@@ -673,7 +680,7 @@ install-hooks:
 	git config core.hooksPath .github/hooks
 
 clean:
-	$(MAKE) -C $(HOST_WS) clean
+	$(MAKE) -C $(HOST_MK) clean
 	$(MAKE) -C $(EXT) clean
 	$(MAKE) -C $(GUI_DIR) clean
 	rm -rf $(CACHE_DIR)

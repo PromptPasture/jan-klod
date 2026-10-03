@@ -90,7 +90,7 @@ There is no inbound-listener or long-lived-socket capability: the built inbound 
 
 ### What extensions cannot do
 
-Asserted by `host/tests/it/sandbox_boundary.rs`, which drives `tool-escape-probe` — a component written to attempt each with plain `std` rather than via typed import:
+Asserted by `pkgs/host/host/tests/it/sandbox_boundary.rs`, which drives `tool-escape-probe` — a component written to attempt each with plain `std` rather than via typed import:
 
 - Direct filesystem access
 - Open arbitrary network connections (`wasi:sockets` wired, all refused)
@@ -215,7 +215,7 @@ Two rules (both in `src/gui/src/main.rs`, both tested):
 
 **Committed** for two reasons. First: the alternative is not "build in CI" — it is **Node becoming a core-build dependency**. Every `cargo build`, `make gate`, and CI job would need `npm run build` first; none install Node today. Large tax on everyone who never touches the web client so one generated file stays absent from git.
 
-Second: this repo does this three times already. `src/protocol/schema/protocol.schema.json` is generated and committed with a drift test; `ext/*.manifest.toml` from real imports; `wit/wkg.lock` likewise. "No generated artifacts" isn't this repo's property, so preserving it here buys nothing while costing the first reason.
+Second: this repo does this three times already. `pkgs/host/protocol/schema/protocol.schema.json` is generated and committed with a drift test; `ext/*.manifest.toml` from real imports; `wit/wkg.lock` likewise. "No generated artifacts" isn't this repo's property, so preserving it here buys nothing while costing the first reason.
 
 **What the choice costs.** Committed bundles can go stale: editing `src/web/src` and forgetting to rebuild serves the old page silently. `make web-dist-drift` catches it (#127): rebuilds into a temp tree and diffs (same regenerate-and-compare as the schema test). Works because esbuild is reproducible — macOS-built, Linux rebuilds byte-for-byte.
 
@@ -316,7 +316,7 @@ Two differences from `rpc` (both MCP's shape):
 - **A frame may have no `id`.** `notifications/initialized` arrives after handshake with no answer. `rpc` refuses null id on purpose (uncorrelatable answer worse than none); carrying that rule across would reject every client's first message.
 - **A failed tool is a *successful* response with `isError: true`.** Opposite of `protocol::jsonrpc`'s `Outcome` (result and error mutually exclusive, making "both" and "neither" unrepresentable). Mapping a refused turn to a JSON-RPC error would make every permission refusal read to editors as a broken server.
 
-The driver is **headless by construction**: stdin carries protocol frames, so prompting would read a client's next request as the answer. Default answer is refusal, so the right policy and protocol behaviour come from one choice — editors couldn't answer anyway. `host/tests/it/mcp.rs::a_write_requiring_turn_is_refused_and_nothing_is_written` asserts the effect: the model asks to write a real path and the file isn't there.
+The driver is **headless by construction**: stdin carries protocol frames, so prompting would read a client's next request as the answer. Default answer is refusal, so the right policy and protocol behaviour come from one choice — editors couldn't answer anyway. `pkgs/host/host/tests/it/mcp.rs::a_write_requiring_turn_is_refused_and_nothing_is_written` asserts the effect: the model asks to write a real path and the file isn't there.
 
 **No security-model row, deliberately.** This surface grants nothing new — it re-exposes the existing turn path behind the same permission gate; the test above is evidence. A row asserting an unenforced boundary is worse than no row; recorded here so "no row" is a decision, not an omission.
 
@@ -367,7 +367,7 @@ Deliberately **not an extension**; the `store-*` component family never existed.
 
 ### Compile cache
 
-Configured in the same `storage:` block: `cache-dir` (default `wasmtime-cache`, beside `config.yaml`) is where Wasmtime caches compiled components ([#60](https://github.com/PromptPasture/jan-klod/issues/60)), so second boots skip Cranelift recompilation. Wasmtime's own built-in cache (`Cache`/`CacheConfig`, `Config::cache`) wired at `Runtime::boot` — not a bespoke `.cwasm` cache. Evaluated first per the issue and adopted because it keys on everything affecting codegen (component bytes, target triple, compiler/ISA flags, Wasmtime version) and treats corrupt/foreign artefacts as misses, never errors. See `core/src/wasm_cache.rs` for evaluation and [Security model](security-model.md) for what cache hits trust.
+Configured in the same `storage:` block: `cache-dir` (default `wasmtime-cache`, beside `config.yaml`) is where Wasmtime caches compiled components ([#60](https://github.com/PromptPasture/jan-klod/issues/60)), so second boots skip Cranelift recompilation. Wasmtime's own built-in cache (`Cache`/`CacheConfig`, `Config::cache`) wired at `Runtime::boot` — not a bespoke `.cwasm` cache. Evaluated first per the issue and adopted because it keys on everything affecting codegen (component bytes, target triple, compiler/ISA flags, Wasmtime version) and treats corrupt/foreign artefacts as misses, never errors. See `pkgs/host/core/src/wasm_cache.rs` for evaluation and [Security model](security-model.md) for what cache hits trust.
 
 ### Two tables
 
