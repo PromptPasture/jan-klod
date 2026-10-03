@@ -587,7 +587,7 @@ mod tests {
             2,
             "an empty term is `list --remote`, not `match nothing`"
         );
-        assert!(hit("nothing-like-this").is_empty());
+        assert_eq!(hit("nothing-like-this"), [] as [std::string::String; 0]);
     }
 
     /// An empty index and a typo are different problems, and the count is what

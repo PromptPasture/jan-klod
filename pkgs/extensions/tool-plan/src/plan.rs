@@ -273,7 +273,7 @@ mod tests {
         let ids: Vec<u32> = plan.steps.iter().map(|s| s.id).collect();
         assert_eq!(ids, vec![1, 3], "id 2 came back");
         plan.apply(r#"{"op":"clear"}"#).expect("clears");
-        assert!(plan.steps.is_empty());
+        assert_eq!(plan.steps.len(), 0);
     }
 
     #[test]

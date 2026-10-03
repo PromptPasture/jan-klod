@@ -1564,7 +1564,7 @@ mod tests {
     #[test]
     fn a_dangling_flag_falls_back_to_the_default_address() {
         let (positional, bind) = split_serve_args(&args(["--bind"].as_ref()));
-        assert!(positional.is_empty());
+        assert_eq!(positional, [] as [std::string::String; 0]);
         assert_eq!(
             bind, None,
             "nothing followed it, so the caller gets the default"

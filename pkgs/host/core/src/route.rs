@@ -459,6 +459,9 @@ mod tests {
             .complete(&user_request("ping"))
             .expect("completes");
         assert_eq!(completion.text, "pong");
-        assert!(completion.tool_calls.is_empty());
+        assert_eq!(
+            completion.tool_calls,
+            [] as [jan_klod_protocol::turn::ToolCall; 0]
+        );
     }
 }

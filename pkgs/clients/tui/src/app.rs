@@ -1502,7 +1502,7 @@ mod tests {
     fn a_status_item_that_cleans_away_is_dropped() {
         let mut app = App::default();
         app.set_contributions(&reporting("\x1b\x1b", "gone"));
-        assert!(app.contributed_status().is_empty());
+        assert_eq!(app.contributed_status(), []);
     }
 
     #[test]
@@ -1535,7 +1535,7 @@ mod tests {
     fn a_contribution_whose_name_is_only_escapes_is_dropped() {
         let mut app = App::default();
         app.set_contributions(&contributing("\x1b\x1b", "invisible"));
-        assert!(app.contributions().is_empty());
+        assert_eq!(app.contributions(), []);
     }
 
     /// Choosing one records intent for the caller to send, the way `/cancel`

@@ -1054,7 +1054,7 @@ mod tests {
                 );
             }
         }
-        for frames in [SPINNER.0, SPINNER.1] {
+        for frames in <[&[&str]; 2]>::from(SPINNER) {
             assert!(!frames.is_empty(), "a spinner with no frames cannot spin");
             assert!(frames.iter().all(|f| !f.is_empty()));
         }

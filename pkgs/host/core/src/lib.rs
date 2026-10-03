@@ -2534,7 +2534,7 @@ extensions:
         assert!(matches!(exts[0].state, LoadState::Missing(_)));
 
         // No components compiled, so starting is a clean no-op.
-        assert!(runtime.start_all().unwrap().is_empty());
+        assert_eq!(runtime.start_all().unwrap(), [] as [std::string::String; 0]);
 
         std::fs::remove_dir_all(&dir).ok();
     }

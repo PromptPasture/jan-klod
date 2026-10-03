@@ -1809,7 +1809,7 @@ mod tests {
         let mut app = App::default();
         type_into(&mut app, &root, "@zzzz");
         assert!(app.completion_open(), "the list stays open on no match");
-        assert!(app.completion_entries().is_empty());
+        assert_eq!(app.completion_entries().len(), 0);
         assert!(
             !key(&mut app, KeyCode::Enter, KeyModifiers::NONE),
             "Enter falls through to submit rather than being swallowed"

@@ -253,9 +253,9 @@ mod tests {
     /// its floor; guessing here would hide that nothing was understood.
     #[test]
     fn a_query_matching_nothing_ranks_nothing() {
-        assert!(rank(&fleet(), "xylophone marzipan").is_empty());
-        assert!(rank(&fleet(), "").is_empty());
-        assert!(rank(&fleet(), "  , . !").is_empty());
+        assert_eq!(rank(&fleet(), "xylophone marzipan"), [] as [usize; 0]);
+        assert_eq!(rank(&fleet(), ""), [] as [usize; 0]);
+        assert_eq!(rank(&fleet(), "  , . !"), [] as [usize; 0]);
     }
 
     /// Equal scores keep input order, so the advertised set does not churn
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn an_empty_fleet_ranks_nothing_rather_than_panicking() {
-        assert!(rank(&[], "anything").is_empty());
+        assert_eq!(rank(&[], "anything"), [] as [usize; 0]);
     }
 
     /// A fleet with hyphenated names, as the real ones are.

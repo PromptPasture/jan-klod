@@ -435,7 +435,10 @@ mod tests {
     /// did not ask for an install tool does not have one.
     #[test]
     fn disabled_advertises_nothing() {
-        assert!(NativeTools::disabled().metas().is_empty());
+        assert_eq!(
+            NativeTools::disabled().metas(),
+            [] as [serde_json::Value; 0]
+        );
     }
 
     /// A call that is not ours is `None`, not a refusal. Claiming it would
