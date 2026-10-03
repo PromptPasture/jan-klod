@@ -91,7 +91,7 @@ lto = true
 # builds (both git hooks pay this profile on every commit/push) and rejected it
 # — do not re-propose without new numbers. Same machine, same touched guest
 # (tool-fs), before/after, each leg run 2-4x:
-#   - guest build, changed source (touch one guest, `make -C src/extensions
+#   - guest build, changed source (touch one guest, `make -C pkgs/extensions
 #     all`, no clean): fat 1.57s/1.57s vs thin 1.26s/1.23s — thin ~0.3s faster.
 #   - `du -sh ext/` after a full rebuild: fat 2.5M vs thin 2.8M — thin ~12%
 #     bigger, because thin LTO optimizes less across crate boundaries.

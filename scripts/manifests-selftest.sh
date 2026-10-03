@@ -79,7 +79,7 @@ cp "$ROOT/wit/host-fs.wit" "$ROOT/wit/host-log.wit" "$WORK/wit/"
 sed -i.bak 's/^package jan-klod:interfaces@.*;/package jan-klod:interfaces@9.9.9;/' \
     "$WORK/wit/host-log.wit"
 rm -f "$WORK/wit/host-log.wit.bak"
-if sh "$ROOT/scripts/manifests.sh" "$ROOT/src/extensions" "$EXT" "$WORK/wit" tool-fs \
+if sh "$ROOT/scripts/manifests.sh" "$ROOT/pkgs/extensions" "$EXT" "$WORK/wit" tool-fs \
     >"$WORK/gen" 2>&1; then
     echo "manifests-selftest: disagreeing WIT versions were ACCEPTED" >&2
     exit 1
@@ -97,6 +97,6 @@ printf '  refused: %s\n' "disagreeing jan-klod:interfaces versions in wit/"
 
 # The tampering above never touched $EXT, but a generator run just did — leave
 # the staged manifests as the real `wit/` describes them.
-sh "$ROOT/scripts/manifests.sh" "$ROOT/src/extensions" "$EXT" "$ROOT/wit" tool-fs >/dev/null
+sh "$ROOT/scripts/manifests.sh" "$ROOT/pkgs/extensions" "$EXT" "$ROOT/wit" tool-fs >/dev/null
 
 echo "manifests-selftest: 5 refusals, as required"

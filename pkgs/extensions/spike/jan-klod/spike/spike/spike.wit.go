@@ -6,5 +6,5 @@
 // host can load a TinyGo-built component and call an exported function across
 // the Component Model boundary. Kept out of the canonical
 // `jan-klod:interfaces` package on purpose — delete this directory together
-// with `src/extensions/spike/` once the gate verdict is recorded.
+// with `pkgs/extensions/spike/` once the gate verdict is recorded.
 package spike

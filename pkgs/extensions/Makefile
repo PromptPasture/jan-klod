@@ -1,5 +1,5 @@
 # Builds the first-party guest extensions to Component-Model components and stages
-# the Rust ones in <repo>/ext. Works standalone (`make -C src/extensions ...`) or
+# the Rust ones in <repo>/ext. Works standalone (`make -C pkgs/extensions ...`) or
 # via the root Makefile. Repo-root artifacts (wit/, ext/) resolve against ROOT so
 # the launch directory does not matter.
 #
@@ -11,7 +11,7 @@ EXT_DIR := $(ROOT)/ext
 WIT_DIR := $(ROOT)/wit
 
 # Pinned tool versions, shared with the root Makefile, which includes the same
-# file. Via $(ROOT) rather than a relative path so `make -f src/extensions/...`
+# file. Via $(ROOT) rather than a relative path so `make -f pkgs/extensions/...`
 # from elsewhere resolves it too — CI invokes this makefile directly.
 include $(ROOT)/versions.mk
 
@@ -23,7 +23,7 @@ GUESTS := host-secrets-probe interceptor-context interceptor-guardrails intercep
 # Shared cargo-deny policy (repo root) — the same file the host workspace uses.
 DENY_CONFIG := $(ROOT)/deny.toml
 
-# Go modules under src/extensions, discovered by mask (currently only the Slice 1a
+# Go modules under pkgs/extensions, discovered by mask (currently only the Slice 1a
 # canary). Globbed so a new Go guest is gated without editing this Makefile.
 GO_MODULES := $(wildcard */go.mod)
 
@@ -213,7 +213,7 @@ audit:
 deny:
 	cargo deny -L error --manifest-path Cargo.toml --config $(DENY_CONFIG) check
 
-# Supply-chain gate for every Go module under src/extensions (currently only the
+# Supply-chain gate for every Go module under pkgs/extensions (currently only the
 # TinyGo Slice 1a canary): verified module sums + a govulncheck scan. GOFLAGS pins
 # -mod=readonly so a scan can never silently mutate go.mod/go.sum, and
 # GOVULNCHECK_VERSION pins the scanner for the reason versions.mk records (#131).

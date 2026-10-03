@@ -1,6 +1,6 @@
 //! `tool-plan` across turns and across sessions.
 //!
-//! The guest's own tests (`src/extensions/tool-plan/src/plan.rs`) cover every
+//! The guest's own tests (`pkgs/extensions/tool-plan/src/plan.rs`) cover every
 //! rule about what a plan *is*. These cover the two things that can only be
 //! true of the whole stack: a plan written in one turn is there in the next,
 //! and two sessions do not see each other's.

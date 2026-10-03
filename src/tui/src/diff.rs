@@ -25,7 +25,7 @@ use crate::theme::Theme;
 use crate::wrap::{hard_wrap, width};
 
 /// What the guests append when output hits the cap. See the module docs: this
-/// is a convention shared with `src/extensions/guest-fs`, not a wire contract.
+/// is a convention shared with `pkgs/extensions/guest-fs`, not a wire contract.
 const TRUNCATION: &str = "…[truncated:";
 
 /// One parsed line of a diff.

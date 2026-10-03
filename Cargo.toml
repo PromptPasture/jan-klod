@@ -13,7 +13,7 @@ members = [
 # there and neither is silently adopted as a member — naming them here says so
 # out loud, and makes a future glob in `members` safe. `pkgs/host/supervisor`
 # (Go) and `src/web` (TypeScript) carry no manifest and need no entry.
-exclude = ["src/extensions", "src/gui"]
+exclude = ["pkgs/extensions", "src/gui"]
 
 [workspace.package]
 edition = "2021"

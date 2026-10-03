@@ -169,7 +169,7 @@ where its toolchain is absent, and why nothing in `ext/` is committed.
 ## In TypeScript
 
 The Component Model is language-neutral and this repository proves it rather
-than asserting it: `src/extensions/tool-hello-ts` is the TypeScript twin of
+than asserting it: `pkgs/extensions/tool-hello-ts` is the TypeScript twin of
 `tool-hello`, built against the same `wit/`, dispatched by the same fleet, with
 no host-side special case. If you want the proof rather than the instructions,
 `pkgs/host/host/tests/it/polyglot_ts.rs` runs a turn through it.
@@ -210,7 +210,7 @@ follow.
 ### 3. Build it
 
 ```console
-$ make -C src/extensions ts-guest
+$ make -C pkgs/extensions ts-guest
 ```
 
 `make extensions` runs this too. Without the toolchain it says what is missing
@@ -278,7 +278,7 @@ know which language your component was written in, which is the whole point.
 
 ## In Python
 
-`src/extensions/tool-hello-py` is the third twin of `tool-hello`, built with
+`pkgs/extensions/tool-hello-py` is the third twin of `tool-hello`, built with
 `componentize-py` against the same `wit/`. `pkgs/host/host/tests/it/polyglot_py.rs`
 runs a turn through it. The costs are in [the table above](#meet-the-cost-first) —
 the largest component of the three, from the smallest toolchain.
@@ -309,7 +309,7 @@ the way it reads `Cargo.toml` and `package.json`).
 ### 3. Build it
 
 ```console
-$ make -C src/extensions py-guest
+$ make -C pkgs/extensions py-guest
 ```
 
 `make extensions` runs this too, and skips with what to install when
@@ -338,7 +338,7 @@ Two consequences worth knowing before you start:
 
 - **`wit_world` does not exist until you build.** It is gitignored, regenerated
   every run so it cannot go stale against `wit/`, and your editor will not
-  resolve those imports until `make -C src/extensions py-guest` has run once.
+  resolve those imports until `make -C pkgs/extensions py-guest` has run once.
 - **Names are snake_case, not lowerCamelCase.** `componentize-py` lowers
   `arguments-schema` to `arguments_schema` where `jco` gives
   `argumentsSchema`, and a variant case becomes `Decision_Proceed`. Each

@@ -67,7 +67,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9.143
 
-      # `make -C src/extensions all` generates each guest's capability manifest
+      # `make -C pkgs/extensions all` generates each guest's capability manifest
       # by reading the component's own imports out of `wasm-tools component wit`,
       # so staging the guests now needs this. Pinned like everything else here:
       # these Makefiles parse its output. Keep in step with WASM_TOOLS_VERSION in
@@ -106,7 +106,7 @@ jobs:
           cache: enable
 
       - name: Fetch spike WIT deps
-        run: make -C src/extensions spike-deps
+        run: make -C pkgs/extensions spike-deps
 
       # Validate the WIT contracts, and warn if an edit to them did not bump the
       # package version. No job ran `make wit` before this: `make test` and
@@ -122,7 +122,7 @@ jobs:
       # pre-commit hook did until it was fixed. The `gate` job below was unaffected:
       # it stages guests first.
       - name: Stage guest components
-        run: make -C src/extensions all
+        run: make -C pkgs/extensions all
 
       # #79 gated the host's integration suite (pkgs/host/host/tests/it/) behind the
       # `integration` cargo feature, so plain `make test` now builds and runs unit
@@ -269,7 +269,7 @@ jobs:
           cache: enable
 
       - name: Fetch spike WIT deps
-        run: make -C src/extensions spike-deps
+        run: make -C pkgs/extensions spike-deps
 
       # Exit gate: builds every guest to wasm32-wasip2, then runs the full offline
       # integration surface across all v1 guarantees — the thin loop with provider
@@ -378,16 +378,16 @@ jobs:
       - name: cargo-audit (RUSTSEC)
         run: make audit
 
-      # Go modules under src/extensions (currently only the Slice 1a canary):
+      # Go modules under pkgs/extensions (currently only the Slice 1a canary):
       # verified module sums + govulncheck, readonly. cache-dependency-path globs
       # every go.sum; the Makefile target globs every go.mod — no path is pinned.
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-          cache-dependency-path: src/extensions/*/go.sum
+          cache-dependency-path: pkgs/extensions/*/go.sum
 
       - name: Go supply-chain (mod verify + govulncheck)
-        run: make -C src/extensions go-supply-chain
+        run: make -C pkgs/extensions go-supply-chain
 
       # The supervisor's own Go leg (#130). It was the last line of the root
       # `supply-chain` target, and this job calls the legs by name and never
@@ -401,7 +401,7 @@ jobs:
       # different modules with different makefiles, and naming it here is the
       # half that stops it going missing again.
       #
-      # No cache key for it. `setup-go` above globs `src/extensions/*/go.sum`,
+      # No cache key for it. `setup-go` above globs `pkgs/extensions/*/go.sum`,
       # and pkgs/host/supervisor has no go.sum at all — it is a dependency-free
       # binary, so `go mod verify` passes trivially and the work is
       # govulncheck's standard-library scan, which is where a Go toolchain CVE

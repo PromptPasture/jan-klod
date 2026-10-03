@@ -5,7 +5,7 @@
 # 735) and every `cargo test`, `cargo clippy --workspace` and CI run would
 # resolve and build them, whether or not anyone touched the window. A
 # separate workspace keeps that tree behind `make gui`, at the cost of a second
-# `target/` — the trade `src/extensions` already makes for the guests.
+# `target/` — the trade `pkgs/extensions` already makes for the guests.
 #
 # What it does *not* buy is an exemption from the supply-chain gates: the root
 # `Makefile` names this workspace in `lockfile`, `deny` and `audit` alongside the

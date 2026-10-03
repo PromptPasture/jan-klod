@@ -518,13 +518,13 @@ fn the_security_model_cites_tests_that_exist() {
         // a fourth entry here every time one is added.
         let candidates = [
             root.join("pkgs/host").join(path),
-            root.join("src/extensions").join(path),
+            root.join("pkgs/extensions").join(path),
             root.join(path),
         ];
         let found = candidates.iter().find(|p| p.exists()).unwrap_or_else(|| {
             panic!(
                 "the security model cites `{path}`, which does not exist under \
-                 pkgs/host, src/extensions, or the repository root"
+                 pkgs/host, pkgs/extensions, or the repository root"
             )
         });
         let source = std::fs::read_to_string(found).expect("the cited file is readable");

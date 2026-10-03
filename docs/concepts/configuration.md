@@ -43,7 +43,7 @@ The core interprets exactly two keys per entry; **everything else is opaque**.
 
 ## What is in `ext/`
 
-The directory the core resolves components against — **build output**: `make ext` puts `.wasm` per guest, plus `<name>.manifest.toml` declaring what it needs. Neither is tracked in git; `make -C src/extensions clean` removes both. `ext/` is a directory one command produces, not a place to keep things.
+The directory the core resolves components against — **build output**: `make ext` puts `.wasm` per guest, plus `<name>.manifest.toml` declaring what it needs. Neither is tracked in git; `make -C pkgs/extensions clean` removes both. `ext/` is a directory one command produces, not a place to keep things.
 
 A manifest is generated from the component's imports, describes the `.wasm`, and cannot drift; see [Contracts → The extension manifest](contracts.md#the-extension-manifest). Reading one answers "what does this want?" without a WASM parser:
 
@@ -396,7 +396,7 @@ internal error and the host fails closed at `tool-call`. A typo stops tool calls
 until it is fixed rather than leaving a guardrail that is silently absent.
 
 Full rule reference, including how the lists compose:
-[`src/extensions/interceptor-guardrails/README.md`](../../src/extensions/interceptor-guardrails/README.md).
+[`pkgs/extensions/interceptor-guardrails/README.md`](../../pkgs/extensions/interceptor-guardrails/README.md).
 
 ## Capability groups
 

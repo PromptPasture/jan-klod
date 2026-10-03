@@ -3,10 +3,10 @@
 .DEFAULT_GOAL := all
 
 # Orchestrates two sub-makefiles: pkgs/host/Makefile (the Rust host workspace) and
-# src/extensions/Makefile (guest components, staged in ext/). Also owns the
+# pkgs/extensions/Makefile (guest components, staged in ext/). Also owns the
 # root WIT contracts and the integration targets spanning both subtrees.
 
-# Pinned tool versions, shared with src/extensions/Makefile, which includes the
+# Pinned tool versions, shared with pkgs/extensions/Makefile, which includes the
 # same file. See versions.mk for why it is a file and not a block here.
 include versions.mk
 
@@ -16,7 +16,7 @@ HOST_WS := .
 HOST_MK := pkgs/host
 # The one host-workspace member that is not under pkgs/host yet (32d moves it).
 TUI := src/tui
-EXT := src/extensions
+EXT := pkgs/extensions
 SUPERVISOR := pkgs/host/supervisor
 WEB := src/web
 # The Tauri shell (#141, #142). Its own cargo workspace, deliberately: Tauri
@@ -107,7 +107,7 @@ wit:
 	sh scripts/wit-version-check.sh
 
 # wit/spike/deps (wasi:cli & co) is gitignored and only ever populated by `make
-# setup` (below) or `make -C src/extensions spike-deps` — nothing on the plain
+# setup` (below) or `make -C pkgs/extensions spike-deps` — nothing on the plain
 # build path fetches it. Without this check, a fresh clone that skipped setup
 # hits `bindgen!`'s compile-time WIT resolution instead: "failed to resolve
 # directory while parsing WIT for path .../wit/spike", which names no fix.
@@ -117,7 +117,7 @@ check-spike-deps:
 	@test -d wit/spike/deps || { \
 	  echo "error: wit/spike/deps is missing (gitignored, not from git checkout)." >&2; \
 	  echo "  Run 'make setup' once per clone, or if you already have wkg:" >&2; \
-	  echo "  make -C src/extensions spike-deps" >&2; \
+	  echo "  make -C pkgs/extensions spike-deps" >&2; \
 	  exit 1; \
 	}
 
@@ -206,7 +206,7 @@ clippy-gui:
 	$(MAKE) -C $(GUI_DIR) clippy
 
 # The guests are their own cargo workspace too, and declare the same strict
-# lint policy — see `src/extensions/Makefile` for why this runs twice.
+# lint policy — see `pkgs/extensions/Makefile` for why this runs twice.
 clippy-guests:
 	$(MAKE) -C $(EXT) clippy
 
@@ -341,7 +341,7 @@ clippy: check-spike-deps
 # audited/denied tree that differs from the one that actually builds. Two
 # workspaces: the host workspace and the guest extensions workspace (one
 # shared Cargo.lock across all guests, so a new guest added to
-# src/extensions/Cargo.toml's members is covered without editing this list).
+# pkgs/extensions/Cargo.toml's members is covered without editing this list).
 # This used to be a loop inlined in both `pre-push` and `ci.yml`'s
 # supply-chain job — the same commands typed twice, free to drift the way
 # the rest of #72 was about. Named here, both now call it.
@@ -434,7 +434,7 @@ web-supply-chain:
 # together.
 #
 # `go run …@$(GOVULNCHECK_VERSION)` rather than a `govulncheck` off `PATH`,
-# matching src/extensions' `go-supply-chain`: no runner has govulncheck
+# matching pkgs/extensions' `go-supply-chain`: no runner has govulncheck
 # installed, and the neighbouring leg already resolves the tool this way. That
 # answered #131's second question — the supervisor does use the same call — and
 # #131 then closed the first one by pinning the version both sites share, in
@@ -560,7 +560,7 @@ gate: check-spike-deps extensions
 
 # The pre-commit gate: both `cargo fmt --check` invocations, then a rebuilt
 # (not just removed) ext/ — an absent ext/ makes
-# scripts/manifests-selftest.sh (run by `make -C src/extensions test`, part of
+# scripts/manifests-selftest.sh (run by `make -C pkgs/extensions test`, part of
 # `make test` below) skip instead of checking anything, so `rm -rf` alone
 # would let a missing manifest report green. JK_REQUIRE_GUESTS=1 is what turns
 # a skipped self-test into a failure rather than trusting the rebuild alone to

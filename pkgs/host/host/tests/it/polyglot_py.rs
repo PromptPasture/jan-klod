@@ -31,7 +31,7 @@ use jan_klod_core::Runtime;
 
 use crate::common;
 
-/// The component this test needs, which `make -C src/extensions py-guest`
+/// The component this test needs, which `make -C pkgs/extensions py-guest`
 /// stages when `componentize-py` is present.
 const PY_COMPONENT: &str = "tool-hello-py.wasm";
 
@@ -41,7 +41,7 @@ fn a_python_tool_answers_a_real_tool_call() {
     if !ext_dir.join(PY_COMPONENT).exists() {
         eprintln!(
             "skipping: {PY_COMPONENT} is not staged — build it with \
-             `make -C src/extensions py-guest` (needs componentize-py on PATH)"
+             `make -C pkgs/extensions py-guest` (needs componentize-py on PATH)"
         );
         return;
     }

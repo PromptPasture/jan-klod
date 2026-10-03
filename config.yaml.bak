@@ -152,7 +152,7 @@ extensions:
       # closed at `tool-call`: a typo stops tool calls until it is fixed,
       # loudly, rather than leaving a guardrail that silently is not there.
       #
-      # Full reference: src/extensions/interceptor-guardrails/README.md
+      # Full reference: pkgs/extensions/interceptor-guardrails/README.md
       #
       #   deny-tool-arguments   — matched against a call's arguments
       #       pattern    (required)  the expression to match

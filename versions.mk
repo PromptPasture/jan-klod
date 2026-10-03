@@ -1,8 +1,8 @@
 # Pinned versions of every tool whose output or CLI a Makefile target depends on.
 #
 # This file exists rather than a block in the root Makefile because two makefiles
-# need these values: the root one, and src/extensions/Makefile, which CI invokes
-# directly (`make -C src/extensions go-supply-chain`) and which therefore cannot
+# need these values: the root one, and pkgs/extensions/Makefile, which CI invokes
+# directly (`make -C pkgs/extensions go-supply-chain`) and which therefore cannot
 # inherit a variable from a parent make that never ran. A pin copied into both
 # would be a pin that can drift, which is the bug this file's newest entry is
 # about (#131).
@@ -31,7 +31,7 @@ CARGO_NEXTEST_VERSION := 0.9.143
 # ecosystem that had already learned it, and this is the other one learning it.
 #
 # Invoked as `go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)`
-# from both src/extensions/Makefile (go-supply-chain) and the root Makefile
+# from both pkgs/extensions/Makefile (go-supply-chain) and the root Makefile
 # (supervisor-supply-chain). `go run …@version` rather than a binary off PATH
 # because no runner has govulncheck installed.
 GOVULNCHECK_VERSION := v1.8.0

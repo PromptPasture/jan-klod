@@ -96,13 +96,13 @@ jobs:
           chmod: 0755
           cache: enable
 
-      # `make -C src/extensions spike-deps` rather than an inline `cd wit &&
+      # `make -C pkgs/extensions spike-deps` rather than an inline `cd wit &&
       # wkg …`, so this calls the target a developer calls and the two cannot
       # drift. No `|| true`: if the deps cannot be fetched, the guests that need
       # them do not build, and finding that out here beats finding it out in the
       # build step with a confusing error.
       - name: Fetch WIT spike deps
-        run: make -C src/extensions spike-deps
+        run: make -C pkgs/extensions spike-deps
 
       # Only Linux needs this, and only for the `GUI=1` archive below. On macOS
       # the webview is WKWebView, part of the OS — #141 verified a Tauri binary

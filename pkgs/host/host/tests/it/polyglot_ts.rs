@@ -24,7 +24,7 @@ use jan_klod_core::Runtime;
 
 use crate::common;
 
-/// The component this test needs, which `make -C src/extensions ts-guest`
+/// The component this test needs, which `make -C pkgs/extensions ts-guest`
 /// stages when `jco` is present.
 const TS_COMPONENT: &str = "tool-hello-ts.wasm";
 
@@ -34,7 +34,7 @@ fn a_typescript_tool_answers_a_real_tool_call() {
     if !ext_dir.join(TS_COMPONENT).exists() {
         eprintln!(
             "skipping: {TS_COMPONENT} is not staged — build it with \
-             `make -C src/extensions ts-guest` (needs jco on PATH)"
+             `make -C pkgs/extensions ts-guest` (needs jco on PATH)"
         );
         return;
     }

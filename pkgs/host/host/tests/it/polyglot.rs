@@ -1,13 +1,13 @@
 //! A component built from another language runs in this host — the "any
 //! language" claim, backed by an actual test rather than a spike.
 //!
-//! Loads `src/extensions/spike/spike.wasm` (TinyGo, built against `wit/spike`),
+//! Loads `pkgs/extensions/spike/spike.wasm` (TinyGo, built against `wit/spike`),
 //! instantiates it with the host's WASI wiring, calls its exported `complete`,
 //! and checks the round trip. Runs every gate, no toolchain required.
 //!
 //! That artifact is a **committed fixture**, the one exception to ignored guest
-//! components: `.gitignore` negates it, `make -C src/extensions clean` leaves it
-//! alone, and `make -C src/extensions spike-guest` regenerates it with `-no-debug
+//! components: `.gitignore` negates it, `make -C pkgs/extensions clean` leaves it
+//! alone, and `make -C pkgs/extensions spike-guest` regenerates it with `-no-debug
 //! -opt=z` (~75 KB, no DWARF) for whoever commits the new one. Nothing in a test
 //! run writes to it.
 //!
@@ -49,7 +49,7 @@ impl WasiView for Host {
 }
 
 fn spike_wasm() -> PathBuf {
-    common::repo_root().join("src/extensions/spike/spike.wasm")
+    common::repo_root().join("pkgs/extensions/spike/spike.wasm")
 }
 
 /// Instantiate the component at `path` in this host and call its `complete`.
@@ -82,7 +82,7 @@ fn a_component_built_from_go_completes_a_call_through_the_host() {
         path.exists(),
         "the committed TinyGo component is missing at {} — restore it with \
          `git checkout -- {}` rather than rebuilding; only rebuild (`make -C \
-         src/extensions spike-guest`) if committing a new one",
+         pkgs/extensions spike-guest`) if committing a new one",
         path.display(),
         path.display()
     );
@@ -117,7 +117,7 @@ fn the_committed_artifact_is_rebuildable() {
     let _guard = common::TempDir(dir.clone());
     let rebuilt = dir.join("spike.wasm");
 
-    let extensions = common::repo_root().join("src/extensions");
+    let extensions = common::repo_root().join("pkgs/extensions");
     let output = std::process::Command::new("make")
         .arg("spike-guest")
         .arg(format!("SPIKE_WASM={}", rebuilt.display()))

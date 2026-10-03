@@ -242,7 +242,7 @@ capabilities = [
 ]
 ```
 
-**`capabilities` is read from the component, not written by its author.** The generator (`scripts/manifests.sh`, run by `make -C src/extensions manifests`) takes the top-level world's `import` lines out of `wasm-tools component wit` and keeps the `host-*` interfaces. So a manifest cannot claim less than the artifact beside it does.
+**`capabilities` is read from the component, not written by its author.** The generator (`scripts/manifests.sh`, run by `make -C pkgs/extensions manifests`) takes the top-level world's `import` lines out of `wasm-tools component wit` and keeps the `host-*` interfaces. So a manifest cannot claim less than the artifact beside it does.
 
 An empty list is written as `capabilities = []` rather than omitted: "needs nothing" is a claim worth making, and a missing key reads as unfilled.
 

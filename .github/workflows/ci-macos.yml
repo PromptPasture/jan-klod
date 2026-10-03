@@ -81,7 +81,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9.143
 
-      # `make -C src/extensions all` generates each guest's manifest from the
+      # `make -C pkgs/extensions all` generates each guest's manifest from the
       # component's real imports via `wasm-tools component wit`. Keep in step
       # with WASM_TOOLS_VERSION in versions.mk.
       - uses: taiki-e/install-action@v2
@@ -104,10 +104,10 @@ jobs:
           cache: enable
 
       - name: Fetch spike WIT deps
-        run: make -C src/extensions spike-deps
+        run: make -C pkgs/extensions spike-deps
 
       - name: Stage guest components
-        run: make -C src/extensions all
+        run: make -C pkgs/extensions all
 
       # Assert the count, not the exit code — the same positive guard `make gate`
       # uses for the integration suite, and for the same reason. These tests are
