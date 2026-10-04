@@ -108,10 +108,19 @@ fn two_sessions_with_different_principals_each_see_their_own_principal() {
     let factory = || common::canned_http("pong");
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let port = surface.port();
 
-    // Client thread sends messages from two different principals
-    let client = thread::spawn(move || {
+    let principals = {
+        let mut p = HashMap::new();
+        p.insert("alice".to_string(), ALICE_TOKEN.to_string());
+        p.insert("bob".to_string(), BOB_TOKEN.to_string());
+        p
+    };
+
+    // Messages from two different principals, all on one surface: a
+    // `serve_once_authed` per request races, because a surface that is
+    // stopping can still accept the next connection and then drop it
+    // unanswered (#246).
+    let (alice_1, bob_1, alice_2) = surface.serve_while(&agents, principals, |port| {
         let alice_1 = send_message(port, "session-alice", Some(ALICE_TOKEN), "hello from alice");
         let bob_1 = send_message(port, "session-bob", Some(BOB_TOKEN), "hello from bob");
         let alice_2 = send_message(
@@ -122,23 +131,6 @@ fn two_sessions_with_different_principals_each_see_their_own_principal() {
         );
         (alice_1, bob_1, alice_2)
     });
-
-    // Server thread handles the three message requests
-    let principals = {
-        let mut p = HashMap::new();
-        p.insert("alice".to_string(), ALICE_TOKEN.to_string());
-        p.insert("bob".to_string(), BOB_TOKEN.to_string());
-        p
-    };
-
-    // Serve the three message requests
-    for _ in 0..3 {
-        surface
-            .serve_once_authed(&agents, principals.clone())
-            .expect("serves");
-    }
-
-    let (alice_1, bob_1, alice_2) = client.join().expect("client thread");
 
     // Both sessions completed without error, proving the principal field was
     // correctly passed through the conductor to the guest. The interceptor
