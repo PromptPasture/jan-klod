@@ -28,4 +28,8 @@
 # — but it cannot simply be dropped, because omitting `slow-timeout` inherits
 # nextest's default, which *terminates*. An explicit period with no `on-timeout`
 # is the way to keep termination off.
+#
+# What bounds a genuinely hung test is the CI job instead: the exit-gate job
+# carries `timeout-minutes` (.github/workflows/ci.yml), so a hang costs that
+# much and the SLOW lines name the test, rather than six hours (#246).
 slow-timeout = { period = "120s" }

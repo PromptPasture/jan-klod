@@ -53,7 +53,6 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::thread;
 
 use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
@@ -65,7 +64,7 @@ use std::collections::HashMap;
 const TOKEN: &str = "s3cret-token";
 
 /// Minimal config to boot an agent. Neither route touches the agent, but
-/// `serve_once_authed` needs one to hand the other routes.
+/// the surface needs one to hand the other routes.
 fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -111,25 +110,24 @@ fn the_web_client_is_served_without_a_token() {
     let factory = || common::canned_http("pong");
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let port = surface.port();
 
-    let client = thread::spawn(move || {
-        let page = get_unauthenticated(port, "/");
-        let script = get_unauthenticated(port, "/app.js");
-        (page, script)
-    });
     // A token *is* configured. Serving these two anyway is the exemption under
-    // test; with `None`, the test would pass on any surface.
-    for _ in 0..2 {
-        surface
-            .serve_once_authed(&agents, {
-                let mut principals = HashMap::new();
-                principals.insert("operator".to_string(), TOKEN.to_string());
-                principals
-            })
-            .expect("serves");
-    }
-    let (page, script) = client.join().expect("client thread");
+    // test; with `None`, the test would pass on any surface. One surface for
+    // both: a `serve_once_authed` per request races, because a surface that is
+    // stopping can still accept the next connection and drop it (#246).
+    let (page, script) = surface.serve_while(
+        &agents,
+        {
+            let mut principals = HashMap::new();
+            principals.insert("operator".to_string(), TOKEN.to_string());
+            principals
+        },
+        |port| {
+            let page = get_unauthenticated(port, "/");
+            let script = get_unauthenticated(port, "/app.js");
+            (page, script)
+        },
+    );
 
     assert!(page.contains("200 OK"), "GET / is served: {page}");
     assert!(
@@ -240,25 +238,23 @@ fn an_api_route_still_refuses_without_a_token() {
     let factory = || common::canned_http("pong");
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let port = surface.port();
 
-    let client = thread::spawn(move || {
-        let sessions = get_unauthenticated(port, "/sessions");
-        // A path that merely *starts* with an exempt one. `/app.jsx` is not
-        // `/app.js`, and the difference is a `starts_with` away.
-        let near_miss = get_unauthenticated(port, "/app.jsx");
-        (sessions, near_miss)
-    });
-    for _ in 0..2 {
-        surface
-            .serve_once_authed(&agents, {
-                let mut principals = HashMap::new();
-                principals.insert("operator".to_string(), TOKEN.to_string());
-                principals
-            })
-            .expect("serves");
-    }
-    let (sessions, near_miss) = client.join().expect("client thread");
+    // One surface for both requests (#246).
+    let (sessions, near_miss) = surface.serve_while(
+        &agents,
+        {
+            let mut principals = HashMap::new();
+            principals.insert("operator".to_string(), TOKEN.to_string());
+            principals
+        },
+        |port| {
+            let sessions = get_unauthenticated(port, "/sessions");
+            // A path that merely *starts* with an exempt one. `/app.jsx` is not
+            // `/app.js`, and the difference is a `starts_with` away.
+            let near_miss = get_unauthenticated(port, "/app.jsx");
+            (sessions, near_miss)
+        },
+    );
 
     assert!(
         sessions.contains("401"),

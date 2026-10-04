@@ -98,26 +98,25 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
     let factory = || common::canned_http("pong");
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let port = surface.port();
 
-    let client = thread::spawn(move || {
-        let none = request(port, "/session/a/message", None);
-        let wrong = request(port, "/session/a/message", Some("not-the-token"));
-        let right = request(port, "/session/a/message", Some(TOKEN));
-        let health = request(port, "/health", None);
-        (none, wrong, right, health)
-    });
-
-    for _ in 0..4 {
-        surface
-            .serve_once_authed(&agents, {
-                let mut principals = HashMap::new();
-                principals.insert("operator".to_string(), TOKEN.to_string());
-                principals
-            })
-            .expect("serves");
-    }
-    let (none, wrong, right, health) = client.join().expect("client thread");
+    // One surface for all four requests: a `serve_once_authed` per request
+    // races, because a surface that is stopping can still accept the next
+    // connection and then drop it unanswered (#246).
+    let (none, wrong, right, health) = surface.serve_while(
+        &agents,
+        {
+            let mut principals = HashMap::new();
+            principals.insert("operator".to_string(), TOKEN.to_string());
+            principals
+        },
+        |port| {
+            let none = request(port, "/session/a/message", None);
+            let wrong = request(port, "/session/a/message", Some("not-the-token"));
+            let right = request(port, "/session/a/message", Some(TOKEN));
+            let health = request(port, "/health", None);
+            (none, wrong, right, health)
+        },
+    );
 
     assert!(none.contains("401"), "no header is refused: {none}");
     assert!(wrong.contains("401"), "a wrong token is refused: {wrong}");
@@ -318,10 +317,22 @@ fn principal_resolves_from_credentials_in_the_guard() {
     let factory = || common::canned_http("pong");
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
-    let port = surface.port();
 
-    // Test 1: Multiple principals with different tokens
-    let client = thread::spawn(move || {
+    let mut principals = HashMap::new();
+    principals.insert("operator".to_string(), "operator-secret".to_string());
+    principals.insert("admin".to_string(), "admin-secret".to_string());
+
+    // Multiple principals with different tokens, all on one surface (#246).
+    let (
+        no_token,
+        wrong_token,
+        op_token,
+        admin_token,
+        health_no_auth,
+        health_with_auth,
+        index_no_auth,
+        app_js_no_auth,
+    ) = surface.serve_while(&agents, principals, |port| {
         let no_token = request(port, "/session/a/message", None);
         let wrong_token = request(port, "/session/a/message", Some("wrong-token"));
         let op_token = request(port, "/session/a/message", Some("operator-secret"));
@@ -341,28 +352,6 @@ fn principal_resolves_from_credentials_in_the_guard() {
             app_js_no_auth,
         )
     });
-
-    let mut principals = HashMap::new();
-    principals.insert("operator".to_string(), "operator-secret".to_string());
-    principals.insert("admin".to_string(), "admin-secret".to_string());
-
-    // Serve 8 requests (2 for each request type)
-    for _ in 0..8 {
-        surface
-            .serve_once_authed(&agents, principals.clone())
-            .expect("serves");
-    }
-
-    let (
-        no_token,
-        wrong_token,
-        op_token,
-        admin_token,
-        health_no_auth,
-        health_with_auth,
-        index_no_auth,
-        app_js_no_auth,
-    ) = client.join().expect("client thread");
 
     // No token -> 401
     assert!(

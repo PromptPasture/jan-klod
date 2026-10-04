@@ -170,13 +170,19 @@ impl Surface {
 
     /// Serve one request, then return.
     ///
+    /// One per surface's lifetime, not one per request in a loop: a surface
+    /// that is stopping can still accept the next connection and drop it
+    /// unanswered, so the loop waits forever on a request already lost. Several
+    /// requests go through [`Surface::serve_while`] (#246).
+    ///
     /// # Errors
     /// Whatever the server failed with.
     pub fn serve_once(&self, agents: &Arc<Agents>) -> std::io::Result<()> {
         self.run(agents, HashMap::new(), 1, None::<fn(u16)>)
     }
 
-    /// Serve one request, requiring `Bearer <token>` when one is set.
+    /// Serve one request, requiring `Bearer <token>` when one is set. The
+    /// same one-request limit as [`Surface::serve_once`] applies.
     ///
     /// # Errors
     /// Whatever the server failed with.
