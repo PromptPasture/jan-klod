@@ -53,7 +53,7 @@ use jan_klod_core::session::{
 };
 use jan_klod_core::{AgentSession, HeadlessDriver};
 
-use crate::pending::Pending;
+use crate::pending::{Parked, Pending};
 use crate::sessions::Agents;
 
 /// How often the wait pokes the event stream while parked. A vanished client
@@ -723,6 +723,15 @@ struct PromptDriver<'a> {
 
 impl Driver for PromptDriver<'_> {
     fn ask(&mut self, prompt: &UserPrompt) -> String {
+        // Parked before the frame is sent, never after: a client may answer
+        // as soon as it reads the frame, and an answer that arrives before
+        // the park finds nothing pending and is refused `409` (#290).
+        let Some(parked) = self.pending.park(&self.session) else {
+            // Something is already parked for this session. Two questions
+            // and one answer route cannot be told apart, so this one takes
+            // its default rather than risk being given the other's answer.
+            return prompt.default_answer.clone();
+        };
         let (kind, payload) = prompt_frame(prompt, &self.session);
         if self
             .frames
@@ -735,7 +744,7 @@ impl Driver for PromptDriver<'_> {
             // The client is gone; nobody can answer, so take the safe default.
             return prompt.default_answer.clone();
         }
-        self.wait_for_answer()
+        self.wait_for_answer(&parked)
             .unwrap_or_else(|| prompt.default_answer.clone())
     }
 }
@@ -748,13 +757,7 @@ impl PromptDriver<'_> {
     /// until a write fails, so waking every `HEARTBEAT` is how one is
     /// noticed before the deadline rather than at it. Unchanged from the
     /// version that owned the socket — only what it waits on has changed.
-    fn wait_for_answer(&self) -> Option<String> {
-        let Some(parked) = self.pending.park(&self.session) else {
-            // Something is already parked for this session. Two questions
-            // and one answer route cannot be told apart, so this one takes
-            // its default rather than risk being given the other's answer.
-            return None;
-        };
+    fn wait_for_answer(&self, parked: &Parked<'_>) -> Option<String> {
         let deadline = Instant::now() + answer_timeout();
         loop {
             let remaining = deadline.checked_duration_since(Instant::now())?;
@@ -1015,7 +1018,52 @@ fn contributions_payload(agent: &mut AgentSession) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::health;
+    use super::{health, unbounded_channel, Frame, Pending, PromptDriver};
+    use jan_klod_core::intercept::{Driver, UserPrompt};
+
+    /// #290: the frame used to be sent before the turn parked, so a client
+    /// that answered on reading it could find nothing pending and get `409`.
+    ///
+    /// That window was microseconds wide and one try hit it about 1% of the
+    /// time, so the test tries many.
+    #[test]
+    fn a_prompt_is_answerable_as_soon_as_its_frame_can_be_read() {
+        for _ in 0..200 {
+            let pending = Pending::new();
+            let (frames, mut received) = unbounded_channel();
+            let refused = std::thread::scope(|scope| {
+                let asked = scope.spawn(|| {
+                    let mut driver = PromptDriver {
+                        pending: &pending,
+                        frames,
+                        session: "s1".to_owned(),
+                    };
+                    driver.ask(&UserPrompt {
+                        question: "Run it?".to_owned(),
+                        options: vec!["yes".to_owned(), "no".to_owned()],
+                        default_answer: "no".to_owned(),
+                    })
+                });
+                let frame = received.blocking_recv().expect("the prompt frame is sent");
+                assert!(matches!(frame, Frame::Named { .. }), "a named prompt frame");
+                // No client can answer sooner than this.
+                let refused = !pending.answer("s1", "yes".to_owned());
+                if refused {
+                    // Deliver it once the turn parks, so a failure is reported
+                    // now rather than after the answer timeout.
+                    while !pending.answer("s1", "yes".to_owned()) {
+                        std::thread::yield_now();
+                    }
+                }
+                assert_eq!(asked.join().expect("the turn ends"), "yes");
+                refused
+            });
+            assert!(
+                !refused,
+                "the frame was readable before the turn parked, so its answer was refused"
+            );
+        }
+    }
 
     #[test]
     fn health_reports_ok_with_a_version() {
