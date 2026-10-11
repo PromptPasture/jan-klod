@@ -8,7 +8,7 @@ References: [architecture.md → UIs](../../concepts/architecture.md#user-interf
 
 ## Goal
 
-Human- and agent-facing surfaces: **UI client** (separate process over REST), **`host-socket`** + 
+Human- and agent-facing surfaces: **UI client** (separate process over REST), **`host-socket`** +
 first `chat-*` integration (headless chat), **`agent-*` ACP delegation** (core delegates to/called by agents).
 
 ## Architecture invariants

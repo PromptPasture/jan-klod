@@ -11,7 +11,7 @@ updated: 2026-06-29
 
 > Created: 2026-06-15 · **Primary source** for [Handoff.md](Handoff.md) and [BRAINSTORM.md](BRAINSTORM.md).
 > Raw transcript (Java/Quarkus era); see [2026-06-29-component-model-rust](../2026-06-29-component-model-rust/Handoff.md)
-> for current Rust/Wasmtime/Component Model architecture. Load-bearing ideas: Linux-kernel core, 
+> for current Rust/Wasmtime/Component Model architecture. Load-bearing ideas: Linux-kernel core,
 > agent-loop as extension, LSP-style server/client split, minimal launcher.
 
 ---
@@ -204,7 +204,7 @@ pi-agent (native, fast startup)
   └── loads extensions/*.jar via embedded JVM on demand
 ```
 
-**C) JAR-only, forget native for extensible builds**
+**C) JAR-only** — forget native for extensible builds
 
 Option A is probably right for v1.
 
@@ -225,6 +225,7 @@ Option A is probably right for v1.
 ```
 
 Launcher flow on update:
+
 ```
 1. Download 1.2.0 → versions/1.2.0/
 2. Migrate state 1.1.0 → 1.2.0 (schema migration)
@@ -493,6 +494,7 @@ dev.janklod:jan-klod-bundle-full
 ### ZIP layouts
 
 **JVM:**
+
 ```
 jan-klod.zip
 ├── jan-klod.yaml
@@ -506,6 +508,7 @@ jan-klod.zip
 ```
 
 **Bundle:**
+
 ```
 jan-klod-tui-1.0.0-linux-amd64.zip
 ├── jan-klod

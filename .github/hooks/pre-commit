@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-commit hook — compilation + tests only (fast gate).
+# Pre-commit hook — markdown lint + compilation + tests (fast gate).
 # Skip with: git commit --no-verify
 #
 # The gate sequence itself lives in the root Makefile's `gate-commit` target,
@@ -21,13 +21,28 @@ RST='\033[0m'
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-# Skip entirely unless the commit touches something Rust build output depends
-# on, so doc/workflow-only commits stay instant. wit/ is included because guest
+STAGED="$(git diff --cached --name-only --diff-filter=ACM)"
+
+# A commit that stages a .md file runs `make lint-docs` (#234). That needs
+# Node; without it the commit fails rather than passing unlinted, since CI
+# would refuse the same file anyway.
+if grep -q '\.md$' <<<"$STAGED"; then
+  if ! command -v npx >/dev/null; then
+    printf "${RED}✗${RST} .md files staged but npx is not on PATH — install Node 22 (see docs/guides/development-setup.md).\n" >&2
+    exit 1
+  fi
+  if ! make lint-docs; then
+    printf "\n${RED}✗${RST} markdown lint failed — see above.\n\n" >&2
+    exit 1
+  fi
+fi
+
+# Skip the build gate unless the commit touches something Rust build output depends
+# on, so doc/workflow-only commits skip it. wit/ is included because guest
 # crates read it at compile time via wit_bindgen::generate!. This reads the
 # staged diff, so it belongs in the hook rather than the Makefile target: a
 # target has no notion of what is staged.
-if ! git diff --cached --name-only --diff-filter=ACM \
-     | grep -qE '\.rs$|Cargo\.(toml|lock)$|^wit/'; then
+if ! grep -qE '\.rs$|Cargo\.(toml|lock)$|^wit/' <<<"$STAGED"; then
   exit 0
 fi
 

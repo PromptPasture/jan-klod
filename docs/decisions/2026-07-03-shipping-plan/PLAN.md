@@ -68,7 +68,8 @@ Conductor emits `text-delta` via `EventSink`, REST streams SSE. TUI currently wa
 
 ### REST API surface (2026-07-03)
 
-Replace `POST /turn` with resource model: 
+Replace `POST /turn` with resource model:
+
 ```
 GET  /health                    liveness probe
 GET  /sessions                  list {id, created, preview}
@@ -76,6 +77,7 @@ POST /sessions                  create → {id}
 GET  /session/:id               transcript + metadata
 POST /session/:id/message       send, stream SSE
 ```
+
 No `PUT`/`DELETE` v0.1.0 — append-only, pruning post-v0.1.0. Contained to `serve.rs` + client.
 
 ### Session resume

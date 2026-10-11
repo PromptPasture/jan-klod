@@ -1,8 +1,8 @@
 # Phase 2 Plan — First Real Value: the Agent Loop
 
 > **Re-architected 2026-07-01** around [Thin Loop + Interceptor Middleware](../2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
-> Loop *mechanism* lives in **core** (Rust); every *decision* is a sandboxed **`interceptor-*`** 
-> extension called at ordered **phases** (`wit/interceptor.wit`). Monolithic `manager-agent-loop` / 
+> Loop *mechanism* lives in **core** (Rust); every *decision* is a sandboxed **`interceptor-*`**
+> extension called at ordered **phases** (`wit/interceptor.wit`). Monolithic `manager-agent-loop` /
 > `agent-manager-world` / `manager-context` **retired**. Slice 2a router logic recast as `interceptor-intent-router`.
 
 Execution checklist for Phase 2. Update flags here and in [Status tracker](../../concepts/roadmap.md#status-tracker).
@@ -11,9 +11,9 @@ Prerequisite: Phase 1 exit gate passed (2026-07-01). References: [small-model-ha
 
 ## Goal
 
-User query enters the **core loop** → `interceptor-intent-router` classifies simple vs. agentic → 
-request-shaping interceptors (`select-model`, `-context`, `-tools`) assemble completion → core 
-drives ReAct with grammar-constrained decoding + retry/validate → provider fallback on failure → 
+User query enters the **core loop** → `interceptor-intent-router` classifies simple vs. agentic →
+request-shaping interceptors (`select-model`, `-context`, `-tools`) assemble completion → core
+drives ReAct with grammar-constrained decoding + retry/validate → provider fallback on failure →
 `interceptor-permission` gates tool calls → loop returns grounded answer.
 
 ## Status
@@ -30,8 +30,8 @@ Flags: `not-started` · `in-progress` · `blocked` · `done`.
 
 ## Architecture context
 
-Loop is **core mechanism**, not an extension. Core exposes a **loop entry** (a `run-handle`, 
-same poll pattern as `llm-provider`) that drivers call; Phase 2 uses the offline test harness 
+Loop is **core mechanism**, not an extension. Core exposes a **loop entry** (a `run-handle`,
+same poll pattern as `llm-provider`) that drivers call; Phase 2 uses the offline test harness
 (WIT *driver capability* for `api-*`/`chat-*` deferred to Phase 3/4).
 
 Interceptors are sandboxed guests exporting the generic `interceptor` interface ([`wit/interceptor.wit`](../../../wit/interceptor.wit)):
@@ -55,15 +55,17 @@ subscribed-phases: func() -> list<phase>
 
 **GitHub:** #24
 
-Layered router (`whatlang` → heuristic → LLM classifier) built and unit-tested (17 tests), 
+Layered router (`whatlang` → heuristic → LLM classifier) built and unit-tested (17 tests),
 in `manager-agent-loop`. Repackage as interceptor extension at `before-loop`.
 
 Carried forward:
+
 - [x] **Language detection** — `whatlang` 0.16, pure-Rust, no model call.
 - [x] **Heuristic tier** — ~90 rules, emits `simple` or `agentic`.
 - [x] **LLM classifier** — constrained call; ambiguous/failed → `agentic`.
 
 Recast:
+
 - [x] New guest `pkgs/extensions/interceptor-intent-router/` exporting `interceptor-world`; router module moved verbatim (17 tests pass).
 - [x] `subscribed-phases()` → `[before-loop]`; `intercept`: `simple` → `block`, `agentic` → `proceed`.
 - [x] LLM classifier via routed `llm-provider` import (replaces in-manager call).

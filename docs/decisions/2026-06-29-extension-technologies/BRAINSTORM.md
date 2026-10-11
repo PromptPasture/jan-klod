@@ -24,12 +24,15 @@ Choose languages/toolchains for **first-party extensions** (`provider-*`, `store
 ## Ideas Considered
 
 ### Per-extension best-fit, gated (chosen)
+
 Best tool per job, gated by CM maturity → supply-chain → fit. Honest about toolchain reality; genuine polyglot. Downside: multiple toolchains, drift risk without written rules.
 
 ### Single default language
+
 One toolchain, consistent, simplest CI. Downside: wastes Component Model; poor fit on integration extensions.
 
 ### Ecosystem-first
+
 Best-SDK language even if CM immature. Max fit. Downside: Go-streaming-workaround repeats; pre-release coupling; supply-chain ignored.
 
 ## Outcomes
@@ -57,7 +60,7 @@ Original: Go (TinyGo) default. False premises: team/codebase are Rust-first; `ca
    first-class `cargo-component` toolchain) outweighs per-extension ecosystem fit
    for the components *we* build. Go (TinyGo) stays a fully supported, CM-mature
    option — chosen when its ecosystem or fit is decisive — but is **no longer the
-   default**. *(Amended 2026-06-29; see [Amendment](#amendment-2026-06-29--default-flipped-to-rust).)*
+   default**. *(Amended 2026-06-29; see [Amendment](#amendment--default-flipped-to-rust).)*
 3. **Case-by-case only: TypeScript/JS and Python** — allowed when a library in that
    ecosystem is decisive *and* hygiene controls are applied.
 4. **Excluded for now: Kotlin/JVM, Java** — Kotlin/Wasm is Beta, needs a

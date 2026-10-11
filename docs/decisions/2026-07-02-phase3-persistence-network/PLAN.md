@@ -8,8 +8,8 @@ References: [architecture.md → Storage](../../concepts/architecture.md#storage
 
 ## Goal
 
-Durable state surviving restarts + way for outside to drive core. Two capabilities: 
-**host-side persistent store** behind `host-storage`/`memory-store` contracts, and 
+Durable state surviving restarts + way for outside to drive core. Two capabilities:
+**host-side persistent store** behind `host-storage`/`memory-store` contracts, and
 **`host-serve`** inbound listener with **`api-rest`** (REST + SSE) surface driving Phase 2 loop.
 
 ## Architecture invariants

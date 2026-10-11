@@ -56,4 +56,3 @@ Found by tests refusing to run; cheap to trip over again:
 2. **Imports end in `.ts`, not `.js`.** Node resolves the real file when it
    runs the sources directly; esbuild is happy either way. `tsconfig` sets
    `allowImportingTsExtensions` to match.
-

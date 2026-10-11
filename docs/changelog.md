@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-11
+
+- **Chore**: **Markdown lint** ([#234](https://github.com/PromptPasture/jan-klod/issues/234)). `make lint-docs` runs `markdownlint-cli2@0.23.3` over every tracked `.md` against `.markdownlint.yaml`; the pre-commit hook runs it when a `.md` is staged, and CI runs it beside `test-web`. MD060 is off because the house table style (padded cells, tight delimiter row) matches none of its styles. Existing findings fixed: whitespace, blank lines around blocks, `$` prompts dropped from output-less `console` blocks, one broken anchor.
+
 ## 2026-10-03
 
 - **Refactor**: **Phase 32 — `src/` becomes `pkgs/`** ([#274](https://github.com/PromptPasture/jan-klod/issues/274)). Packages are grouped `pkgs/host/*`, `pkgs/extensions/*` and `pkgs/clients/*`; the repo-root `Cargo.toml` is the host workspace, the guests and the Tauri shell keep their own. Every package has a README, and three package-specific wiki pages moved into their package's `docs/`. `make lints-drift` keeps the three `[workspace.lints]` blocks identical. Paths in this changelog's earlier entries are as they were when written.

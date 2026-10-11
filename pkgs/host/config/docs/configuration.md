@@ -48,7 +48,7 @@ The directory the core resolves components against — **build output**: `make e
 A manifest is generated from the component's imports, describes the `.wasm`, and cannot drift; see [Contracts → The extension manifest](../../../../docs/concepts/contracts.md#the-extension-manifest). Reading one answers "what does this want?" without a WASM parser:
 
 ```console
-$ cat ext/tool-shell.manifest.toml | grep -A2 capabilities
+cat ext/tool-shell.manifest.toml | grep -A2 capabilities
 capabilities = [
     "host-process",
 ]
@@ -75,7 +75,6 @@ Off by default because inspectable components are what manifests enforce. `make 
 
 Until that adoption happens the component is on disk and not loaded, which is why `ext-install` says "callable from the next turn" rather than "installed".
 
-
 **Empty list means nothing is trusted, not "skip the check"** — the same default-deny rule: named no keys = granted nothing, every install refused until configured. Empty meaning unsigned-is-fine would disappear the check for exactly the person who never configured it.
 
 A signature covers **both** component and manifest. Manifests carry no provenance; the host trusts them at boot purely for sitting beside the component. A signature over the `.wasm` alone would verify the artefact while trusting someone else's description of what it may ask for.
@@ -83,7 +82,7 @@ A signature covers **both** component and manifest. Manifests carry no provenanc
 Nothing first-party is signed yet, so installs need the deliberate widening:
 
 ```console
-$ jan-klod-gateway ext install ./tool-thing.wasm --sha256 <hex> --allow-unsigned
+jan-klod-gateway ext install ./tool-thing.wasm --sha256 <hex> --allow-unsigned
 installed tool-thing into ext/ — may use host-fs
 ```
 
@@ -97,7 +96,7 @@ its manifest together.
 **URLs work like paths**, same checks apply:
 
 ```console
-$ jan-klod-gateway ext install https://example.com/ext/tool-thing.wasm
+jan-klod-gateway ext install https://example.com/ext/tool-thing.wasm
 ```
 
 The URL names the **component**; manifest and signatures fetch from beside it (`tool-thing.manifest.toml`, `tool-thing.wasm.minisig`, `tool-thing.manifest.toml.minisig`) — same layout as disk, so publishers serve one directory and both forms work. With `--allow-unsigned` signatures aren't requested.
@@ -273,7 +272,6 @@ A top-level block controlling how the host emits structured logging. Default-den
 
 **Invalid values are rejected at boot** with a clear error message naming the key, the invalid value, and the allowed values (`json`, `human`).
 
-
 ## Telegram (`telegram:`)
 
 A top-level block configuring the Telegram Bot API integration when running the bot with `jan-klod-gateway telegram`. Controls sender identity allowlisting — the list of Telegram user ids permitted to drive turns.
@@ -292,7 +290,6 @@ telegram:
 ```
 
 If the bot has been moved to a guest by the time this slice lands (22b, #185), the allowlist moves to the guest's config and the principal storage moves to the guest's session context — same security rule applies either way.
-
 
 ## Interceptors
 
@@ -403,6 +400,7 @@ Full rule reference, including how the lists compose:
 `scripts/capabilities.yaml` defines groups of extensions that work together, offered by `setup` and the Configurator. A group bundles related extensions with their configuration overrides, allowing operators to enable multiple extensions at once with consistent settings.
 
 Each group names:
+
 - Its semantic meaning (e.g. "Core agent reasoning", "Content filtering")
 - The extensions it activates
 - Dependencies or requirements (e.g. execution mode, storage backend)

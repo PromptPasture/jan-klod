@@ -25,7 +25,7 @@ you. The numbers are in [Meet the cost first](#meet-the-cost-first).
 ## 1. Generate the crate
 
 ```console
-$ make ext-new NAME=tool-greet KIND=tool
+make ext-new NAME=tool-greet KIND=tool
 ```
 
 Pick any name except `tool-hello`, which is the committed example `ext-new` refuses to overwrite.
@@ -51,7 +51,7 @@ instead — see [In TypeScript](#in-typescript) and [In Python](#in-python).
 ## 2. Build it
 
 ```console
-$ make extensions
+make extensions
 ```
 
 Compiles guests to `wasm32-wasip2`, stages them in `ext/`, and generates manifests
@@ -60,7 +60,7 @@ from real imports. You don't write a manifest; it's extracted from the component
 Look at what yours declared:
 
 ```console
-$ cat ext/tool-greet.manifest.toml
+cat ext/tool-greet.manifest.toml
 ```
 
 A fresh tool declares only `host-log` (all the template uses). Add a `host-fs` call
@@ -72,7 +72,7 @@ must grant it before the host wires it up. Declaration is not permission.
 Compiling is not the same as working. Test with the host suite:
 
 ```console
-$ cd src && cargo nextest run -p jan-klod-host --features jan-klod-host/integration generated_guest::
+cd src && cargo nextest run -p jan-klod-host --features jan-klod-host/integration generated_guest::
 ```
 
 `pkgs/host/host/tests/it/generated_guest.rs` is a template. Copy it, change the three
@@ -100,7 +100,7 @@ The host resolves `tool` + `greet` to `ext/tool-greet.wasm`.
 To use a component built outside this repository:
 
 ```console
-$ jan-klod-gateway ext install ./tool-theirs.wasm
+jan-klod-gateway ext install ./tool-theirs.wasm
 ```
 
 **This will refuse, and the refusal is the point:**
@@ -116,8 +116,8 @@ which ships empty. Every signed install is refused until a trusted key is added.
 For now, pin the bytes instead:
 
 ```console
-$ shasum -a 256 ./tool-theirs.wasm        # sha256sum on Linux
-$ jan-klod-gateway ext install ./tool-theirs.wasm --allow-unsigned --sha256 <hex>
+shasum -a 256 ./tool-theirs.wasm        # sha256sum on Linux
+jan-klod-gateway ext install ./tool-theirs.wasm --allow-unsigned --sha256 <hex>
 ```
 
 `--allow-unsigned` requires `--sha256` — both flags together only. A hash is weaker
@@ -127,9 +127,9 @@ them) — hence the requirement and why it's the fallback, not the default.
 The full command surface:
 
 ```console
-$ jan-klod-gateway ext list
-$ jan-klod-gateway ext install <path.wasm|url> [ext-dir] [--sha256 <hex>] [--allow-unsigned]
-$ jan-klod-gateway ext remove <name>
+jan-klod-gateway ext list
+jan-klod-gateway ext install <path.wasm|url> [ext-dir] [--sha256 <hex>] [--allow-unsigned]
+jan-klod-gateway ext remove <name>
 ```
 
 Remote sources must be public; URLs are validated before download and on every redirect.
@@ -177,8 +177,8 @@ no host-side special case. If you want the proof rather than the instructions,
 ### 1. Install the toolchain
 
 ```console
-$ npm install -g @bytecodealliance/jco@1.34.0
-$ cd pkgs/clients/web && npm ci
+npm install -g @bytecodealliance/jco@1.34.0
+cd pkgs/clients/web && npm ci
 ```
 
 `jco` is expected on `PATH`; `esbuild` is reused from `pkgs/clients/web`'s pinned
@@ -188,7 +188,7 @@ devDependency rather than installed a second time. Both versions are pinned —
 ### 2. Generate it
 
 ```console
-$ make ext-new NAME=tool-greet-ts KIND=tool LANG=ts
+make ext-new NAME=tool-greet-ts KIND=tool LANG=ts
 ```
 
 `LANG=ts` supports `tool` and `interceptor`. The other three kinds are refused
@@ -210,7 +210,7 @@ follow.
 ### 3. Build it
 
 ```console
-$ make -C pkgs/extensions ts-guest
+make -C pkgs/extensions ts-guest
 ```
 
 `make extensions` runs this too. Without the toolchain it says what is missing
@@ -286,7 +286,7 @@ the largest component of the three, from the smallest toolchain.
 ### 1. Install the toolchain
 
 ```console
-$ pipx install componentize-py==0.25.1
+pipx install componentize-py==0.25.1
 ```
 
 One tool, not two: `componentize-py` generates its own bindings, so there is
@@ -296,7 +296,7 @@ reason `jco` is not.
 ### 2. Generate it
 
 ```console
-$ make ext-new NAME=tool-greet-py KIND=tool LANG=py
+make ext-new NAME=tool-greet-py KIND=tool LANG=py
 ```
 
 `LANG=py` supports `tool` and `interceptor`, the same two as TypeScript and
@@ -309,7 +309,7 @@ the way it reads `Cargo.toml` and `package.json`).
 ### 3. Build it
 
 ```console
-$ make -C pkgs/extensions py-guest
+make -C pkgs/extensions py-guest
 ```
 
 `make extensions` runs this too, and skips with what to install when

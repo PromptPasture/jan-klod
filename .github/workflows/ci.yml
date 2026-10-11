@@ -183,6 +183,10 @@ jobs:
       - name: Web client tests (pkgs/clients/web)
         run: make test-web
 
+      # Markdown lint (#234). Here because this job already has Node.
+      - name: Markdown lint
+        run: make lint-docs
+
       # The committed `pkgs/clients/web/dist/` is still what `pkgs/clients/web/src/` builds
       # (#127). #119 box 1 committed the bundle on the argument that this
       # repository's other generated artifacts — protocol.schema.json,

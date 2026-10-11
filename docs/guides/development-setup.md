@@ -131,6 +131,10 @@ make setup   # wkg, wit/spike/deps, git hooks, supply-chain plugins
 make gate    # full integration exit gate
 ```
 
+The pre-commit hook also runs `make lint-docs` (markdownlint-cli2 via `npx`,
+rules in `.markdownlint.yaml`) when a commit stages a `.md` file, so such
+commits need Node 22 on PATH.
+
 `make setup` is required for `make gate`, `make harness`, `make clippy` (they
 need `wit/spike/deps`). Unit tests (`make test`/`make test-core`) do not need it.
 

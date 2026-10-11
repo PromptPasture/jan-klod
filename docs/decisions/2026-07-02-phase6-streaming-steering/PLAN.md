@@ -74,7 +74,7 @@ terminal `Done`; a driver `follow_up` injects another cycle.
   follow-up), the SSE server (`api_rest.rs`), and the SSE client (`jan-klod-ui`
   `parse_frame` + `roundtrip`) — all offline.
 - [x] CI — `make phase6-gate` aggregates them (`cargo test -- stream cancel follow_up`
-  + `api_rest` + `jan-klod-ui`), wired into the harness job.
+  - `api_rest` + `jan-klod-ui`), wired into the harness job.
 - [x] **Mark Phase 6 `done`** here and in [roadmap.md](../../concepts/roadmap.md).
   Carried-forward, non-blocking: per-token deltas (v1 streams per-completion), the
   `ratatui` TUI + Telegram consuming the stream, and the driver-capability WIT (only
