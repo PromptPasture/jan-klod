@@ -3,7 +3,7 @@
 //! `extensions.tool`, `start_all` failing, REST surface silently denying
 //! instead of asking. This file loads the real `config.yaml`, boots the real
 //! `Runtime` and REST surface, drives it with the real client library
-//! (`jan_klod_client`, what the TUI calls). Only provider HTTP and workspace
+//! (`jk_tui`, what the TUI calls). Only provider HTTP and workspace
 //! root (temp dir) are faked.
 //!
 //! Skips when guests not staged in `ext/`.
@@ -13,10 +13,10 @@ use std::net::TcpStream;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use jan_klod_client::{stream_turn, StreamEvent};
-use jan_klod_host::serve::Surface;
-use jan_klod_host::sessions::Agents;
 use jk_agent::Runtime;
+use jk_host::serve::Surface;
+use jk_host::sessions::Agents;
+use jk_tui::{stream_turn, StreamEvent};
 use jk_wasm::http::WireResponse;
 use jk_wasm::route::HttpFn;
 

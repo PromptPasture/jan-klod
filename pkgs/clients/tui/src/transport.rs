@@ -12,7 +12,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio as ChildIo};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_protocol::{
+use jk_protocol::{
     compatible, jsonrpc, Command as Rpc, Notification, SessionGetResult, PROTOCOL_VERSION,
 };
 
@@ -92,7 +92,7 @@ pub trait Transport: Send + Sync {
     /// notification, which only the stdio transport carries. Over REST the
     /// menu simply gains no contributed entries, which the contract makes a
     /// valid client rather than a degraded one.
-    fn contributions(&self) -> Vec<jan_klod_protocol::Contributions> {
+    fn contributions(&self) -> Vec<jk_protocol::Contributions> {
         Vec::new()
     }
 
@@ -229,7 +229,7 @@ pub struct Stdio {
     /// What the core reported at the handshake, before the client had
     /// anywhere to put it. Held rather than dropped: the notification arrives
     /// once, ahead of the hello answer, and nothing is listening yet.
-    contributed: Mutex<Vec<jan_klod_protocol::Contributions>>,
+    contributed: Mutex<Vec<jk_protocol::Contributions>>,
 }
 
 impl Stdio {
@@ -513,7 +513,7 @@ impl Transport for Stdio {
         Ok(())
     }
 
-    fn contributions(&self) -> Vec<jan_klod_protocol::Contributions> {
+    fn contributions(&self) -> Vec<jk_protocol::Contributions> {
         self.contributed
             .lock()
             .map(|held| held.clone())
@@ -636,7 +636,7 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
 mod tests {
     use super::{event_for, Logs, Rest, Rpc, Stdio, Transport};
     use crate::StreamEvent;
-    use jan_klod_protocol::{Notification, PROTOCOL_VERSION};
+    use jk_protocol::{Notification, PROTOCOL_VERSION};
 
     /// Stdio half of #154: id and arguments reach client (used to be discarded).
     /// Asserted here and in `tests/parse_frame.rs` because #81 had two faces,
@@ -646,7 +646,7 @@ mod tests {
     #[test]
     fn a_contributions_notification_becomes_an_event() {
         let event = event_for(&Notification::SurfaceContributions {
-            extensions: vec![jan_klod_protocol::Contributions {
+            extensions: vec![jk_protocol::Contributions {
                 extension: "interceptor.system".to_owned(),
                 commands: vec![],
                 status_items: vec![],
@@ -805,7 +805,7 @@ mod tests {
     /// Method name is the contract; wrong one looks like ignored message.
     #[test]
     fn steering_frames_as_the_method_the_core_matches_on() {
-        let framed = serde_json::to_value(jan_klod_protocol::Command::TurnFollowUp {
+        let framed = serde_json::to_value(jk_protocol::Command::TurnFollowUp {
             session: "s1".to_owned(),
             message: "steer".to_owned(),
         })

@@ -488,7 +488,7 @@ impl ToolExtension {
     fn invoke_asking(
         &mut self,
         arguments: &str,
-        driver: &mut dyn jan_klod_protocol::turn::Driver,
+        driver: &mut dyn jk_protocol::turn::Driver,
     ) -> Option<Result<String, String>> {
         let asking = self.asking.as_ref()?.jan_klod_interfaces_tool_askable();
         let mut answer: Option<String> = None;
@@ -504,7 +504,7 @@ impl ToolExtension {
                     return Some(Ok(result));
                 }
                 ask_bind::exports::jan_klod::interfaces::tool_askable::Step::Asking(ask) => {
-                    answer = Some(driver.ask(&jan_klod_protocol::turn::UserPrompt {
+                    answer = Some(driver.ask(&jk_protocol::turn::UserPrompt {
                         question: ask.question,
                         options: ask.options,
                         default_answer: ask.default_answer,
@@ -568,7 +568,7 @@ pub struct ToolMeta {
 
 /// Instantiated `tool-*` extensions, dispatched by name.
 ///
-/// Implements [`ToolInvoker`](jan_klod_protocol::intercept::ToolInvoker) so the loop can call
+/// Implements [`ToolInvoker`](jk_protocol::intercept::ToolInvoker) so the loop can call
 /// tools by matching the model's `tool-call` name. Unknown names return `None`.
 pub struct ToolFleet {
     /// (advertised metadata, extension), metadata resolved once via `meta`.
@@ -624,12 +624,12 @@ impl ToolFleet {
     }
 }
 
-impl jan_klod_protocol::intercept::ToolInvoker for ToolFleet {
+impl jk_protocol::intercept::ToolInvoker for ToolFleet {
     fn invoke_asking(
         &mut self,
-        call: &jan_klod_protocol::turn::ToolCall,
-        driver: &mut dyn jan_klod_protocol::turn::Driver,
-    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
+        call: &jk_protocol::turn::ToolCall,
+        driver: &mut dyn jk_protocol::turn::Driver,
+    ) -> Option<jk_protocol::intercept::ToolInvocation> {
         let entry = self
             .tools
             .iter_mut()
@@ -642,11 +642,11 @@ impl jan_klod_protocol::intercept::ToolInvoker for ToolFleet {
             return self.invoke(call);
         };
         Some(match outcome {
-            Ok(content) => jan_klod_protocol::intercept::ToolInvocation {
+            Ok(content) => jk_protocol::intercept::ToolInvocation {
                 content,
                 failed: false,
             },
-            Err(content) => jan_klod_protocol::intercept::ToolInvocation {
+            Err(content) => jk_protocol::intercept::ToolInvocation {
                 content,
                 failed: true,
             },
@@ -655,8 +655,8 @@ impl jan_klod_protocol::intercept::ToolInvoker for ToolFleet {
 
     fn invoke(
         &mut self,
-        call: &jan_klod_protocol::turn::ToolCall,
-    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
+        call: &jk_protocol::turn::ToolCall,
+    ) -> Option<jk_protocol::intercept::ToolInvocation> {
         let entry = self
             .tools
             .iter_mut()
@@ -664,11 +664,11 @@ impl jan_klod_protocol::intercept::ToolInvoker for ToolFleet {
         // A tool error is fed back to the model as the result, not an abort —
         // but it is still, per #162, a failure the wire is told about.
         Some(match entry.1.invoke(&call.arguments) {
-            Ok(content) => jan_klod_protocol::intercept::ToolInvocation {
+            Ok(content) => jk_protocol::intercept::ToolInvocation {
                 content,
                 failed: false,
             },
-            Err(content) => jan_klod_protocol::intercept::ToolInvocation {
+            Err(content) => jk_protocol::intercept::ToolInvocation {
                 content,
                 failed: true,
             },
@@ -812,24 +812,24 @@ impl LazyToolFleet {
     }
 }
 
-impl jan_klod_protocol::intercept::ToolInvoker for LazyToolFleet {
+impl jk_protocol::intercept::ToolInvoker for LazyToolFleet {
     fn invoke_asking(
         &mut self,
-        call: &jan_klod_protocol::turn::ToolCall,
-        driver: &mut dyn jan_klod_protocol::turn::Driver,
-    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
+        call: &jk_protocol::turn::ToolCall,
+        driver: &mut dyn jk_protocol::turn::Driver,
+    ) -> Option<jk_protocol::intercept::ToolInvocation> {
         self.ensure().ok()?.invoke_asking(call, driver)
     }
 
     fn invoke(
         &mut self,
-        call: &jan_klod_protocol::turn::ToolCall,
-    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
+        call: &jk_protocol::turn::ToolCall,
+    ) -> Option<jk_protocol::intercept::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
             // Like live tools: error fed to model as result, not abort.
             // Lazy failure costs one tool call, not the turn.
-            Err(err) => Some(jan_klod_protocol::intercept::ToolInvocation {
+            Err(err) => Some(jk_protocol::intercept::ToolInvocation {
                 content: format!("tool fleet failed to instantiate: {err}"),
                 failed: true,
             }),

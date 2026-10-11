@@ -4,7 +4,7 @@
 //! exactly what a careless `#[serde(rename)]` edit or a variant reshuffle
 //! produces silently. These tests make it loud.
 
-use jan_klod_protocol::{jsonrpc, Command, HelloResult, Notification, PROTOCOL_VERSION};
+use jk_protocol::{jsonrpc, Command, HelloResult, Notification, PROTOCOL_VERSION};
 
 /// The `method` each command must serialize to.
 ///
@@ -60,7 +60,7 @@ fn every_command() -> Vec<Command> {
         Command::SurfaceInvoke {
             extension: "interceptor.system".to_owned(),
             name: "prompt".to_owned(),
-            arguments: vec![jan_klod_protocol::ArgumentValue {
+            arguments: vec![jk_protocol::ArgumentValue {
                 name: "verbose".to_owned(),
                 value: "true".to_owned(),
             }],
@@ -175,27 +175,27 @@ fn every_notification() -> Vec<Notification> {
         // Fully populated, nested included: the schema is derived from this
         // value, so an empty list here would describe a list of nothing.
         Notification::SurfaceContributions {
-            extensions: vec![jan_klod_protocol::Contributions {
+            extensions: vec![jk_protocol::Contributions {
                 extension: "interceptor.system".to_owned(),
-                commands: vec![jan_klod_protocol::SurfaceCommand {
+                commands: vec![jk_protocol::SurfaceCommand {
                     name: "prompt".to_owned(),
                     title: "System prompt".to_owned(),
                     description: "Show the standing instructions".to_owned(),
-                    arguments: vec![jan_klod_protocol::Argument {
+                    arguments: vec![jk_protocol::Argument {
                         name: "verbose".to_owned(),
                         description: "Include the built-in text".to_owned(),
                         required: false,
                     }],
                 }],
-                status_items: vec![jan_klod_protocol::StatusItem {
+                status_items: vec![jk_protocol::StatusItem {
                     name: "prompt-source".to_owned(),
                     text: "built-in".to_owned(),
                     detail: "no `prompt` key is configured".to_owned(),
                 }],
-                forms: vec![jan_klod_protocol::SurfaceForm {
+                forms: vec![jk_protocol::SurfaceForm {
                     name: "set-prompt".to_owned(),
                     title: "Replace the system prompt".to_owned(),
-                    fields: vec![jan_klod_protocol::Field {
+                    fields: vec![jk_protocol::Field {
                         name: "text".to_owned(),
                         label: "Instructions".to_owned(),
                         options: vec!["built-in".to_owned(), "custom".to_owned()],
@@ -421,7 +421,7 @@ fn the_error_codes_are_the_ones_the_spec_reserves() {
 fn the_method_list_holds_every_command_and_nothing_else() {
     let mut from_the_enum: Vec<&str> = every_command().iter().map(expected_method).collect();
     from_the_enum.sort_unstable();
-    let mut listed: Vec<&str> = jan_klod_protocol::COMMAND_METHODS.to_vec();
+    let mut listed: Vec<&str> = jk_protocol::COMMAND_METHODS.to_vec();
     listed.sort_unstable();
     assert_eq!(
         listed, from_the_enum,
@@ -454,26 +454,23 @@ fn an_unreadable_frame_is_answered_with_a_null_id() {
 /// this is not a major-only check.
 #[test]
 fn a_differing_minor_is_refused_while_the_major_is_zero() {
-    assert!(jan_klod_protocol::compatible("0.1.0", "0.1.0"));
+    assert!(jk_protocol::compatible("0.1.0", "0.1.0"));
     assert!(
-        jan_klod_protocol::compatible("0.1.0", "0.1.9"),
+        jk_protocol::compatible("0.1.0", "0.1.9"),
         "a patch bump is compatible"
     );
     for refused in ["0.2.0", "1.0.0", "0.0.1", "", "dev", "1", "x.y.z"] {
         assert!(
-            !jan_klod_protocol::compatible("0.1.0", refused),
+            !jk_protocol::compatible("0.1.0", refused),
             "{refused} must not be accepted by a 0.1 core"
         );
     }
     // From 1.0 the ordinary semver reading applies: additive minors pass.
-    assert!(jan_klod_protocol::compatible("1.3.0", "1.1.0"));
-    assert!(!jan_klod_protocol::compatible("1.3.0", "2.0.0"));
+    assert!(jk_protocol::compatible("1.3.0", "1.1.0"));
+    assert!(!jk_protocol::compatible("1.3.0", "2.0.0"));
     // And this build's own version is compatible with itself, which is the
     // assertion that fails if PROTOCOL_VERSION stops being parseable.
-    assert!(jan_klod_protocol::compatible(
-        PROTOCOL_VERSION,
-        PROTOCOL_VERSION
-    ));
+    assert!(jk_protocol::compatible(PROTOCOL_VERSION, PROTOCOL_VERSION));
 }
 
 /// A refused handshake returns no [`HelloResult`], so the refusal must say
@@ -784,14 +781,14 @@ fn the_committed_schema_matches_the_types() {
     }
     let committed = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
-            "{}: {e}. Generate it with `JK_UPDATE_SCHEMA=1 cargo test -p jan-klod-protocol`",
+            "{}: {e}. Generate it with `JK_UPDATE_SCHEMA=1 cargo test -p jk-protocol`",
             path.display()
         )
     });
     assert_eq!(
         committed, expected,
         "the committed schema no longer describes these types. Regenerate it with \
-         `JK_UPDATE_SCHEMA=1 cargo test -p jan-klod-protocol` and commit the result"
+         `JK_UPDATE_SCHEMA=1 cargo test -p jk-protocol` and commit the result"
     );
 }
 

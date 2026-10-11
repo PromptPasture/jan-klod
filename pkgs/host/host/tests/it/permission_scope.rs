@@ -14,10 +14,10 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use jan_klod_host::sessions::Agents;
-use jan_klod_protocol::turn::{Driver, UserPrompt};
-use jan_klod_protocol::turn::{Event, EventSink, Flow};
 use jk_agent::{AgentSession, Runtime};
+use jk_host::sessions::Agents;
+use jk_protocol::turn::{Driver, UserPrompt};
+use jk_protocol::turn::{Event, EventSink, Flow};
 
 use crate::common;
 

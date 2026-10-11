@@ -13,7 +13,7 @@ pub mod delegate;
 pub mod session;
 mod session_entries;
 
-use jan_klod_protocol::turn;
+use jk_protocol::turn;
 use jk_session::{event_log, projection, store};
 use jk_wasm::{egress, route, BootReport, CombinedFleet, CoreError, LoadedExtension};
 use std::path::{Path, PathBuf};
@@ -149,7 +149,7 @@ impl Runtime {
             Arc::new(session_entries::SessionEntries::new(Arc::clone(&store)))
         })?;
         Ok(AgentSession {
-            dispatcher: jan_klod_protocol::intercept::Dispatcher::new(interceptors),
+            dispatcher: jk_protocol::intercept::Dispatcher::new(interceptors),
             providers,
             store,
             limits: self.limits(),
@@ -235,8 +235,8 @@ impl Runtime {
 /// A booted thin-loop agent: the interceptor dispatcher and provider fallback
 /// chain, ready to run turns via [`conductor`].
 pub struct AgentSession {
-    dispatcher: jan_klod_protocol::intercept::Dispatcher,
-    providers: Vec<Box<dyn jan_klod_protocol::intercept::Completer>>,
+    dispatcher: jk_protocol::intercept::Dispatcher,
+    providers: Vec<Box<dyn jk_protocol::intercept::Completer>>,
     store: Arc<Mutex<store::Store>>,
     /// Bounds this session's turns run under, from top-level `limits:`.
     limits: conductor::Limits,
@@ -319,7 +319,7 @@ impl AgentSession {
     pub fn run_with(
         &mut self,
         driver: &mut dyn turn::Driver,
-        tools: &mut dyn jan_klod_protocol::intercept::ToolInvoker,
+        tools: &mut dyn jk_protocol::intercept::ToolInvoker,
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
@@ -359,12 +359,12 @@ impl AgentSession {
         )
     }
 
-    /// Like [`Self::run_with`], but streams incremental [`jan_klod_protocol::turn::Event`]s to
+    /// Like [`Self::run_with`], but streams incremental [`jk_protocol::turn::Event`]s to
     /// `sink` as the turn runs (live TUI transcript or SSE).
     pub fn run_streaming(
         &mut self,
         driver: &mut dyn turn::Driver,
-        tools: &mut dyn jan_klod_protocol::intercept::ToolInvoker,
+        tools: &mut dyn jk_protocol::intercept::ToolInvoker,
         sink: &mut dyn turn::EventSink,
         session: &str,
         message: &str,
@@ -596,24 +596,22 @@ impl AgentSession {
     /// Read from the components each time rather than cached: an invocation
     /// may report that the set changed, and a cache would leave every attached
     /// client showing the old one.
-    pub fn contributions(&mut self) -> Vec<jan_klod_protocol::contributions::Contributions> {
+    pub fn contributions(&mut self) -> Vec<jk_protocol::contributions::Contributions> {
         self.dispatcher.contributions()
     }
 
     /// Run a contribution, routed to the extension that declared it.
     ///
     /// # Errors
-    /// [`jan_klod_protocol::contributions::InvokeError`] when no such extension or name is
+    /// [`jk_protocol::contributions::InvokeError`] when no such extension or name is
     /// contributed, the arguments are unusable, or the extension fails.
     pub fn invoke_contribution(
         &mut self,
         extension: &str,
         name: &str,
-        arguments: &[jan_klod_protocol::contributions::ArgumentValue],
-    ) -> Result<
-        jan_klod_protocol::contributions::InvokeOutcome,
-        jan_klod_protocol::contributions::InvokeError,
-    > {
+        arguments: &[jk_protocol::contributions::ArgumentValue],
+    ) -> Result<jk_protocol::contributions::InvokeOutcome, jk_protocol::contributions::InvokeError>
+    {
         self.dispatcher
             .invoke_contribution(extension, name, arguments)
     }
@@ -656,11 +654,11 @@ impl AgentSession {
 /// borrows of session fields (dispatcher, providers, tools) in one call.
 #[allow(clippy::too_many_arguments)]
 fn run_and_persist(
-    dispatcher: &mut jan_klod_protocol::intercept::Dispatcher,
-    providers: &mut [Box<dyn jan_klod_protocol::intercept::Completer>],
+    dispatcher: &mut jk_protocol::intercept::Dispatcher,
+    providers: &mut [Box<dyn jk_protocol::intercept::Completer>],
     store: &Mutex<store::Store>,
     limits: conductor::Limits,
-    tools: &mut dyn jan_klod_protocol::intercept::ToolInvoker,
+    tools: &mut dyn jk_protocol::intercept::ToolInvoker,
     driver: &mut dyn turn::Driver,
     sink: &mut dyn turn::EventSink,
     session: &str,
@@ -775,28 +773,24 @@ mod tests {
     struct RewriteBeforeLoop {
         replacement: String,
     }
-    impl jan_klod_protocol::intercept::Interceptor for RewriteBeforeLoop {
+    impl jk_protocol::intercept::Interceptor for RewriteBeforeLoop {
         fn id(&self) -> &'static str {
             "rewrite"
         }
-        fn subscribed_phases(&self) -> Vec<jan_klod_protocol::intercept::Phase> {
-            vec![jan_klod_protocol::intercept::Phase::BeforeLoop]
+        fn subscribed_phases(&self) -> Vec<jk_protocol::intercept::Phase> {
+            vec![jk_protocol::intercept::Phase::BeforeLoop]
         }
         fn intercept(
             &mut self,
-            _input: &jan_klod_protocol::intercept::InterceptInput,
-        ) -> Result<
-            jan_klod_protocol::intercept::Decision,
-            jan_klod_protocol::intercept::InterceptorError,
-        > {
-            Ok(jan_klod_protocol::intercept::Decision::Replace(
-                jan_klod_protocol::intercept::HookState::BeforeLoop(
-                    jan_klod_protocol::intercept::UserTurn {
-                        session: "s".to_string(),
-                        user_message: self.replacement.clone(),
-                        principal: None,
-                    },
-                ),
+            _input: &jk_protocol::intercept::InterceptInput,
+        ) -> Result<jk_protocol::intercept::Decision, jk_protocol::intercept::InterceptorError>
+        {
+            Ok(jk_protocol::intercept::Decision::Replace(
+                jk_protocol::intercept::HookState::BeforeLoop(jk_protocol::intercept::UserTurn {
+                    session: "s".to_string(),
+                    user_message: self.replacement.clone(),
+                    principal: None,
+                }),
             ))
         }
     }
@@ -804,15 +798,15 @@ mod tests {
     /// A provider whose answer plays no part in what this test checks —
     /// present only so the turn has something to complete with.
     struct FixedAnswer;
-    impl jan_klod_protocol::intercept::Completer for FixedAnswer {
+    impl jk_protocol::intercept::Completer for FixedAnswer {
         fn id(&self) -> &'static str {
             "p"
         }
         fn complete(
             &mut self,
-            _request: &jan_klod_protocol::intercept::PendingRequest,
-        ) -> Result<jan_klod_protocol::intercept::Completion, String> {
-            Ok(jan_klod_protocol::intercept::Completion {
+            _request: &jk_protocol::intercept::PendingRequest,
+        ) -> Result<jk_protocol::intercept::Completion, String> {
+            Ok(jk_protocol::intercept::Completion {
                 text: "hi".to_string(),
                 tool_calls: vec![],
                 finish_reason: "stop".to_string(),
@@ -836,12 +830,12 @@ mod tests {
     fn the_log_holds_the_message_a_before_loop_rewrite_produced() {
         let store = Mutex::new(store::Store::open_in_memory().unwrap());
         let mut dispatcher =
-            jan_klod_protocol::intercept::Dispatcher::new(vec![Box::new(RewriteBeforeLoop {
+            jk_protocol::intercept::Dispatcher::new(vec![Box::new(RewriteBeforeLoop {
                 replacement: "rewritten by the interceptor".to_string(),
             })]);
-        let mut providers: Vec<Box<dyn jan_klod_protocol::intercept::Completer>> =
+        let mut providers: Vec<Box<dyn jk_protocol::intercept::Completer>> =
             vec![Box::new(FixedAnswer)];
-        let mut tools = jan_klod_protocol::intercept::NoTools;
+        let mut tools = jk_protocol::intercept::NoTools;
         let mut driver = HeadlessDriver;
         let mut sink = conductor::NoSink;
 

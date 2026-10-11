@@ -3,12 +3,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use jan_klod_protocol::intercept::{
+use jk_protocol::intercept::{
     BlockReason, Decision, Dispatcher, HookState, InterceptInput, Interceptor, InterceptorError,
     Outcome, PendingRequest, Phase, UserTurn,
 };
 
-use jan_klod_protocol::turn::{Driver, ToolCall, UserPrompt};
+use jk_protocol::turn::{Driver, ToolCall, UserPrompt};
 
 // ---------------------------------------------------------------------------
 // Test doubles

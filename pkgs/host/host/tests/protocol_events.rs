@@ -1,21 +1,21 @@
 //! Every turn event the conductor emits has a place in the client protocol.
 //!
-//! Without this, adding a `jan_klod_protocol::turn::Event` variant is a silent hole: the
+//! Without this, adding a `jk_protocol::turn::Event` variant is a silent hole: the
 //! event reaches the SSE sink and never reaches a protocol client, and nothing
 //! fails. The mapping below has no wildcard arm, so a new variant stops this
 //! file from compiling — which is the whole point of it existing.
 //!
 //! The mapping used to live here, because #41 added no transport and the core
 //! had no runtime reason to hold a protocol type. Slice 13b gave it one, so the
-//! function moved to `jan_klod_host::rpc::notification_for` and this file
+//! function moved to `jk_host::rpc::notification_for` and this file
 //! asserts *that* — a test that validated its own copy of a mapping would pass
 //! while the copy the stdio transport actually sends drifted away from it.
 
-use jan_klod_host::rpc::notification_for;
-use jan_klod_host::serve;
-use jan_klod_protocol::turn::Event;
-use jan_klod_protocol::turn::{ToolCall, ToolOutcome, UserPrompt};
-use jan_klod_protocol::Notification;
+use jk_host::rpc::notification_for;
+use jk_host::serve;
+use jk_protocol::turn::Event;
+use jk_protocol::turn::{ToolCall, ToolOutcome, UserPrompt};
+use jk_protocol::Notification;
 
 /// One event of each variant, every field distinguishable, so a field mapped to
 /// the wrong place shows up as a mismatch rather than as two equal strings.
@@ -123,7 +123,7 @@ fn nothing_an_event_carries_is_dropped() {
 }
 
 /// Three notifications answer to no event, and that is not an oversight: `ask`
-/// comes from `jan_klod_protocol::turn::Driver::ask` blocking a turn, `error` from a failed
+/// comes from `jk_protocol::turn::Driver::ask` blocking a turn, `error` from a failed
 /// turn or an unservable request, and `session/updated` from the store — none
 /// of which passes through `EventSink`.
 #[test]
@@ -263,9 +263,9 @@ fn the_error_frame_fits_the_error_notification() {
 }
 
 /// The frames above are the whole SSE surface, and this proves the shared
-/// constant lists exactly them — computed from `jan_klod_protocol::turn::Event`, so adding a
+/// constant lists exactly them — computed from `jk_protocol::turn::Event`, so adding a
 /// variant fails here rather than being noticed by a reader. The constant lives
-/// in `jan-klod-protocol` because a client cannot see this crate, and the
+/// in `jk-protocol` because a client cannot see this crate, and the
 /// client's half of the check (`ui/tests/parse_frame.rs`) reads the same one.
 /// The keepalive is a `:` comment rather than a frame precisely so it needs no
 /// notification.
@@ -290,7 +290,7 @@ fn the_projected_frame_kinds_are_the_ones_the_protocol_covers() {
     kinds.sort_unstable();
     assert_eq!(
         kinds,
-        jan_klod_protocol::SSE_FRAME_KINDS,
+        jk_protocol::SSE_FRAME_KINDS,
         "the shared list and what the core actually emits have diverged"
     );
 }

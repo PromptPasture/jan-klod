@@ -1,5 +1,5 @@
 #![allow(missing_docs)]
-use jan_klod::app::{App, Entry, Prompt, Who};
+use jk_tui::app::{App, Entry, Prompt, Who};
 
 #[test]
 fn typing_and_backspace_edit_the_input() {
@@ -32,7 +32,7 @@ fn blank_submit_sends_nothing() {
     let mut app = App::default();
     "   ".chars().for_each(|c| app.push_char(c));
     assert_eq!(app.take_submission(), None);
-    assert_eq!(app.transcript, [] as [jan_klod::app::Entry; 0]);
+    assert_eq!(app.transcript, [] as [jk_tui::app::Entry; 0]);
 }
 
 #[test]

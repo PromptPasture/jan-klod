@@ -18,7 +18,7 @@
 //! of one turn**. A [`Notification`](crate::Notification) is what a client is
 //! told happened; an [`Event`] is what the log remembers happening. Putting
 //! them in separate crates would leave two places asserting the shapes of one
-//! thing, which is how they drift. `protocol_events.rs` in `jan-klod-host`
+//! thing, which is how they drift. `protocol_events.rs` in `jk-host`
 //! already treats them as two views, and now they are two views declared side
 //! by side.
 //!

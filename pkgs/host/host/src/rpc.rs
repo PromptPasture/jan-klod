@@ -42,17 +42,17 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Instant;
 
-use jan_klod_protocol::{
+use jk_protocol::{
     compatible, jsonrpc, Command, HelloResult, Notification, SurfaceInvokeResult, COMMAND_METHODS,
     PROTOCOL_VERSION,
 };
 
 use jk_agent::conductor::RunResult;
 
-use jan_klod_protocol::turn::{Driver, UserPrompt};
-use jan_klod_protocol::turn::{Event, EventSink, Flow};
 use jk_agent::session::{self, Forked};
 use jk_agent::AgentSession;
+use jk_protocol::turn::{Driver, UserPrompt};
+use jk_protocol::turn::{Event, EventSink, Flow};
 
 /// Serve frames from `input`, answering on `output`, until EOF.
 ///
@@ -222,7 +222,7 @@ pub(crate) fn parse(line: &str) -> Result<jsonrpc::Request, jsonrpc::Response> {
             "a frame must be one JSON object on one line".to_owned(),
         ));
     };
-    // Happy path uses contract type so envelope is per `jan-klod-protocol`, not a
+    // Happy path uses contract type so envelope is per `jk-protocol`, not a
     // second reading. Failures use the raw value only to explain why.
     match serde_json::from_str::<jsonrpc::Request>(line) {
         // `Id::Null` exists so *this core* can answer a frame it could not read
@@ -393,9 +393,9 @@ pub(crate) fn command<W: Write>(
             name,
             arguments,
         } => {
-            let arguments: Vec<jan_klod_protocol::contributions::ArgumentValue> = arguments
+            let arguments: Vec<jk_protocol::contributions::ArgumentValue> = arguments
                 .into_iter()
-                .map(|argument| jan_klod_protocol::contributions::ArgumentValue {
+                .map(|argument| jk_protocol::contributions::ArgumentValue {
                     name: argument.name,
                     value: argument.value,
                 })
@@ -423,13 +423,13 @@ pub(crate) fn command<W: Write>(
                 }
                 // A name nobody contributes is the caller's mistake; the
                 // other two are the extension's, and the codes say which.
-                Err(error @ jan_klod_protocol::contributions::InvokeError::Unknown) => {
+                Err(error @ jk_protocol::contributions::InvokeError::Unknown) => {
                     Served::Answer(refuse(id, jsonrpc::METHOD_NOT_FOUND, error.to_string()))
                 }
-                Err(error @ jan_klod_protocol::contributions::InvokeError::InvalidArguments) => {
+                Err(error @ jk_protocol::contributions::InvokeError::InvalidArguments) => {
                     Served::Answer(refuse(id, jsonrpc::INVALID_PARAMS, error.to_string()))
                 }
-                Err(error @ jan_klod_protocol::contributions::InvokeError::Failed(_)) => {
+                Err(error @ jk_protocol::contributions::InvokeError::Failed(_)) => {
                     Served::Answer(refuse(id, jsonrpc::INTERNAL_ERROR, error.to_string()))
                 }
             }
@@ -746,25 +746,25 @@ fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::i
 /// What the loaded extensions contribute, as the notification clients read.
 ///
 /// The kernel's shapes are not the wire's — `jk-agent` does not depend on
-/// `jan-klod-protocol` — so a surface maps between them, the same way
+/// `jk-protocol` — so a surface maps between them, the same way
 /// [`notification_for`] maps a turn event.
 fn contributions_notification(agent: &mut AgentSession) -> Notification {
     let extensions = agent
         .contributions()
         .into_iter()
-        .map(|set| jan_klod_protocol::Contributions {
+        .map(|set| jk_protocol::Contributions {
             extension: set.extension,
             commands: set
                 .commands
                 .into_iter()
-                .map(|command| jan_klod_protocol::SurfaceCommand {
+                .map(|command| jk_protocol::SurfaceCommand {
                     name: command.name,
                     title: command.title,
                     description: command.description,
                     arguments: command
                         .arguments
                         .into_iter()
-                        .map(|argument| jan_klod_protocol::Argument {
+                        .map(|argument| jk_protocol::Argument {
                             name: argument.name,
                             description: argument.description,
                             required: argument.required,
@@ -775,7 +775,7 @@ fn contributions_notification(agent: &mut AgentSession) -> Notification {
             status_items: set
                 .status_items
                 .into_iter()
-                .map(|item| jan_klod_protocol::StatusItem {
+                .map(|item| jk_protocol::StatusItem {
                     name: item.name,
                     text: item.text,
                     detail: item.detail,
@@ -784,13 +784,13 @@ fn contributions_notification(agent: &mut AgentSession) -> Notification {
             forms: set
                 .forms
                 .into_iter()
-                .map(|form| jan_klod_protocol::SurfaceForm {
+                .map(|form| jk_protocol::SurfaceForm {
                     name: form.name,
                     title: form.title,
                     fields: form
                         .fields
                         .into_iter()
-                        .map(|field| jan_klod_protocol::Field {
+                        .map(|field| jk_protocol::Field {
                             name: field.name,
                             label: field.label,
                             options: field.options,
@@ -807,7 +807,7 @@ fn contributions_notification(agent: &mut AgentSession) -> Notification {
 #[cfg(test)]
 mod tests {
     use super::{parse, write_frame};
-    use jan_klod_protocol::{jsonrpc, Command, COMMAND_METHODS};
+    use jk_protocol::{jsonrpc, Command, COMMAND_METHODS};
 
     /// The code and message a line is refused with, or `None` if it parsed.
     fn refusal(line: &str) -> Option<(i64, jsonrpc::Id, String)> {

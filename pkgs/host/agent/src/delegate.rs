@@ -6,7 +6,7 @@
 //! Wire format is transport-specific; the seam is unit-tested offline.
 //!
 //! Inbound delegation (core called *by* another ACP orchestrator) is just the
-//! host-side REST surface (`jan_klod_host::serve`).
+//! host-side REST surface (`jk_host::serve`).
 //!
 //! # Not wired
 //!
@@ -16,9 +16,9 @@
 
 use std::collections::HashMap;
 
-use jan_klod_protocol::intercept::ToolDefinition;
-use jan_klod_protocol::intercept::ToolInvoker;
-use jan_klod_protocol::turn::ToolCall;
+use jk_protocol::intercept::ToolDefinition;
+use jk_protocol::intercept::ToolInvoker;
+use jk_protocol::turn::ToolCall;
 
 /// The tool name the model uses to delegate to another agent.
 pub const DELEGATE_TOOL: &str = "delegate";
@@ -73,7 +73,7 @@ impl<T: AgentTransport> AgentDelegate<T> {
 }
 
 impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
-    fn invoke(&mut self, call: &ToolCall) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
+    fn invoke(&mut self, call: &ToolCall) -> Option<jk_protocol::intercept::ToolInvocation> {
         if call.name != DELEGATE_TOOL {
             return None; // skip if not ours
         }
@@ -83,17 +83,17 @@ impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
         let context = args.get("context").and_then(serde_json::Value::as_str);
 
         let Some(endpoint) = self.agents.get(agent) else {
-            return Some(jan_klod_protocol::intercept::ToolInvocation {
+            return Some(jk_protocol::intercept::ToolInvocation {
                 content: format!("unknown agent `{agent}`"),
                 failed: true,
             });
         };
         Some(match self.transport.delegate(endpoint, task, context) {
-            Ok(answer) => jan_klod_protocol::intercept::ToolInvocation {
+            Ok(answer) => jk_protocol::intercept::ToolInvocation {
                 content: answer,
                 failed: false,
             },
-            Err(err) => jan_klod_protocol::intercept::ToolInvocation {
+            Err(err) => jk_protocol::intercept::ToolInvocation {
                 content: format!("delegation to `{agent}` failed: {err}"),
                 failed: true,
             },

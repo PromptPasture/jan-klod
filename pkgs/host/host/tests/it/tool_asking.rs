@@ -13,8 +13,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use jan_klod_protocol::intercept::ToolInvoker;
-use jan_klod_protocol::turn::{Driver, UserPrompt};
+use jk_protocol::intercept::ToolInvoker;
+use jk_protocol::turn::{Driver, UserPrompt};
 use jk_wasm::host_process::ProcessRunner;
 use jk_wasm::tool_host::{ToolExtension, ToolFleet};
 use wasmtime::component::Component;
@@ -67,8 +67,8 @@ fn fleet() -> Option<ToolFleet> {
     Some(ToolFleet::new(vec![tool]))
 }
 
-fn call(arguments: &str) -> jan_klod_protocol::turn::ToolCall {
-    jan_klod_protocol::turn::ToolCall {
+fn call(arguments: &str) -> jk_protocol::turn::ToolCall {
+    jk_protocol::turn::ToolCall {
         id: "c1".to_string(),
         name: "ask-probe".to_string(),
         arguments: arguments.to_string(),

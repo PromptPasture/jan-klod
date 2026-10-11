@@ -319,7 +319,7 @@ GUI_BIN := $(abspath $(GUI_DIR)/target/release/jan-klod-gui)
 JK_GUI_BIN := $(if $(GUI),$(GUI_BIN),)
 
 bundle: extensions
-	cd $(HOST_WS) && cargo build --release -p jan-klod-host -p jan-klod
+	cd $(HOST_WS) && cargo build --release -p jk-host -p jk-tui
 	@if [ -n "$(GUI)" ]; then $(MAKE) -C $(GUI_DIR) release; fi
 	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT) "$(abspath scripts/distributions/$(DIST)/skills)"; 	else 	  JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
 
@@ -382,7 +382,7 @@ audit deny:
 #
 # **One** glob, `src/*/*.cdx.json`, and that is not a shortcut: every crate in
 # both workspaces — the seven host members (`jk-session` joined in Phase 21b,
-# `jk-wasm` in 21c) and `jan-klod-gui` — is a direct child of `src/`, so one
+# `jk-wasm` in 21c) and `jk-gui` — is a direct child of `src/`, so one
 # level of wildcard reaches all eight and nothing else.
 # It has to be exactly one level. `src/**/...` is what was here before, and in
 # `sh` (no `globstar`) `**` is just `*`, so it was never recursive; when the
@@ -483,13 +483,13 @@ harness: check-spike-deps extensions
 	  test -f $(HOST_MK)/host/tests/it/$$m.rs \
 	    || { echo "harness: no module $$m.rs in $(HOST_MK)/host/tests/it/" >&2; exit 1; }; \
 	done
-	cd $(HOST_WS) && cargo nextest run -p jan-klod-host --features jan-klod-host/integration $(addsuffix ::,$(HARNESS_MODULES))
+	cd $(HOST_WS) && cargo nextest run -p jk-host --features jk-host/integration $(addsuffix ::,$(HARNESS_MODULES))
 
 # Exit gate: the full offline integration suite, nothing allowed to skip.
 # JK_REQUIRE_GUESTS turns a silently-skipped test into a failure.
 #
 # #79 verified this gate's test count is unchanged by the feature gate below:
-# 504 tests run, 0 skipped (160 of them jan-klod-host::it, the rest unit
+# 504 tests run, 0 skipped (160 of them jk-host::it, the rest unit
 # tests across the workspace) under JK_REQUIRE_GUESTS=1, same as immediately
 # before the `integration` feature landed. That absolute count will drift as
 # the suite grows — it is not itself a gate — but a *drop to zero* is exactly
@@ -501,7 +501,7 @@ harness: check-spike-deps extensions
 # --no-fail-fast reports every failure in the run, not just the first.
 # Doctests run separately since nextest doesn't run them.
 #
-# --features jan-klod-host/integration cannot be dropped: since #79 the `it`
+# --features jk-host/integration cannot be dropped: since #79 the `it`
 # target (tests/it/, the whole integration suite) carries `required-features =
 # ["integration"]`, so without this flag cargo simply does not build it — no
 # wasmtime link, no test, and critically no *failure* either. `cargo nextest
@@ -517,7 +517,7 @@ harness: check-spike-deps extensions
 # never dropped or mistyped. `cargo nextest list` is cheap (no run, just
 # compiles-and-enumerates) and prints one line per test as
 # "<binary> <test-name>"; the `it` binary's lines start with
-# "jan-klod-host::it ".
+# "jk-host::it ".
 #
 # `--color never` is what makes that last sentence true, and it is not
 # cosmetic. `.github/workflows/ci.yml` sets `CARGO_TERM_COLOR: always`, which
@@ -537,16 +537,16 @@ GATE_LIST := $(HOST_WS)/target/gate-tests.txt
 gate: export JK_REQUIRE_GUESTS = 1
 gate: check-spike-deps extensions
 	@mkdir -p $(dir $(GATE_LIST))
-	@cd $(HOST_WS) && cargo nextest list -p jan-klod-host --features jan-klod-host/integration --bins --tests --color never > target/gate-tests.txt
-	@n=$$(grep -c '^jan-klod-host::it ' $(GATE_LIST) || true); \
-	  echo "gate: integration suite (jan-klod-host::it) resolves $$n test(s)"; \
+	@cd $(HOST_WS) && cargo nextest list -p jk-host --features jk-host/integration --bins --tests --color never > target/gate-tests.txt
+	@n=$$(grep -c '^jk-host::it ' $(GATE_LIST) || true); \
+	  echo "gate: integration suite (jk-host::it) resolves $$n test(s)"; \
 	  if [ "$$n" -eq 0 ]; then \
 	    echo "gate: the integration suite compiled zero tests - the --features integration gate is broken" >&2; \
 	    echo "gate: what nextest listed (first 20 lines):" >&2; \
 	    head -20 $(GATE_LIST) >&2; \
 	    exit 1; \
 	  fi
-	cd $(HOST_WS) && cargo nextest run --workspace --features jan-klod-host/integration --no-fail-fast
+	cd $(HOST_WS) && cargo nextest run --workspace --features jk-host/integration --no-fail-fast
 	cd $(HOST_WS) && cargo test --doc --workspace
 
 # --- Hook-facing gates (also called directly by .github/workflows/ci.yml) ---
@@ -588,7 +588,7 @@ gate-commit:
 # explicit fetch before clippy/gate can compile against it. Guests are
 # rebuilt for the same reason `gate-commit` rebuilds them. `test-guests`, not
 # `test`, runs here: `gate` below is a strict superset of the host workspace's
-# unit tests once --features jan-klod-host/integration is added, so running
+# unit tests once --features jk-host/integration is added, so running
 # `test-core` a second time here would just repeat it for no extra coverage.
 #
 # All three clippys run here and none of them runs in `gate`, which stays
@@ -624,39 +624,39 @@ gate-push:
 # Boot the real core against config.yaml: resolve extensions against ext/,
 # compile present components, run their lifecycle, print the boot plan.
 run:
-	cd $(HOST_WS) && cargo run --quiet -p jan-klod-host -- $(CONFIG) $(EXT_DIR)
+	cd $(HOST_WS) && cargo run --quiet -p jk-host -- $(CONFIG) $(EXT_DIR)
 
 # Serve the loop over the host-side REST surface. Uses live host-http, so the
 # enabled provider needs its api-key env. Override BIND=host:port.
 BIND ?= 127.0.0.1:8787
 serve:
-	cd $(HOST_WS) && cargo run --quiet -p jan-klod-host -- serve $(CONFIG) $(EXT_DIR) $(BIND)
+	cd $(HOST_WS) && cargo run --quiet -p jk-host -- serve $(CONFIG) $(EXT_DIR) $(BIND)
 
 # TUI client — connects to the gateway (auto-starting it if not running).
 # Override ADDR=host:port and SESSION=id.
 ADDR ?= 127.0.0.1:8787
 SESSION ?= cli
 chat:
-	cd $(HOST_WS) && cargo run --quiet -p jan-klod -- $(ADDR) $(SESSION)
+	cd $(HOST_WS) && cargo run --quiet -p jk-tui -- $(ADDR) $(SESSION)
 
 # The same client, in a window. `gui` first so the shell is staged beside the
 # binary `cargo run` produces — without it `--gui` correctly reports that the
 # shell is not installed, which is accurate and unhelpful as a dev loop.
 chat-gui: gui
-	cd $(HOST_WS) && cargo run --quiet -p jan-klod -- --gui --addr $(ADDR)
+	cd $(HOST_WS) && cargo run --quiet -p jk-tui -- --gui --addr $(ADDR)
 
 # Telegram bot (headless). Needs TELEGRAM_BOT_TOKEN + network.
 chat-telegram:
-	cd $(HOST_WS) && cargo run --quiet -p jan-klod-host -- telegram $(CONFIG) $(EXT_DIR)
+	cd $(HOST_WS) && cargo run --quiet -p jk-host -- telegram $(CONFIG) $(EXT_DIR)
 
 # Drives a provider's llm-provider.complete path against a live endpoint.
 # Needs the provider's api-key env (e.g. OPENAI_API_KEY) — real, billed call.
 probe:
-	cd $(HOST_WS) && cargo run --quiet -p jan-klod-host --features examples --example provider_probe -- $(CONFIG) $(EXT_DIR)
+	cd $(HOST_WS) && cargo run --quiet -p jk-host --features examples --example provider_probe -- $(CONFIG) $(EXT_DIR)
 
 # Resolve config.yaml and print the extension plan (each instance -> wasm).
 config:
-	cd $(HOST_WS) && cargo run --quiet -p jan-klod-config --features examples --example dump -- $(CONFIG)
+	cd $(HOST_WS) && cargo run --quiet -p jk-config --features examples --example dump -- $(CONFIG)
 
 # One-time developer setup: cargo supply-chain plugins, git hooks, and the WIT
 # deps that only `wkg` can fetch.

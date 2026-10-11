@@ -10,7 +10,7 @@ publish.workspace = true
 # rest live here, below both this crate and the session store, so the log can
 # name them without depending on the loop. No new package in the tree — the
 # workspace already builds it, and it depends on nothing but serde.
-jan-klod-protocol = { path = "../protocol" }
+jk-protocol = { path = "../protocol" }
 # The session store (#180). This crate no longer defines the log, the
 # projections or the SQLite connection; it composes them with a loop.
 jk-session = { path = "../session" }

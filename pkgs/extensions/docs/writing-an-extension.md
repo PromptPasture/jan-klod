@@ -72,7 +72,7 @@ must grant it before the host wires it up. Declaration is not permission.
 Compiling is not the same as working. Test with the host suite:
 
 ```console
-cd src && cargo nextest run -p jan-klod-host --features jan-klod-host/integration generated_guest::
+cd src && cargo nextest run -p jk-host --features jk-host/integration generated_guest::
 ```
 
 `pkgs/host/host/tests/it/generated_guest.rs` is a template. Copy it, change the three

@@ -217,7 +217,7 @@ pub fn url_from_config_path(path: &Path) -> Result<String, IndexError> {
     // it: the latter expands `${VAR}` in every enabled instance, searching a
     // registry would demand a provider's API key.
     let registry =
-        jan_klod_config::Config::top_level(path, "registry").map_err(|err| IndexError::Config {
+        jk_config::Config::top_level(path, "registry").map_err(|err| IndexError::Config {
             path: path.display().to_string(),
             detail: err.to_string(),
         })?;

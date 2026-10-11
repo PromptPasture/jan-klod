@@ -16,7 +16,7 @@ package jan-klod:interfaces@0.4.0;
 /// browser. No pixels, no layout, no toolkit crosses this boundary, because the
 /// extension does not know which client is attached, or whether one is.
 ///
-/// Declarations travel to clients over `jan-klod-protocol`: a notification at
+/// Declarations travel to clients over `jk-protocol`: a notification at
 /// connect and another when the set changes, versioned with `PROTOCOL_VERSION`
 /// like everything else on that wire.
 ///

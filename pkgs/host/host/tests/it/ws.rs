@@ -8,9 +8,9 @@
 //! frame in produces a frame out.
 
 use futures_util::{SinkExt as _, StreamExt as _};
-use jan_klod_host::serve::Surface;
-use jan_klod_host::sessions::Agents;
 use jk_agent::Runtime;
+use jk_host::serve::Surface;
+use jk_host::sessions::Agents;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -180,7 +180,7 @@ fn hello() -> String {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "protocol/hello",
-        "params": { "version": jan_klod_protocol::PROTOCOL_VERSION },
+        "params": { "version": jk_protocol::PROTOCOL_VERSION },
     })
     .to_string()
 }
@@ -202,7 +202,7 @@ fn a_client_connects_and_negotiates_the_protocol() {
 
     assert_eq!(answers.len(), 1, "one frame in, one out: {answers:?}");
     assert!(
-        answers[0].contains(jan_klod_protocol::PROTOCOL_VERSION),
+        answers[0].contains(jk_protocol::PROTOCOL_VERSION),
         "the handshake carries the version: {}",
         answers[0]
     );
@@ -244,7 +244,7 @@ fn the_socket_is_refused_without_the_token() {
     );
     let accepted = accepted.expect("the authenticated client connects");
     assert!(
-        accepted[0].contains(jan_klod_protocol::PROTOCOL_VERSION),
+        accepted[0].contains(jk_protocol::PROTOCOL_VERSION),
         "and gets the handshake: {accepted:?}"
     );
 }

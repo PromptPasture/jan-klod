@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use jan_klod::transport::{Rest, Transport};
+use jk_tui::transport::{Rest, Transport};
 
 /// The fake core: accept one connection, read past request headers, then
 /// emit `delta` frames until the socket shuts down. Never stops on its own.

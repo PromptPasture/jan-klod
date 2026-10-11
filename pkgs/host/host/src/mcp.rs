@@ -41,7 +41,7 @@
 
 use std::io::{BufRead, Write};
 
-use jan_klod_protocol::jsonrpc;
+use jk_protocol::jsonrpc;
 
 use jk_agent::{AgentSession, HeadlessDriver};
 
@@ -378,7 +378,7 @@ fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::i
 #[cfg(test)]
 mod tests {
     use super::{classify, content, tools, Asked, MCP_VERSION};
-    use jan_klod_protocol::jsonrpc;
+    use jk_protocol::jsonrpc;
 
     /// Classify a line and render the response it earns.
     ///

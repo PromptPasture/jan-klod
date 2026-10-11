@@ -1,7 +1,7 @@
 //! Wasm-guest adapter for the interceptor dispatch engine.
 //!
-//! [`jan_klod_protocol::intercept::Dispatcher`] drives anything implementing the
-//! [`Interceptor`](jan_klod_protocol::intercept::Interceptor) trait. This module adapts
+//! [`jk_protocol::intercept::Dispatcher`] drives anything implementing the
+//! [`Interceptor`](jk_protocol::intercept::Interceptor) trait. This module adapts
 //! a *sandboxed component* as one: `bindgen!`s the `interceptor-world`,
 //! instantiates a guest, satisfies its five imports (`host-log`, `host-config`,
 //! `host-event`, `host-storage`, `llm-provider`), and maps host-side loop-state
@@ -13,7 +13,7 @@
 //! `host-http`. `host-event` is observation-only (logs; no in-loop subscriber
 //! yet).
 
-use jan_klod_protocol::turn;
+use jk_protocol::turn;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -24,10 +24,10 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 use crate::host::ConfigSection;
 // `Store` is wasmtime's here, so the core's persistent store needs a distinct name.
 use crate::CoreError;
-use jan_klod_protocol::intercept::{
+use jk_protocol::intercept::{
     BlockReason, Decision, HookState, InterceptInput, Interceptor, InterceptorError, Phase,
 };
-use jan_klod_protocol::turn::UserPrompt;
+use jk_protocol::turn::UserPrompt;
 
 // Generated Component-Model bindings for the interceptor world; lint exemptions
 // scoped to the macro output.
@@ -71,8 +71,7 @@ use surface_bind::exports::jan_klod::interfaces::client_surface as g_surface;
 ///
 /// Injected so the tier runs offline in tests; `Runtime::build_agent` backs it
 /// with a real provider instance.
-pub type ProviderFn =
-    Box<dyn Fn(&jan_klod_protocol::intercept::PendingRequest) -> String + Send + Sync>;
+pub type ProviderFn = Box<dyn Fn(&jk_protocol::intercept::PendingRequest) -> String + Send + Sync>;
 
 /// Host state for one interceptor guest.
 struct InterceptorHost {
@@ -217,9 +216,9 @@ const fn fault(err: &crate::guest_storage::StorageFault) -> g_storage::StoreErro
 /// interceptor actually asked for.
 fn to_pending_request(
     request: &g_llm::CompletionRequest,
-) -> jan_klod_protocol::intercept::PendingRequest {
-    use jan_klod_protocol::intercept::PendingRequest;
-    use jan_klod_protocol::turn::{Message, Role};
+) -> jk_protocol::intercept::PendingRequest {
+    use jk_protocol::intercept::PendingRequest;
+    use jk_protocol::turn::{Message, Role};
     PendingRequest {
         model: Some(request.model.clone()).filter(|m| !m.is_empty()),
         messages: request
@@ -414,7 +413,7 @@ impl Interceptor for WasmInterceptor {
     /// decision: a guest that cannot say what it offers should cost a client
     /// its menu entry, never its turn — the opposite of the fail-closed policy
     /// `tool-call` runs under.
-    fn contributions(&mut self) -> Option<jan_klod_protocol::contributions::Contributions> {
+    fn contributions(&mut self) -> Option<jk_protocol::contributions::Contributions> {
         let surface = self.surface.as_ref()?;
         match surface
             .jan_klod_interfaces_client_surface()
@@ -434,15 +433,13 @@ impl Interceptor for WasmInterceptor {
     fn invoke_contribution(
         &mut self,
         name: &str,
-        arguments: &[jan_klod_protocol::contributions::ArgumentValue],
-    ) -> Result<
-        jan_klod_protocol::contributions::InvokeOutcome,
-        jan_klod_protocol::contributions::InvokeError,
-    > {
+        arguments: &[jk_protocol::contributions::ArgumentValue],
+    ) -> Result<jk_protocol::contributions::InvokeOutcome, jk_protocol::contributions::InvokeError>
+    {
         let surface = self
             .surface
             .as_ref()
-            .ok_or(jan_klod_protocol::contributions::InvokeError::Unknown)?;
+            .ok_or(jk_protocol::contributions::InvokeError::Unknown)?;
         let gen_arguments: Vec<g_surface::ArgumentValue> = arguments
             .iter()
             .map(|argument| g_surface::ArgumentValue {
@@ -457,21 +454,21 @@ impl Interceptor for WasmInterceptor {
         ) {
             // A trap is the extension failing, not the client asking wrongly,
             // so it is reported as such rather than as an unknown name.
-            Err(error) => Err(jan_klod_protocol::contributions::InvokeError::Failed(
+            Err(error) => Err(jk_protocol::contributions::InvokeError::Failed(
                 error.to_string(),
             )),
             Ok(Err(g_surface::InvokeError::Unknown)) => {
-                Err(jan_klod_protocol::contributions::InvokeError::Unknown)
+                Err(jk_protocol::contributions::InvokeError::Unknown)
             }
             Ok(Err(g_surface::InvokeError::InvalidArguments)) => {
-                Err(jan_klod_protocol::contributions::InvokeError::InvalidArguments)
+                Err(jk_protocol::contributions::InvokeError::InvalidArguments)
             }
             Ok(Err(g_surface::InvokeError::Failed)) => {
-                Err(jan_klod_protocol::contributions::InvokeError::Failed(
+                Err(jk_protocol::contributions::InvokeError::Failed(
                     "the extension refused it".to_owned(),
                 ))
             }
-            Ok(Ok(outcome)) => Ok(jan_klod_protocol::contributions::InvokeOutcome {
+            Ok(Ok(outcome)) => Ok(jk_protocol::contributions::InvokeOutcome {
                 text: outcome.text,
                 contributions_changed: outcome.contributions_changed,
             }),
@@ -607,7 +604,7 @@ fn from_gen_message(m: g_types::Message) -> turn::Message {
     }
 }
 
-fn to_gen_tool(t: &jan_klod_protocol::intercept::ToolDefinition) -> g_types::ToolDefinition {
+fn to_gen_tool(t: &jk_protocol::intercept::ToolDefinition) -> g_types::ToolDefinition {
     g_types::ToolDefinition {
         name: t.name.clone(),
         description: t.description.clone(),
@@ -615,8 +612,8 @@ fn to_gen_tool(t: &jan_klod_protocol::intercept::ToolDefinition) -> g_types::Too
     }
 }
 
-fn from_gen_tool(t: g_types::ToolDefinition) -> jan_klod_protocol::intercept::ToolDefinition {
-    jan_klod_protocol::intercept::ToolDefinition {
+fn from_gen_tool(t: g_types::ToolDefinition) -> jk_protocol::intercept::ToolDefinition {
+    jk_protocol::intercept::ToolDefinition {
         name: t.name,
         description: t.description,
         parameters_schema: t.parameters_schema,
@@ -639,7 +636,7 @@ fn from_gen_call(c: g_types::ToolCall) -> turn::ToolCall {
     }
 }
 
-fn to_gen_request(r: &jan_klod_protocol::intercept::PendingRequest) -> g_icept::PendingRequest {
+fn to_gen_request(r: &jk_protocol::intercept::PendingRequest) -> g_icept::PendingRequest {
     g_icept::PendingRequest {
         model: r.model.clone(),
         messages: r.messages.iter().map(to_gen_message).collect(),
@@ -650,8 +647,8 @@ fn to_gen_request(r: &jan_klod_protocol::intercept::PendingRequest) -> g_icept::
     }
 }
 
-fn from_gen_request(r: g_icept::PendingRequest) -> jan_klod_protocol::intercept::PendingRequest {
-    jan_klod_protocol::intercept::PendingRequest {
+fn from_gen_request(r: g_icept::PendingRequest) -> jk_protocol::intercept::PendingRequest {
+    jk_protocol::intercept::PendingRequest {
         model: r.model,
         messages: r.messages.into_iter().map(from_gen_message).collect(),
         tools: r.tools.into_iter().map(from_gen_tool).collect(),
@@ -692,7 +689,7 @@ fn to_gen_state(state: &HookState) -> g_icept::HookState {
 fn from_gen_state(state: g_icept::HookState) -> HookState {
     match state {
         g_icept::HookState::BeforeLoop(t) => {
-            HookState::BeforeLoop(jan_klod_protocol::intercept::UserTurn {
+            HookState::BeforeLoop(jk_protocol::intercept::UserTurn {
                 session: t.session,
                 user_message: t.user_message,
                 principal: t.principal,
@@ -702,7 +699,7 @@ fn from_gen_state(state: g_icept::HookState) -> HookState {
         g_icept::HookState::SelectContext(r) => HookState::SelectContext(from_gen_request(r)),
         g_icept::HookState::SelectTools(r) => HookState::SelectTools(from_gen_request(r)),
         g_icept::HookState::AfterResponse(r) => {
-            HookState::AfterResponse(jan_klod_protocol::intercept::RawResponse {
+            HookState::AfterResponse(jk_protocol::intercept::RawResponse {
                 text: r.text,
                 finish_reason: r.finish_reason,
             })
@@ -718,7 +715,7 @@ fn from_gen_state(state: g_icept::HookState) -> HookState {
             failed: false,
         }),
         g_icept::HookState::Finalize(a) => {
-            HookState::Finalize(jan_klod_protocol::intercept::FinalAnswer { text: a.text })
+            HookState::Finalize(jk_protocol::intercept::FinalAnswer { text: a.text })
         }
         g_icept::HookState::PrepareNextTurn(r) => HookState::PrepareNextTurn(from_gen_request(r)),
     }
@@ -755,20 +752,20 @@ const fn from_gen_error(err: g_icept::InterceptorError) -> InterceptorError {
 fn from_gen_contributions(
     extension: &str,
     declared: g_surface::Contributions,
-) -> jan_klod_protocol::contributions::Contributions {
-    jan_klod_protocol::contributions::Contributions {
+) -> jk_protocol::contributions::Contributions {
+    jk_protocol::contributions::Contributions {
         extension: extension.to_owned(),
         commands: declared
             .commands
             .into_iter()
-            .map(|command| jan_klod_protocol::contributions::Command {
+            .map(|command| jk_protocol::contributions::Command {
                 name: command.name,
                 title: command.title,
                 description: command.description,
                 arguments: command
                     .arguments
                     .into_iter()
-                    .map(|argument| jan_klod_protocol::contributions::Argument {
+                    .map(|argument| jk_protocol::contributions::Argument {
                         name: argument.name,
                         description: argument.description,
                         required: argument.required,
@@ -779,7 +776,7 @@ fn from_gen_contributions(
         status_items: declared
             .status_items
             .into_iter()
-            .map(|item| jan_klod_protocol::contributions::StatusItem {
+            .map(|item| jk_protocol::contributions::StatusItem {
                 name: item.name,
                 text: item.text,
                 detail: item.detail,
@@ -788,13 +785,13 @@ fn from_gen_contributions(
         forms: declared
             .forms
             .into_iter()
-            .map(|form| jan_klod_protocol::contributions::Form {
+            .map(|form| jk_protocol::contributions::Form {
                 name: form.name,
                 title: form.title,
                 fields: form
                     .fields
                     .into_iter()
-                    .map(|field| jan_klod_protocol::contributions::Field {
+                    .map(|field| jk_protocol::contributions::Field {
                         name: field.name,
                         label: field.label,
                         options: field.options,
@@ -809,8 +806,8 @@ fn from_gen_contributions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jan_klod_protocol::intercept::{Dispatcher, HookState, Outcome, PendingRequest, UserTurn};
-    use jan_klod_protocol::turn::{Driver, Message, Role};
+    use jk_protocol::intercept::{Dispatcher, HookState, Outcome, PendingRequest, UserTurn};
+    use jk_protocol::turn::{Driver, Message, Role};
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -931,7 +928,7 @@ mod tests {
     }
 
     fn tool_call(name: &str) -> HookState {
-        HookState::ToolCall(jan_klod_protocol::turn::ToolCall {
+        HookState::ToolCall(jk_protocol::turn::ToolCall {
             id: "1".into(),
             name: name.into(),
             arguments: "{}".into(),
@@ -988,7 +985,7 @@ mod tests {
     }
 
     fn tool_call_with(name: &str, arguments: &str) -> HookState {
-        HookState::ToolCall(jan_klod_protocol::turn::ToolCall {
+        HookState::ToolCall(jk_protocol::turn::ToolCall {
             id: "1".into(),
             name: name.into(),
             arguments: arguments.into(),
@@ -1201,7 +1198,7 @@ mod tests {
     }
 
     fn select_tools() -> HookState {
-        HookState::SelectTools(jan_klod_protocol::intercept::PendingRequest {
+        HookState::SelectTools(jk_protocol::intercept::PendingRequest {
             model: Some("m".into()),
             messages: vec![],
             tools: vec![],
@@ -1503,7 +1500,7 @@ mod tests {
         // The router constrains its classifier to two labels. A seam that passed
         // only the last user message would drop that grammar, and the "classifier"
         // would become free-form generation the guest then has to parse.
-        let seen: Arc<Mutex<Option<jan_klod_protocol::intercept::PendingRequest>>> =
+        let seen: Arc<Mutex<Option<jk_protocol::intercept::PendingRequest>>> =
             Arc::new(Mutex::new(None));
         let captured = Arc::clone(&seen);
         let Some((_engine, router)) = load_intent_router(Box::new(move |request| {

@@ -11,15 +11,15 @@ use std::cell::RefCell;
 use std::io::{BufRead, Write};
 use std::rc::Rc;
 
-use jan_klod_protocol::jsonrpc;
+use jk_protocol::jsonrpc;
 
 use std::sync::mpsc::Receiver;
 
 use jk_agent::conductor::RunResult;
 
-use jan_klod_protocol::turn::{Driver, UserPrompt};
-use jan_klod_protocol::turn::{Event, EventSink, Flow};
 use jk_agent::AgentSession;
+use jk_protocol::turn::{Driver, UserPrompt};
+use jk_protocol::turn::{Event, EventSink, Flow};
 
 /// ACP protocol version (integer, not date like MCP).
 pub const ACP_VERSION: i64 = 1;
@@ -577,7 +577,7 @@ fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::i
 #[cfg(test)]
 mod tests {
     use super::{Asker, Connection, PipeAsker, Rc, RefCell, Routed, UserPrompt, ACP_VERSION};
-    use jan_klod_protocol::jsonrpc;
+    use jk_protocol::jsonrpc;
 
     /// Everything except `session/prompt` is answered without touching the
     /// agent, so these tests pass no runtime at all — the reason `answer` takes

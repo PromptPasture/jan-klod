@@ -1,7 +1,7 @@
 //! The WebAssembly boundary (#181): the minimal container that turns a
 //! `config.yaml` into a set of sandboxed extension components.
 //!
-//! The flow is: load config ([`jan_klod_config`]) → build a host [`Linker`] that
+//! The flow is: load config ([`jk_config`]) → build a host [`Linker`] that
 //! grants the Component-Model capabilities (`host-log`, `host-config`,
 //! `host-http`) → resolve each enabled instance's `ext/<component>.wasm` and
 //! compile it → drive the universal `extension-lifecycle` (`init` → `start`).
@@ -36,7 +36,7 @@ pub mod sandbox_seatbelt;
 pub mod tool_host;
 mod wasm_cache;
 
-use jan_klod_protocol::turn;
+use jk_protocol::turn;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ use wasmtime::{Engine, Store};
 
 use bindings::jan_klod::interfaces::{host_config, host_http, host_log, host_secrets};
 use bindings::ExtensionWorld;
-use jan_klod_config::{Config, ExtensionInstance};
+use jk_config::{Config, ExtensionInstance};
 
 pub use host::{ConfigSection, HostState};
 
@@ -310,7 +310,7 @@ pub struct Runtime {
 /// instance — compiled, but not yet instantiated (#59; see
 /// [`tool_host::LazyToolFleet`]).
 struct ProvidersAndTools {
-    providers: Vec<Box<dyn jan_klod_protocol::intercept::Completer>>,
+    providers: Vec<Box<dyn jk_protocol::intercept::Completer>>,
     provider_ids: Vec<String>,
     tool_fleet: tool_host::LazyToolFleet,
     registry_fleet: registry_host::LazyRegistryFleet,
@@ -320,9 +320,9 @@ struct ProvidersAndTools {
 pub struct Instantiated {
     /// Every enabled interceptor, in boot/load order — the order the
     /// dispatcher consults them.
-    pub interceptors: Vec<Box<dyn jan_klod_protocol::intercept::Interceptor>>,
+    pub interceptors: Vec<Box<dyn jk_protocol::intercept::Interceptor>>,
     /// The provider fallback chain, in the order `providers:` configures.
-    pub providers: Vec<Box<dyn jan_klod_protocol::intercept::Completer>>,
+    pub providers: Vec<Box<dyn jk_protocol::intercept::Completer>>,
     /// The tool, registry and host-native fleet, lazily instantiated (#59).
     pub tools: CombinedFleet,
 }
@@ -919,7 +919,7 @@ impl Runtime {
         process: &host_process::ProcessRunner,
         storage: &dyn Fn() -> Arc<dyn guest_storage::Entries>,
     ) -> Result<ProvidersAndTools, CoreError> {
-        let mut providers: Vec<Box<dyn jan_klod_protocol::intercept::Completer>> = Vec::new();
+        let mut providers: Vec<Box<dyn jk_protocol::intercept::Completer>> = Vec::new();
         // Instance ids, parallel to `providers`, so the configured chain can be
         // matched by name without downcasting a `dyn Completer`.
         let mut provider_ids: Vec<String> = Vec::new();
@@ -1019,8 +1019,8 @@ impl Runtime {
         project_instructions: Option<&str>,
         classifier: Option<&std::sync::Arc<std::sync::Mutex<route::ProviderCompleter>>>,
         storage: &dyn Fn() -> Arc<dyn guest_storage::Entries>,
-    ) -> Result<Vec<Box<dyn jan_klod_protocol::intercept::Interceptor>>, CoreError> {
-        let mut interceptors: Vec<Box<dyn jan_klod_protocol::intercept::Interceptor>> = Vec::new();
+    ) -> Result<Vec<Box<dyn jk_protocol::intercept::Interceptor>>, CoreError> {
+        let mut interceptors: Vec<Box<dyn jk_protocol::intercept::Interceptor>> = Vec::new();
         for ext in &self.extensions {
             let LoadState::Compiled(component) = &ext.state else {
                 continue;
@@ -1362,7 +1362,7 @@ impl Runtime {
     }
 }
 
-/// Combined tool + registry fleet implementing [`jan_klod_protocol::intercept::ToolInvoker`].
+/// Combined tool + registry fleet implementing [`jk_protocol::intercept::ToolInvoker`].
 ///
 /// Dispatches first to the `tool-*` fleet, then to the registry fleet (skills + MCP).
 /// Both are lazy (#59): a fleet with nothing pending or live costs nothing until
@@ -1384,11 +1384,8 @@ impl CombinedFleet {
     }
 }
 
-impl jan_klod_protocol::intercept::ToolInvoker for CombinedFleet {
-    fn invoke(
-        &mut self,
-        call: &turn::ToolCall,
-    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
+impl jk_protocol::intercept::ToolInvoker for CombinedFleet {
+    fn invoke(&mut self, call: &turn::ToolCall) -> Option<jk_protocol::intercept::ToolInvocation> {
         self.tools
             .invoke(call)
             .or_else(|| self.registry.invoke(call))
@@ -1398,7 +1395,7 @@ impl jan_klod_protocol::intercept::ToolInvoker for CombinedFleet {
         &mut self,
         call: &turn::ToolCall,
         driver: &mut dyn turn::Driver,
-    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
+    ) -> Option<jk_protocol::intercept::ToolInvocation> {
         // Tools may ask; registries and the host's own tools do not, so they
         // keep the default. Order matches `invoke`, or a name would resolve
         // differently depending on whether a driver was in play.
@@ -1474,7 +1471,7 @@ impl CombinedFleet {
 fn classifier_fn(
     classifier: Option<std::sync::Arc<std::sync::Mutex<route::ProviderCompleter>>>,
 ) -> interceptor_host::ProviderFn {
-    use jan_klod_protocol::intercept::Completer;
+    use jk_protocol::intercept::Completer;
     let Some(classifier) = classifier else {
         return Box::new(|_request| "agentic".to_string());
     };
@@ -1605,7 +1602,7 @@ impl fmt::Display for BootReport<'_> {
 pub enum CoreError {
     /// Loading or parsing `config.yaml` failed.
     #[error(transparent)]
-    Config(#[from] jan_klod_config::ConfigError),
+    Config(#[from] jk_config::ConfigError),
     /// A component installed after boot could not be adopted (#214).
     #[error("cannot adopt `{stem}`: {reason}")]
     Adopt {

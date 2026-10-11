@@ -12,7 +12,7 @@ publish.workspace = true
 # The shared turn vocabulary. This crate encodes an `Event` and rebuilds a
 # transcript out of `Message`s, and naming them from the loop's crate instead
 # would be the dependency cycle this slice exists to avoid.
-jan-klod-protocol = { path = "../protocol" }
+jk-protocol = { path = "../protocol" }
 serde_json.workspace = true
 thiserror.workspace = true
 # `bundled` compiles SQLite from source so there is no system-lib dependency;

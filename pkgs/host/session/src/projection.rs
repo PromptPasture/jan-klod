@@ -49,7 +49,7 @@
 
 use crate::event_log::{decode_record, Record, KIND_USER_MESSAGE};
 use crate::store::LoggedEvent;
-use jan_klod_protocol::turn::{Message, Role};
+use jk_protocol::turn::{Message, Role};
 
 /// The conversation a session's log describes, oldest first.
 ///
@@ -115,10 +115,10 @@ pub fn last_turns(events: &[LoggedEvent], turns: u32) -> &[LoggedEvent] {
 
 /// The message one record contributes, or `None` when it contributes nothing.
 ///
-/// Exhaustive over [`Record`] and [`jan_klod_protocol::turn::Event`] with no wildcard,
+/// Exhaustive over [`Record`] and [`jk_protocol::turn::Event`] with no wildcard,
 /// so new kinds cannot be silently dropped—the decision must be written here.
 fn message_for(record: Record) -> Option<Message> {
-    use jan_klod_protocol::turn::Event;
+    use jk_protocol::turn::Event;
     match record {
         Record::UserMessage(content) | Record::FollowUp(content) => Some(Message {
             role: Role::User,
@@ -150,7 +150,7 @@ fn message_for(record: Record) -> Option<Message> {
 mod tests {
     use super::*;
     use crate::event_log::{encode, envelope, KIND_ANSWER, KIND_ASK, KIND_USER_MESSAGE};
-    use jan_klod_protocol::turn::{Event, ToolCall, ToolOutcome};
+    use jk_protocol::turn::{Event, ToolCall, ToolOutcome};
     use serde_json::json;
 
     /// Builds rows as the store does; tests never depend on `seq` beyond row order.
@@ -398,7 +398,7 @@ mod tests {
 mod bound_tests {
     use super::*;
     use crate::event_log::{encode, envelope};
-    use jan_klod_protocol::turn::{Event, ToolOutcome};
+    use jk_protocol::turn::{Event, ToolOutcome};
     use serde_json::json;
 
     /// Each turn is user message, tool result, answer—three rows; a row-based

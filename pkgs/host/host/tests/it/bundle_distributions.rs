@@ -113,7 +113,7 @@ fn every_distribution_boots_with_its_own_config() {
         // `tool-fs` from its guest list, boot green, and hand a user an install
         // where the tool they came for silently does not exist. The guest list
         // and the config have to agree, and only this checks it.
-        let parsed = jan_klod_config::Config::from_path(&config)
+        let parsed = jk_config::Config::from_path(&config)
             .unwrap_or_else(|err| panic!("distribution `{name}`'s config parses: {err}"));
         let missing: Vec<String> = parsed
             .instances

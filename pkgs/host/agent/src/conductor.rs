@@ -12,17 +12,17 @@
 //! state machine is unit-tested with stubs.
 //!
 //! What a turn *emits* — [`Event`], [`Flow`], [`EventSink`] — now lives in
-//! [`jan_klod_protocol::turn`] beside the rest of the turn vocabulary,
+//! [`jk_protocol::turn`] beside the rest of the turn vocabulary,
 //! because the event log encodes an `Event` and sits below this crate (#180).
 
-use jan_klod_protocol::turn::{Event, EventSink, Flow};
+use jk_protocol::turn::{Event, EventSink, Flow};
 
-use jan_klod_protocol::intercept::{
+use jk_protocol::intercept::{
     Completer, Completion, Dispatcher, FinalAnswer, HookState, Outcome, PendingRequest, Phase,
     RawResponse, ToolInvocation, ToolInvoker, UserTurn,
 };
 
-use jan_klod_protocol::turn::{Driver, Message, Role, ToolCall, ToolOutcome};
+use jk_protocol::turn::{Driver, Message, Role, ToolCall, ToolOutcome};
 
 /// Default cap on `ReAct` iterations to prevent infinite tool-call loops.
 /// Eight covers a real coding cycle; raise via `limits.max-iterations`.
@@ -549,10 +549,10 @@ fn validate(completion: &Completion) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jan_klod_protocol::intercept::{
+    use jk_protocol::intercept::{
         BlockReason, Decision, InterceptInput, Interceptor, InterceptorError, NoTools, TRUNCATED,
     };
-    use jan_klod_protocol::turn::UserPrompt;
+    use jk_protocol::turn::UserPrompt;
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;

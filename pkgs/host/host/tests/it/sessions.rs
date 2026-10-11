@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use jan_klod_host::sessions::{Agents, Factory};
 use jk_agent::{AgentSession, Runtime};
+use jk_host::sessions::{Agents, Factory};
 
 use crate::common;
 
@@ -141,7 +141,7 @@ fn one_agent_makes_the_same_two_turns_wait() {
     };
     let calls = Arc::new(AtomicU32::new(0));
     let factory = paced_factory(&calls);
-    let (jobs, queued) = jan_klod_host::session_thread::queue::<AgentSession>();
+    let (jobs, queued) = jk_host::session_thread::queue::<AgentSession>();
 
     let fast_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let slow_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
@@ -169,7 +169,7 @@ fn one_agent_makes_the_same_two_turns_wait() {
         let mut agent = runtime
             .build_agent(&*factory)
             .expect("the single agent boots");
-        jan_klod_host::session_thread::serve(&mut agent, &queued);
+        jk_host::session_thread::serve(&mut agent, &queued);
     });
 
     let slow = slow_at.lock().expect("not poisoned").expect("slow ran");

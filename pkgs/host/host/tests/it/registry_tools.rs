@@ -11,8 +11,8 @@
 
 use std::fmt::Write as _;
 
-use jan_klod_protocol::intercept::ToolInvoker;
-use jan_klod_protocol::turn::ToolCall;
+use jk_protocol::intercept::ToolInvoker;
+use jk_protocol::turn::ToolCall;
 use jk_wasm::native_tools::NativeTools;
 
 use crate::common;

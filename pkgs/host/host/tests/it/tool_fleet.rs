@@ -1,8 +1,8 @@
 //! Tool dispatch via `ToolFleet`: dispatch `ToolCall` by name, unknown tools
 //! return `None`. Skips when guests not staged.
 
-use jan_klod_protocol::intercept::ToolInvoker;
-use jan_klod_protocol::turn::ToolCall;
+use jk_protocol::intercept::ToolInvoker;
+use jk_protocol::turn::ToolCall;
 use jk_wasm::host_fs::Workspace;
 use jk_wasm::host_process::ProcessRunner;
 use jk_wasm::tool_host::{ToolExtension, ToolFleet};

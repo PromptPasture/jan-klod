@@ -2,7 +2,7 @@
 
 The WebAssembly boundary: loads a `config.yaml`, builds a Wasmtime linker that grants each extension only the capabilities it declares, compiles the enabled components from `ext/`, and adapts them to the traits the loop consumes. It also holds the capability hosts (`host-fs`, `host-process`, `host-http`), the effect sandbox, and the `ext` install path. The only crate in the tree that names `wasmtime`.
 
-Used by [`jk-agent`](../agent) and [`jan-klod-host`](../host). Depends on [`jan-klod-config`](../config) and [`jan-klod-protocol`](../protocol).
+Used by [`jk-agent`](../agent) and [`jk-host`](../host). Depends on [`jk-config`](../config) and [`jk-protocol`](../protocol).
 
 ```sh
 cargo test -p jk-wasm

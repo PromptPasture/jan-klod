@@ -69,11 +69,11 @@ Core grants these capabilities to every extension.
 | `host-event.wit` | `host-event` | Event bus publish/subscribe — **observation-only** (fire-and-forget); cannot shape the loop |
 | `host-storage.wit` | `host-storage` | Namespaced view of the core's own store. **Granted** (`persist: true`), never ambient; namespaces are prefixed with the calling component's id |
 | `host-secrets.wit` | `host-secrets` | Named secrets from the configured backend (e.g. environment variables). **Granted** (`secrets: true`), default-deny; no enumeration or listing, read-only by name |
-| `host-agent.wit` | `host-agent` | Drive a session from inside the sandbox — the inward twin of `jan-klod-protocol` (create/list/read/fork a session, send a message, answer a prompt). Default-deny, manifest-declared *(Phase 22, drafted ahead of a host implementation)* |
+| `host-agent.wit` | `host-agent` | Drive a session from inside the sandbox — the inward twin of `jk-protocol` (create/list/read/fork a session, send a message, answer a prompt). Default-deny, manifest-declared *(Phase 22, drafted ahead of a host implementation)* |
 
 Interceptor dispatch isn't in this table: it's a core-native call of `interceptor` (above), not a capability.
 
-There is no `host-serve`/`host-socket` pair and no `api-*`/`chat-*` extension family — that design was superseded. The built inbound surface (REST + SSE, stdio JSON-RPC, WebSocket) is host-side code in `jan-klod-host`, not something a sandboxed guest holds; Telegram is likewise kernel code today, which is exactly the gap `host-agent` (Phase 22) is meant to close.
+There is no `host-serve`/`host-socket` pair and no `api-*`/`chat-*` extension family — that design was superseded. The built inbound surface (REST + SSE, stdio JSON-RPC, WebSocket) is host-side code in `jk-host`, not something a sandboxed guest holds; Telegram is likewise kernel code today, which is exactly the gap `host-agent` (Phase 22) is meant to close.
 
 ## Streaming
 
@@ -166,7 +166,7 @@ interface extension-lifecycle {
 
 There is **no WIT UI contract.** UIs are not extensions and run in their own processes; they reach core the same way any external client does — over the core's host-side client surface. Today that surface is the REST + SSE API; it is built into the core binary since Phase 3.
 
-**Phase 13 — the client protocol is a contract of the same rank as WIT.** The `jan-klod-protocol` crate (`pkgs/host/protocol`) holds the typed commands and notifications, `PROTOCOL_VERSION`, and a JSON Schema export in [`schema/protocol.schema.json`](../../pkgs/host/protocol/schema/protocol.schema.json) — which is what a non-Rust client generates its types from.
+**Phase 13 — the client protocol is a contract of the same rank as WIT.** The `jk-protocol` crate (`pkgs/host/protocol`) holds the typed commands and notifications, `PROTOCOL_VERSION`, and a JSON Schema export in [`schema/protocol.schema.json`](../../pkgs/host/protocol/schema/protocol.schema.json) — which is what a non-Rust client generates its types from.
 
 ### Transports
 

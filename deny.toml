@@ -97,7 +97,7 @@ exceptions = [
 # Duplicate transitive versions are noise, not a security failure, in a young tree
 # — surface them without breaking the build. Wildcard version requirements are
 # forbidden: they defeat the locked-build guarantee — but only for registry crates.
-# Intra-workspace path deps (jk-agent, jan-klod-config, …) carry no version and so read as
+# Intra-workspace path deps (jk-agent, jk-config, …) carry no version and so read as
 # `*`; they resolve from the filesystem, not a registry, so a wildcard there is
 # harmless and expected for unpublished crates.
 multiple-versions = "warn"

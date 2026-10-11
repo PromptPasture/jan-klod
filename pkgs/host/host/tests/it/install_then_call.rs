@@ -195,7 +195,7 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
 
     let runtime = Runtime::boot(&config, &ext).expect("the runtime boots");
     let factory = provider(&script);
-    let agents = jan_klod_host::sessions::Agents::new(runtime, Arc::new(factory));
+    let agents = jk_host::sessions::Agents::new(runtime, Arc::new(factory));
 
     // The seam is no longer this test's to drive (#231). It runs inside
     // the session's thread, between one turn and the next, for every
@@ -308,7 +308,7 @@ fn a_session_that_installed_nothing_can_call_what_another_installed() {
 
     let runtime = Runtime::boot(&config, &ext).expect("the runtime boots");
     let factory = provider(&script);
-    let agents = jan_klod_host::sessions::Agents::new(runtime, Arc::new(factory));
+    let agents = jk_host::sessions::Agents::new(runtime, Arc::new(factory));
 
     // A installs. The adoption happens inside A's session thread, after
     // its turn, with no help from this test.

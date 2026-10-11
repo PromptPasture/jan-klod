@@ -5,7 +5,7 @@
 // bindgen!-generated code; exempt from workspace lints
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
-use jan_klod_config::Config;
+use jk_config::Config;
 use serde_json::Value;
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Result, Store};

@@ -49,7 +49,7 @@ jan-klod-gui --url <url> [--title <title>]
 
 `jan-klod --gui` handles it: `ensure_gateway` (spawn-or-attach, in `pkgs/clients/tui`), then launch with answering URL. Second spawn-or-attach risks finding different gateway—the bug the split avoids.
 
-Found like the gateway: **sibling executable, then `PATH`** (`jan_klod::sibling_bin`). Release bundles satisfy this (three binaries side-by-side); dev trees don't (two workspaces). `make gui` staging fixes this (vs. a checkout-only lookup rule).
+Found like the gateway: **sibling executable, then `PATH`** (`jk_tui::sibling_bin`). Release bundles satisfy this (three binaries side-by-side); dev trees don't (two workspaces). `make gui` staging fixes this (vs. a checkout-only lookup rule).
 
 ## The one thing here that is not a window
 

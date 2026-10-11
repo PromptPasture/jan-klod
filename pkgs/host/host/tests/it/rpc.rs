@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 // Client transport trait (same API as jan-klod binary).
-use jan_klod_client::transport::Transport as _;
-use jan_klod_host::rpc;
-use jan_klod_protocol::{jsonrpc, PROTOCOL_VERSION};
 use jk_agent::Runtime;
+use jk_host::rpc;
+use jk_protocol::{jsonrpc, PROTOCOL_VERSION};
+use jk_tui::transport::Transport as _;
 use jk_wasm::http::WireResponse;
 use jk_wasm::route::HttpFn;
 
@@ -463,7 +463,7 @@ fn a_client_can_fork_at_a_seq_it_read_from_session_get() {
     // type exists so non-Rust clients can generate from the schema, and a type
     // nobody parses the real bytes with is exactly how the two drift — which is
     // the shape of defect this file keeps finding.
-    let typed: jan_klod_protocol::SessionGetResult = serde_json::from_value(transcript.clone())
+    let typed: jk_protocol::SessionGetResult = serde_json::from_value(transcript.clone())
         .unwrap_or_else(|e| panic!("session/get must match SessionGetResult: {e}: {transcript}"));
     assert_eq!(typed.id, "fork-src");
 
@@ -847,13 +847,13 @@ extensions:
     // `spawn_from` returning `Ok` *is* the handshake: it sends
     // `protocol/hello`, reads the answer and compares versions before handing
     // the transport back.
-    let transport = jan_klod_client::transport::Stdio::spawn_from(
+    let transport = jk_tui::transport::Stdio::spawn_from(
         std::path::Path::new(env!("CARGO_BIN_EXE_jan-klod-gateway")),
         &[
             config.to_str().expect("utf-8 path"),
             ext.to_str().expect("utf-8 path"),
         ],
-        jan_klod_client::transport::Logs::Discard,
+        jk_tui::transport::Logs::Discard,
     )
     .expect("the client spawns the gateway and negotiates a protocol version");
 
@@ -878,7 +878,7 @@ extensions:
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, jan_klod_client::StreamEvent::Warning(_))),
+                .any(|event| matches!(event, jk_tui::StreamEvent::Warning(_))),
             "attempt {attempt}: the fallback warnings streamed to the client: {events:?}"
         );
     }

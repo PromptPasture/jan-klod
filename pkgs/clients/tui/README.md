@@ -1,12 +1,12 @@
 # `pkgs/clients/tui` — the terminal client
 
-The client you type into. **Separate process** (not extension): spawns `jan-klod-gateway rpc` and speaks newline-delimited JSON-RPC over pipes, or drives an existing gateway. Depends only on `jan-klod-protocol` wire contract (serde only, by design).
+The client you type into. **Separate process** (not extension): spawns `jan-klod-gateway rpc` and speaks newline-delimited JSON-RPC over pipes, or drives an existing gateway. Depends only on `jk-protocol` wire contract (serde only, by design).
 
 ## Dependencies, and why each one is here
 
 | Crate | Why |
 |---|---|
-| `jan-klod-protocol` | The wire contract. Serde-only by design (#41), which is what lets a client depend on it without pulling in the core or Wasmtime. |
+| `jk-protocol` | The wire contract. Serde-only by design (#41), which is what lets a client depend on it without pulling in the core or Wasmtime. |
 | `serde_json` | The framing on both transports. |
 | `ratatui` 0.30 | The terminal UI, for the `tui` mode only. Bundles the crossterm backend and event types, used via `ratatui::crossterm`. The pure `App` model in `app.rs` needs none of it and is unit-tested without a terminal. |
 | `tiny_http` *(dev)* | The round-trip test stands up a canned HTTP server to drive the client against. |

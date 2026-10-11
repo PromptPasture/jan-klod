@@ -1433,21 +1433,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "jan-klod"
+name = "jk-agent"
 version = "0.1.0"
 dependencies = [
- "ignore",
- "jan-klod-protocol",
- "pulldown-cmark",
- "ratatui",
+ "jk-protocol",
+ "jk-session",
+ "jk-wasm",
+ "rusqlite",
  "serde_json",
- "tiny_http",
- "unicode-segmentation",
- "unicode-width",
 ]
 
 [[package]]
-name = "jan-klod-config"
+name = "jk-config"
 version = "0.1.0"
 dependencies = [
  "serde_json",
@@ -1456,18 +1453,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "jan-klod-host"
+name = "jk-host"
 version = "0.1.0"
 dependencies = [
  "axum",
  "blake2",
  "futures-core",
  "futures-util",
- "jan-klod",
- "jan-klod-config",
- "jan-klod-protocol",
  "jk-agent",
+ "jk-config",
+ "jk-protocol",
  "jk-session",
+ "jk-tui",
  "jk-wasm",
  "ring",
  "rusqlite",
@@ -1484,7 +1481,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "jan-klod-protocol"
+name = "jk-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -1492,21 +1489,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "jk-agent"
-version = "0.1.0"
-dependencies = [
- "jan-klod-protocol",
- "jk-session",
- "jk-wasm",
- "rusqlite",
- "serde_json",
-]
-
-[[package]]
 name = "jk-session"
 version = "0.1.0"
 dependencies = [
- "jan-klod-protocol",
+ "jk-protocol",
  "rusqlite",
  "serde_json",
  "sha2",
@@ -1514,11 +1500,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "jk-tui"
+version = "0.1.0"
+dependencies = [
+ "ignore",
+ "jk-protocol",
+ "pulldown-cmark",
+ "ratatui",
+ "serde_json",
+ "tiny_http",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "jk-wasm"
 version = "0.1.0"
 dependencies = [
- "jan-klod-config",
- "jan-klod-protocol",
+ "jk-config",
+ "jk-protocol",
  "landlock",
  "minisign-verify",
  "serde",

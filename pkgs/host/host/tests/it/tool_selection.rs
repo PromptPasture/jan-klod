@@ -14,9 +14,9 @@
 //! so a reordered or rewritten distribution fails here instead of quietly
 //! measuring something nobody ships.
 
-use jan_klod_protocol::intercept::{Dispatcher, HookState, PendingRequest, Phase};
+use jk_protocol::intercept::{Dispatcher, HookState, PendingRequest, Phase};
 
-use jan_klod_protocol::turn::{Message, Role};
+use jk_protocol::turn::{Message, Role};
 use jk_wasm::interceptor_host::WasmInterceptor;
 use jk_wasm::ConfigSection;
 use wasmtime::component::Component;
@@ -27,8 +27,8 @@ use crate::self_extend::shipped_fleet;
 
 /// A driver that is never asked: `select-tools` has no question to put.
 struct NoDriver;
-impl jan_klod_protocol::turn::Driver for NoDriver {
-    fn ask(&mut self, _prompt: &jan_klod_protocol::turn::UserPrompt) -> String {
+impl jk_protocol::turn::Driver for NoDriver {
+    fn ask(&mut self, _prompt: &jk_protocol::turn::UserPrompt) -> String {
         unreachable!("select-tools does not ask")
     }
 }

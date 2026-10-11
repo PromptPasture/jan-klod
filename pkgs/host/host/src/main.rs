@@ -20,8 +20,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use jan_klod_config::Config;
 use jk_agent::Runtime;
+use jk_config::Config;
 use jk_session::event_log::{verify_chain, ChainStatus};
 use jk_session::store::Store;
 use jk_wasm::ext_index;
@@ -86,7 +86,7 @@ fn init_tracing(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Build and install the subscriber based on the configured output format.
     match config.observability.output_format {
-        jan_klod_config::OutputFormat::Json => {
+        jk_config::OutputFormat::Json => {
             // JSON output: newline-delimited JSON on stderr
             tracing_subscriber::fmt()
                 .json()
@@ -96,7 +96,7 @@ fn init_tracing(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
                 .with_target(true)
                 .init();
         }
-        jan_klod_config::OutputFormat::Human => {
+        jk_config::OutputFormat::Human => {
             // Human-readable text on stderr
             tracing_subscriber::fmt()
                 .pretty()
@@ -183,7 +183,7 @@ fn acp() -> ExitCode {
 
     let input = std::io::BufReader::new(std::io::stdin());
     let output = std::io::stdout();
-    match jan_klod_host::acp::serve(input, output, &mut agent) {
+    match jk_host::acp::serve(input, output, &mut agent) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("jan-klod: acp: {err}");
@@ -235,7 +235,7 @@ fn mcp() -> ExitCode {
 
     let input = std::io::BufReader::new(std::io::stdin());
     let mut output = std::io::stdout();
-    match jan_klod_host::mcp::serve(input, &mut output, &mut agent) {
+    match jk_host::mcp::serve(input, &mut output, &mut agent) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("jan-klod: mcp: {err}");
@@ -636,8 +636,8 @@ fn ask(args: &[String]) -> ExitCode {
 /// that write.
 struct TerminalDriver;
 
-impl jan_klod_protocol::turn::Driver for TerminalDriver {
-    fn ask(&mut self, prompt: &jan_klod_protocol::turn::UserPrompt) -> String {
+impl jk_protocol::turn::Driver for TerminalDriver {
+    fn ask(&mut self, prompt: &jk_protocol::turn::UserPrompt) -> String {
         // The question goes to stderr so `ask`'s stdout stays the answer and
         // nothing else — a script can pipe it without stripping prompts out.
         eprintln!("\n  ? {}", prompt.question);
@@ -1025,7 +1025,7 @@ fn rpc(args: &[String]) -> ExitCode {
     // reader to a thread so a mid-turn cancel can be read, and a `StdinLock`
     // holds a `MutexGuard`, which is not `Send`.
     let input = std::io::BufReader::new(std::io::stdin());
-    match jan_klod_host::rpc::serve(input, std::io::stdout(), &mut agent) {
+    match jk_host::rpc::serve(input, std::io::stdout(), &mut agent) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("jan-klod: rpc loop failed: {err}");
@@ -1097,7 +1097,7 @@ fn confine(_args: &[String]) -> ExitCode {
 /// is set, defaults to `operator: ${JAN_KLOD_TOKEN}`. If neither is present, returns an
 /// empty map (surface is unauthenticated).
 fn load_principals(config_path: &str) -> Result<std::collections::HashMap<String, String>, String> {
-    use jan_klod_config::Config;
+    use jk_config::Config;
 
     let config =
         Config::from_path(config_path).map_err(|e| format!("failed to load config: {e}"))?;
@@ -1181,9 +1181,9 @@ fn serve(args: &[String]) -> ExitCode {
     // One agent per session, built on first use (#229). Nothing is built
     // here: a gateway that boots with no clients has nothing to serve
     // yet, and the first request pays 3.5 ms for the session it names.
-    let agents = jan_klod_host::sessions::Agents::new(runtime, std::sync::Arc::new(factory));
+    let agents = jk_host::sessions::Agents::new(runtime, std::sync::Arc::new(factory));
 
-    let surface = match jan_klod_host::serve::Surface::bind(&bind) {
+    let surface = match jk_host::serve::Surface::bind(&bind) {
         Ok(surface) => surface,
         Err(err) => {
             eprintln!("jan-klod: cannot bind {bind}: {err}");
@@ -1300,7 +1300,7 @@ fn telegram(args: &[String]) -> ExitCode {
     let mut offset = 0;
     let mut consecutive_errors: u32 = 0;
     loop {
-        match jan_klod_host::telegram::poll_once(
+        match jk_host::telegram::poll_once(
             &mut agent,
             &fetch,
             &token,

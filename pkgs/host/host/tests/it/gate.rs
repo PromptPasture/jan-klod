@@ -23,10 +23,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use jan_klod_protocol::intercept::{ToolInvocation, ToolInvoker};
-use jan_klod_protocol::turn::{Driver, ToolCall, UserPrompt};
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
+use jk_protocol::intercept::{ToolInvocation, ToolInvoker};
+use jk_protocol::turn::{Driver, ToolCall, UserPrompt};
 use jk_wasm::http::{WireError, WireResponse};
 use jk_wasm::route::HttpFn;
 
@@ -408,8 +408,8 @@ fn phase20_fixture(
     tag: &str,
 ) -> Option<(
     common::TempDir,
-    Arc<jan_klod_host::sessions::Agents>,
-    jan_klod_host::serve::Surface,
+    Arc<jk_host::sessions::Agents>,
+    jk_host::serve::Surface,
 )> {
     let needed = [
         "provider-openai.wasm",
@@ -471,9 +471,8 @@ extensions:
     });
     let runtime =
         Runtime::boot(&config, common::repo_root().join("ext")).expect("the runtime boots");
-    let agents = jan_klod_host::sessions::Agents::new(runtime, factory);
-    let surface =
-        jan_klod_host::serve::Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
+    let agents = jk_host::sessions::Agents::new(runtime, factory);
+    let surface = jk_host::serve::Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     Some((guard, agents, surface))
 }
 

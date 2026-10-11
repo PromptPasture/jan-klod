@@ -9,8 +9,8 @@
 //!
 //! Skips (passes as a no-op) when `tool-fs.wasm` isn't staged in `ext/`.
 
-use jan_klod_protocol::intercept::ToolInvoker;
-use jan_klod_protocol::turn::ToolCall;
+use jk_protocol::intercept::ToolInvoker;
+use jk_protocol::turn::ToolCall;
 use jk_wasm::host_fs::Workspace;
 use jk_wasm::host_process::ProcessRunner;
 use jk_wasm::tool_host::LazyToolFleet;

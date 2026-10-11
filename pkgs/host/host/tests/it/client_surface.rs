@@ -13,9 +13,9 @@
 
 use std::io::Cursor;
 
-use jan_klod_host::rpc;
-use jan_klod_protocol::{jsonrpc, Notification, PROTOCOL_VERSION};
 use jk_agent::Runtime;
+use jk_host::rpc;
+use jk_protocol::{jsonrpc, Notification, PROTOCOL_VERSION};
 
 use crate::common;
 

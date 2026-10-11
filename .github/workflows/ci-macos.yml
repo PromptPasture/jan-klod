@@ -136,8 +136,8 @@ jobs:
       # nothing sets `CARGO_TERM_COLOR` there.
       - name: Guard — the Seatbelt tests must exist on this runner
         run: |
-          cargo nextest list -p jan-klod-host \
-            --features jan-klod-host/integration --bins --tests \
+          cargo nextest list -p jk-host \
+            --features jk-host/integration --bins --tests \
             --color never > /tmp/nextest-list.txt
           # Both modules the run step below filters on (#125). Checking only
           # one would leave the other free to compile to zero tests and still
@@ -168,8 +168,8 @@ jobs:
       # run against Landlock on every push via ci.yml's `harness` job.
       - name: Seatbelt sandbox tests, and the boot path that resolves them
         run: |
-          cargo nextest run -p jan-klod-host \
-            --features jan-klod-host/integration sandbox_seatbelt:: execution_config::
+          cargo nextest run -p jk-host \
+            --features jk-host/integration sandbox_seatbelt:: execution_config::
         env:
           JK_REQUIRE_GUESTS: "1"
 

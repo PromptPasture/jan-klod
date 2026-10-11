@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use crate::AgentSession;
-use jan_klod_protocol::turn::{Message, Role};
+use jk_protocol::turn::{Message, Role};
 
 /// How long a turn waits for a confirmation before giving up and taking the
 /// prompt's default answer. Long enough for a person to read and decide; short

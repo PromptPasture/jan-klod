@@ -17,7 +17,7 @@
 //! SQLite session backend in a package of its own for the same reason.
 //!
 //! The vocabulary of a turn — `Event`, `Message`, `ToolCall` — comes from
-//! [`jan_klod_protocol::turn`], *below* this crate. It cannot come from the
+//! [`jk_protocol::turn`], *below* this crate. It cannot come from the
 //! loop above, which needs this crate: that is the cycle this arrangement
 //! exists to avoid.
 

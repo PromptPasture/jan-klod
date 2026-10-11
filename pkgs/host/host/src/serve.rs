@@ -48,12 +48,12 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use jk_agent::conductor::RunResult;
 
-use jan_klod_protocol::turn::{Driver, UserPrompt};
-use jan_klod_protocol::turn::{Event, EventSink, Flow};
 use jk_agent::session::{
     answer_timeout, fork, new_session_id, session_payload, sessions_payload, Forked,
 };
 use jk_agent::{AgentSession, HeadlessDriver};
+use jk_protocol::turn::{Driver, UserPrompt};
+use jk_protocol::turn::{Event, EventSink, Flow};
 
 use crate::pending::{Parked, Pending};
 use crate::sessions::Agents;
@@ -507,14 +507,14 @@ fn handle_invoke(agent: &mut AgentSession, body: &str) -> Reply {
     ) else {
         return error_reply(400, "both `extension` and `name` are required");
     };
-    let arguments: Vec<jan_klod_protocol::contributions::ArgumentValue> = value
+    let arguments: Vec<jk_protocol::contributions::ArgumentValue> = value
         .get("arguments")
         .and_then(serde_json::Value::as_array)
         .map(|given| {
             given
                 .iter()
                 .filter_map(|argument| {
-                    Some(jan_klod_protocol::contributions::ArgumentValue {
+                    Some(jk_protocol::contributions::ArgumentValue {
                         name: argument.get("name")?.as_str()?.to_owned(),
                         value: argument.get("value")?.as_str()?.to_owned(),
                     })
@@ -534,13 +534,13 @@ fn handle_invoke(agent: &mut AgentSession, body: &str) -> Reply {
         },
         // A name nobody contributes is the caller's mistake; the other two are
         // the extension's, and the status codes say which.
-        Err(error @ jan_klod_protocol::contributions::InvokeError::Unknown) => {
+        Err(error @ jk_protocol::contributions::InvokeError::Unknown) => {
             error_reply(404, &error.to_string())
         }
-        Err(error @ jan_klod_protocol::contributions::InvokeError::InvalidArguments) => {
+        Err(error @ jk_protocol::contributions::InvokeError::InvalidArguments) => {
             error_reply(400, &error.to_string())
         }
-        Err(error @ jan_klod_protocol::contributions::InvokeError::Failed(_)) => {
+        Err(error @ jk_protocol::contributions::InvokeError::Failed(_)) => {
             error_reply(500, &error.to_string())
         }
     }
@@ -1021,7 +1021,7 @@ fn contributions_payload(agent: &mut AgentSession) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::{health, unbounded_channel, Frame, Pending, PromptDriver};
-    use jan_klod_protocol::turn::{Driver, UserPrompt};
+    use jk_protocol::turn::{Driver, UserPrompt};
 
     /// #290: the frame used to be sent before the turn parked, so a client
     /// that answered on reading it could find nothing pending and get `409`.
