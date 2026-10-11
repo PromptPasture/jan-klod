@@ -27,6 +27,7 @@ A good commit message helps future developers (including yourself) understand wh
 ## Examples
 
 **Good:**
+
 ```
 Fix race condition in session initialization
 
@@ -38,6 +39,7 @@ Fixes #789
 ```
 
 **Poor:**
+
 ```
 fixed a bug
 ```
@@ -45,6 +47,7 @@ fixed a bug
 ## Conventional Commits (Recommended)
 
 Structure commits as `<type>(<scope>): <subject>`:
+
 - **feat:** a new feature
 - **fix:** a bug fix
 - **refactor:** code change without behavior change

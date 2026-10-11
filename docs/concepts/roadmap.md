@@ -644,8 +644,6 @@ roughly 10x less boot time and half the peak RSS, the win #59's honest
 key-completeness argument, and the numbers are in
 [the changelog](../changelog.md#2026-09-11).
 
-
-
 - **Observability** — structured logging, Prometheus, OpenTelemetry — wired from Phase 1.
 - **Testing** — `cargo test` for core; a WASM-component test harness that loads a
   guest and verifies its WIT interface; integration tests with real SQLite + embedded Wasmtime.

@@ -9,7 +9,7 @@ Phase 20 ([#169](https://github.com/PromptPasture/jan-klod/issues/169)) closes o
 
 > Two clients drive turns in two sessions **concurrently** over REST, with an `ask` answered in one while the other streams.
 
-#223 put the session behind a job queue, #225 stopped a parked confirmation from holding the socket, and #224 and #226 changed the transport. None of them changes the shape underneath: there is one `AgentSession` on one thread, `run_turn` holds it for the length of a turn, and a turn parked on an `ask` holds it while a human thinks. Two turns serialise. ([#228](https://github.com/PromptPasture/jan-klod/issues/228))
+\#223 put the session behind a job queue, #225 stopped a parked confirmation from holding the socket, and #224 and #226 changed the transport. None of them changes the shape underneath: there is one `AgentSession` on one thread, `run_turn` holds it for the length of a turn, and a turn parked on an `ask` holds it while a human thinks. Two turns serialise. ([#228](https://github.com/PromptPasture/jan-klod/issues/228))
 
 ## What the gate asks for, exactly
 

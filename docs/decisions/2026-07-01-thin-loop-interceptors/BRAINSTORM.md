@@ -18,24 +18,24 @@ related:
 
 ## Goal
 
-Keep jan-klod's foundation — **sandbox + small models + everything WASM + nothing trusted** — 
-but adopt Pi's thin loop (`stream → if tools, run → loop`) by moving loop **mechanism** 
-into core and expressing every agent **decision** (intent routing, task classification, 
+Keep jan-klod's foundation — **sandbox + small models + everything WASM + nothing trusted** —
+but adopt Pi's thin loop (`stream → if tools, run → loop`) by moving loop **mechanism**
+into core and expressing every agent **decision** (intent routing, task classification,
 tool selection, context compression, fallback, permission) as **sandboxed interceptor extension**.
 
 ## Context
 
 Reviewed [earendil-works/pi](https://github.com/earendil-works/pi) vs. jan-klod. Opposite bets:
 
-- **Pi** — frontier models + trust. No sandbox. Agent loop is thin conductor; *all* 
-  extensibility via ordered, return-carrying **lifecycle-hook chain** 
-  (`before_agent_start`, `context`, `tool_call`, `tool_result`, `prepare_next_turn`, steering). 
+- **Pi** — frontier models + trust. No sandbox. Agent loop is thin conductor; *all*
+  extensibility via ordered, return-carrying **lifecycle-hook chain**
+  (`before_agent_start`, `context`, `tool_call`, `tool_result`, `prepare_next_turn`, steering).
   Permission, path protection, compaction all extend.
-- **jan-klod** — sandbox + small models. Everything WASM/WIT, nothing trusted. Current 
+- **jan-klod** — sandbox + small models. Everything WASM/WIT, nothing trusted. Current
   `manager-agent-loop` is monolithic (router + controller + decomposer + fallback + routing).
 
-Pi's innovation: *where* extensibility lives. Current `host-event` bus is **fire-and-forget pub/sub** — 
-extensions *observe* but don't *shape* (can't block tools, rewrite requests, classify). This gap 
+Pi's innovation: *where* extensibility lives. Current `host-event` bus is **fire-and-forget pub/sub** —
+extensions *observe* but don't *shape* (can't block tools, rewrite requests, classify). This gap
 resolves here.
 
 ## Agenda
@@ -78,11 +78,11 @@ Harness has two irreducible pieces: constrained **grammar** and **retry-on-malfo
 
 ### Summary
 
-Adopt Pi's thin loop as **core mechanism**. New **interceptor-middleware** host primitive 
-(synchronous, ordered, return-carrying: one generic `intercept` over `phase` enum, returning 
-`proceed | replace | block | ask`) sits alongside pub/sub `host-event` bus. Every agent 
-*decision* is **sandboxed interceptor extension**. Small-model harness irreducibles stay as 
-fixed core mechanism, tuned via `host-config` + request-shaping phases. Sandbox/nothing-trusted 
+Adopt Pi's thin loop as **core mechanism**. New **interceptor-middleware** host primitive
+(synchronous, ordered, return-carrying: one generic `intercept` over `phase` enum, returning
+`proceed | replace | block | ask`) sits alongside pub/sub `host-event` bus. Every agent
+*decision* is **sandboxed interceptor extension**. Small-model harness irreducibles stay as
+fixed core mechanism, tuned via `host-config` + request-shaping phases. Sandbox/nothing-trusted
 posture unchanged: core is trusted host by definition; all providers, tools, stores, interceptors remain sandboxed WASM.
 
 ### Decisions
@@ -99,24 +99,24 @@ posture unchanged: core is trusted host by definition; all providers, tools, sto
 
 Review surfaced three open points. Resolved:
 
-1. **Dispatch core-native (no `host-hook` import).** Core loop invokes each interceptor's *exported* 
-   `interceptor` interface at each phase; enabled/disabled via `jan-klod.yaml` (ordering structural). 
+1. **Dispatch core-native (no `host-hook` import).** Core loop invokes each interceptor's *exported*
+   `interceptor` interface at each phase; enabled/disabled via `jan-klod.yaml` (ordering structural).
    No `host-hook.wit` capability import — earlier draft contradicted "core drives natively".
-2. **Generic hook only for `interceptor-context`.** History trimming internal to `interceptor-context`; 
+2. **Generic hook only for `interceptor-context`.** History trimming internal to `interceptor-context`;
    loop doesn't call `context-manager` directly. `context-manager.wit` subsumed.
-3. **Provider fallback is core mechanism, not interceptor.** Re-issues *same* failed request on next 
-   provider (on-provider-error retry = same category as retry/validate) — `prepare-next-turn` can't do it. 
+3. **Provider fallback is core mechanism, not interceptor.** Re-issues *same* failed request on next
+   provider (on-provider-error retry = same category as retry/validate) — `prepare-next-turn` can't do it.
    `interceptor-task-router` does classification + routing only.
 
 ### Open Questions
 
-- ~~**Interceptor WIT shape**~~ **Resolved:** [`wit/interceptor.wit`](../../../wit/interceptor.wit) — 
-  generic `intercept` over `phase` enum + `subscribed-phases`, return `result<decision, interceptor-error>`. 
-  Streaming: preview-vs-authoritative rule — tokens preview; loop emits authoritative at boundary, which 
+- ~~**Interceptor WIT shape**~~ **Resolved:** [`wit/interceptor.wit`](../../../wit/interceptor.wit) —
+  generic `intercept` over `phase` enum + `subscribed-phases`, return `result<decision, interceptor-error>`.
+  Streaming: preview-vs-authoritative rule — tokens preview; loop emits authoritative at boundary, which
   `after-response`/`finalize` may `replace`. Interception at turn boundaries.
-- ~~**UI gap**~~ **Resolved by `ask`:** interceptor returns `ask(user-prompt)`, loop suspends, routes to driver 
+- ~~**UI gap**~~ **Resolved by `ask`:** interceptor returns `ask(user-prompt)`, loop suspends, routes to driver
   (TUI/chat/`api-*`), re-invokes with answer. `default-answer` for headless/no-driver. Permission gate never touches UI.
-- ~~**Interceptor ordering**~~ **Resolved:** structural (phase enum + load order), not configured. 
+- ~~**Interceptor ordering**~~ **Resolved:** structural (phase enum + load order), not configured.
   `jan-klod.yaml` only enables/disables.
 - **`interceptor-task-router` scope** — one extension (classification + routing) or split? Deferred.
 - **Carry-overs:** `whatlang` language detection, grammar format (GBNF vs JSON-schema), token-count strategy.

@@ -241,7 +241,6 @@ jan-klod --addr 127.0.0.1:8787 <session-id>
 
 The `--addr` makes this the REST path: *this* gateway, the one serving requests above, rather than a fresh one on a pipe. Without it, `jan-klod <session-id>` resumes over stdio — the store is the same either way.
 
-
 ## Next steps
 
 - Add skills: create `.agents/skills/review.md` with a YAML `name:` header.

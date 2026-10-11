@@ -21,6 +21,7 @@ updated: 2026-06-16
 **Jan-Klod** brainstorm: minimal, stable Java/Quarkus core + typed extensions + curated bundles + Initializr-style configurator.
 
 Artifacts:
+
 - [`BRAINSTORM.md`](BRAINSTORM.md) — distilled architecture, contracts, config, bundles, deployment, questions
 - [`CONVERSATION.md`](CONVERSATION.md) — verbatim transcript (primary source)
 
@@ -112,6 +113,7 @@ Skills path convention: `.agents/skills/{skill-name}/SKILL.md`
 ### Blue/green deployment
 
 Tiny launcher (Go/Rust):
+
 - Symlink: `current → versions/{n}/`, `previous → versions/{n-1}/`
 - Health check + auto-rollback on failure
 - Manual: `jan-klod rollback`
@@ -121,6 +123,7 @@ State: SQLite (portable, migration-friendly). Version schema from day one.
 ### Configurator
 
 Initializr-style web UI. Generates ZIP:
+
 - JVM: config + libs + launchers + ext folder
 - Bundle: native binary + config
 

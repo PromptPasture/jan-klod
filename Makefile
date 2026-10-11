@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift lints-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui lint-docs harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift lints-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -66,6 +66,7 @@ help:
 	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
 	@echo "  test-web    run the browser client's suite (pkgs/clients/web; needs Node, not in 'test')"
+	@echo "  lint-docs   lint every tracked .md with markdownlint-cli2 (needs Node; not in 'test')"
 	@echo "  test-gui    run the Tauri shell's suite (pkgs/clients/gui; needs a display, not in 'test')"
 	@echo "  clippy-gui  lint the Tauri shell (-D warnings)"
 	@echo "  clippy-guests lint the wasm guests, native + wasm32 (-D warnings)"
@@ -187,6 +188,14 @@ test-guests:
 # --experimental-strip-types, which needs Node >= 22.6.
 test-web:
 	cd $(WEB) && npm test
+
+# Markdown lint (#234), rules in .markdownlint.yaml. Tracked files only:
+# a glob would also walk generated trees such as pkgs/clients/web/dist/.
+# Pinned like every other npm tool here, so a release cannot change the verdict.
+# The pre-commit hook runs it when a commit stages a .md file; ci.yml runs it
+# in the job that already sets up Node for `test-web`.
+lint-docs:
+	git ls-files -z '*.md' | xargs -0 npx --yes markdownlint-cli2@0.23.3
 
 # The Tauri shell's suite (#142). Deliberately **not** a prerequisite of `test`,
 # for the same reason `test-web` is not: it belongs to a workspace that is not

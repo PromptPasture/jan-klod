@@ -51,7 +51,7 @@ Every distribution ships the same `jan-klod` **core** binary plus a selected `.w
 Install one with the installer's `--dist`:
 
 ```console
-$ curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh -s -- --dist headless-chat
+curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/install.sh | sh -s -- --dist headless-chat
 ```
 
 With no `--dist` you get `coding`.
@@ -83,7 +83,7 @@ Capabilities are not hand-typed: `scripts/manifests.sh` reads them from the comp
 **`ext search` is the capability view.** No interactive Configurator yet (landing page is static), so the command is where an operator reads what a component asks for before downloading:
 
 ```console
-$ jan-klod-gateway ext search tool-fs
+jan-klod-gateway ext search tool-fs
 tool-fs  0.1.0  api 0.3.0  tool  147445 bytes  unsigned
   may use host-fs
   fs tool: read / write / grep a workspace file through host-fs, dispatched by an `op` argument.

@@ -25,6 +25,7 @@ Enable agents on **9–12B models locally** without large GPU clusters or cloud 
 Why small models fail + compensations:
 
 ### Failures
+
 - Poor instruction following (complex prompts)
 - Tool call hallucinations
 - Context/state loss
@@ -86,6 +87,7 @@ Answer extractor
 ## Next Steps
 
 **Clarify target deployment first** (bare metal/edge/framework). Then:
+
 - Prototype minimal harness
 - Benchmark Qwen2.5 vs Llama-3.1
 - Design constrained decoding integration
