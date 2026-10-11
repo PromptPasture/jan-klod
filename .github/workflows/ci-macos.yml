@@ -88,6 +88,12 @@ jobs:
         with:
           tool: wasm-tools@1.258.0
 
+      # ...and writes that manifest with jaq (#208), pinned as in ci.yml. Its
+      # absence failed this job at guest staging, before any Seatbelt test (#296).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: jaq@2.3.0
+
       # The `it` test binary's polyglot module resolves `wit/spike` through
       # `bindgen!` at compile time, so building *any* test in that binary needs
       # wit/spike/deps — including this job's, which runs only four of them.
