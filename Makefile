@@ -666,7 +666,7 @@ self-extend-fixture:
 setup:
 	cargo install cargo-audit --version $(CARGO_AUDIT_VERSION)
 	cargo install cargo-cyclonedx --version $(CARGO_CYCLONEDX_VERSION)
-	cargo install cargo-nextest --version $(CARGO_NEXTEST_VERSION)
+	cargo install --locked cargo-nextest --version $(CARGO_NEXTEST_VERSION)
 	cargo install cargo-deny --version $(CARGO_DENY_VERSION)
 	cargo install wasm-tools --version $(WASM_TOOLS_VERSION)
 	cargo install wkg --version $(WKG_VERSION)

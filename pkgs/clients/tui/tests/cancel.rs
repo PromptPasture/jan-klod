@@ -8,21 +8,19 @@
 //! it must actually stop.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use jan_klod::transport::{Rest, Transport};
 
-#[test]
-fn cancel_stops_a_turn_streaming_forever_over_rest() {
+/// The fake core: accept one connection, read past request headers, then
+/// emit `delta` frames until the socket shuts down. Never stops on its own.
+/// Only `cancel` does.
+fn fake_core() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds ephemeral port");
     let addr = listener.local_addr().expect("local addr");
-
-    // The fake core: accept one connection, read past request headers,
-    // then emit `delta` frames until socket shuts down. Never stops on its own.
-    // Only `cancel` does.
     thread::spawn(move || {
         let Ok((mut stream, _)) = listener.accept() else {
             return;
@@ -54,9 +52,12 @@ fn cancel_stops_a_turn_streaming_forever_over_rest() {
             thread::sleep(Duration::from_millis(20));
         }
     });
+    addr
+}
 
-    let transport: Rest = Rest::new(addr.to_string());
-    let transport = std::sync::Arc::new(transport);
+#[test]
+fn cancel_stops_a_turn_streaming_forever_over_rest() {
+    let transport = std::sync::Arc::new(Rest::new(fake_core().to_string()));
 
     let (tx, rx) = mpsc::channel();
     let turn_transport = transport.clone();
@@ -76,5 +77,46 @@ fn cancel_stops_a_turn_streaming_forever_over_rest() {
     assert!(
         result.is_ok(),
         "cancelled turn must end (error ok); hanging is the bug: {result:?}"
+    );
+}
+
+/// #289: on Linux, a frame that arrives after the cancel's shutdown resets the
+/// connection, and the next read fails with ECONNRESET rather than seeing EOF.
+/// The reader is held off the socket across the cancel so the server's next
+/// frames always land in that window, instead of the rare timing that made the
+/// test above flaky.
+#[test]
+fn a_cancel_that_resets_the_connection_still_ends_the_turn_cleanly() {
+    let transport = std::sync::Arc::new(Rest::new(fake_core().to_string()));
+
+    let (first_tx, first_rx) = mpsc::channel();
+    let (cancelled_tx, cancelled_rx) = mpsc::channel::<()>();
+    let (tx, rx) = mpsc::channel();
+    let turn_transport = transport.clone();
+    thread::spawn(move || {
+        let mut hold = Some((first_tx, cancelled_rx));
+        let result = turn_transport.stream_turn("s1", "keep talking", &mut |_event| {
+            if let Some((first_tx, cancelled_rx)) = hold.take() {
+                let _ = first_tx.send(());
+                let _ = cancelled_rx.recv();
+                // Several 20 ms frames reach the shut-down socket meanwhile.
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let _ = tx.send(result);
+    });
+
+    first_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the turn streams a frame");
+    transport.cancel("s1").expect("a turn is running to cancel");
+    cancelled_tx.send(()).expect("the reader is waiting");
+
+    let result = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("stream_turn did not return after cancel — the stream is still open");
+    assert!(
+        result.is_ok(),
+        "a reset caused by the cancel is the cancel working, not a failure: {result:?}"
     );
 }

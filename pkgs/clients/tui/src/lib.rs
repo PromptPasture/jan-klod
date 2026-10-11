@@ -295,7 +295,16 @@ pub(crate) fn stream_turn_cancellable(
     let mut kind: Option<String> = None;
     let mut data: Option<String> = None;
     for line in reader.lines() {
-        let line = line.map_err(|err| format!("reading response: {err}"))?;
+        let line = match line {
+            Ok(line) => line,
+            // A cancel shuts the socket down while the server may still be
+            // writing, and on Linux a frame arriving after that resets the
+            // connection: the read fails with ECONNRESET instead of seeing
+            // EOF. The cancel took the socket from the slot, so an empty slot
+            // means this error is the cancel working, not a failure (#289).
+            Err(_) if live_socket.lock().is_ok_and(|slot| slot.is_none()) => break,
+            Err(err) => return Err(format!("reading response: {err}")),
+        };
         if !in_body {
             if line.is_empty() {
                 in_body = true;

@@ -127,8 +127,9 @@ pub trait Transport: Send + Sync {
 pub struct Rest {
     addr: String,
     /// Live turn socket, if any. `stream_turn` stores a clone for the turn
-    /// and clears it when done. `cancel` shuts it down to make the reader see
-    /// EOF (closed connection → `Flow::Stop` from client side).
+    /// and clears it when done. `cancel` takes it and shuts it down to make
+    /// the reader see EOF (closed connection → `Flow::Stop` from client
+    /// side); an empty slot is how the reader tells a cancel from a failure.
     live: Arc<Mutex<Option<TcpStream>>>,
 }
 
@@ -158,11 +159,14 @@ impl Transport for Rest {
 
     fn cancel(&self, _session: &str) -> Result<(), String> {
         // Error, not silent no-op: `/cancel` "working" on nothing misleads.
-        let guard = self
+        // Taken, not borrowed: the reader checks the slot when a read fails,
+        // and an empty one means this cancel caused it (#289).
+        let taken = self
             .live
             .lock()
-            .map_err(|_| "the live turn's socket is poisoned".to_owned())?;
-        guard.as_ref().map_or_else(
+            .map_err(|_| "the live turn's socket is poisoned".to_owned())?
+            .take();
+        taken.map_or_else(
             || Err("no turn is running to cancel".to_owned()),
             |stream| {
                 stream
