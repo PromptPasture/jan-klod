@@ -454,7 +454,7 @@ impl App {
     /// business, since only it knows the cell.
     /// Forms are not read. Nothing contributes one yet and no renderer here
     /// draws one, so storing them would be state this client cannot show.
-    pub fn set_contributions(&mut self, sets: &[jan_klod_protocol::Contributions]) {
+    pub fn set_contributions(&mut self, sets: &[jk_protocol::Contributions]) {
         self.contributed = sets
             .iter()
             .flat_map(|set| {
@@ -1459,10 +1459,10 @@ mod tests {
     use super::{App, Entry, Prompt, ToastKind, ToolStatus, Turn, Who};
 
     /// One extension contributing one command, as the notification delivers it.
-    fn contributing(name: &str, summary: &str) -> Vec<jan_klod_protocol::Contributions> {
-        vec![jan_klod_protocol::Contributions {
+    fn contributing(name: &str, summary: &str) -> Vec<jk_protocol::Contributions> {
+        vec![jk_protocol::Contributions {
             extension: "interceptor.system".to_owned(),
-            commands: vec![jan_klod_protocol::SurfaceCommand {
+            commands: vec![jk_protocol::SurfaceCommand {
                 name: name.to_owned(),
                 title: name.to_owned(),
                 description: summary.to_owned(),
@@ -1474,11 +1474,11 @@ mod tests {
     }
 
     /// The same, contributing one status item instead.
-    fn reporting(text: &str, detail: &str) -> Vec<jan_klod_protocol::Contributions> {
-        vec![jan_klod_protocol::Contributions {
+    fn reporting(text: &str, detail: &str) -> Vec<jk_protocol::Contributions> {
+        vec![jk_protocol::Contributions {
             extension: "interceptor.system".to_owned(),
             commands: vec![],
-            status_items: vec![jan_klod_protocol::StatusItem {
+            status_items: vec![jk_protocol::StatusItem {
                 name: "prompt-source".to_owned(),
                 text: text.to_owned(),
                 detail: detail.to_owned(),

@@ -1,0 +1,29 @@
+[package]
+name = "jk-agent"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The shared turn vocabulary (#180): `Event`, `Message`, `ToolCall` and the
+# rest live here, below both this crate and the session store, so the log can
+# name them without depending on the loop. No new package in the tree — the
+# workspace already builds it, and it depends on nothing but serde.
+jk-protocol = { path = "../protocol" }
+# The session store (#180). This crate no longer defines the log, the
+# projections or the SQLite connection; it composes them with a loop.
+jk-session = { path = "../session" }
+# The component runtime (#181): boot, the linker, the guests and their
+# capabilities. This crate composes it with the store and names no wasmtime.
+jk-wasm = { path = "../wasm" }
+serde_json.workspace = true
+
+[dev-dependencies]
+# `tests/migration.rs` builds its fixture with SQLite directly, so it is the
+# pre-log schema holding the old rows rather than a simulation of them. A
+# dev-dependency, so the shipped crate still links no database (#180).
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[lints]
+workspace = true

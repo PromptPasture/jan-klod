@@ -24,7 +24,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'pkgs/host/core/src/sandbox*.rs'
+      - 'pkgs/host/wasm/src/sandbox*.rs'
       - 'pkgs/host/host/tests/it/sandbox_*.rs'
       # The boot-path confinement pair lives here, not in a sandbox_* file
       # (#125). It is the only evidence that the runner
@@ -35,7 +35,7 @@ on:
       - '.github/workflows/ci-macos.yml'
   pull_request:
     paths:
-      - 'pkgs/host/core/src/sandbox*.rs'
+      - 'pkgs/host/wasm/src/sandbox*.rs'
       - 'pkgs/host/host/tests/it/sandbox_*.rs'
       # The boot-path confinement pair lives here, not in a sandbox_* file
       # (#125). It is the only evidence that the runner
@@ -88,6 +88,12 @@ jobs:
         with:
           tool: wasm-tools@1.258.0
 
+      # ...and writes that manifest with jaq (#208), pinned as in ci.yml. Its
+      # absence failed this job at guest staging, before any Seatbelt test (#296).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: jaq@2.3.0
+
       # The `it` test binary's polyglot module resolves `wit/spike` through
       # `bindgen!` at compile time, so building *any* test in that binary needs
       # wit/spike/deps — including this job's, which runs only four of them.
@@ -136,8 +142,8 @@ jobs:
       # nothing sets `CARGO_TERM_COLOR` there.
       - name: Guard — the Seatbelt tests must exist on this runner
         run: |
-          cargo nextest list -p jan-klod-host \
-            --features jan-klod-host/integration --bins --tests \
+          cargo nextest list -p jk-host \
+            --features jk-host/integration --bins --tests \
             --color never > /tmp/nextest-list.txt
           # Both modules the run step below filters on (#125). Checking only
           # one would leave the other free to compile to zero tests and still
@@ -168,12 +174,13 @@ jobs:
       # run against Landlock on every push via ci.yml's `harness` job.
       - name: Seatbelt sandbox tests, and the boot path that resolves them
         run: |
-          cargo nextest run -p jan-klod-host \
-            --features jan-klod-host/integration sandbox_seatbelt:: execution_config::
+          cargo nextest run -p jk-host \
+            --features jk-host/integration sandbox_seatbelt:: execution_config::
         env:
           JK_REQUIRE_GUESTS: "1"
 
-      # The core's own unit tests on macOS — cheap next to the above, and the
-      # half of `sandbox.rs` that picks a backend is itself per-OS.
+      # The core's and the wasm boundary's own unit tests on macOS — cheap next
+      # to the above, and the half of `sandbox.rs` that picks a backend is
+      # itself per-OS (it lives in `jk-wasm` since #181).
       - name: Core unit tests
-        run: cargo test -p jan-klod-core
+        run: cargo test -p jk-agent -p jk-wasm

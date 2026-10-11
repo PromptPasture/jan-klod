@@ -14,12 +14,12 @@
 //! honest extension would never send. A wasm build in the way of that would
 //! add no coverage and a great deal of setup.
 
-use jan_klod::app::App;
-use jan_klod::layout;
-use jan_klod::sidebar::{self, SessionInfo};
-use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
-use jan_klod::wrap::width as cells;
-use jan_klod_protocol::{Contributions, StatusItem, SurfaceCommand};
+use jk_protocol::{Contributions, StatusItem, SurfaceCommand};
+use jk_tui::app::App;
+use jk_tui::layout;
+use jk_tui::sidebar::{self, SessionInfo};
+use jk_tui::theme::{Depth, GlyphSet, Mode, Theme};
+use jk_tui::wrap::width as cells;
 
 /// The gate's themes: coloured, and what `NO_COLOR=1` on 16 colours gives.
 const fn themes() -> [(&'static str, Theme); 2] {

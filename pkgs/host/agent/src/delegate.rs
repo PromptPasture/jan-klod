@@ -6,7 +6,7 @@
 //! Wire format is transport-specific; the seam is unit-tested offline.
 //!
 //! Inbound delegation (core called *by* another ACP orchestrator) is just the
-//! host-side REST surface (`jan_klod_host::serve`).
+//! host-side REST surface (`jk_host::serve`).
 //!
 //! # Not wired
 //!
@@ -16,8 +16,9 @@
 
 use std::collections::HashMap;
 
-use crate::conductor::ToolInvoker;
-use crate::intercept::{ToolCall, ToolDefinition};
+use jk_protocol::intercept::ToolDefinition;
+use jk_protocol::intercept::ToolInvoker;
+use jk_protocol::turn::ToolCall;
 
 /// The tool name the model uses to delegate to another agent.
 pub const DELEGATE_TOOL: &str = "delegate";
@@ -72,7 +73,7 @@ impl<T: AgentTransport> AgentDelegate<T> {
 }
 
 impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
-    fn invoke(&mut self, call: &ToolCall) -> Option<crate::conductor::ToolInvocation> {
+    fn invoke(&mut self, call: &ToolCall) -> Option<jk_protocol::intercept::ToolInvocation> {
         if call.name != DELEGATE_TOOL {
             return None; // skip if not ours
         }
@@ -82,17 +83,17 @@ impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
         let context = args.get("context").and_then(serde_json::Value::as_str);
 
         let Some(endpoint) = self.agents.get(agent) else {
-            return Some(crate::conductor::ToolInvocation {
+            return Some(jk_protocol::intercept::ToolInvocation {
                 content: format!("unknown agent `{agent}`"),
                 failed: true,
             });
         };
         Some(match self.transport.delegate(endpoint, task, context) {
-            Ok(answer) => crate::conductor::ToolInvocation {
+            Ok(answer) => jk_protocol::intercept::ToolInvocation {
                 content: answer,
                 failed: false,
             },
-            Err(err) => crate::conductor::ToolInvocation {
+            Err(err) => jk_protocol::intercept::ToolInvocation {
                 content: format!("delegation to `{agent}` failed: {err}"),
                 failed: true,
             },

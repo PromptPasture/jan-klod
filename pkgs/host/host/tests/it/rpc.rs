@@ -9,17 +9,17 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 // Client transport trait (same API as jan-klod binary).
-use jan_klod_client::transport::Transport as _;
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
-use jan_klod_core::Runtime;
-use jan_klod_host::rpc;
-use jan_klod_protocol::{jsonrpc, PROTOCOL_VERSION};
+use jk_agent::Runtime;
+use jk_host::rpc;
+use jk_protocol::{jsonrpc, PROTOCOL_VERSION};
+use jk_tui::transport::Transport as _;
+use jk_wasm::http::WireResponse;
+use jk_wasm::route::HttpFn;
 
 use crate::common;
 
 /// Offline agent with canned "pong" provider.
-fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted(tag: &str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     booted_with(tag, || common::canned_http("pong"))
 }
 
@@ -27,7 +27,7 @@ fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
 fn booted_with(
     tag: &str,
     http: impl Fn() -> HttpFn,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
         return None;
     }
@@ -80,7 +80,7 @@ fn frames(output: Vec<u8>) -> Vec<Frame> {
 }
 
 /// Scripted exchange (all frames queued front; client doesn't react).
-fn exchange(agent: &mut jan_klod_core::AgentSession, script: &[&str]) -> Vec<Frame> {
+fn exchange(agent: &mut jk_agent::AgentSession, script: &[&str]) -> Vec<Frame> {
     let input = Cursor::new(script.join("\n").into_bytes());
     let mut output = Vec::new();
     rpc::serve(input, &mut output, agent).expect("the loop runs to EOF");
@@ -314,7 +314,7 @@ fn tool_then_answer() -> (Arc<AtomicU32>, impl Fn() -> HttpFn) {
 fn booted_gated(
     tag: &str,
     http: impl Fn() -> HttpFn,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&GATED) {
         return None;
     }
@@ -463,7 +463,7 @@ fn a_client_can_fork_at_a_seq_it_read_from_session_get() {
     // type exists so non-Rust clients can generate from the schema, and a type
     // nobody parses the real bytes with is exactly how the two drift — which is
     // the shape of defect this file keeps finding.
-    let typed: jan_klod_protocol::SessionGetResult = serde_json::from_value(transcript.clone())
+    let typed: jk_protocol::SessionGetResult = serde_json::from_value(transcript.clone())
         .unwrap_or_else(|e| panic!("session/get must match SessionGetResult: {e}: {transcript}"));
     assert_eq!(typed.id, "fork-src");
 
@@ -847,13 +847,13 @@ extensions:
     // `spawn_from` returning `Ok` *is* the handshake: it sends
     // `protocol/hello`, reads the answer and compares versions before handing
     // the transport back.
-    let transport = jan_klod_client::transport::Stdio::spawn_from(
+    let transport = jk_tui::transport::Stdio::spawn_from(
         std::path::Path::new(env!("CARGO_BIN_EXE_jan-klod-gateway")),
         &[
             config.to_str().expect("utf-8 path"),
             ext.to_str().expect("utf-8 path"),
         ],
-        jan_klod_client::transport::Logs::Discard,
+        jk_tui::transport::Logs::Discard,
     )
     .expect("the client spawns the gateway and negotiates a protocol version");
 
@@ -878,7 +878,7 @@ extensions:
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, jan_klod_client::StreamEvent::Warning(_))),
+                .any(|event| matches!(event, jk_tui::StreamEvent::Warning(_))),
             "attempt {attempt}: the fallback warnings streamed to the client: {events:?}"
         );
     }

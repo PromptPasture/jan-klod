@@ -1,11 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "pkgs/host/core",
+    "pkgs/host/agent",
     "pkgs/host/config",
     "pkgs/host/host",
     "pkgs/host/protocol",
     "pkgs/host/session",
+    "pkgs/host/wasm",
     "pkgs/clients/tui",
 ]
 # Both are cargo workspaces in their own right, sitting under this one's

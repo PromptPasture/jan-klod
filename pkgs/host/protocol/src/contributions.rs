@@ -3,12 +3,13 @@
 //! The host-side mirror of `wit/client-surface.wit`: plain types with no
 //! Component-Model dependency, so a surface can carry them to a client without
 //! touching generated bindings — the same separation `intercept` keeps for loop
-//! state, and `conductor::Event` for turn events.
+//! state, and [`crate::turn::Event`] for turn events.
 //!
-//! Not the wire types either. `jan-klod-protocol` owns those, and this crate no
-//! longer depends on it (#179): a surface maps these to notifications the way
-//! it maps `conductor::Event`, which is what keeps the kernel from knowing what
-//! a client speaks.
+//! Not the wire types either — those are the crate root's [`crate::Contributions`]
+//! and friends. A surface maps these to notifications the way it maps
+//! [`crate::turn::Event`], which is what keeps the loop from knowing what a
+//! client speaks (#179). They sit in this crate because the wasm adapters
+//! produce them and the loop hands them on, and both sit above it (#181).
 //!
 //! **Every string here is attacker-influenced.** A contributed `title` can
 //! carry whatever an MCP server wrote in a tool description, so a renderer

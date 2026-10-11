@@ -1,6 +1,6 @@
 //! The shared turn vocabulary — what a turn is made of, named once (#180).
 //!
-//! These types were in `jan-klod-core`, beside the loop that produces them.
+//! These types were in the old core crate, beside the loop that produces them.
 //! That worked while one crate held everything. It stops working at the first
 //! crate boundary: the event log encodes an [`Event`] and rebuilds a
 //! transcript out of [`Message`]s, so `jk-session` needs this vocabulary, and
@@ -18,7 +18,7 @@
 //! of one turn**. A [`Notification`](crate::Notification) is what a client is
 //! told happened; an [`Event`] is what the log remembers happening. Putting
 //! them in separate crates would leave two places asserting the shapes of one
-//! thing, which is how they drift. `protocol_events.rs` in `jan-klod-host`
+//! thing, which is how they drift. `protocol_events.rs` in `jk-host`
 //! already treats them as two views, and now they are two views declared side
 //! by side.
 //!

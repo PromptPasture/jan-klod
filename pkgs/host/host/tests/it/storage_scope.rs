@@ -3,8 +3,8 @@
 //! survive restart, (2) `persist: true` keeps state, (3) components isolate
 //! namespaces and can't read session transcripts. Skips when guests not staged.
 
-use jan_klod_core::intercept::{Driver, UserPrompt};
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
+use jk_protocol::turn::{Driver, UserPrompt};
 
 use crate::common;
 
@@ -57,9 +57,9 @@ extensions:
 }
 
 /// Mock provider: calls bash once, then answers.
-fn tool_calling_provider() -> impl Fn() -> jan_klod_core::route::HttpFn {
+fn tool_calling_provider() -> impl Fn() -> jk_wasm::route::HttpFn {
     // Annotated return type needed for closure's higher-ranked lifetimes.
-    move || -> jan_klod_core::route::HttpFn {
+    move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::atomic::AtomicU32::new(0);
         Box::new(move |_m, _u, _h, _b, _t| {
             let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -71,7 +71,7 @@ fn tool_calling_provider() -> impl Fn() -> jan_klod_core::route::HttpFn {
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"done"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&body).unwrap(),
@@ -174,7 +174,7 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
     let _ = agent.run_with_driver(&mut driver, "s1", "use bash");
 
     // Read DB directly (guest's view not under test).
-    let store = jan_klod_core::store::Store::open(&db).expect("opens the same db");
+    let store = jk_session::store::Store::open(&db).expect("opens the same db");
     let namespaces = store.list_namespaces().expect("lists namespaces");
 
     // Gate asked for `permission`; must be prefixed to prevent namespace collisions.

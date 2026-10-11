@@ -4,9 +4,9 @@
 //! # Why this is in the contract crate and not in the transport
 //!
 //! The crate docs used to say framing belongs to transport—right for one, wrong
-//! for two parties. The core writes frames (`jan_klod_host::rpc`, Slice 13b)
+//! for two parties. The core writes frames (`jk_host::rpc`, Slice 13b)
 //! and *every client* reads them; `jan-klod` (the TUI client) depends on neither
-//! `jan-klod-core` nor Wasmtime by design. A frame type reachable only from the
+//! `jk-agent` nor Wasmtime by design. A frame type reachable only from the
 //! core would be hand-rolled twice, the divergence this contract prevents. So
 //! framing lives here, beside the commands it carries; the transport keeps
 //! what is genuinely its own: the sockets, pipes, and read loop.

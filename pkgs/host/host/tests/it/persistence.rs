@@ -5,8 +5,8 @@
 //!
 //! Skips if guests are not staged in `ext/`.
 
-use jan_klod_core::conductor::RunResult;
-use jan_klod_core::Runtime;
+use jk_agent::conductor::RunResult;
+use jk_agent::Runtime;
 
 use crate::common;
 

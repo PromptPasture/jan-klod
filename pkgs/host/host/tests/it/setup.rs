@@ -7,7 +7,7 @@
 
 use std::process::Command;
 
-use jan_klod_host::setup::{apply_group_strategy, ConfigStrategy, Group, Question, QuestionType};
+use jk_host::setup::{apply_group_strategy, ConfigStrategy, Group, Question, QuestionType};
 
 use crate::common;
 

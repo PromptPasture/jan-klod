@@ -16,7 +16,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 
@@ -108,15 +108,15 @@ execution:
 /// Boot an agent against the fixture server. Returns the agent and the temp dir
 /// guard, so the caller decides when the runtime drops — which is the point of
 /// the last test below.
-fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted(tag: &str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     booted_with(tag, || common::canned_http("ok"))
 }
 
 /// [`booted`], driven by a provider of the caller's choice.
 fn booted_with(
     tag: &str,
-    http: impl Fn() -> jan_klod_core::route::HttpFn,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+    http: impl Fn() -> jk_wasm::route::HttpFn,
+) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     booted_against(tag, &fixture_script(tag), http)
 }
 
@@ -124,8 +124,8 @@ fn booted_with(
 fn booted_against(
     tag: &str,
     script: &str,
-    http: impl Fn() -> jan_klod_core::route::HttpFn,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+    http: impl Fn() -> jk_wasm::route::HttpFn,
+) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&GUESTS) {
         return None;
     }
@@ -201,7 +201,7 @@ fn a_tool_on_a_stdio_server_can_be_called() {
     let completions = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(Mutex::new(String::new()));
     let (counter, recorded) = (Arc::clone(&completions), Arc::clone(&seen));
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let counter = Arc::clone(&counter);
         let recorded = Arc::clone(&recorded);
         Box::new(move |_m, _u, _h, body, _t| {
@@ -219,7 +219,7 @@ fn a_tool_on_a_stdio_server_can_be_called() {
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"done"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&response).unwrap(),
@@ -338,7 +338,7 @@ fn a_malformed_reply_leaves_the_server_down_rather_than_breaking_the_turn() {
     // capability, not a broken agent.
     let answer = agent.run("s1", "hello");
     assert!(
-        matches!(answer, jan_klod_core::conductor::RunResult::Answered { .. }),
+        matches!(answer, jk_agent::conductor::RunResult::Answered { .. }),
         "a turn must still run with a broken MCP server configured: {answer:?}"
     );
     assert!(
@@ -376,7 +376,7 @@ fn a_silent_child_gives_up_instead_of_pinning_the_core() {
     );
     let answer = agent.run("s1", "hello");
     assert!(
-        matches!(answer, jan_klod_core::conductor::RunResult::Answered { .. }),
+        matches!(answer, jk_agent::conductor::RunResult::Answered { .. }),
         "a turn must still run with a silent MCP server configured: {answer:?}"
     );
     assert!(

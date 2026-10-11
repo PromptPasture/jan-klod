@@ -7,11 +7,11 @@
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
-use jan_klod_core::conductor::Event;
-use jan_klod_core::event_log::{self, decode};
-use jan_klod_core::store::Store;
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
+use jk_protocol::turn::Event;
+use jk_session::event_log::{self, decode};
 use jk_session::event_log::{verify_chain, ChainStatus};
+use jk_session::store::Store;
 use rusqlite::params;
 
 use crate::common;
@@ -338,7 +338,7 @@ extensions:
     .unwrap();
 
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::Arc::clone(&calls);
         Box::new(move |_m, _u, _h, _b, _t| {
             let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -351,7 +351,7 @@ extensions:
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"done"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&body).unwrap(),

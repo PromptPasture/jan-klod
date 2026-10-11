@@ -4,7 +4,7 @@ title: Contracts
 description: Stable WIT interfaces that form the boundary between core and extensions
 tags: [contracts, wit, interfaces, extensions, wasm]
 created: 2026-06-28T00:00:00Z
-updated: 2026-09-18T00:00:00Z
+updated: 2026-10-11T00:00:00Z
 ---
 
 Contracts are stable interfaces the core exposes and extensions consume or implement. A breaking change breaks all extensions.
@@ -69,11 +69,11 @@ Core grants these capabilities to every extension.
 | `host-event.wit` | `host-event` | Event bus publish/subscribe — **observation-only** (fire-and-forget); cannot shape the loop |
 | `host-storage.wit` | `host-storage` | Namespaced view of the core's own store. **Granted** (`persist: true`), never ambient; namespaces are prefixed with the calling component's id |
 | `host-secrets.wit` | `host-secrets` | Named secrets from the configured backend (e.g. environment variables). **Granted** (`secrets: true`), default-deny; no enumeration or listing, read-only by name |
-| `host-agent.wit` | `host-agent` | Drive a session from inside the sandbox — the inward twin of `jan-klod-protocol` (create/list/read/fork a session, send a message, answer a prompt). Default-deny, manifest-declared *(Phase 22, drafted ahead of a host implementation)* |
+| `host-agent.wit` | `host-agent` | Drive a session from inside the sandbox — the inward twin of `jk-protocol` (create/list/read/fork a session, send a message, answer a prompt). Default-deny, manifest-declared *(Phase 22, drafted ahead of a host implementation)* |
 
 Interceptor dispatch isn't in this table: it's a core-native call of `interceptor` (above), not a capability.
 
-There is no `host-serve`/`host-socket` pair and no `api-*`/`chat-*` extension family — that design was superseded. The built inbound surface (REST + SSE, stdio JSON-RPC, WebSocket) is host-side code in `jan-klod-host`, not something a sandboxed guest holds; Telegram is likewise kernel code today, which is exactly the gap `host-agent` (Phase 22) is meant to close.
+There is no `host-serve`/`host-socket` pair and no `api-*`/`chat-*` extension family — that design was superseded. The built inbound surface (REST + SSE, stdio JSON-RPC, WebSocket) is host-side code in `jk-host`, not something a sandboxed guest holds; Telegram is likewise kernel code today, which is exactly the gap `host-agent` (Phase 22) is meant to close.
 
 ## Streaming
 
@@ -166,7 +166,7 @@ interface extension-lifecycle {
 
 There is **no WIT UI contract.** UIs are not extensions and run in their own processes; they reach core the same way any external client does — over the core's host-side client surface. Today that surface is the REST + SSE API; it is built into the core binary since Phase 3.
 
-**Phase 13 — the client protocol is a contract of the same rank as WIT.** The `jan-klod-protocol` crate (`pkgs/host/protocol`) holds the typed commands and notifications, `PROTOCOL_VERSION`, and a JSON Schema export in [`schema/protocol.schema.json`](../../pkgs/host/protocol/schema/protocol.schema.json) — which is what a non-Rust client generates its types from.
+**Phase 13 — the client protocol is a contract of the same rank as WIT.** The `jk-protocol` crate (`pkgs/host/protocol`) holds the typed commands and notifications, `PROTOCOL_VERSION`, and a JSON Schema export in [`schema/protocol.schema.json`](../../pkgs/host/protocol/schema/protocol.schema.json) — which is what a non-Rust client generates its types from.
 
 ### Transports
 
@@ -201,7 +201,7 @@ An answer that arrives when nothing asked is refused on both — `409` over REST
 | `turn/follow-up` | `session`, `message` | — (no steering over REST) |
 | `surface/invoke` | `extension`, `name`, `arguments` | — (contributions are new) |
 
-**Notifications** (core → client). The first five are `conductor::Event` one for one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable command, `session/updated` a transcript that moved, `surface/contributions` what the extensions offer a client to render ([`wit/client-surface.wit`](../../wit/client-surface.wit)) — sent at connect and again whenever the set changes:
+**Notifications** (core → client). The first five are `turn::Event` one for one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable command, `session/updated` a transcript that moved, `surface/contributions` what the extensions offer a client to render ([`wit/client-surface.wit`](../../wit/client-surface.wit)) — sent at connect and again whenever the set changes:
 
 | Notification | Params | SSE frame today |
 |---|---|---|
@@ -286,7 +286,7 @@ Manifests don't grant permissions — `config.yaml`'s grants do.
 
 There is no such thing as an optional field to add. A field is part of the shape; optionality lives in its *type* (`option<T>`), which has to be there from the start to help.
 
-**Pre-1.0 is stricter than typical semver.** While major is `0` the package is free to change, so `0.x` carries no promise — differing **minor** is refused. Semver says `0.1` and `0.9` might be compatible; here they're not. `core::manifest::api_compatible` requires same major and same minor while major is `0`; from `1.0` on, differing minor passes.
+**Pre-1.0 is stricter than typical semver.** While major is `0` the package is free to change, so `0.x` carries no promise — differing **minor** is refused. Semver says `0.1` and `0.9` might be compatible; here they're not. `jk_wasm::manifest::api_compatible` requires same major and same minor while major is `0`; from `1.0` on, differing minor passes.
 
 **What the host does with it today.** Every component ships an `api-version` in its [manifest](#the-extension-manifest), and `Runtime::boot` refuses an incompatible one, naming both versions and the component. That is the whole of it.
 

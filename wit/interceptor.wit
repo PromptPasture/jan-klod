@@ -36,7 +36,7 @@ interface interceptor {
     /// why. `session-start` and `on-error` were exactly that — carried since v1,
     /// never dispatched, never subscribed to — and were removed rather than left
     /// as a trap for the first third-party interceptor to find. They come back
-    /// the day something drives them; `jan_klod_core::intercept::is_dispatched`
+    /// the day something drives them; `jk_protocol::intercept::is_dispatched`
     /// makes that a compile-time obligation rather than a promise.
     enum phase {
         /// Per run, before the agentic loop. May short-circuit to a direct

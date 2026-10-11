@@ -17,7 +17,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 
@@ -40,9 +40,9 @@ struct Script {
     calls_seen: AtomicU32,
 }
 
-fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
+fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
     let script = Arc::clone(script);
-    move || -> jan_klod_core::route::HttpFn {
+    move || -> jk_wasm::route::HttpFn {
         let script = Arc::clone(&script);
         Box::new(move |_m, _u, _h, body, _t| {
             script.calls_seen.fetch_add(1, Ordering::Relaxed);
@@ -72,7 +72,7 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
                 if let Some(body) = text {
                     script.results.lock().expect("not poisoned").push(body);
                 }
-                return Ok(jan_klod_core::http::WireResponse {
+                return Ok(jk_wasm::http::WireResponse {
                     status: 200,
                     headers: vec![],
                     body: serde_json::to_vec(&serde_json::json!({"choices":[{"message":{
@@ -98,7 +98,7 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
                         "finish_reason":"tool_calls"}]})
                 },
             );
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&response).unwrap(),
@@ -195,14 +195,14 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
 
     let runtime = Runtime::boot(&config, &ext).expect("the runtime boots");
     let factory = provider(&script);
-    let agents = jan_klod_host::sessions::Agents::new(runtime, Arc::new(factory));
+    let agents = jk_host::sessions::Agents::new(runtime, Arc::new(factory));
 
     // The seam is no longer this test's to drive (#231). It runs inside
     // the session's thread, between one turn and the next, for every
     // transport — so what is asserted here is the *promise*: install in
     // one turn, call in the next, same session, no restart.
     let one = agents.of("s1");
-    one.run(|agent: &mut jan_klod_core::AgentSession| {
+    one.run(|agent: &mut jk_agent::AgentSession| {
         agent.run("s1", "install the hello tool");
     })
     .expect("turn one ran");
@@ -211,7 +211,7 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
     // made the old one out of date.
     agents
         .of("s1")
-        .run(|agent: &mut jan_klod_core::AgentSession| {
+        .run(|agent: &mut jk_agent::AgentSession| {
             agent.run("s1", "now greet the world");
         })
         .expect("turn two ran");
@@ -238,11 +238,11 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
     // Without it the log ends on the install's "callable from the next
     // turn" — a promise, with nothing saying whether it held.
     let store =
-        jan_klod_core::store::Store::open(dir.join("jan-klod.db")).expect("the log is readable");
+        jk_session::store::Store::open(dir.join("jan-klod.db")).expect("the log is readable");
     let rows = store.session_events("s1").expect("the session has a log");
     assert!(
         rows.iter().any(|row| {
-            row.kind == jan_klod_core::event_log::KIND_EXTENSION_LOADED
+            row.kind == jk_session::event_log::KIND_EXTENSION_LOADED
                 && row.payload.contains("tool-hello")
                 && row.payload.contains("\"loaded\":true")
         }),
@@ -308,13 +308,13 @@ fn a_session_that_installed_nothing_can_call_what_another_installed() {
 
     let runtime = Runtime::boot(&config, &ext).expect("the runtime boots");
     let factory = provider(&script);
-    let agents = jan_klod_host::sessions::Agents::new(runtime, Arc::new(factory));
+    let agents = jk_host::sessions::Agents::new(runtime, Arc::new(factory));
 
     // A installs. The adoption happens inside A's session thread, after
     // its turn, with no help from this test.
     agents
         .of("installer")
-        .run(|agent: &mut jan_klod_core::AgentSession| {
+        .run(|agent: &mut jk_agent::AgentSession| {
             agent.run("installer", "install the hello tool");
         })
         .expect("A's turn ran");
@@ -322,7 +322,7 @@ fn a_session_that_installed_nothing_can_call_what_another_installed() {
     // B has never been mentioned before now.
     agents
         .of("bystander")
-        .run(|agent: &mut jan_klod_core::AgentSession| {
+        .run(|agent: &mut jk_agent::AgentSession| {
             agent.run("bystander", "now greet the world");
         })
         .expect("B's turn ran");

@@ -263,11 +263,11 @@ mod tests {
     }
 
     /// One extension reporting one status item, as the notification delivers it.
-    fn reporting(text: &str) -> Vec<jan_klod_protocol::Contributions> {
-        vec![jan_klod_protocol::Contributions {
+    fn reporting(text: &str) -> Vec<jk_protocol::Contributions> {
+        vec![jk_protocol::Contributions {
             extension: "interceptor.system".to_owned(),
             commands: vec![],
-            status_items: vec![jan_klod_protocol::StatusItem {
+            status_items: vec![jk_protocol::StatusItem {
                 name: "prompt-source".to_owned(),
                 text: text.to_owned(),
                 detail: "why".to_owned(),

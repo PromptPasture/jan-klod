@@ -14,11 +14,11 @@
 //! vanish. The second assertion counts distinct glyphs, not just comparing
 //! renders (which would pass even if only tint told states apart).
 
-use jan_klod::app::{App, Prompt};
-use jan_klod::blocks;
-use jan_klod::layout;
-use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
-use jan_klod::wrap::width as cells;
+use jk_tui::app::{App, Prompt};
+use jk_tui::blocks;
+use jk_tui::layout;
+use jk_tui::theme::{Depth, GlyphSet, Mode, Theme};
+use jk_tui::wrap::width as cells;
 
 /// The turn the gate names, driven through the model rather than assembled as
 /// entries — so this exercises the paths a real turn takes.

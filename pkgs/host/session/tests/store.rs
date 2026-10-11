@@ -1,6 +1,6 @@
 //! The host-side persistent store.
 
-use jan_klod_protocol::turn::{Event, ToolCall, ToolOutcome};
+use jk_protocol::turn::{Event, ToolCall, ToolOutcome};
 use jk_session::event_log::{encode, envelope, KIND_USER_MESSAGE};
 use jk_session::projection;
 use jk_session::store::{Store, StoreError};
@@ -585,7 +585,7 @@ fn recent_turns_reads_a_small_bounded_tail_of_a_long_session_with_the_same_messa
     // `Message` has no `PartialEq` (it is not a comparable value anywhere
     // else in the crate), so the comparison is over `(role, content,
     // tool_call_id)` tuples rather than the messages themselves.
-    let as_tuples = |messages: Vec<jan_klod_protocol::turn::Message>| {
+    let as_tuples = |messages: Vec<jk_protocol::turn::Message>| {
         messages
             .into_iter()
             .map(|m| (m.role, m.content, m.tool_call_id))

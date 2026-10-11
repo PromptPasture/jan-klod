@@ -4,7 +4,7 @@
 //! * **stdio** (default): spawn `jan-klod-gateway rpc`, speak JSON-RPC over pipes.
 //! * **REST + SSE**: `POST /session/:id/message`, stream back `event:/data:` frames.
 //!
-//! Depends only on `jan-klod-protocol` wire contract (not core runtime or Wasmtime).
+//! Depends only on `jk-protocol` wire contract (not core runtime or Wasmtime).
 
 pub mod app;
 pub mod blocks;
@@ -122,7 +122,7 @@ pub enum StreamEvent {
     /// set (`wit/client-surface.wit`). Not a turn event: it arrives at the
     /// handshake and again whenever the set changes, so a client that ignores
     /// it renders no contributions and otherwise behaves identically.
-    Contributions(Vec<jan_klod_protocol::Contributions>),
+    Contributions(Vec<jk_protocol::Contributions>),
 }
 
 /// Parse SSE frame (event kind + data JSON) → [`StreamEvent`] or `None`.
@@ -483,10 +483,7 @@ pub fn list_sessions(addr: &str) -> Result<Vec<transport::SessionSummary>, Strin
 /// # Errors
 /// Returns a human-readable error if the connection fails or the response is
 /// not well-formed.
-pub fn get_session(
-    addr: &str,
-    session: &str,
-) -> Result<jan_klod_protocol::SessionGetResult, String> {
+pub fn get_session(addr: &str, session: &str) -> Result<jk_protocol::SessionGetResult, String> {
     let request = format!(
         "GET /session/{session} HTTP/1.1\r\nHost: {addr}\r\n{}Connection: close\r\n\r\n",
         auth_header()

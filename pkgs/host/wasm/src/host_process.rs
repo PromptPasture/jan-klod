@@ -1148,9 +1148,10 @@ mod tests {
         // workspace under `env::temp_dir()`, which reads `TMPDIR`, so
         // poisoning it first sends the workspace to the filesystem root. The
         // host's real `TMPDIR` is outside the workspace anyway, which is all
-        // this needs to distinguish.
+        // this needs to distinguish. Nor after `runner()`: under `cargo test`
+        // every test shares this process's environment, and a sentinel set
+        // here broke the fixtures of every test that ran after it (#297).
         let (ws, runner) = runner();
-        std::env::set_var("TMPDIR", "/host-tmpdir-must-not-be-used");
         let exit = runner
             .exec(
                 "/bin/sh",

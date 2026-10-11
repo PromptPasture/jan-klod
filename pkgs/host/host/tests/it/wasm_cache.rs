@@ -3,7 +3,7 @@
 //! Cranelift the second time, and mutating a guest's bytes between boots
 //! produces a fresh miss rather than a stale hit.
 //!
-//! `pkgs/host/core/src/wasm_cache.rs`'s unit tests exercise the mechanism directly
+//! `pkgs/host/wasm/src/wasm_cache.rs`'s unit tests exercise the mechanism directly
 //! against Wasmtime's API — with synthetic WAT components — and cover the
 //! "changing the Wasmtime version" acceptance (two crate versions cannot both
 //! link into one binary). This file proves the claim end-to-end through
@@ -11,7 +11,7 @@
 //!
 //! Skips (passes as a no-op) when the guest is not staged in `ext/`.
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 

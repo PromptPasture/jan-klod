@@ -5,7 +5,7 @@
 //! - No file is re-written if the content is identical.
 //! - The setup-digest file is created and allows hand-edit detection.
 
-use jan_klod_host::config_write::{has_not_been_edited, write_config_atomically};
+use jk_host::config_write::{has_not_been_edited, write_config_atomically};
 use std::fs;
 use std::path::PathBuf;
 

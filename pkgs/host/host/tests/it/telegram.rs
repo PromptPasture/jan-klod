@@ -4,8 +4,8 @@
 
 use std::cell::RefCell;
 
-use jan_klod_core::Runtime;
-use jan_klod_host::telegram::poll_once;
+use jk_agent::Runtime;
+use jk_host::telegram::poll_once;
 
 use crate::common;
 
@@ -79,7 +79,7 @@ extensions:
 }
 
 /// Mock provider: requests write, then reports done (gate has something to confirm).
-fn write_then_answer_http() -> jan_klod_core::route::HttpFn {
+fn write_then_answer_http() -> jk_wasm::route::HttpFn {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     let calls = Arc::new(AtomicU32::new(0));
@@ -109,7 +109,7 @@ fn write_then_answer_http() -> jan_klod_core::route::HttpFn {
                 }]
             })
         };
-        Ok(jan_klod_core::http::WireResponse {
+        Ok(jk_wasm::http::WireResponse {
             status: 200,
             headers: vec![],
             body: serde_json::to_vec(&body).unwrap(),

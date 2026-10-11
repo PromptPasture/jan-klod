@@ -13,9 +13,9 @@
 
 use std::io::Cursor;
 
-use jan_klod_core::Runtime;
-use jan_klod_host::rpc;
-use jan_klod_protocol::{jsonrpc, Notification, PROTOCOL_VERSION};
+use jk_agent::Runtime;
+use jk_host::rpc;
+use jk_protocol::{jsonrpc, Notification, PROTOCOL_VERSION};
 
 use crate::common;
 
@@ -24,7 +24,7 @@ use crate::common;
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "interceptor-system.wasm"];
 
 /// An offline agent, with `interceptor-system` on when `contributing`.
-fn booted(tag: &str, contributing: bool) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted(tag: &str, contributing: bool) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&GUESTS) {
         return None;
     }
@@ -59,7 +59,7 @@ extensions:
 }
 
 /// Drive a scripted exchange and hand back what the core wrote, in order.
-fn exchange(agent: &mut jan_klod_core::AgentSession, script: &[String]) -> Vec<String> {
+fn exchange(agent: &mut jk_agent::AgentSession, script: &[String]) -> Vec<String> {
     let input = Cursor::new(script.join("\n").into_bytes());
     let mut output = Vec::new();
     rpc::serve(input, &mut output, agent).expect("the loop runs to EOF");

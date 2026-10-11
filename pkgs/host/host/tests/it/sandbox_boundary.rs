@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use jan_klod_core::host_process::ProcessRunner;
-use jan_klod_core::tool_host::ToolExtension;
+use jk_wasm::host_process::ProcessRunner;
+use jk_wasm::tool_host::ToolExtension;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 

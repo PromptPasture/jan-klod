@@ -46,7 +46,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-use jan_klod_core::AgentSession;
+use jk_agent::AgentSession;
 
 use crate::rpc::{self, Incoming, Served, Wire};
 use crate::sessions::Agents;

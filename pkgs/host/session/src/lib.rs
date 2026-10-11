@@ -11,13 +11,13 @@
 //! # Why it is a crate
 //!
 //! So that `rusqlite` is a dependency of one crate rather than of everything
-//! that can reach a session. `jan-klod-core` linked SQLite into the same
+//! that can reach a session. The old core crate linked SQLite into the same
 //! binary as the component runtime, and nothing in the type system said which
 //! half a given line belonged to. Prior art for the boundary: Pi keeps its
 //! SQLite session backend in a package of its own for the same reason.
 //!
 //! The vocabulary of a turn — `Event`, `Message`, `ToolCall` — comes from
-//! [`jan_klod_protocol::turn`], *below* this crate. It cannot come from the
+//! [`jk_protocol::turn`], *below* this crate. It cannot come from the
 //! loop above, which needs this crate: that is the cycle this arrangement
 //! exists to avoid.
 

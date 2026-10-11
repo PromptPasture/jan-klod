@@ -1,6 +1,6 @@
 # `jan-klod-gui` — the desktop window
 
-Tauri 2 window around **the web client the core serves**. Not a third codebase: `pkgs/clients/web` builds, `pkgs/host/core` serves at `/`, this opens a webview. Vision decision 5.
+Tauri 2 window around **the web client the core serves**. Not a third codebase: `pkgs/clients/web` builds, `pkgs/host/host` serves at `/`, this opens a webview. Vision decision 5.
 
 ```sh
 make gui       # build, stage beside host binaries
@@ -49,7 +49,7 @@ jan-klod-gui --url <url> [--title <title>]
 
 `jan-klod --gui` handles it: `ensure_gateway` (spawn-or-attach, in `pkgs/clients/tui`), then launch with answering URL. Second spawn-or-attach risks finding different gateway—the bug the split avoids.
 
-Found like the gateway: **sibling executable, then `PATH`** (`jan_klod::sibling_bin`). Release bundles satisfy this (three binaries side-by-side); dev trees don't (two workspaces). `make gui` staging fixes this (vs. a checkout-only lookup rule).
+Found like the gateway: **sibling executable, then `PATH`** (`jk_tui::sibling_bin`). Release bundles satisfy this (three binaries side-by-side); dev trees don't (two workspaces). `make gui` staging fixes this (vs. a checkout-only lookup rule).
 
 ## The one thing here that is not a window
 

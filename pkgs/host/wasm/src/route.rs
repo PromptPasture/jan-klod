@@ -1,7 +1,7 @@
 //! Provider instantiation and the conductor's provider adapter.
 //!
 //! Extensions consume other extensions by instantiating them and delegating.
-//! The loop drives providers through the [`Completer`](crate::conductor::Completer)
+//! The loop drives providers through the [`Completer`](jk_protocol::intercept::Completer)
 //! trait (see [`ProviderCompleter`]). The provider's `host-http` is injected as
 //! [`HttpFn`] so turns run live (real client) or offline (canned reply) without
 //! changing the adapter.
@@ -12,7 +12,7 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-use jan_klod_config::ExtensionInstance;
+use jk_config::ExtensionInstance;
 
 use crate::host::ConfigSection;
 use crate::http::{WireError, WireResponse};
@@ -234,7 +234,7 @@ fn drive(
     }
 }
 
-/// A provider adapted to the [`Completer`](crate::conductor::Completer) trait:
+/// A provider adapted to the [`Completer`](jk_protocol::intercept::Completer) trait:
 /// one link in the loop's fallback chain.
 pub struct ProviderCompleter {
     id: String,
@@ -304,15 +304,15 @@ impl ProviderCompleter {
     }
 }
 
-impl crate::conductor::Completer for ProviderCompleter {
+impl jk_protocol::intercept::Completer for ProviderCompleter {
     fn id(&self) -> &str {
         &self.id
     }
 
     fn complete(
         &mut self,
-        request: &crate::intercept::PendingRequest,
-    ) -> Result<crate::conductor::Completion, String> {
+        request: &jk_protocol::intercept::PendingRequest,
+    ) -> Result<jk_protocol::intercept::Completion, String> {
         let preq = intercept_to_p_request(request);
         let iface = self.world.jan_klod_interfaces_llm_provider();
         let handle = match iface.call_complete(&mut self.store, &preq) {
@@ -330,7 +330,7 @@ impl crate::conductor::Completer for ProviderCompleter {
             match chunk {
                 p_llm::CompletionChunk::TextDelta(delta) => text.push_str(&delta),
                 p_llm::CompletionChunk::ToolCallRequest(call) => {
-                    tool_calls.push(crate::intercept::ToolCall {
+                    tool_calls.push(jk_protocol::turn::ToolCall {
                         id: call.id,
                         name: call.name,
                         arguments: call.arguments,
@@ -343,7 +343,7 @@ impl crate::conductor::Completer for ProviderCompleter {
             }
         }
         let _ = iface.call_close_stream(&mut self.store, handle);
-        Ok(crate::conductor::Completion {
+        Ok(jk_protocol::intercept::Completion {
             text,
             tool_calls,
             finish_reason,
@@ -352,8 +352,10 @@ impl crate::conductor::Completer for ProviderCompleter {
 }
 
 /// Map conductor's `pending-request` to provider's `completion-request`.
-fn intercept_to_p_request(request: &crate::intercept::PendingRequest) -> p_llm::CompletionRequest {
-    use crate::intercept::Role;
+fn intercept_to_p_request(
+    request: &jk_protocol::intercept::PendingRequest,
+) -> p_llm::CompletionRequest {
+    use jk_protocol::turn::Role;
     p_llm::CompletionRequest {
         model: request.model.clone().unwrap_or_default(),
         messages: request
@@ -388,9 +390,10 @@ fn intercept_to_p_request(request: &crate::intercept::PendingRequest) -> p_llm::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conductor::Completer;
     use crate::http::WireResponse;
-    use crate::intercept::{Message, PendingRequest, Role};
+    use jk_protocol::intercept::Completer;
+    use jk_protocol::intercept::PendingRequest;
+    use jk_protocol::turn::{Message, Role};
     use std::path::PathBuf;
 
     fn repo_root() -> PathBuf {
@@ -461,7 +464,7 @@ mod tests {
         assert_eq!(completion.text, "pong");
         assert_eq!(
             completion.tool_calls,
-            [] as [jan_klod_protocol::turn::ToolCall; 0]
+            [] as [jk_protocol::turn::ToolCall; 0]
         );
     }
 }

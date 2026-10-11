@@ -70,12 +70,11 @@ impl Checks {
     /// [`ExtError::Config`] if file can't be read/parsed or [`Checks::from_config`] refuses.
     pub fn from_config_path(path: &Path) -> Result<Self, ExtError> {
         // top_level: avoid expanding ${VAR} in enabled instances (no provider API key needed).
-        let registry = jan_klod_config::Config::top_level(path, "registry").map_err(|err| {
-            ExtError::Config {
+        let registry =
+            jk_config::Config::top_level(path, "registry").map_err(|err| ExtError::Config {
                 path: path.display().to_string(),
                 detail: err.to_string(),
-            }
-        })?;
+            })?;
         Self::from_config(registry.as_ref())
     }
 }

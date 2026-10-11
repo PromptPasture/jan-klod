@@ -3,12 +3,12 @@ package jan-klod:interfaces@0.4.0;
 /// Drive a session from inside the sandbox — the inward twin of the client
 /// protocol (Phase 22).
 ///
-/// `jan-klod-protocol` is what a *client* says to the runtime: create a
+/// `jk-protocol` is what a *client* says to the runtime: create a
 /// session, list them, read one, fork it, send a message, answer a prompt.
 /// This interface offers the same vocabulary *inward*, to a granted guest. The
 /// symmetry is the point: a Telegram bot and a terminal client want the same
 /// six things, and one of them happens to run in a component. Where the shapes
-/// differ, `jan-klod-protocol` (`pkgs/host/protocol/src/lib.rs`) is right and this
+/// differ, `jk-protocol` (`pkgs/host/protocol/src/lib.rs`) is right and this
 /// follows it.
 ///
 /// It is the most powerful capability in the set — a holder drives the loop,

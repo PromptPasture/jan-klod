@@ -41,7 +41,7 @@ pub const INDEX_VERSION: u64 = 1;
 
 /// One published component, as the index describes it.
 ///
-/// The same shape `pkgs/host/core/examples/registry_index.rs` writes — one
+/// The same shape `pkgs/host/wasm/examples/registry_index.rs` writes — one
 /// format, written in one place and read in one place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -217,7 +217,7 @@ pub fn url_from_config_path(path: &Path) -> Result<String, IndexError> {
     // it: the latter expands `${VAR}` in every enabled instance, searching a
     // registry would demand a provider's API key.
     let registry =
-        jan_klod_config::Config::top_level(path, "registry").map_err(|err| IndexError::Config {
+        jk_config::Config::top_level(path, "registry").map_err(|err| IndexError::Config {
             path: path.display().to_string(),
             detail: err.to_string(),
         })?;

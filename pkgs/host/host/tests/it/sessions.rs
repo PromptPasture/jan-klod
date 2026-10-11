@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use jan_klod_core::{AgentSession, Runtime};
-use jan_klod_host::sessions::{Agents, Factory};
+use jk_agent::{AgentSession, Runtime};
+use jk_host::sessions::{Agents, Factory};
 
 use crate::common;
 
@@ -23,7 +23,7 @@ use crate::common;
 /// prove nothing about concurrency.
 fn paced_factory(calls: &Arc<AtomicU32>) -> Factory {
     let calls = Arc::clone(calls);
-    Arc::new(move || -> jan_klod_core::route::HttpFn {
+    Arc::new(move || -> jk_wasm::route::HttpFn {
         let calls = Arc::clone(&calls);
         Box::new(move |_m, _u, _h, body, _t| {
             calls.fetch_add(1, Ordering::Relaxed);
@@ -31,7 +31,7 @@ fn paced_factory(calls: &Arc<AtomicU32>) -> Factory {
             if asked.contains("take your time") {
                 std::thread::sleep(Duration::from_millis(1500));
             }
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&serde_json::json!({"choices":[{"message":{
@@ -141,7 +141,7 @@ fn one_agent_makes_the_same_two_turns_wait() {
     };
     let calls = Arc::new(AtomicU32::new(0));
     let factory = paced_factory(&calls);
-    let (jobs, queued) = jan_klod_host::session_thread::queue::<AgentSession>();
+    let (jobs, queued) = jk_host::session_thread::queue::<AgentSession>();
 
     let fast_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let slow_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
@@ -169,7 +169,7 @@ fn one_agent_makes_the_same_two_turns_wait() {
         let mut agent = runtime
             .build_agent(&*factory)
             .expect("the single agent boots");
-        jan_klod_host::session_thread::serve(&mut agent, &queued);
+        jk_host::session_thread::serve(&mut agent, &queued);
     });
 
     let slow = slow_at.lock().expect("not poisoned").expect("slow ran");
@@ -256,7 +256,7 @@ extensions:
         .run(|agent: &mut AgentSession| {
             (
                 agent.transcript("alpha").len(),
-                jan_klod_core::session::sessions_payload(agent).to_string(),
+                jk_agent::session::sessions_payload(agent).to_string(),
             )
         })
         .expect("the reader ran");

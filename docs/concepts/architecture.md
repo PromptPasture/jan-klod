@@ -4,10 +4,10 @@ title: Architecture
 description: High-level architecture of the Jan-Klod agent runtime
 tags: [architecture, core, extensions, rust, wasm, wasmtime]
 created: 2026-06-28T00:00:00Z
-updated: 2026-09-18T00:00:00Z
+updated: 2026-10-11T00:00:00Z
 ---
 
-> **Foundation:** **Rust + Wasmtime** host running WebAssembly Components (WIT contracts) as a standalone, user-privilege process — see [decisions/2026-06-29-component-model-rust](../decisions/2026-06-29-component-model-rust/Handoff.md). Taxonomy and contracts unchanged from Go + Wazero; host language/runtime and extension sandboxing differ. Because **nothing is trusted**, native extensions are gone; the inbound network surface (REST + SSE, stdio JSON-RPC) is host-side code in `jan-klod-host`, not a WASM extension — the planned `api-*`/`chat-*`/`host-serve`/`host-socket` design was superseded before anything shipped against it. The **agent loop** (re-architected 2026-07-01) has thin *mechanism* in **core** and all *decisions* in **interceptor** extensions — see [Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md). All implementation choices resolved as of v0.1.0.
+> **Foundation:** **Rust + Wasmtime** host running WebAssembly Components (WIT contracts) as a standalone, user-privilege process — see [decisions/2026-06-29-component-model-rust](../decisions/2026-06-29-component-model-rust/Handoff.md). Taxonomy and contracts unchanged from Go + Wazero; host language/runtime and extension sandboxing differ. Because **nothing is trusted**, native extensions are gone; the inbound network surface (REST + SSE, stdio JSON-RPC) is host-side code in `jk-host`, not a WASM extension — the planned `api-*`/`chat-*`/`host-serve`/`host-socket` design was superseded before anything shipped against it. The **agent loop** (re-architected 2026-07-01) has thin *mechanism* in **core** and all *decisions* in **interceptor** extensions — see [Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md). All implementation choices resolved as of v0.1.0.
 >
 > **Post-v0.1 (2026-09-08):** jan-klod is an **agent runtime** (kernel + distributions + clients) — [Vision — Harness as a Platform](../decisions/2026-09-08-harness-platform-vision/Vision.md), Phases 13–18: versioned client protocol, event-sourced session log, OS-level effect sandbox for `host-process`, manifest-declared capability grants, web client + Tauri shell, MCP + ACP bidirectional. Items marked *(planned, Phase N)* come from there; others describe what is built.
 
@@ -26,9 +26,23 @@ Core runs as a **standalone user-privilege process** (not a daemon) and is **hea
 - **Agent loop mechanism** — thin conductor (`stream → tools → loop`) + **interceptor dispatch** (see [Agent loop architecture](#agent-loop-architecture))
 - Observability (structured logging)
 
-**Zero agent behaviour in core.** The loop is pure *mechanism* — no policy. Every decision (loop entry, model, tools, history trim, tool permit) comes from sandboxed **interceptor** extensions. A core-only boot with no interceptors runs bare `stream → tools → loop`. UIs are separate clients, and the kernel crate holds no transport at all: REST, stdio JSON-RPC, ACP and MCP live in the `jan-klod-host` binary crate that serves them ([#179](https://github.com/PromptPasture/jan-klod/issues/179)), and the Telegram poller sits beside them until [#173](https://github.com/PromptPasture/jan-klod/issues/173) makes it an extension.
+**Zero agent behaviour in core.** The loop is pure *mechanism* — no policy. Every decision (loop entry, model, tools, history trim, tool permit) comes from sandboxed **interceptor** extensions. A core-only boot with no interceptors runs bare `stream → tools → loop`. UIs are separate clients, and the kernel crate holds no transport at all: REST, stdio JSON-RPC, ACP and MCP live in the `jk-host` binary crate that serves them ([#179](https://github.com/PromptPasture/jan-klod/issues/179)), and the Telegram poller sits beside them until [#173](https://github.com/PromptPasture/jan-klod/issues/173) makes it an extension.
 
-> **Why the loop is in core (not an extension).** With every decision moved to interceptors, the loop is ~200 lines of conductor (provider call, tool dispatch, interceptor dispatch, streaming handles, cancel, steering queue). Native Rust keeps "nothing trusted" (core is the trusted host; all providers/tools/stores/interceptors stay sandboxed WASM) and avoids WASM loop driving WASM interceptor chain across component boundaries twice. Trade-off: the conductor is no longer swappable/polyglot. See [the decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
+The host is seven `jk-*` crates, each depending only on the ones listed before it ([#172](https://github.com/PromptPasture/jan-klod/issues/172)):
+
+| Crate | Path | Holds |
+|---|---|---|
+| `jk-protocol` | `pkgs/host/protocol` | The client wire contract, the turn vocabulary (`turn`) and the interceptor phase contract and dispatcher (`intercept`) |
+| `jk-config` | `pkgs/host/config` | `config.yaml` parsing |
+| `jk-session` | `pkgs/host/session` | The event log, its projections and the SQLite store — the only crate linking SQLite; no `wasmtime` |
+| `jk-wasm` | `pkgs/host/wasm` | Wasmtime, the linker, every `host-*` capability, manifests, the effect sandbox, egress and the registry — the only crate naming `wasmtime` |
+| `jk-agent` | `pkgs/host/agent` | The harness: the conductor, `AgentSession`, delegation and the wiring of `jk-wasm` to `jk-session`; no transport |
+| `jk-host` | `pkgs/host/host` | Every inbound surface (REST + SSE, WebSocket, stdio JSON-RPC, ACP, MCP, Telegram); ships the `jan-klod-gateway` binary |
+| `jk-tui` | `pkgs/clients/tui` | The terminal client; depends on `jk-protocol` alone and ships the `jan-klod` binary |
+
+The Tauri shell, `jk-gui`, is its own workspace and ships `jan-klod-gui`. Binary names did not change with the package names.
+
+> **Why the loop is in core (not an extension).** With every decision moved to interceptors, the loop is mechanism only: provider call, tool dispatch, interceptor dispatch, streaming handles, cancel, steering queue. Measured 2026-10-11 ([#182](https://github.com/PromptPasture/jan-klod/issues/182)), that is **548 non-test lines** in `pkgs/host/agent/src/conductor.rs` (422 without comments and blanks) plus **454** for the phase dispatcher in `pkgs/host/protocol/src/intercept.rs` (232) — not the ~200 first estimated, and size was never the argument. Native Rust keeps "nothing trusted" (core is the trusted host; all providers/tools/stores/interceptors stay sandboxed WASM) and avoids WASM loop driving WASM interceptor chain across component boundaries twice. Trade-off: the conductor is no longer swappable/polyglot. See [the decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
 
 ## Layers
 
@@ -58,7 +72,7 @@ Three languages are proven rather than claimed, each by a guest the gate runs a 
 ### One tool is not an extension
 
 Every model-facing tool is a component, with one exception: **`ext-install`**,
-implemented by the host in `core::native_tools`. It is stated here rather
+implemented by the host in `jk_wasm::native_tools`. It is stated here rather
 than left to be discovered, because "all tools are components" is a property
 worth keeping deliberately.
 
@@ -86,7 +100,7 @@ an installed extension.
 - Logging, config read (own section only), event bus publish/subscribe
 - Driving a session from inside the sandbox (create/list/read/fork, send a message, answer a prompt) — `host-agent` *(Phase 22, contract drafted, host implementation open)*
 
-There is no inbound-listener or long-lived-socket capability: the built inbound surface (REST + SSE, stdio JSON-RPC) is host-side `axum`/stdio code in `jan-klod-host`, and Telegram is host-side kernel code today — `host-agent` above is what would let a sandboxed guest do that instead.
+There is no inbound-listener or long-lived-socket capability: the built inbound surface (REST + SSE, stdio JSON-RPC) is host-side `axum`/stdio code in `jk-host`, and Telegram is host-side kernel code today — `host-agent` above is what would let a sandboxed guest do that instead.
 
 ### What extensions cannot do
 
@@ -108,7 +122,7 @@ Asserted by `pkgs/host/host/tests/it/sandbox_boundary.rs`, which drives `tool-es
 | `tool-*` | Discrete callable tools | WASM | `tool-web-search` |
 | `agent-*` | AI agent delegation via ACP | WASM | `agent-claude-code`, `agent-opencode`, `agent-codex` |
 
-There is no `api-*`/`chat-*` category. That design (network-facing extensions behind a planned `host-serve`/`host-socket` pair) was superseded before anything shipped against it: the built inbound surface (REST + SSE, stdio JSON-RPC) is host-side code in `jan-klod-host`, and Telegram is host-side kernel code — see [What the host grants extensions](#what-the-host-grants-extensions) and [`host-agent.wit`](contracts.md#host-provided-interfaces) for the Phase 22 path to making a chat driver an ordinary sandboxed guest.
+There is no `api-*`/`chat-*` category. That design (network-facing extensions behind a planned `host-serve`/`host-socket` pair) was superseded before anything shipped against it: the built inbound surface (REST + SSE, stdio JSON-RPC) is host-side code in `jk-host`, and Telegram is host-side kernel code — see [What the host grants extensions](#what-the-host-grants-extensions) and [`host-agent.wit`](contracts.md#host-provided-interfaces) for the Phase 22 path to making a chat driver an ordinary sandboxed guest.
 
 **Every extension is a sandboxed, language-agnostic WASM component — nothing trusted, nothing compiled into core.** (Only loop *mechanism* is in core; it carries no policy — see [Agent loop architecture](#agent-loop-architecture).) Extensions needing network (`provider-*`, `tool-*`) get it only through host-granted capabilities, never raw OS access.
 
@@ -151,12 +165,12 @@ agent-opencode        implements agent-delegate
 
 # there is no api-*/chat-* family: that design (host-serve/host-socket) was
 # superseded before anything shipped against it. The inbound surface is
-# host-side code in jan-klod-host — axum REST + SSE, stdio JSON-RPC — and
+# host-side code in jk-host — axum REST + SSE, stdio JSON-RPC — and
 # Telegram is host-side kernel code, not a guest. See host-agent.wit (Phase 22)
 # for the path to a sandboxed chat/API driver.
 
 # UIs are NOT extensions — separate client processes that connect over
-# REST + SSE or stdio JSON-RPC, both served by jan-klod-host
+# REST + SSE or stdio JSON-RPC, both served by jk-host
 ```
 
 ### User interfaces (separate clients)
@@ -291,13 +305,13 @@ for the rationale.
 
 ## Transport
 
-The HTTP surface is **host-side** — `jan_klod_host::serve` runs an `axum` listener exposing core over **REST + Server-Sent Events (SSE)**, and `GET /ws` beside them. UI clients, browsers, and remote ACP callers consume it. Curl-debuggable, browser-compatible, no stub generation. Endpoints: `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`, `GET /ws`.
+The HTTP surface is **host-side** — `jk_host::serve` runs an `axum` listener exposing core over **REST + Server-Sent Events (SSE)**, and `GET /ws` beside them. UI clients, browsers, and remote ACP callers consume it. Curl-debuggable, browser-compatible, no stub generation. Endpoints: `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`, `GET /ws`.
 
 The session is still `!Send` and still lives on one thread; what changed in Phase 20 is that nothing else does. Requests are served by the runtime, and the session is reached by job (`host::session_thread`) — so a parked confirmation no longer stops the surface, which is what it used to do (#223, #225).
 
-**It is no longer the only surface.** Phase 13 made the client surface a versioned contract ranked as WIT — `jan-klod-protocol`, with typed commands/notifications and version negotiated at connect (see [Contracts](contracts.md#ui--core-client-surface)) — and gave it a second transport:
+**It is no longer the only surface.** Phase 13 made the client surface a versioned contract ranked as WIT — `jk-protocol`, with typed commands/notifications and version negotiated at connect (see [Contracts](contracts.md#ui--core-client-surface)) — and gave it a second transport:
 
-**stdio JSON-RPC** (`jan-klod-gateway rpc`, `jan_klod_host::rpc`) is the TUI default and editor use. Newline-delimited JSON-RPC 2.0 on the process's stdin/stdout: **no port, no token, nothing left running** (client spawns and owns the gateway). Stdout carries frames only; all logs go to stderr.
+**stdio JSON-RPC** (`jan-klod-gateway rpc`, `jk_host::rpc`) is the TUI default and editor use. Newline-delimited JSON-RPC 2.0 on the process's stdin/stdout: **no port, no token, nothing left running** (client spawns and owns the gateway). Stdout carries frames only; all logs go to stderr.
 
 The two differ structurally. Over REST, mid-turn confirmation answers on a *second connection* and cancel is client disconnect. Over stdio there's one pipe: a reader thread holds it during the turn, handing frames to the loop between turn events — how `turn/cancel` gets read and how `turn/follow-up` (steering a running turn) becomes possible, which REST cannot do.
 
@@ -305,7 +319,7 @@ The two differ structurally. Over REST, mid-turn confirmation answers on a *seco
 
 ### The MCP port (`jan-klod-gateway mcp`)
 
-A third surface, first one core doesn't define: **MCP's stdio transport is the framing `rpc` already speaks** — newline-delimited JSON-RPC 2.0, stdout frames and nothing else, stderr logs. `jan_klod_host::mcp` is a method-name-and-payload adapter over the same envelope, not a second transport, costing no dependency.
+A third surface, first one core doesn't define: **MCP's stdio transport is the framing `rpc` already speaks** — newline-delimited JSON-RPC 2.0, stdout frames and nothing else, stderr logs. `jk_host::mcp` is a method-name-and-payload adapter over the same envelope, not a second transport, costing no dependency.
 
 `rmcp`, the official Rust SDK, is async on tokio. `mcp.rs` stays synchronous anyway — the session is `!Send` and reached by job rather than held — so adopting it would be an architectural change rather than a convenience. The parenthetical that used to be here, "why `tiny_http` over `axum`", stopped being true in Phase 20: the surface is `axum` and the session's thread is unaffected by it.
 
@@ -367,7 +381,7 @@ Deliberately **not an extension**; the `store-*` component family never existed.
 
 ### Compile cache
 
-Configured in the same `storage:` block: `cache-dir` (default `wasmtime-cache`, beside `config.yaml`) is where Wasmtime caches compiled components ([#60](https://github.com/PromptPasture/jan-klod/issues/60)), so second boots skip Cranelift recompilation. Wasmtime's own built-in cache (`Cache`/`CacheConfig`, `Config::cache`) wired at `Runtime::boot` — not a bespoke `.cwasm` cache. Evaluated first per the issue and adopted because it keys on everything affecting codegen (component bytes, target triple, compiler/ISA flags, Wasmtime version) and treats corrupt/foreign artefacts as misses, never errors. See `pkgs/host/core/src/wasm_cache.rs` for evaluation and [Security model](security-model.md) for what cache hits trust.
+Configured in the same `storage:` block: `cache-dir` (default `wasmtime-cache`, beside `config.yaml`) is where Wasmtime caches compiled components ([#60](https://github.com/PromptPasture/jan-klod/issues/60)), so second boots skip Cranelift recompilation. Wasmtime's own built-in cache (`Cache`/`CacheConfig`, `Config::cache`) wired at `Runtime::boot` — not a bespoke `.cwasm` cache. Evaluated first per the issue and adopted because it keys on everything affecting codegen (component bytes, target triple, compiler/ISA flags, Wasmtime version) and treats corrupt/foreign artefacts as misses, never errors. See `pkgs/host/wasm/src/wasm_cache.rs` for evaluation and [Security model](security-model.md) for what cache hits trust.
 
 ### Two tables
 
@@ -380,7 +394,7 @@ events(session TEXT, seq INTEGER, ts INTEGER, kind TEXT, payload TEXT,
 
 One row per event, `seq` numbered from 1 per session — a log reads as a gapless sequence. `seq` is allocated inside the insert (`SELECT COALESCE(MAX(seq), 0) + 1 … RETURNING seq`), preventing collisions. No update and no single-row delete: logs whose rows could be rewritten make replays claims about the present, not the past. `purge_session_events` (forgetting a whole session) is the only removal.
 
-What's logged and by what: every `conductor::Event` via `PersistingSink` (fan-out, so SSE stream and TUI receive everything); the turn-starting message; `ask`, answer, and steering follow-up via `PersistingDriver`. Answers record regardless of provenance, including defaults when nobody replied (replays can't otherwise distinguish approvals from timed-out denials). Text deltas store one row per event, not coalesced — replaying clients need them as they arrived.
+What's logged and by what: every `turn::Event` via `PersistingSink` (fan-out, so SSE stream and TUI receive everything); the turn-starting message; `ask`, answer, and steering follow-up via `PersistingDriver`. Answers record regardless of provenance, including defaults when nobody replied (replays can't otherwise distinguish approvals from timed-out denials). Text deltas store one row per event, not coalesced — replaying clients need them as they arrived.
 
 Logging is best-effort: store failures report once per turn, never cancelling it — a full disk shouldn't stop conversations.
 
@@ -388,11 +402,11 @@ Logging is best-effort: store failures report once per turn, never cancelling it
 
 ### The envelope, and why it has its own version
 
-Every `payload` is `{"v": <EVENT_LOG_VERSION>, "data": {…}}`. `EVENT_LOG_VERSION` (`core::event_log`) is **not** the client protocol version (merging would be a mistake): stored logs outlive watching clients, so "can this build read this row?" and "can this client talk to this core?" are different questions with different answers. Readers refuse newer versions rather than guess, and accept older ones.
+Every `payload` is `{"v": <EVENT_LOG_VERSION>, "data": {…}}`. `EVENT_LOG_VERSION` (`jk_session::event_log`) is **not** the client protocol version (merging would be a mistake): stored logs outlive watching clients, so "can this build read this row?" and "can this client talk to this core?" are different questions with different answers. Readers refuse newer versions rather than guess, and accept older ones.
 
 ### Everything else is a projection of it
 
-`core::projection::transcript` turns rows into the `Vec<Message>` a turn replays — a pure function, no store/I/O. Each row places the way `conductor::run_turn` places it, not by projection rules: a `follow-up` is a user message (how steering injects), a `tool-result` is a `Role::Tool` message with the call's id (how the loop feeds results back). `text-delta` rows drop in favour of `done` (conductor's own words: deltas are non-authoritative preview), so agentic turns' intermediate assistant texts aren't in the transcript — same as the `{user, answer}` transcript this replaces.
+`jk_session::projection::transcript` turns rows into the `Vec<Message>` a turn replays — a pure function, no store/I/O. Each row places the way `conductor::run_turn` places it, not by projection rules: a `follow-up` is a user message (how steering injects), a `tool-result` is a `Role::Tool` message with the call's id (how the loop feeds results back). `text-delta` rows drop in favour of `done` (conductor's own words: deltas are non-authoritative preview), so agentic turns' intermediate assistant texts aren't in the transcript — same as the `{user, answer}` transcript this replaces.
 
 `ask` and answers drop too (load-bearing decision): the prompt goes to the *user* by an interceptor over a channel the model doesn't touch, so rendering the question as an assistant message puts words in the model's mouth, and the answer as a user message makes a permission click look user-typed.
 
@@ -410,7 +424,7 @@ Implementation lives under `pkgs/`, in three groups; every package has the same 
 
 | Group | Holds |
 |---|---|
-| `pkgs/host/*` | The host crates (`core`, `config`, `host`, `protocol`, `session`) and the Go `supervisor` |
+| `pkgs/host/*` | The host crates (`agent`, `config`, `host`, `protocol`, `session`, `wasm`) and the Go `supervisor` |
 | `pkgs/extensions/*` | Every guest, flat, named by kind (`tool-*`, `interceptor-*`, `provider-*`, `registry-*`) |
 | `pkgs/clients/*` | The terminal (`tui`), web and Tauri (`gui`) clients |
 

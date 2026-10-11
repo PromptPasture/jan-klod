@@ -14,7 +14,7 @@
 
 use std::path::PathBuf;
 
-use jan_klod_core::ConfigSection;
+use jk_wasm::ConfigSection;
 use serde_json::json;
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Result, Store};
@@ -39,7 +39,7 @@ mod skill_registry_bind {
 }
 
 /// A canned `host-http` reply. The harness mirrors the host boundary in
-/// [`jan_klod_core::http`]: 5xx → `server-error`, 4xx → `client-error`, else
+/// [`jk_wasm::http`]: 5xx → `server-error`, 4xx → `client-error`, else
 /// → success. One mock serves both happy path and error-mapping tests.
 #[derive(Clone)]
 struct MockHttp {

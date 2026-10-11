@@ -1,5 +1,5 @@
 #![allow(missing_docs)]
-use jan_klod_config::{Config, ConfigError, ExtensionInstance};
+use jk_config::{Config, ConfigError, ExtensionInstance};
 use serde_json::json;
 
 fn instance<'a>(cfg: &'a Config, id: &str) -> &'a ExtensionInstance {

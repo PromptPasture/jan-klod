@@ -14,7 +14,7 @@
 //! core?"). Sharing one number would make every client-facing rename a reason
 //! to migrate history.
 //!
-//! The two representations also happen to look alike — `jan-klod-protocol`'s
+//! The two representations also happen to look alike — `jk-protocol`'s
 //! notifications mirror [`Event`] one for one — and reusing those types here
 //! would reintroduce exactly the coupling the separate version exists to avoid.
 //!
@@ -36,7 +36,7 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 
 use crate::store::{Store, StoreError};
-use jan_klod_protocol::turn::{Driver, Event, EventSink, Flow, ToolCall, ToolOutcome, UserPrompt};
+use jk_protocol::turn::{Driver, Event, EventSink, Flow, ToolCall, ToolOutcome, UserPrompt};
 
 /// The envelope format this build writes, and the highest it can read.
 ///
@@ -327,7 +327,7 @@ impl EventSink for PersistingSink<'_> {
     }
 }
 
-/// An [`intercept::Driver`] that logs each prompt and the answer it got,
+/// An [`jk_protocol::turn::Driver`] that logs each prompt and the answer it got,
 /// then behaves exactly as the driver it wraps.
 ///
 /// A wrapper, not a change to the trait: `ask` already returns the answer,

@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 use crate::execution_config::pid_alive;
@@ -87,7 +87,7 @@ workspace: {ws}
     let nth = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
     let (counter, recorded) = (Arc::clone(&nth), Arc::clone(&seen));
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let counter = Arc::clone(&counter);
         let recorded = Arc::clone(&recorded);
         let arguments = arguments.clone();
@@ -105,7 +105,7 @@ workspace: {ws}
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"done"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&response).unwrap(),

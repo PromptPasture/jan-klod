@@ -317,7 +317,7 @@ fn every_config_key_is_one_the_runtime_reads() {
     // The runtime's own list, not a copy of it: this was the only
     // enumeration in the tree until #222, and a component could be filed
     // under a category nothing dispatches because nothing built against it.
-    const CONSUMED_CATEGORIES: [&str; 4] = jan_klod_core::CATEGORIES;
+    const CONSUMED_CATEGORIES: [&str; 4] = jk_wasm::CATEGORIES;
     // Top-level keys, and what reads each.
     //   extensions — Config::from_path
     //   workspace  — Runtime::open_workspace
@@ -549,7 +549,7 @@ fn the_security_model_cites_tests_that_exist() {
     );
 }
 
-/// Every wire command in `jan_klod_protocol::COMMAND_METHODS` has a row in the
+/// Every wire command in `jk_protocol::COMMAND_METHODS` has a row in the
 /// **Commands** table in `docs/concepts/contracts.md`.
 ///
 /// That table is hand-maintained prose — exactly how `session/fork` went missing
@@ -565,7 +565,7 @@ fn the_commands_table_lists_every_wire_command() {
     let page = root.join("docs/concepts/contracts.md");
     let text = std::fs::read_to_string(&page).expect("the contracts page is readable");
 
-    let missing: Vec<&str> = jan_klod_protocol::COMMAND_METHODS
+    let missing: Vec<&str> = jk_protocol::COMMAND_METHODS
         .iter()
         .copied()
         .filter(|method| !text.contains(&format!("`{method}`")))
@@ -574,7 +574,7 @@ fn the_commands_table_lists_every_wire_command() {
     assert!(
         missing.is_empty(),
         "docs/concepts/contracts.md's Commands table is missing {missing:?} — every name in \
-         `jan_klod_protocol::COMMAND_METHODS` must appear as `` `method` `` somewhere on the \
+         `jk_protocol::COMMAND_METHODS` must appear as `` `method` `` somewhere on the \
          page, or a non-Rust client reading only the docs sees fewer commands than the schema \
          ships"
     );
@@ -584,7 +584,7 @@ fn the_commands_table_lists_every_wire_command() {
 /// exists. An *unenabled* block's component reference is otherwise untested, so
 /// stale references can sit unnoticed until someone flips `enabled: true`.
 ///
-/// Uses the real parser (`jan_klod_config`), not hand-rolled YAML — a previous
+/// Uses the real parser (`jk_config`), not hand-rolled YAML — a previous
 /// scan matching only explicit `type:` lines missed every block relying on the
 /// default-name derivation.
 #[test]
@@ -593,8 +593,8 @@ fn every_declared_instance_resolves_to_a_component() {
     // Enabled instances expand their `${VAR}`, so parsing needs the env var set;
     // its value is irrelevant here.
     std::env::set_var("OPENAI_API_KEY", "placeholder-for-parsing");
-    let config = jan_klod_config::Config::from_path(root.join("config.yaml"))
-        .expect("the shipped config parses");
+    let config =
+        jk_config::Config::from_path(root.join("config.yaml")).expect("the shipped config parses");
     let ext = root.join("ext");
 
     let missing: Vec<String> = config

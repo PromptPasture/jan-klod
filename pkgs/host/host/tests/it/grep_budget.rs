@@ -5,7 +5,7 @@
 //! assertion it does not make. Run it deliberately:
 //!
 //! ```console
-//! cd src && cargo test -p jan-klod-host --features jan-klod-host/integration \
+//! cd src && cargo test -p jk-host --features jk-host/integration \
 //!   --test it grep_budget -- --ignored --nocapture
 //! ```
 //!
@@ -51,11 +51,11 @@
 
 use std::time::{Duration, Instant};
 
-use jan_klod_core::conductor::ToolInvoker;
-use jan_klod_core::host_fs::Workspace;
-use jan_klod_core::host_process::ProcessRunner;
-use jan_klod_core::intercept::ToolCall;
-use jan_klod_core::tool_host::{ToolExtension, ToolFleet};
+use jk_protocol::intercept::ToolInvoker;
+use jk_protocol::turn::ToolCall;
+use jk_wasm::host_fs::Workspace;
+use jk_wasm::host_process::ProcessRunner;
+use jk_wasm::tool_host::{ToolExtension, ToolFleet};
 use wasmtime::component::Component;
 use wasmtime::Engine;
 

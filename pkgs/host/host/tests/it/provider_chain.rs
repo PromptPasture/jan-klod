@@ -6,10 +6,10 @@
 //!
 //! Skips if guests are not staged in `ext/`.
 
-use jan_klod_core::conductor::RunResult;
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
-use jan_klod_core::Runtime;
+use jk_agent::conductor::RunResult;
+use jk_agent::Runtime;
+use jk_wasm::http::WireResponse;
+use jk_wasm::route::HttpFn;
 
 use crate::common;
 

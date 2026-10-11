@@ -57,8 +57,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use jan_klod::transport::{Logs, Rest, Stdio as StdioTransport, Transport};
-use jan_klod::{gateway_bin, gui_bin, StreamEvent};
+use jk_tui::transport::{Logs, Rest, Stdio as StdioTransport, Transport};
+use jk_tui::{gateway_bin, gui_bin, StreamEvent};
 
 /// The address `--addr` defaults to when it is given with no value, and the one
 /// `serve` binds by default.

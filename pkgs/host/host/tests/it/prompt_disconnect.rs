@@ -21,10 +21,10 @@
 //! is the failure this test exists to catch and the reason its bound is
 //! well under the timeout rather than just under it.
 
-use jan_klod_core::route::HttpFn;
+use jk_wasm::route::HttpFn;
 
-use jan_klod_host::serve::Surface;
-use jan_klod_host::sessions::Agents;
+use jk_host::serve::Surface;
+use jk_host::sessions::Agents;
 
 use crate::common;
 use std::collections::HashMap;
@@ -48,7 +48,7 @@ fn tool_then_answer_http() -> HttpFn {
             serde_json::json!({"choices":[{"message":{"role":"assistant",
                 "content":"done"},"finish_reason":"stop"}]})
         };
-        Ok(jan_klod_core::http::WireResponse {
+        Ok(jk_wasm::http::WireResponse {
             status: 200,
             headers: vec![],
             body: serde_json::to_vec(&body).unwrap(),
@@ -99,8 +99,8 @@ fn a_disconnected_client_does_not_hold_the_turn_open() {
     let _guard = common::TempDir(dir.clone());
     let config = write_config(&dir);
 
-    let runtime = jan_klod_core::Runtime::boot(&config, common::repo_root().join("ext"))
-        .expect("runtime boots");
+    let runtime =
+        jk_agent::Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
     let factory = tool_then_answer_http;
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");

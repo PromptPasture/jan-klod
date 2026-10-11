@@ -11,9 +11,9 @@
 
 use std::fmt::Write as _;
 
-use jan_klod_core::conductor::ToolInvoker;
-use jan_klod_core::intercept::ToolCall;
-use jan_klod_core::native_tools::NativeTools;
+use jk_protocol::intercept::ToolInvoker;
+use jk_protocol::turn::ToolCall;
+use jk_wasm::native_tools::NativeTools;
 
 use crate::common;
 use crate::ext_install::{canned_files, published, scratch, Scratch};
@@ -30,7 +30,7 @@ fn write_index(scratch: &Scratch, component: &[u8], signature: &str) -> String {
         "extensions": [{
             "name": "tool-fs",
             "version": "0.1.0",
-            "api-version": jan_klod_core::manifest::API_VERSION,
+            "api-version": jk_wasm::manifest::API_VERSION,
             "kind": "tool",
             "capabilities": ["host-fs", "host-log"],
             "description": "reads and writes inside the workspace",

@@ -1,8 +1,8 @@
 //! Print the extension plan from `config.yaml`.
 //!
-//! Usage: `cargo run -p jan-klod-config --example dump -- [path]`; defaults to `config.yaml`.
+//! Usage: `cargo run -p jk-config --example dump -- [path]`; defaults to `config.yaml`.
 
-use jan_klod_config::Config;
+use jk_config::Config;
 
 fn main() {
     let path = std::env::args()

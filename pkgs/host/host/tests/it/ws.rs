@@ -8,9 +8,9 @@
 //! frame in produces a frame out.
 
 use futures_util::{SinkExt as _, StreamExt as _};
-use jan_klod_core::Runtime;
-use jan_klod_host::serve::Surface;
-use jan_klod_host::sessions::Agents;
+use jk_agent::Runtime;
+use jk_host::serve::Surface;
+use jk_host::sessions::Agents;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -180,7 +180,7 @@ fn hello() -> String {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "protocol/hello",
-        "params": { "version": jan_klod_protocol::PROTOCOL_VERSION },
+        "params": { "version": jk_protocol::PROTOCOL_VERSION },
     })
     .to_string()
 }
@@ -202,7 +202,7 @@ fn a_client_connects_and_negotiates_the_protocol() {
 
     assert_eq!(answers.len(), 1, "one frame in, one out: {answers:?}");
     assert!(
-        answers[0].contains(jan_klod_protocol::PROTOCOL_VERSION),
+        answers[0].contains(jk_protocol::PROTOCOL_VERSION),
         "the handshake carries the version: {}",
         answers[0]
     );
@@ -244,7 +244,7 @@ fn the_socket_is_refused_without_the_token() {
     );
     let accepted = accepted.expect("the authenticated client connects");
     assert!(
-        accepted[0].contains(jan_klod_protocol::PROTOCOL_VERSION),
+        accepted[0].contains(jk_protocol::PROTOCOL_VERSION),
         "and gets the handshake: {accepted:?}"
     );
 }
@@ -389,7 +389,7 @@ extensions:
     .expect("writes the config");
 
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::Arc::clone(&calls);
         Box::new(move |_m, _u, _h, _b, _t| {
             let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -401,7 +401,7 @@ extensions:
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"all done"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&body).expect("serialises"),

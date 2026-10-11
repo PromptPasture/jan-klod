@@ -5,7 +5,7 @@
 // bindgen!-generated code; exempt from workspace lints
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
-use jan_klod_config::Config;
+use jk_config::Config;
 use serde_json::Value;
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Result, Store};
@@ -85,7 +85,7 @@ impl host_http::Host for ProbeHost {
             .into_iter()
             .map(|h| (h.name, h.value))
             .collect();
-        match jan_klod_core::http::fetch(
+        match jk_wasm::http::fetch(
             &request.method,
             &request.url,
             &headers,
@@ -106,8 +106,8 @@ impl host_http::Host for ProbeHost {
     }
 }
 
-fn wire_to_http(err: &jan_klod_core::http::WireError) -> host_http::HttpError {
-    use jan_klod_core::http::WireError;
+fn wire_to_http(err: &jk_wasm::http::WireError) -> host_http::HttpError {
+    use jk_wasm::http::WireError;
     match err {
         WireError::InvalidUrl => host_http::HttpError::InvalidUrl,
         WireError::ConnectionFailed => host_http::HttpError::ConnectionFailed,

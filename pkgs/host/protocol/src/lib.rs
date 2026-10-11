@@ -1,6 +1,6 @@
 //! One versioned wire contract shared by every client.
 //!
-//! Today a client is whatever `jan_klod_host::serve` happens to serve — REST
+//! Today a client is whatever `jk_host::serve` happens to serve — REST
 //! routes plus an SSE stream — so each new client (TUI, web, editor) reads the
 //! route table and drifts from the others. This crate makes that surface a
 //! contract of the same rank as the WIT package: named commands, named
@@ -28,6 +28,13 @@
 //! projections of one turn, and every crate above this one needs the same
 //! words for it (#180).
 //!
+//! [`intercept`] and [`contributions`] follow for the same reason: the
+//! interceptor contract and the plain shapes of what an extension contributes
+//! to a client. The wasm adapters implement those traits and the loop consumes
+//! them; in separate crates, the contract has to sit below both (#181). The
+//! [`contributions`] types are not the root's wire shapes of the same names —
+//! a surface maps one to the other.
+//!
 //! # Versioning
 //!
 //! [`PROTOCOL_VERSION`] is semver. Removing a command, renaming one, or
@@ -38,6 +45,8 @@
 //! decides — and while this version is `0.x`, a differing **minor** is a
 //! refusal too.
 
+pub mod contributions;
+pub mod intercept;
 pub mod jsonrpc;
 pub mod turn;
 
@@ -82,7 +91,7 @@ pub const COMMAND_METHODS: &[&str] = &[
 ///
 /// # This rule is deliberately duplicated
 ///
-/// `jan_klod_core::manifest::api_compatible` applies the same test to the WIT
+/// `jk_wasm::manifest::api_compatible` applies the same test to the WIT
 /// `jan-klod:interfaces` version, and this is not a copy to deduplicate. The
 /// two version *lines* are independent — a WIT change need not touch a command,
 /// and vice versa — so sharing one predicate would drag one to decisions it did
@@ -113,7 +122,7 @@ pub fn compatible(core: &str, client: &str) -> bool {
 /// adjacent tagging produces — internal or external tagging would not.
 ///
 /// Each variant names the surface it comes from. `session/*` and `turn/answer`
-/// are the routes `jan_klod_host::serve` serves today; `turn/cancel` and
+/// are the routes `jk_host::serve` serves today; `turn/cancel` and
 /// `turn/follow-up` are new, because over REST the only way to stop a turn is
 /// to drop the SSE connection and there is no way at all to steer one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,7 +218,7 @@ pub enum Command {
 /// Every `event:` kind the SSE projection can emit, sorted.
 ///
 /// Here rather than in the core because **a client cannot see the core**: this
-/// crate is the only thing `jan-klod-core` and a UI both depend on, which is
+/// crate is the only thing `jk-agent` and a UI both depend on, which is
 /// what lets the producer and the consumer be checked against one list instead
 /// of against each other's prose. Without that, a client can simply not know a
 /// frame — #81, where every tool result in a healthy turn reached the user as
@@ -218,7 +227,7 @@ pub enum Command {
 /// Two tests hold the ends, and neither crate needs to see the other:
 /// `pkgs/host/core/tests/protocol_events.rs` proves this is exactly what
 /// `serve::sse_frame`, `prompt_frame` and `error_frame` produce across every
-/// `conductor::Event`, and `ui/tests/parse_frame.rs` proves a client has an
+/// `turn::Event`, and `ui/tests/parse_frame.rs` proves a client has an
 /// answer for each. Adding a frame to the core fails the first; shipping a
 /// client that ignores it fails the second.
 ///
@@ -239,7 +248,7 @@ pub const SSE_FRAME_KINDS: [&str; 7] = [
 /// notification is a JSON-RPC request with no `id`, the signal for
 /// "no reply expected".
 ///
-/// The first five mirror `jan_klod_core::conductor::Event`. The rest are not
+/// The first five mirror [`turn::Event`]. The rest are not
 /// events: `Ask` is the pending prompt an interceptor blocks a turn on,
 /// answered by [`Command::TurnAnswer`]; `Error` is a turn that failed or a
 /// command that could not be served; `SessionUpdated` reports a session whose
@@ -247,7 +256,7 @@ pub const SSE_FRAME_KINDS: [&str; 7] = [
 ///
 /// # These are not the SSE event names
 ///
-/// The SSE projection in `jan_klod_host::serve` predates this contract and
+/// The SSE projection in `jk_host::serve` predates this contract and
 /// keeps its own names: `delta` for `text-delta`, `tool` for `tool-invoked`,
 /// and `prompt` for `ask`. `tool-result`, `warning`, `done` and `error` match.
 /// Do not "fix" either side to agree with the other — the projection is allowed

@@ -4,10 +4,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::conductor::RunResult;
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
-use jan_klod_core::Runtime;
+use jk_agent::conductor::RunResult;
+use jk_agent::Runtime;
+use jk_wasm::http::WireResponse;
+use jk_wasm::route::HttpFn;
 
 use crate::common;
 
@@ -395,12 +395,12 @@ fn the_model_is_actually_told_which_tools_exist() {
 #[derive(Default)]
 struct WarningSink(Vec<String>);
 
-impl jan_klod_core::conductor::EventSink for WarningSink {
-    fn emit(&mut self, event: &jan_klod_core::conductor::Event) -> jan_klod_core::conductor::Flow {
-        if let jan_klod_core::conductor::Event::Warning(message) = event {
+impl jk_protocol::turn::EventSink for WarningSink {
+    fn emit(&mut self, event: &jk_protocol::turn::Event) -> jk_protocol::turn::Flow {
+        if let jk_protocol::turn::Event::Warning(message) = event {
             self.0.push(message.clone());
         }
-        jan_klod_core::conductor::Flow::Continue
+        jk_protocol::turn::Flow::Continue
     }
 }
 
@@ -494,7 +494,7 @@ extensions:
 
     let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let seen = std::sync::Arc::clone(&bodies);
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let seen = std::sync::Arc::clone(&seen);
         Box::new(move |_m, _u, _h, body, _t| {
             if let Some(bytes) = body {
@@ -502,7 +502,7 @@ extensions:
                     .unwrap()
                     .push(String::from_utf8_lossy(bytes).into_owned());
             }
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&serde_json::json!({
@@ -514,8 +514,7 @@ extensions:
         })
     };
 
-    let runtime =
-        jan_klod_core::Runtime::boot(&config, common::repo_root().join("ext")).expect("boots");
+    let runtime = jk_agent::Runtime::boot(&config, common::repo_root().join("ext")).expect("boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
     let _ = agent.run("s", "hello");
 

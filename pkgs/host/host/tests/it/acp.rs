@@ -12,15 +12,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use jan_klod_core::Runtime;
-use jan_klod_host::acp::Connection;
+use jk_agent::Runtime;
+use jk_host::acp::Connection;
 
 use crate::common;
 
-fn booted(
-    tag: &str,
-    reply: &'static str,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted(tag: &str, reply: &'static str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
         return None;
     }
@@ -70,16 +67,16 @@ impl Editor {
     /// its default. Tests that *do* answer supply their own.
     fn send(
         &mut self,
-        agent: &mut jan_klod_core::AgentSession,
+        agent: &mut jk_agent::AgentSession,
         line: &str,
     ) -> Option<serde_json::Value> {
-        self.send_with(agent, line, &jan_klod_host::acp::NoAsker)
+        self.send_with(agent, line, &jk_host::acp::NoAsker)
     }
 
-    /// The same, with a chosen [`jan_klod_host::acp::Asker`].
-    fn send_with<A: jan_klod_host::acp::Asker>(
+    /// The same, with a chosen [`jk_host::acp::Asker`].
+    fn send_with<A: jk_host::acp::Asker>(
         &mut self,
-        agent: &mut jan_klod_core::AgentSession,
+        agent: &mut jk_agent::AgentSession,
         line: &str,
         asker: &A,
     ) -> Option<serde_json::Value> {
@@ -102,7 +99,7 @@ impl Editor {
     }
 
     /// Handshake, then a session, returning its id.
-    fn opened(&mut self, agent: &mut jan_klod_core::AgentSession) -> String {
+    fn opened(&mut self, agent: &mut jk_agent::AgentSession) -> String {
         let hello = self
             .send(
                 agent,
@@ -253,8 +250,8 @@ impl Answering {
     }
 }
 
-impl jan_klod_host::acp::Asker for Answering {
-    fn ask(&self, _session: &str, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
+impl jk_host::acp::Asker for Answering {
+    fn ask(&self, _session: &str, prompt: &jk_protocol::turn::UserPrompt) -> String {
         self.asked.borrow_mut().push(prompt.question.clone());
         // A real editor picks an `optionId` from the prompt's own options.
         assert!(
@@ -273,11 +270,7 @@ impl jan_klod_host::acp::Asker for Answering {
 /// Boot an agent whose provider asks for a real workspace write, then answers.
 fn booted_writing(
     tag: &str,
-) -> Option<(
-    common::TempDir,
-    jan_klod_core::AgentSession,
-    std::path::PathBuf,
-)> {
+) -> Option<(common::TempDir, jk_agent::AgentSession, std::path::PathBuf)> {
     const GUESTS: [&str; 4] = [
         "provider-openai.wasm",
         "interceptor-permission.wasm",
@@ -319,7 +312,7 @@ extensions:
     .expect("writes the config");
 
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let http = move || -> jan_klod_core::route::HttpFn {
+    let http = move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::Arc::clone(&calls);
         Box::new(move |_m, _u, _h, _b, _t| {
             let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -334,7 +327,7 @@ extensions:
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"done"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&body).expect("serializes"),

@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
-use jan_klod::{parse_frame, StreamEvent};
-use jan_klod_protocol::SSE_FRAME_KINDS;
+use jk_protocol::SSE_FRAME_KINDS;
+use jk_tui::{parse_frame, StreamEvent};
 
 /// The guard #81 needs, and the one that did not exist when #81 happened:
 /// a frame kind the core can send but this client has no answer for. Unknown

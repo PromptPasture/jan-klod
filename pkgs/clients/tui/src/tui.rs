@@ -1,4 +1,4 @@
-//! TUI shell over [`app`](jan_klod::app) and [`Transport`]. Thin,
+//! TUI shell over [`app`](jk_tui::app) and [`Transport`]. Thin,
 //! terminal-bound glue (not unit-tested); state logic in tested `App`, which
 //! has never known its transport.
 //!
@@ -10,16 +10,16 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use jan_klod::app::{App, Prompt, SessionEntry, SessionMessage, ToastKind, Turn};
-use jan_klod::blocks;
-use jan_klod::commands::Availability;
-use jan_klod::keymap::{self, Context};
-use jan_klod::layout;
-use jan_klod::sidebar::{self, SessionInfo};
-use jan_klod::theme::{Glyph, Theme};
-use jan_klod::transport::Transport;
-use jan_klod::viewport::Viewport;
-use jan_klod::StreamEvent;
+use jk_tui::app::{App, Prompt, SessionEntry, SessionMessage, ToastKind, Turn};
+use jk_tui::blocks;
+use jk_tui::commands::Availability;
+use jk_tui::keymap::{self, Context};
+use jk_tui::layout;
+use jk_tui::sidebar::{self, SessionInfo};
+use jk_tui::theme::{Glyph, Theme};
+use jk_tui::transport::Transport;
+use jk_tui::viewport::Viewport;
+use jk_tui::StreamEvent;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Layout};
@@ -945,7 +945,7 @@ fn render(
     // computed from the buffer rather than fixed at three rows. `- 2` for the
     // block border, and again for the caret glyph and the space after it.
     let caret = format!("{} ", theme.glyph(caret_glyph(app.turn())));
-    let caret_cells = jan_klod::wrap::width(&caret);
+    let caret_cells = jk_tui::wrap::width(&caret);
     let composer_width = usize::from(content.width).saturating_sub(2 + caret_cells);
 
     let (composer_rows, (caret_row, caret_col)) = app.composer.visible(composer_width);
@@ -1459,9 +1459,9 @@ fn render_menu(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::{edit_or_scroll, request_cancel, Pane};
-    use jan_klod::app::{App, Entry as JanKlodEntry, Turn};
-    use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
-    use jan_klod::viewport::Viewport;
+    use jk_tui::app::{App, Entry as JanKlodEntry, Turn};
+    use jk_tui::theme::{Depth, GlyphSet, Mode, Theme};
+    use jk_tui::viewport::Viewport;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn press(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -1646,7 +1646,7 @@ mod tests {
 
     #[test]
     fn every_command_in_the_table_does_what_it_claims() {
-        for command in jan_klod::commands::COMMANDS {
+        for command in jk_tui::commands::COMMANDS {
             let mut app = App::default();
             command.name.chars().for_each(|c| app.push_char(c));
             assert_eq!(
@@ -1663,7 +1663,7 @@ mod tests {
             );
 
             match command.availability {
-                jan_klod::commands::Availability::Ready => match command.name {
+                jk_tui::commands::Availability::Ready => match command.name {
                     "/newline" => assert_eq!(app.input(), "\n"),
                     "/quit" => assert!(app.should_quit),
                     // No turn is running in this loop's fresh `App`, so
@@ -1694,8 +1694,8 @@ mod tests {
                     "/help" => assert!(app.help_open(), "/help did not open the overlay"),
                     other => panic!("{other} is Ready and untested — add it here"),
                 },
-                jan_klod::commands::Availability::Pending(reason) => match app.transcript.last() {
-                    Some(jan_klod::app::Entry::Message { text, .. }) => assert!(
+                jk_tui::commands::Availability::Pending(reason) => match app.transcript.last() {
+                    Some(jk_tui::app::Entry::Message { text, .. }) => assert!(
                         text.contains(reason),
                         "{} said {:?} rather than its reason",
                         command.name,
@@ -1718,7 +1718,7 @@ mod tests {
         key(&mut app, KeyCode::Up, KeyModifiers::NONE);
         assert_eq!(
             app.menu_selected(),
-            jan_klod::commands::COMMANDS.len() - 1,
+            jk_tui::commands::COMMANDS.len() - 1,
             "a six-item list wraps, unlike history"
         );
 
@@ -1923,8 +1923,8 @@ mod tests {
 #[cfg(test)]
 mod signals {
     use super::{caret_glyph, composer_label, spinner_frame, status_hint};
-    use jan_klod::app::{App, Prompt, Turn};
-    use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
+    use jk_tui::app::{App, Prompt, Turn};
+    use jk_tui::theme::{Depth, GlyphSet, Mode, Theme};
 
     fn streaming() -> App {
         let mut app = App::default();
@@ -1976,7 +1976,7 @@ mod signals {
     /// nothing about whether the status bar calls it.
     #[test]
     fn the_status_bar_renders_from_the_keymap_table_and_not_a_duplicate() {
-        use jan_klod::keymap::{Binding, Context};
+        use jk_tui::keymap::{Binding, Context};
 
         const DOCTORED: &[Binding] = &[
             Binding {
@@ -2083,10 +2083,10 @@ mod signals {
 #[cfg(test)]
 mod enter {
     use super::{edit_or_scroll, enter_means, steer, Enter, Pane};
-    use jan_klod::app::{App, Prompt, Turn};
-    use jan_klod::transport::{Rest, Transport};
-    use jan_klod::viewport::Viewport;
-    use jan_klod::StreamEvent;
+    use jk_tui::app::{App, Prompt, Turn};
+    use jk_tui::transport::{Rest, Transport};
+    use jk_tui::viewport::Viewport;
+    use jk_tui::StreamEvent;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Mutex;
 
@@ -2135,25 +2135,22 @@ mod enter {
                 .push("session/create".to_string());
             Ok("new".to_string())
         }
-        fn session_list(&self) -> Result<Vec<jan_klod::transport::SessionSummary>, String> {
+        fn session_list(&self) -> Result<Vec<jk_tui::transport::SessionSummary>, String> {
             self.sent
                 .lock()
                 .expect("lock")
                 .push("session/list".to_string());
-            Ok(vec![jan_klod::transport::SessionSummary {
+            Ok(vec![jk_tui::transport::SessionSummary {
                 id: "s1".to_string(),
                 preview: "hi".to_string(),
             }])
         }
-        fn session_get(
-            &self,
-            session: &str,
-        ) -> Result<jan_klod_protocol::SessionGetResult, String> {
+        fn session_get(&self, session: &str) -> Result<jk_protocol::SessionGetResult, String> {
             self.sent
                 .lock()
                 .expect("lock")
                 .push(format!("session/get {session}"));
-            Ok(jan_klod_protocol::SessionGetResult {
+            Ok(jk_protocol::SessionGetResult {
                 id: session.to_string(),
                 messages: Vec::new(),
             })
@@ -2317,10 +2314,10 @@ mod enter {
             &mut app,
             &mut Viewport::default(),
             Pane::default(),
-            jan_klod::theme::Theme::new(
-                jan_klod::theme::Mode::Dark,
-                jan_klod::theme::Depth::TrueColor,
-                jan_klod::theme::GlyphSet::Unicode,
+            jk_tui::theme::Theme::new(
+                jk_tui::theme::Mode::Dark,
+                jk_tui::theme::Depth::TrueColor,
+                jk_tui::theme::GlyphSet::Unicode,
             ),
         ));
         assert!(!app.dialog_open(), "Esc must close the dialog");
@@ -2415,11 +2412,11 @@ mod dialogs {
     //! #105's three dialogs: the wiring between `App`'s intents and
     //! `Transport`, and the one-frame-implementation invariant.
 
-    use jan_klod::app::{App, Entry, SessionEntry, SessionMessage};
-    use jan_klod::theme::{Depth, GlyphSet, Mode, Theme};
-    use jan_klod::transport::{SessionSummary, Transport};
-    use jan_klod::viewport::Viewport;
-    use jan_klod_protocol::{SessionGetResult, TranscriptMessage};
+    use jk_protocol::{SessionGetResult, TranscriptMessage};
+    use jk_tui::app::{App, Entry, SessionEntry, SessionMessage};
+    use jk_tui::theme::{Depth, GlyphSet, Mode, Theme};
+    use jk_tui::transport::{SessionSummary, Transport};
+    use jk_tui::viewport::Viewport;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Mutex;
 
@@ -2556,7 +2553,7 @@ mod dialogs {
             &self,
             _session: &str,
             _message: &str,
-            _on_event: &mut dyn FnMut(jan_klod::StreamEvent),
+            _on_event: &mut dyn FnMut(jk_tui::StreamEvent),
         ) -> Result<(), String> {
             Ok(())
         }
@@ -2622,7 +2619,7 @@ mod dialogs {
         assert_eq!(
             app.transcript[0],
             Entry::Message {
-                who: jan_klod::app::Who::You,
+                who: jk_tui::app::Who::You,
                 text: "hello".to_string()
             }
         );
@@ -2636,7 +2633,7 @@ mod dialogs {
         assert_eq!(
             app.transcript[2],
             Entry::Message {
-                who: jan_klod::app::Who::Klod,
+                who: jk_tui::app::Who::Klod,
                 text: "done".to_string()
             }
         );

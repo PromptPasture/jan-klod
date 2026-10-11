@@ -15,11 +15,11 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use jan_klod_core::host_fs::Workspace;
-use jan_klod_core::host_process::ProcessRunner;
-use jan_klod_core::sandbox::{SandboxMode, SandboxPolicy};
-use jan_klod_core::sandbox_landlock::{available, LandlockBackend};
-use jan_klod_core::tool_host::ToolExtension;
+use jk_wasm::host_fs::Workspace;
+use jk_wasm::host_process::ProcessRunner;
+use jk_wasm::sandbox::{SandboxMode, SandboxPolicy};
+use jk_wasm::sandbox_landlock::{available, LandlockBackend};
+use jk_wasm::tool_host::ToolExtension;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 

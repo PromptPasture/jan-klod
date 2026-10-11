@@ -9,7 +9,7 @@
 DENY_CONFIG := $(abspath $(CURDIR)/../../../deny.toml)
 
 # Where `stage` puts the binary. `jan-klod --gui` resolves `jan-klod-gui` as a
-# sibling of itself (jan_klod::sibling_bin), which a release bundle satisfies by
+# sibling of itself (jk_tui::sibling_bin), which a release bundle satisfies by
 # construction and a developer tree does not — two workspaces means two
 # `target/` directories. Copying it next to the host workspace's binaries is
 # what makes `make gui && make chat-gui` work without a second rule for how the

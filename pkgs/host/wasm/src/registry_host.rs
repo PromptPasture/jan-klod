@@ -617,20 +617,20 @@ impl RegistryFleet {
     }
 }
 
-impl crate::conductor::ToolInvoker for RegistryFleet {
+impl jk_protocol::intercept::ToolInvoker for RegistryFleet {
     fn invoke(
         &mut self,
-        call: &crate::intercept::ToolCall,
-    ) -> Option<crate::conductor::ToolInvocation> {
+        call: &jk_protocol::turn::ToolCall,
+    ) -> Option<jk_protocol::intercept::ToolInvocation> {
         // Check skills first
         if let Some((_, idx)) = self.skill_names.iter().find(|(n, _)| n == &call.name) {
             let idx = *idx;
             return Some(match self.skills[idx].invoke(&call.name, &call.arguments) {
-                Ok(content) => crate::conductor::ToolInvocation {
+                Ok(content) => jk_protocol::intercept::ToolInvocation {
                     content,
                     failed: false,
                 },
-                Err(content) => crate::conductor::ToolInvocation {
+                Err(content) => jk_protocol::intercept::ToolInvocation {
                     content,
                     failed: true,
                 },
@@ -641,11 +641,11 @@ impl crate::conductor::ToolInvoker for RegistryFleet {
             let idx = *idx;
             return Some(
                 match self.mcp[idx].invoke_tool(&call.name, &call.arguments) {
-                    Ok(content) => crate::conductor::ToolInvocation {
+                    Ok(content) => jk_protocol::intercept::ToolInvocation {
                         content,
                         failed: false,
                     },
-                    Err(content) => crate::conductor::ToolInvocation {
+                    Err(content) => jk_protocol::intercept::ToolInvocation {
                         content,
                         failed: true,
                     },
@@ -782,16 +782,16 @@ impl LazyRegistryFleet {
     }
 }
 
-impl crate::conductor::ToolInvoker for LazyRegistryFleet {
+impl jk_protocol::intercept::ToolInvoker for LazyRegistryFleet {
     fn invoke(
         &mut self,
-        call: &crate::intercept::ToolCall,
-    ) -> Option<crate::conductor::ToolInvocation> {
+        call: &jk_protocol::turn::ToolCall,
+    ) -> Option<jk_protocol::intercept::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
             // Like LazyToolFleet: instantiation failures feed back as this call's
             // result, not an abort.
-            Err(err) => Some(crate::conductor::ToolInvocation {
+            Err(err) => Some(jk_protocol::intercept::ToolInvocation {
                 content: format!("registry fleet failed to instantiate: {err}"),
                 failed: true,
             }),

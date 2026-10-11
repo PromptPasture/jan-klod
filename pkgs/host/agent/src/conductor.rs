@@ -12,16 +12,17 @@
 //! state machine is unit-tested with stubs.
 //!
 //! What a turn *emits* — [`Event`], [`Flow`], [`EventSink`] — now lives in
-//! [`jan_klod_protocol::turn`] beside the rest of the turn vocabulary,
+//! [`jk_protocol::turn`] beside the rest of the turn vocabulary,
 //! because the event log encodes an `Event` and sits below this crate (#180).
-//! Re-exported here, so every path that named `conductor::Event` still does.
 
-pub use jan_klod_protocol::turn::{Event, EventSink, Flow};
+use jk_protocol::turn::{Event, EventSink, Flow};
 
-use crate::intercept::{
-    Dispatcher, Driver, FinalAnswer, HookState, Message, Outcome, PendingRequest, Phase,
-    RawResponse, Role, ToolCall, ToolOutcome, UserTurn,
+use jk_protocol::intercept::{
+    Completer, Completion, Dispatcher, FinalAnswer, HookState, Outcome, PendingRequest, Phase,
+    RawResponse, ToolInvocation, ToolInvoker, UserTurn,
 };
+
+use jk_protocol::turn::{Driver, Message, Role, ToolCall, ToolOutcome};
 
 /// Default cap on `ReAct` iterations to prevent infinite tool-call loops.
 /// Eight covers a real coding cycle; raise via `limits.max-iterations`.
@@ -45,103 +46,6 @@ impl Default for Limits {
 
 /// Retries for malformed completions before giving up (no silent spiral).
 const MAX_RETRIES: u32 = 3;
-
-/// One model completion: the assistant text plus any tool calls it emitted.
-#[derive(Debug, Clone, Default)]
-pub struct Completion {
-    /// Assistant text (may be empty when the model only emitted tool calls).
-    pub text: String,
-    /// Tool calls the model wants run before it continues.
-    pub tool_calls: Vec<ToolCall>,
-    /// Why the model stopped (provider spelling: `stop`, `length`, `tool_calls`, …).
-    /// Empty if not provided. Kept (not discarded) because `length` means the answer
-    /// is cut off mid-thought—a truncated answer that looks finished is actionable wrong.
-    /// See [`TRUNCATED`].
-    pub finish_reason: String,
-}
-
-/// Finish-reasons indicating model ran out of room, not finished.
-/// `length` is OpenAI-compatible spelling; raw `max_tokens` also accepted.
-pub const TRUNCATED: [&str; 2] = ["length", "max_tokens"];
-
-impl Completion {
-    /// Whether the model stopped because it ran out of room.
-    #[must_use]
-    pub fn was_truncated(&self) -> bool {
-        TRUNCATED.contains(&self.finish_reason.as_str())
-    }
-}
-
-/// Completion backend; implemented by provider extension. Fallback chain tries in order.
-pub trait Completer {
-    /// Stable id, used in fallback diagnostics.
-    fn id(&self) -> &str;
-
-    /// Complete the assembled request.
-    ///
-    /// # Errors
-    /// Returns a human-readable provider failure. The conductor treats any error
-    /// as a fallback trigger and tries the next completer in the chain.
-    fn complete(&mut self, request: &PendingRequest) -> Result<Completion, String>;
-}
-
-/// Result of invoking a tool: content and whether it failed.
-/// Previously (#162), no way to distinguish failure except reading prose meant for humans.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolInvocation {
-    /// The tool's result, or a human-readable description of why it failed.
-    pub content: String,
-    /// Whether the call failed.
-    pub failed: bool,
-}
-
-/// A tool backend: routes a tool call to the extension that implements it.
-pub trait ToolInvoker {
-    /// Invoke `call`. `None` means no tool matched (skip-if-absent);
-    /// conductor reports as failed result, doesn't abort the turn.
-    fn invoke(&mut self, call: &ToolCall) -> Option<ToolInvocation>;
-
-    /// Invoke `call`, letting the tool ask the user first if it can (#216).
-    ///
-    /// Default: ignore the driver and behave like [`Self::invoke`]. Only a
-    /// fleet holding components that export `tool-askable` has anything to
-    /// do with it, and the default means adding this broke no
-    /// implementation.
-    ///
-    /// The driver is **passed, not stored**, which is the whole reason this
-    /// is a separate method rather than state like
-    /// [`Self::bind_session`]. A fleet that held a driver across a turn
-    /// would be holding a second mutable borrow of it, and a tool would be
-    /// able to ask outside a tool call.
-    fn invoke_asking(
-        &mut self,
-        call: &ToolCall,
-        _driver: &mut dyn Driver,
-    ) -> Option<ToolInvocation> {
-        self.invoke(call)
-    }
-
-    /// Tell the fleet which session the calls in this turn belong to.
-    ///
-    /// Default: ignore it. Only a fleet whose guests keep session-scoped
-    /// state needs this, and a no-op default means adding it broke no
-    /// implementation (#215).
-    ///
-    /// Called once per turn by [`run_turn`], which is the only place a tool
-    /// is dispatched from. A fleet that needs a session and is not given one
-    /// **refuses** rather than falling back to shared state, so forgetting
-    /// this is an error rather than a silent leak between sessions.
-    fn bind_session(&mut self, _session: &str) {}
-}
-
-/// A [`ToolInvoker`] with no tools — every call is absent. Used for turns that
-/// offer no tools (e.g. the simple/inline path).
-pub struct NoTools;
-impl ToolInvoker for NoTools {
-    fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
-        None
-    }
-}
 
 /// An [`EventSink`] that drops every event — the non-streaming default.
 pub struct NoSink;
@@ -645,9 +549,10 @@ fn validate(completion: &Completion) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intercept::{
-        BlockReason, Decision, InterceptInput, Interceptor, InterceptorError, UserPrompt,
+    use jk_protocol::intercept::{
+        BlockReason, Decision, InterceptInput, Interceptor, InterceptorError, NoTools, TRUNCATED,
     };
+    use jk_protocol::turn::UserPrompt;
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;

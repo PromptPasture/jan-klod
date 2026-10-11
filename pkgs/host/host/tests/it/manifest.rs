@@ -15,7 +15,8 @@
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
-use jan_klod_core::{LoadState, Runtime};
+use jk_agent::Runtime;
+use jk_wasm::LoadState;
 
 use crate::common;
 
@@ -310,8 +311,8 @@ fn declaring_a_capability_the_config_does_not_grant_still_boots() {
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
     let out = agent.run("s", "hello");
     assert!(
-        matches!(out, jan_klod_core::conductor::RunResult::Answered { .. })
-            || matches!(out, jan_klod_core::conductor::RunResult::Failed(_)),
+        matches!(out, jk_agent::conductor::RunResult::Answered { .. })
+            || matches!(out, jk_agent::conductor::RunResult::Failed(_)),
         "the turn ran one way or the other; what matters is that boot did not refuse"
     );
 }
@@ -465,7 +466,7 @@ fn the_hosts_api_version_matches_the_wit_package() {
     );
     assert_eq!(
         declared[0],
-        jan_klod_core::manifest::API_VERSION,
+        jk_wasm::manifest::API_VERSION,
         "the host's API_VERSION constant has drifted from wit/"
     );
 }
@@ -491,7 +492,7 @@ fn a_component_built_against_another_api_version_is_refused() {
     // the component was then perfectly compatible and the test failed asking
     // why it had not been refused. A fixture that encodes the very number it is
     // testing against goes stale the moment that number moves.
-    let ours = jan_klod_core::manifest::API_VERSION;
+    let ours = jk_wasm::manifest::API_VERSION;
     let current = format!("api-version = \"{ours}\"");
     let manifest = std::fs::read_to_string(real_ext.join("tool-fs.manifest.toml")).unwrap();
     assert!(

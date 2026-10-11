@@ -54,9 +54,9 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use jan_klod_core::Runtime;
-use jan_klod_host::serve::Surface;
-use jan_klod_host::sessions::Agents;
+use jk_agent::Runtime;
+use jk_host::serve::Surface;
+use jk_host::sessions::Agents;
 
 use crate::common;
 use std::collections::HashMap;
@@ -201,14 +201,14 @@ fn the_web_client_answers_every_frame_the_core_emits() {
     // exactly how a text check passes while proving nothing.
     assert_eq!(
         kinds.len(),
-        jan_klod_protocol::SSE_FRAME_KINDS.len(),
+        jk_protocol::SSE_FRAME_KINDS.len(),
         "parsed {kinds:?} out of {} — if that list looks wrong, the parse broke, \
          not the client",
         path.display()
     );
     assert_eq!(
         kinds,
-        jan_klod_protocol::SSE_FRAME_KINDS.to_vec(),
+        jk_protocol::SSE_FRAME_KINDS.to_vec(),
         "the web client's FRAME_KINDS has drifted from the core's \
          SSE_FRAME_KINDS — a frame the core emits and the browser renders as \
          unknown. Update {} to match.",
