@@ -1,9 +1,9 @@
 # Wiki
 
-- [concepts/](concepts/) — architecture, design principles, extension model
-- [decisions/](decisions/) — architecture decisions and session handoffs
-- [guides/](guides/) — setup and build instructions
+Jan-Klod is a self-hosted, extensible AI agent runtime: a minimal Rust + Wasmtime core, with all domain logic in WIT-defined WebAssembly extensions.
 
-## Overview
-
-Jan-Klod is a self-hosted, extensible AI agent runtime. The **core** is a minimal Rust + Wasmtime host; all domain logic lives in **extensions** — WIT-defined WebAssembly components in any language. See [Architecture](concepts/architecture.md) for the full picture and [decisions/2026-06-29-component-model-rust](decisions/2026-06-29-component-model-rust/Handoff.md) for the foundation decision. Post-v0.1.0 vision — versioned client protocol, event-sourced session log, OS-level effect sandbox, signed registry, and web/GUI clients with MCP/ACP ports — is in [Vision — Harness as a Platform](decisions/2026-09-08-harness-platform-vision/Vision.md), phased in the [Roadmap](concepts/roadmap.md) as Phases 13–18. The turnkey half — trusted delivery, secrets, identity, audit, batteries and an enterprise distribution — is in [Vision — The Enterprise Box](decisions/2026-09-18-enterprise-box/Vision.md), phased as Phases 26–31.
+- [Quickstart](quickstart.md) — install, start the server, run a first session
+- [concepts/](concepts/) — architecture, roadmap, security model, contracts
+- [decisions/](decisions/) — architecture decisions, visions, and session handoffs
+- [guides/](guides/) — development setup, editor integration, writing extensions
+- [Changelog](changelog.md) — wiki and project change history
