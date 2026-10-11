@@ -10,6 +10,7 @@
 //!   `jan-klod rpc [config-path] [ext-dir]`        — boot + serve JSON-RPC on stdio
 //!   `jan-klod verify [config-path] [ext-dir]`     — check the install, then exit
 //!   `jan-klod verify --chain [session-id]`        — verify event chain integrity
+//!   `jan-klod --version` / `jan-klod --help`        — print the version / usage
 //!
 //!   config-path  path to config.yaml   (default: config.yaml)
 //!   ext-dir      directory of *.wasm    (default: ext)
@@ -31,6 +32,27 @@ use tracing_subscriber::fmt::time::SystemTime;
 /// Where the installed copies of `config.yaml` and `ext/` live, relative to the
 /// gateway binary: `<prefix>/bin/jan-klod-gateway` → `<prefix>/share/jan-klod/`.
 const INSTALLED_DATA: &str = "../share/jan-klod";
+
+/// What `--help` prints: every subcommand an operator runs.
+const USAGE: &str = "\
+Usage: jan-klod-gateway [command] [args]
+
+Commands:
+  (none) [config] [ext]         boot and print the plan
+  serve [config] [ext] [bind]   serve REST turns (also: serve --bind <addr>)
+  rpc [config] [ext]            serve JSON-RPC on stdio
+  telegram                      run the Telegram channel
+  setup [distribution]          audit the install for a distribution
+  verify [config] [ext]         check the install (also: verify --chain [session])
+  ask <prompt>                  answer one prompt on stdout
+  ext list|search|install|remove  manage extensions
+  mcp                           serve MCP on stdio
+  acp                           serve ACP on stdio
+
+Options:
+  --version                     print the version
+  --help                        print this help
+";
 
 /// Resolve a default config/ext path.
 ///
@@ -106,6 +128,15 @@ fn main() -> ExitCode {
         Some("ext") => ext(&args[1..]),
         Some("mcp") => mcp(),
         Some("acp") => acp(),
+        // Before the fallthrough, which would read either flag as a config path.
+        Some("--version") => {
+            println!("jan-klod-gateway {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Some("--help") => {
+            print!("{USAGE}");
+            ExitCode::SUCCESS
+        }
         _ => boot_plan(&args),
     }
 }
