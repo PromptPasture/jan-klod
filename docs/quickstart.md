@@ -20,6 +20,13 @@ make bundle DIST=coding
 
 `make bundle` produces `dist/jan-klod-<version>-<os>-<arch>-coding.tar.gz`, with `jan-klod`, `jan-klod-gateway`, pre-filled `config.yaml`, and `ext/`. Unpack it and put the binaries on your PATH. `DIST` takes `coding`, `headless-chat`, or `minimal`; add `GUI=1` for the desktop window.
 
+Check that both binaries are found:
+
+```sh
+jan-klod --version
+jan-klod-gateway --version
+```
+
 For development in the checkout, see [development setup](guides/development-setup.md).
 
 ### After first release: installer

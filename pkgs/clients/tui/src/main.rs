@@ -5,6 +5,7 @@
 //!   `jan-klod tui [session]`                — full-screen terminal UI (`ratatui`)
 //!   `jan-klod --gui`                        — the web client in a native window
 //!   `jan-klod --addr <host:port> [session]` — drive a gateway that is running
+//!   `jan-klod --version` / `jan-klod --help` — print the version / usage
 //!
 //!   session  session id, shared across the conversation (default: cli)
 //!   --addr   `host:port` of a running gateway; without it, one is spawned
@@ -63,8 +64,25 @@ use jan_klod::{gateway_bin, gui_bin, StreamEvent};
 /// `serve` binds by default.
 const DEFAULT_ADDR: &str = "127.0.0.1:8787";
 
+/// What `--help` prints.
+const USAGE: &str = "\
+Usage: jan-klod [tui|gui] [--addr <host:port>] [--ascii] [session]
+
+  session        session id, shared across the conversation (default: cli)
+  tui            full-screen terminal UI instead of the line REPL
+  gui            the web client in a native window
+  --addr <addr>  drive a gateway running there; without it, one is spawned
+  --ascii        draw with ASCII glyphs whatever the locale says
+  --version      print the version
+  --help         print this help
+";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(text) = info(&args) {
+        print!("{text}");
+        return ExitCode::SUCCESS;
+    }
     let (mode, rest) = split_mode(&args);
     let parsed = match parse_args(&rest) {
         Ok(parsed) => parsed,
@@ -154,6 +172,15 @@ fn split_mode(args: &[String]) -> (Mode, Vec<String>) {
         Some((first, rest)) if first == "tui" || first == "--tui" => (Mode::Tui, rest.to_vec()),
         Some((first, rest)) if first == "gui" || first == "--gui" => (Mode::Gui, rest.to_vec()),
         _ => (Mode::Repl, args.to_vec()),
+    }
+}
+
+/// The text `--version` or `--help` asks for, when either is the first argument.
+fn info(args: &[String]) -> Option<String> {
+    match args.first().map(String::as_str) {
+        Some("--version") => Some(format!("jan-klod {}\n", env!("CARGO_PKG_VERSION"))),
+        Some("--help") => Some(USAGE.to_string()),
+        _ => None,
     }
 }
 
@@ -434,7 +461,7 @@ fn is_up(addr: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, split_mode, Mode};
+    use super::{info, parse_args, split_mode, Mode};
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_string()).collect()
@@ -485,6 +512,15 @@ mod tests {
         // And it then fails as what it now is: an unknown option.
         let err = parse_args(&rest).expect_err("--gui is not an option");
         assert!(err.contains("--gui"), "{err}");
+    }
+
+    #[test]
+    fn version_and_help_are_answered_before_any_parsing() {
+        let version = info(&args(&["--version"])).expect("--version is answered");
+        assert_eq!(version, format!("jan-klod {}\n", env!("CARGO_PKG_VERSION")));
+        let help = info(&args(&["--help"])).expect("--help is answered");
+        assert!(help.starts_with("Usage: jan-klod"), "{help}");
+        assert!(info(&args(&["my-session"])).is_none());
     }
 
     /// `--gui` still parses an address, since the window needs one — that is the

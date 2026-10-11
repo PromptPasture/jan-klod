@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-11
+
+- **Fix**: **`--version` and `--help` on both binaries** ([#247](https://github.com/PromptPasture/jan-klod/issues/247)). `jan-klod-gateway` read either flag as a config path and fell through to the boot plan; `jan-klod` refused them as unknown options. Both now print the version (`CARGO_PKG_VERSION`) or a usage listing every subcommand, and exit 0. Tests: `pkgs/host/host/tests/it/info_flags.rs`, `pkgs/clients/tui/tests/info_flags.rs`.
+
 ## 2026-10-03
 
 - **Refactor**: **Phase 32 — `src/` becomes `pkgs/`** ([#274](https://github.com/PromptPasture/jan-klod/issues/274)). Packages are grouped `pkgs/host/*`, `pkgs/extensions/*` and `pkgs/clients/*`; the repo-root `Cargo.toml` is the host workspace, the guests and the Tauri shell keep their own. Every package has a README, and three package-specific wiki pages moved into their package's `docs/`. `make lints-drift` keeps the three `[workspace.lints]` blocks identical. Paths in this changelog's earlier entries are as they were when written.

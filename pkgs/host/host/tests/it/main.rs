@@ -32,6 +32,7 @@ mod grep_budget;
 mod guardrails;
 mod host_fs;
 mod host_process;
+mod info_flags;
 mod install_refusals;
 mod install_then_call;
 mod installed_layout;
