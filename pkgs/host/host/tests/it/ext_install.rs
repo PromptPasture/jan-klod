@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use jan_klod_core::ext::{self, Declaration, ExtError};
+use jk_wasm::ext::{self, Declaration, ExtError};
 
 use crate::common;
 
@@ -249,7 +249,7 @@ fn a_component_whose_stem_names_no_category_is_refused_and_nothing_lands() {
     let ExtError::UncategorisedStem { reason } = &err else {
         panic!("an uncategorised stem is refused as such: {err:?}")
     };
-    for category in jan_klod_core::CATEGORIES {
+    for category in jk_wasm::CATEGORIES {
         assert!(
             reason.contains(category),
             "the refusal must name `{category}`: {reason}"
@@ -357,7 +357,7 @@ fn a_manifest_from_another_api_version_is_refused() {
     std::fs::write(
         &manifest,
         text.replace(
-            &format!("api-version = \"{}\"", jan_klod_core::manifest::API_VERSION),
+            &format!("api-version = \"{}\"", jk_wasm::manifest::API_VERSION),
             "api-version = \"9.0.0\"",
         ),
     )
@@ -369,7 +369,7 @@ fn a_manifest_from_another_api_version_is_refused() {
         panic!("an incompatible package version is refused as such: {err:?}")
     };
     assert_eq!(theirs, "9.0.0");
-    assert_eq!(ours, jan_klod_core::manifest::API_VERSION);
+    assert_eq!(ours, jk_wasm::manifest::API_VERSION);
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
@@ -630,7 +630,7 @@ extensions:
         .find(|e| e.instance.id == "tool.fs")
         .expect("the instance resolved");
     assert!(
-        matches!(loaded.state, jan_klod_core::LoadState::Compiled(_)),
+        matches!(loaded.state, jk_wasm::LoadState::Compiled(_)),
         "compiled rather than missing — the manifest beside it satisfied the \
          boot-time cross-check too"
     );
@@ -724,19 +724,16 @@ fn only_http_and_https_count_as_remote() {
 /// would have tested a policy nobody runs.
 pub fn canned_files(
     files: Vec<(&'static str, Vec<u8>)>,
-) -> (
-    jan_klod_core::route::HttpFn,
-    Arc<std::sync::Mutex<Vec<String>>>,
-) {
+) -> (jk_wasm::route::HttpFn, Arc<std::sync::Mutex<Vec<String>>>) {
     let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorded = Arc::clone(&asked);
-    let http: jan_klod_core::route::HttpFn = Box::new(move |_m, url, _h, _b, _t| {
+    let http: jk_wasm::route::HttpFn = Box::new(move |_m, url, _h, _b, _t| {
         recorded.lock().expect("not poisoned").push(url.to_owned());
         let found = files
             .iter()
             .find(|(name, _)| url.ends_with(name))
             .map(|(_, body)| body.clone());
-        Ok(jan_klod_core::http::WireResponse {
+        Ok(jk_wasm::http::WireResponse {
             status: if found.is_some() { 200 } else { 404 },
             headers: vec![],
             body: found.unwrap_or_default(),
@@ -931,12 +928,11 @@ fn a_redirect_to_a_refused_destination_ends_a_remote_install() {
 
     // Permits redirector, not sentinel (asymmetry redirect exploits).
     let entry = format!("http://127.0.0.1:{redirect_port}/tool-fs.wasm");
-    let policy = jan_klod_core::egress::EgressPolicy::public_only()
+    let policy = jk_wasm::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{redirect_port}"));
-    let http: jan_klod_core::route::HttpFn =
-        Box::new(move |method, _asked, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, &entry, headers, body, timeout)
-        });
+    let http: jk_wasm::route::HttpFn = Box::new(move |method, _asked, headers, body, timeout| {
+        jk_wasm::http::fetch_within(&policy, method, &entry, headers, body, timeout)
+    });
 
     let err = ext::install_from_url(
         &scratch.ext,

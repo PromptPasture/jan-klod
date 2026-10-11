@@ -51,11 +51,11 @@
 
 use std::time::{Duration, Instant};
 
-use jan_klod_core::conductor::ToolInvoker;
-use jan_klod_core::host_fs::Workspace;
-use jan_klod_core::host_process::ProcessRunner;
-use jan_klod_core::tool_host::{ToolExtension, ToolFleet};
+use jan_klod_protocol::intercept::ToolInvoker;
 use jan_klod_protocol::turn::ToolCall;
+use jk_wasm::host_fs::Workspace;
+use jk_wasm::host_process::ProcessRunner;
+use jk_wasm::tool_host::{ToolExtension, ToolFleet};
 use wasmtime::component::Component;
 use wasmtime::Engine;
 

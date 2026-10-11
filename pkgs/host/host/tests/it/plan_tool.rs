@@ -54,9 +54,9 @@ impl Script {
 /// the next turn none. The request body carries the whole history, so the
 /// role of its last message says which half of a turn this is — a fresh user
 /// message means "call the tool", a tool result means "answer and stop".
-fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
+fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
     let script = Arc::clone(script);
-    move || -> jan_klod_core::route::HttpFn {
+    move || -> jk_wasm::route::HttpFn {
         let script = Arc::clone(&script);
         Box::new(move |_m, _u, _h, body, _t| {
             let text = body.map(|b| String::from_utf8_lossy(b).into_owned());
@@ -95,7 +95,7 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
                         "name":"plan","arguments":arguments}}]},
                     "finish_reason":"tool_calls"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&response).unwrap(),

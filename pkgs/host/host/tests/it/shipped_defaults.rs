@@ -14,11 +14,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use jan_klod_client::{stream_turn, StreamEvent};
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
 use jan_klod_host::sessions::Agents;
+use jk_wasm::http::WireResponse;
+use jk_wasm::route::HttpFn;
 
 use crate::common;
 use std::collections::HashMap;
@@ -64,7 +64,7 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
     let absent: Vec<&str> = runtime
         .extensions()
         .iter()
-        .filter(|ext| matches!(ext.state, jan_klod_core::LoadState::Missing(_)))
+        .filter(|ext| matches!(ext.state, jk_wasm::LoadState::Missing(_)))
         .map(|ext| ext.instance.id.as_str())
         .collect();
     assert!(

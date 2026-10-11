@@ -155,7 +155,7 @@ extensions:
 fn request_through_the_host(config: &std::path::Path, url: &str) -> Result<(), ()> {
     let runtime = Runtime::boot(config, common::repo_root().join("ext")).expect("boots");
     let policy = runtime.egress_policy();
-    jan_klod_core::http::fetch_within(&policy, "GET", url, &[], None, 2_000)
+    jk_wasm::http::fetch_within(&policy, "GET", url, &[], None, 2_000)
         .map(|_| ())
         .map_err(|_| ())
 }
@@ -279,17 +279,17 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
 #[test]
 fn every_guest_facing_backend_goes_through_the_policy() {
     // Scanned, not hard-coded — literal list misses new backends added later.
-    let core = common::repo_root().join("pkgs/host/core/src");
+    let core = common::repo_root().join("pkgs/host/wasm/src");
     let mut backends = Vec::new();
     for entry in std::fs::read_dir(&core)
-        .expect("core sources are readable")
+        .expect("jk-wasm sources are readable")
         .flatten()
     {
         let path = entry.path();
         if path.extension().is_none_or(|e| e != "rs") {
             continue;
         }
-        let text = std::fs::read_to_string(&path).expect("a core source is readable");
+        let text = std::fs::read_to_string(&path).expect("a jk-wasm source is readable");
         // Host-side implementations of guest's `host-http` import, any binding
         // module name.
         if text.contains("_http::Host for") {
@@ -318,8 +318,7 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             // `contains` not `starts_with`: call sites `let result = crate::http::fetch(`.
             // Trailing `(` excludes `fetch_within(`.
             assert!(
-                !line.contains("crate::http::fetch(")
-                    && !line.contains("jan_klod_core::http::fetch("),
+                !line.contains("crate::http::fetch(") && !line.contains("jk_wasm::http::fetch("),
                 "{name}:{} calls the unbounded client. A guest's egress must go \
                  through `fetch_within`, or it can reach this gateway's own port, \
                  the cloud metadata service, and the LAN.",
@@ -345,7 +344,7 @@ fn every_guest_facing_backend_goes_through_the_policy() {
                 continue;
             }
             assert!(
-                !line.contains("Box::new(jan_klod_core::http::fetch)")
+                !line.contains("Box::new(jk_wasm::http::fetch)")
                     && !line.contains("Box::new(crate::http::fetch)"),
                 "{binary}:{} hands a guest the unbounded client as its `host-http`. \
                  Wrap it in the runtime's egress policy with `fetch_within`.",
@@ -398,10 +397,10 @@ fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
     let entry = format!("http://127.0.0.1:{redirect_port}/start");
 
     // Redirector operator-named; sentinel is not.
-    let policy = jan_klod_core::egress::EgressPolicy::public_only()
+    let policy = jk_wasm::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{redirect_port}"));
 
-    let outcome = jan_klod_core::http::fetch_within(&policy, "GET", &entry, &[], None, 2_000);
+    let outcome = jk_wasm::http::fetch_within(&policy, "GET", &entry, &[], None, 2_000);
 
     // Control: request reached permitted origin, so hits == 0 can't mean nothing
     // happened.
@@ -416,7 +415,7 @@ fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
     // legible).
     assert_eq!(
         outcome.err(),
-        Some(jan_klod_core::http::WireError::ConnectionFailed),
+        Some(jk_wasm::http::WireError::ConnectionFailed),
         "the refused hop is reported as the policy refusing it"
     );
 
@@ -478,11 +477,11 @@ impl Hops {
 fn a_redirect_to_a_permitted_destination_is_followed() {
     // Same origin: one grant covers both hops.
     let hops = Hops::start(302, "/landed".to_owned());
-    let policy = jan_klod_core::egress::EgressPolicy::public_only()
+    let policy = jk_wasm::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{}", hops.port));
     let entry = format!("http://127.0.0.1:{}/start", hops.port);
 
-    let response = jan_klod_core::http::fetch_within(&policy, "GET", &entry, &[], None, 2_000)
+    let response = jk_wasm::http::fetch_within(&policy, "GET", &entry, &[], None, 2_000)
         .expect("a permitted redirect is followed");
     assert_eq!(
         response.status, 200,
@@ -506,7 +505,7 @@ fn a_redirect_to_a_permitted_destination_is_followed() {
 #[test]
 fn credentials_do_not_survive_a_redirect() {
     let hops = Hops::start(302, "/landed".to_owned());
-    let policy = jan_klod_core::egress::EgressPolicy::public_only()
+    let policy = jk_wasm::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{}", hops.port));
     let entry = format!("http://127.0.0.1:{}/start", hops.port);
 
@@ -514,8 +513,7 @@ fn credentials_do_not_survive_a_redirect() {
         ("Authorization".to_owned(), "Bearer sk-secret".to_owned()),
         ("X-Kept".to_owned(), "yes".to_owned()),
     ];
-    jan_klod_core::http::fetch_within(&policy, "GET", &entry, &headers, None, 2_000)
-        .expect("follows");
+    jk_wasm::http::fetch_within(&policy, "GET", &entry, &headers, None, 2_000).expect("follows");
 
     let requests = hops.requests();
     assert_eq!(requests.len(), 2, "{requests:?}");
@@ -542,11 +540,11 @@ fn credentials_do_not_survive_a_redirect() {
 fn a_302_becomes_a_get_and_a_307_keeps_the_post() {
     for (status, expected) in [(302_u16, "GET"), (307, "POST")] {
         let hops = Hops::start(status, "/landed".to_owned());
-        let policy = jan_klod_core::egress::EgressPolicy::public_only()
+        let policy = jk_wasm::egress::EgressPolicy::public_only()
             .allowing(&format!("http://127.0.0.1:{}", hops.port));
         let entry = format!("http://127.0.0.1:{}/start", hops.port);
 
-        jan_klod_core::http::fetch_within(&policy, "POST", &entry, &[], Some(b"payload"), 2_000)
+        jk_wasm::http::fetch_within(&policy, "POST", &entry, &[], Some(b"payload"), 2_000)
             .expect("follows");
 
         let requests = hops.requests();

@@ -4,7 +4,7 @@ title: Contracts
 description: Stable WIT interfaces that form the boundary between core and extensions
 tags: [contracts, wit, interfaces, extensions, wasm]
 created: 2026-06-28T00:00:00Z
-updated: 2026-09-18T00:00:00Z
+updated: 2026-10-11T00:00:00Z
 ---
 
 Contracts are stable interfaces the core exposes and extensions consume or implement. A breaking change breaks all extensions.
@@ -286,7 +286,7 @@ Manifests don't grant permissions — `config.yaml`'s grants do.
 
 There is no such thing as an optional field to add. A field is part of the shape; optionality lives in its *type* (`option<T>`), which has to be there from the start to help.
 
-**Pre-1.0 is stricter than typical semver.** While major is `0` the package is free to change, so `0.x` carries no promise — differing **minor** is refused. Semver says `0.1` and `0.9` might be compatible; here they're not. `core::manifest::api_compatible` requires same major and same minor while major is `0`; from `1.0` on, differing minor passes.
+**Pre-1.0 is stricter than typical semver.** While major is `0` the package is free to change, so `0.x` carries no promise — differing **minor** is refused. Semver says `0.1` and `0.9` might be compatible; here they're not. `jk_wasm::manifest::api_compatible` requires same major and same minor while major is `0`; from `1.0` on, differing minor passes.
 
 **What the host does with it today.** Every component ships an `api-version` in its [manifest](#the-extension-manifest), and `Runtime::boot` refuses an incompatible one, naming both versions and the component. That is the whole of it.
 

@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 // Client transport trait (same API as jan-klod binary).
 use jan_klod_client::transport::Transport as _;
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 use jan_klod_host::rpc;
 use jan_klod_protocol::{jsonrpc, PROTOCOL_VERSION};
+use jk_wasm::http::WireResponse;
+use jk_wasm::route::HttpFn;
 
 use crate::common;
 

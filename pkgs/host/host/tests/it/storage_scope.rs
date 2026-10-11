@@ -57,9 +57,9 @@ extensions:
 }
 
 /// Mock provider: calls bash once, then answers.
-fn tool_calling_provider() -> impl Fn() -> jan_klod_core::route::HttpFn {
+fn tool_calling_provider() -> impl Fn() -> jk_wasm::route::HttpFn {
     // Annotated return type needed for closure's higher-ranked lifetimes.
-    move || -> jan_klod_core::route::HttpFn {
+    move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::atomic::AtomicU32::new(0);
         Box::new(move |_m, _u, _h, _b, _t| {
             let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -71,7 +71,7 @@ fn tool_calling_provider() -> impl Fn() -> jan_klod_core::route::HttpFn {
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"done"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&body).unwrap(),

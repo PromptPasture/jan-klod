@@ -14,11 +14,11 @@
 //! so a reordered or rewritten distribution fails here instead of quietly
 //! measuring something nobody ships.
 
-use jan_klod_core::intercept::{Dispatcher, HookState, PendingRequest, Phase};
+use jan_klod_protocol::intercept::{Dispatcher, HookState, PendingRequest, Phase};
 
-use jan_klod_core::interceptor_host::WasmInterceptor;
-use jan_klod_core::ConfigSection;
 use jan_klod_protocol::turn::{Message, Role};
+use jk_wasm::interceptor_host::WasmInterceptor;
+use jk_wasm::ConfigSection;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 

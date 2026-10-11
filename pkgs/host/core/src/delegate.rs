@@ -16,8 +16,8 @@
 
 use std::collections::HashMap;
 
-use crate::conductor::ToolInvoker;
-use crate::intercept::ToolDefinition;
+use jan_klod_protocol::intercept::ToolDefinition;
+use jan_klod_protocol::intercept::ToolInvoker;
 use jan_klod_protocol::turn::ToolCall;
 
 /// The tool name the model uses to delegate to another agent.
@@ -73,7 +73,7 @@ impl<T: AgentTransport> AgentDelegate<T> {
 }
 
 impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
-    fn invoke(&mut self, call: &ToolCall) -> Option<crate::conductor::ToolInvocation> {
+    fn invoke(&mut self, call: &ToolCall) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
         if call.name != DELEGATE_TOOL {
             return None; // skip if not ours
         }
@@ -83,17 +83,17 @@ impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
         let context = args.get("context").and_then(serde_json::Value::as_str);
 
         let Some(endpoint) = self.agents.get(agent) else {
-            return Some(crate::conductor::ToolInvocation {
+            return Some(jan_klod_protocol::intercept::ToolInvocation {
                 content: format!("unknown agent `{agent}`"),
                 failed: true,
             });
         };
         Some(match self.transport.delegate(endpoint, task, context) {
-            Ok(answer) => crate::conductor::ToolInvocation {
+            Ok(answer) => jan_klod_protocol::intercept::ToolInvocation {
                 content: answer,
                 failed: false,
             },
-            Err(err) => crate::conductor::ToolInvocation {
+            Err(err) => jan_klod_protocol::intercept::ToolInvocation {
                 content: format!("delegation to `{agent}` failed: {err}"),
                 failed: true,
             },

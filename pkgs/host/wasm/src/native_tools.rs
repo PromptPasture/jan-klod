@@ -36,8 +36,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::conductor::{ToolInvocation, ToolInvoker};
 use crate::ext::{install, Checks};
+use jan_klod_protocol::intercept::{ToolInvocation, ToolInvoker};
 use jan_klod_protocol::turn::ToolCall;
 
 /// The name the model calls to install.
@@ -420,7 +420,7 @@ impl ToolInvoker for NativeTools {
 #[cfg(test)]
 mod tests {
     use super::{NativeTools, INSTALL};
-    use crate::conductor::ToolInvoker;
+    use jan_klod_protocol::intercept::ToolInvoker;
     use jan_klod_protocol::turn::ToolCall;
 
     fn call(arguments: &str) -> ToolCall {

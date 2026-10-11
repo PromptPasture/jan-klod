@@ -40,9 +40,9 @@ struct Script {
     calls_seen: AtomicU32,
 }
 
-fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
+fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
     let script = Arc::clone(script);
-    move || -> jan_klod_core::route::HttpFn {
+    move || -> jk_wasm::route::HttpFn {
         let script = Arc::clone(&script);
         Box::new(move |_m, _u, _h, body, _t| {
             script.calls_seen.fetch_add(1, Ordering::Relaxed);
@@ -72,7 +72,7 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
                 if let Some(body) = text {
                     script.results.lock().expect("not poisoned").push(body);
                 }
-                return Ok(jan_klod_core::http::WireResponse {
+                return Ok(jk_wasm::http::WireResponse {
                     status: 200,
                     headers: vec![],
                     body: serde_json::to_vec(&serde_json::json!({"choices":[{"message":{
@@ -98,7 +98,7 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
                         "finish_reason":"tool_calls"}]})
                 },
             );
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&response).unwrap(),

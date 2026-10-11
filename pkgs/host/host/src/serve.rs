@@ -507,14 +507,14 @@ fn handle_invoke(agent: &mut AgentSession, body: &str) -> Reply {
     ) else {
         return error_reply(400, "both `extension` and `name` are required");
     };
-    let arguments: Vec<jan_klod_core::contributions::ArgumentValue> = value
+    let arguments: Vec<jan_klod_protocol::contributions::ArgumentValue> = value
         .get("arguments")
         .and_then(serde_json::Value::as_array)
         .map(|given| {
             given
                 .iter()
                 .filter_map(|argument| {
-                    Some(jan_klod_core::contributions::ArgumentValue {
+                    Some(jan_klod_protocol::contributions::ArgumentValue {
                         name: argument.get("name")?.as_str()?.to_owned(),
                         value: argument.get("value")?.as_str()?.to_owned(),
                     })
@@ -534,13 +534,13 @@ fn handle_invoke(agent: &mut AgentSession, body: &str) -> Reply {
         },
         // A name nobody contributes is the caller's mistake; the other two are
         // the extension's, and the status codes say which.
-        Err(error @ jan_klod_core::contributions::InvokeError::Unknown) => {
+        Err(error @ jan_klod_protocol::contributions::InvokeError::Unknown) => {
             error_reply(404, &error.to_string())
         }
-        Err(error @ jan_klod_core::contributions::InvokeError::InvalidArguments) => {
+        Err(error @ jan_klod_protocol::contributions::InvokeError::InvalidArguments) => {
             error_reply(400, &error.to_string())
         }
-        Err(error @ jan_klod_core::contributions::InvokeError::Failed(_)) => {
+        Err(error @ jan_klod_protocol::contributions::InvokeError::Failed(_)) => {
             error_reply(500, &error.to_string())
         }
     }

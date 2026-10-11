@@ -42,7 +42,6 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Instant;
 
-use jan_klod_core::contributions;
 use jan_klod_protocol::{
     compatible, jsonrpc, Command, HelloResult, Notification, SurfaceInvokeResult, COMMAND_METHODS,
     PROTOCOL_VERSION,
@@ -394,9 +393,9 @@ pub(crate) fn command<W: Write>(
             name,
             arguments,
         } => {
-            let arguments: Vec<contributions::ArgumentValue> = arguments
+            let arguments: Vec<jan_klod_protocol::contributions::ArgumentValue> = arguments
                 .into_iter()
-                .map(|argument| contributions::ArgumentValue {
+                .map(|argument| jan_klod_protocol::contributions::ArgumentValue {
                     name: argument.name,
                     value: argument.value,
                 })
@@ -424,13 +423,13 @@ pub(crate) fn command<W: Write>(
                 }
                 // A name nobody contributes is the caller's mistake; the
                 // other two are the extension's, and the codes say which.
-                Err(error @ contributions::InvokeError::Unknown) => {
+                Err(error @ jan_klod_protocol::contributions::InvokeError::Unknown) => {
                     Served::Answer(refuse(id, jsonrpc::METHOD_NOT_FOUND, error.to_string()))
                 }
-                Err(error @ contributions::InvokeError::InvalidArguments) => {
+                Err(error @ jan_klod_protocol::contributions::InvokeError::InvalidArguments) => {
                     Served::Answer(refuse(id, jsonrpc::INVALID_PARAMS, error.to_string()))
                 }
-                Err(error @ contributions::InvokeError::Failed(_)) => {
+                Err(error @ jan_klod_protocol::contributions::InvokeError::Failed(_)) => {
                     Served::Answer(refuse(id, jsonrpc::INTERNAL_ERROR, error.to_string()))
                 }
             }

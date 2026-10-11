@@ -12,10 +12,10 @@
 //! enabled: this is about the store, and a provider guest would only add a
 //! reason for the test to skip.
 
-use jan_klod_core::http::WireError;
-use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 use jk_session::store::Store;
+use jk_wasm::http::WireError;
+use jk_wasm::route::HttpFn;
 
 /// A database as an install from before the log would have it: the `entries`
 /// table alone, holding two turns of one session, with their own timestamps.

@@ -4,10 +4,10 @@
 //! Usage: `registry_index <ext-dir> <base-url> <author> <out-file>`, normally
 //! through `scripts/registry-index.sh` / `make registry-index`.
 //!
-//! # Why this is a `jan-klod-core` example rather than a shell script
+//! # Why this is a `jk-wasm` example rather than a shell script
 //!
 //! Six of the eleven fields per entry are *the manifest's own*, and this reads
-//! them with [`jan_klod_core::ext::list`] — the same reader `ext list` and the
+//! them with [`jk_wasm::ext::list`] — the same reader `ext list` and the
 //! boot path use. A shell generator would be a second parser of
 //! `ext/*.manifest.toml`, free to disagree with the first about what a
 //! component declares, and the whole value of an index is that the capability
@@ -38,7 +38,7 @@
 
 use std::path::Path;
 
-use jan_klod_core::ext::{list, Declaration};
+use jk_wasm::ext::{list, Declaration};
 
 /// The index format's own version, so a reader can refuse one it doesn't
 /// understand rather than guessing at missing keys.

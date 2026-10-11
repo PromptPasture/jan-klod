@@ -83,7 +83,7 @@ extensions:
     )
     .expect("writes the config");
 
-    let factory = Arc::new(|| -> jan_klod_core::route::HttpFn {
+    let factory = Arc::new(|| -> jk_wasm::route::HttpFn {
         Box::new(move |_m, _u, _h, body, _t| {
             let asked = String::from_utf8_lossy(body.unwrap_or_default()).into_owned();
             // A tool call on the first completion of a turn; an answer
@@ -96,7 +96,7 @@ extensions:
                     {"id":"c1","function":{"name":"bash","arguments":"{}"}}]},
                     "finish_reason":"tool_calls"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&reply).expect("serialises"),

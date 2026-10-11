@@ -152,7 +152,7 @@ artefact from the far smaller toolchain.
 
 **Where the time goes, and where it does not.** Not staging: `Runtime::boot`
 loads the instances `config.yaml` enables, not the contents of `ext/`
-(`pkgs/host/core/src/lib.rs:324`), so a staged component nothing enables costs
+(`pkgs/host/wasm/src/lib.rs:423`), so a staged component nothing enables costs
 nothing. The cost is Cranelift compiling the component at boot in the one
 test that *does* enable it, against a compile cache that is cold because each
 test boots into a fresh temp config directory.

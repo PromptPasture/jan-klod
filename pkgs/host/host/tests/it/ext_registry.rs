@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use jan_klod_core::ext_index::{self, IndexError};
+use jk_wasm::ext_index::{self, IndexError};
 
 use crate::common;
 use crate::ext_install::{canned_files, names, published, scratch, Scratch};
@@ -40,7 +40,7 @@ fn write_index(scratch: &Scratch, component: &[u8], signature: &str) -> String {
         "extensions": [{
             "name": "tool-fs",
             "version": "0.1.0",
-            "api-version": jan_klod_core::manifest::API_VERSION,
+            "api-version": jk_wasm::manifest::API_VERSION,
             "kind": "tool",
             "capabilities": ["host-fs", "host-log"],
             "description": "reads and writes inside the workspace",
@@ -137,7 +137,7 @@ fn bytes_that_are_not_the_ones_the_index_describes_are_refused() {
     assert!(
         matches!(
             err,
-            IndexError::Install(jan_klod_core::ext::ExtError::DigestMismatch { .. })
+            IndexError::Install(jk_wasm::ext::ExtError::DigestMismatch { .. })
         ),
         "the index's digest is checked, not just carried: {err:?}"
     );
@@ -201,7 +201,7 @@ fn a_loopback_index_is_refused_before_it_is_requested() {
     assert!(
         matches!(
             err,
-            IndexError::Install(jan_klod_core::ext::ExtError::RefusedByPolicy { .. })
+            IndexError::Install(jk_wasm::ext::ExtError::RefusedByPolicy { .. })
         ),
         "{err:?}"
     );

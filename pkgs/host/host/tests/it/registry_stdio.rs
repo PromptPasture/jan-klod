@@ -115,7 +115,7 @@ fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
 /// [`booted`], driven by a provider of the caller's choice.
 fn booted_with(
     tag: &str,
-    http: impl Fn() -> jan_klod_core::route::HttpFn,
+    http: impl Fn() -> jk_wasm::route::HttpFn,
 ) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
     booted_against(tag, &fixture_script(tag), http)
 }
@@ -124,7 +124,7 @@ fn booted_with(
 fn booted_against(
     tag: &str,
     script: &str,
-    http: impl Fn() -> jan_klod_core::route::HttpFn,
+    http: impl Fn() -> jk_wasm::route::HttpFn,
 ) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
     if !common::guests_staged(&GUESTS) {
         return None;
@@ -201,7 +201,7 @@ fn a_tool_on_a_stdio_server_can_be_called() {
     let completions = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(Mutex::new(String::new()));
     let (counter, recorded) = (Arc::clone(&completions), Arc::clone(&seen));
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let counter = Arc::clone(&counter);
         let recorded = Arc::clone(&recorded);
         Box::new(move |_m, _u, _h, body, _t| {
@@ -219,7 +219,7 @@ fn a_tool_on_a_stdio_server_can_be_called() {
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"done"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&response).unwrap(),

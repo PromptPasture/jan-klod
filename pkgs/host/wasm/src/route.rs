@@ -1,7 +1,7 @@
 //! Provider instantiation and the conductor's provider adapter.
 //!
 //! Extensions consume other extensions by instantiating them and delegating.
-//! The loop drives providers through the [`Completer`](crate::conductor::Completer)
+//! The loop drives providers through the [`Completer`](jan_klod_protocol::intercept::Completer)
 //! trait (see [`ProviderCompleter`]). The provider's `host-http` is injected as
 //! [`HttpFn`] so turns run live (real client) or offline (canned reply) without
 //! changing the adapter.
@@ -234,7 +234,7 @@ fn drive(
     }
 }
 
-/// A provider adapted to the [`Completer`](crate::conductor::Completer) trait:
+/// A provider adapted to the [`Completer`](jan_klod_protocol::intercept::Completer) trait:
 /// one link in the loop's fallback chain.
 pub struct ProviderCompleter {
     id: String,
@@ -304,15 +304,15 @@ impl ProviderCompleter {
     }
 }
 
-impl crate::conductor::Completer for ProviderCompleter {
+impl jan_klod_protocol::intercept::Completer for ProviderCompleter {
     fn id(&self) -> &str {
         &self.id
     }
 
     fn complete(
         &mut self,
-        request: &crate::intercept::PendingRequest,
-    ) -> Result<crate::conductor::Completion, String> {
+        request: &jan_klod_protocol::intercept::PendingRequest,
+    ) -> Result<jan_klod_protocol::intercept::Completion, String> {
         let preq = intercept_to_p_request(request);
         let iface = self.world.jan_klod_interfaces_llm_provider();
         let handle = match iface.call_complete(&mut self.store, &preq) {
@@ -343,7 +343,7 @@ impl crate::conductor::Completer for ProviderCompleter {
             }
         }
         let _ = iface.call_close_stream(&mut self.store, handle);
-        Ok(crate::conductor::Completion {
+        Ok(jan_klod_protocol::intercept::Completion {
             text,
             tool_calls,
             finish_reason,
@@ -352,7 +352,9 @@ impl crate::conductor::Completer for ProviderCompleter {
 }
 
 /// Map conductor's `pending-request` to provider's `completion-request`.
-fn intercept_to_p_request(request: &crate::intercept::PendingRequest) -> p_llm::CompletionRequest {
+fn intercept_to_p_request(
+    request: &jan_klod_protocol::intercept::PendingRequest,
+) -> p_llm::CompletionRequest {
     use jan_klod_protocol::turn::Role;
     p_llm::CompletionRequest {
         model: request.model.clone().unwrap_or_default(),
@@ -388,9 +390,9 @@ fn intercept_to_p_request(request: &crate::intercept::PendingRequest) -> p_llm::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conductor::Completer;
     use crate::http::WireResponse;
-    use crate::intercept::PendingRequest;
+    use jan_klod_protocol::intercept::Completer;
+    use jan_klod_protocol::intercept::PendingRequest;
     use jan_klod_protocol::turn::{Message, Role};
     use std::path::PathBuf;
 

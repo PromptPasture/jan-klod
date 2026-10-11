@@ -5,9 +5,9 @@
 use std::sync::{Arc, Mutex};
 
 use jan_klod_core::conductor::RunResult;
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
+use jk_wasm::http::WireResponse;
+use jk_wasm::route::HttpFn;
 
 use crate::common;
 
@@ -494,7 +494,7 @@ extensions:
 
     let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let seen = std::sync::Arc::clone(&bodies);
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let seen = std::sync::Arc::clone(&seen);
         Box::new(move |_m, _u, _h, body, _t| {
             if let Some(bytes) = body {
@@ -502,7 +502,7 @@ extensions:
                     .unwrap()
                     .push(String::from_utf8_lossy(bytes).into_owned());
             }
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&serde_json::json!({

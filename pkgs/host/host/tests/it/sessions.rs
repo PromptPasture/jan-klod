@@ -23,7 +23,7 @@ use crate::common;
 /// prove nothing about concurrency.
 fn paced_factory(calls: &Arc<AtomicU32>) -> Factory {
     let calls = Arc::clone(calls);
-    Arc::new(move || -> jan_klod_core::route::HttpFn {
+    Arc::new(move || -> jk_wasm::route::HttpFn {
         let calls = Arc::clone(&calls);
         Box::new(move |_m, _u, _h, body, _t| {
             calls.fetch_add(1, Ordering::Relaxed);
@@ -31,7 +31,7 @@ fn paced_factory(calls: &Arc<AtomicU32>) -> Factory {
             if asked.contains("take your time") {
                 std::thread::sleep(Duration::from_millis(1500));
             }
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&serde_json::json!({"choices":[{"message":{

@@ -1,6 +1,6 @@
 //! Where the two halves of storage are joined (#180).
 //!
-//! [`guest_storage`](crate::guest_storage) declares what `host-storage`
+//! [`guest_storage`](jk_wasm::guest_storage) declares what `host-storage`
 //! needs; `jk-session` provides a SQLite store. Neither names the other, so
 //! something has to say they fit — and that something is this crate, which
 //! owns an [`AgentSession`](crate::AgentSession) and is therefore the only
@@ -15,8 +15,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::guest_storage::{Entries, Row, StorageFault};
 use jk_session::store::{Entry, Store, StoreError};
+use jk_wasm::guest_storage::{Entries, Row, StorageFault};
 
 /// The session store, offered to guests as the four calls `host-storage` has.
 ///

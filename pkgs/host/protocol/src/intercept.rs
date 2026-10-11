@@ -1,28 +1,27 @@
-//! Core-native interceptor dispatch — the mechanism half of the thin-loop
-//! architecture ([decisions/2026-07-01-thin-loop-interceptors]).
+//! The interceptor contract and the two backends a loop calls out to.
 //!
-//! The core loop holds *no policy*: at each [`Phase`] it calls every enabled
-//! interceptor subscribed to that phase and acts on the returned [`Decision`].
-//! This module is the phase-agnostic engine that does exactly that, plus the
-//! fail-closed / fail-open error policy. It is deliberately decoupled from
-//! Wasmtime: an interceptor is anything implementing [`Interceptor`], so the
-//! engine is unit-testable with plain stubs, and the wasm-guest adapter (which
-//! owns a `Store` + generated bindings) is just one implementor.
+//! The host-side mirror of `wit/interceptor.wit` — [`Phase`], [`HookState`],
+//! [`Decision`], the [`Interceptor`] trait — plus [`Completer`] and
+//! [`ToolInvoker`], the seams a turn reaches a model and a tool through.
+//! Plain types with no Component-Model dependency: the wasm guest adapters
+//! implement these traits, the loop that drives them consumes them, and
+//! neither has to name the other ([decisions/2026-07-01-thin-loop-interceptors]).
 //!
-//! These types mirror `wit/interceptor.wit`; they are the host-side loop-state
-//! the guest adapter maps to/from generated component bindings.
+//! They live here, not beside the loop, because the adapters and the loop are
+//! separate crates and the traits are the only thing both must agree on (#181).
+//! Keeping a trait with its consumer would make the adapters depend on the loop
+//! and the loop on the adapters it composes.
 //!
-//! Ordering is structural, never config-driven:
-//! - *across* phases: the conductor calls [`Dispatcher::dispatch`] once per
-//!   phase, in [`Phase`] declaration order;
-//! - *within* one phase: the load order interceptors were registered in.
-//!
-//! The vocabulary a turn is made of — [`Message`],
-//! [`Role`](jan_klod_protocol::turn::Role), [`ToolCall`], [`ToolOutcome`],
-//! [`UserPrompt`], [`Driver`] — now lives in [`jan_klod_protocol::turn`],
-//! because the event log needs the same words and sits below this crate (#180).
+//! [`Dispatcher`] is the phase-agnostic engine over that contract: at each
+//! [`Phase`] it calls every subscribed interceptor in load order and applies the
+//! fail-closed / fail-open error policy. It holds no policy and no Wasmtime, so
+//! it sits with the contract — the adapters' tests drive it as the loop does.
+//! Ordering is structural, never config-driven: *across* phases the loop calls
+//! [`Dispatcher::dispatch`] once per phase in [`Phase`] declaration order;
+//! *within* one phase, the load order interceptors were registered in.
 
-use jan_klod_protocol::turn::{Driver, Message, ToolCall, ToolOutcome, UserPrompt};
+use crate::contributions::{ArgumentValue, Contributions, InvokeError, InvokeOutcome};
+use crate::turn::{Driver, Message, ToolCall, ToolOutcome, UserPrompt};
 
 /// The lifecycle points, in dispatch order. Mirrors the `phase` enum in
 /// `wit/interceptor.wit`.
@@ -248,6 +247,103 @@ pub trait Interceptor {
     }
 }
 
+/// One model completion: the assistant text plus any tool calls it emitted.
+#[derive(Debug, Clone, Default)]
+pub struct Completion {
+    /// Assistant text (may be empty when the model only emitted tool calls).
+    pub text: String,
+    /// Tool calls the model wants run before it continues.
+    pub tool_calls: Vec<ToolCall>,
+    /// Why the model stopped (provider spelling: `stop`, `length`, `tool_calls`, …).
+    /// Empty if not provided. Kept (not discarded) because `length` means the answer
+    /// is cut off mid-thought—a truncated answer that looks finished is actionable wrong.
+    /// See [`TRUNCATED`].
+    pub finish_reason: String,
+}
+
+/// Finish-reasons indicating model ran out of room, not finished.
+/// `length` is OpenAI-compatible spelling; raw `max_tokens` also accepted.
+pub const TRUNCATED: [&str; 2] = ["length", "max_tokens"];
+
+impl Completion {
+    /// Whether the model stopped because it ran out of room.
+    #[must_use]
+    pub fn was_truncated(&self) -> bool {
+        TRUNCATED.contains(&self.finish_reason.as_str())
+    }
+}
+
+/// Completion backend; implemented by provider extension. Fallback chain tries in order.
+pub trait Completer {
+    /// Stable id, used in fallback diagnostics.
+    fn id(&self) -> &str;
+
+    /// Complete the assembled request.
+    ///
+    /// # Errors
+    /// Returns a human-readable provider failure. The conductor treats any error
+    /// as a fallback trigger and tries the next completer in the chain.
+    fn complete(&mut self, request: &PendingRequest) -> Result<Completion, String>;
+}
+
+/// Result of invoking a tool: content and whether it failed.
+/// Previously (#162), no way to distinguish failure except reading prose meant for humans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolInvocation {
+    /// The tool's result, or a human-readable description of why it failed.
+    pub content: String,
+    /// Whether the call failed.
+    pub failed: bool,
+}
+
+/// A tool backend: routes a tool call to the extension that implements it.
+pub trait ToolInvoker {
+    /// Invoke `call`. `None` means no tool matched (skip-if-absent);
+    /// conductor reports as failed result, doesn't abort the turn.
+    fn invoke(&mut self, call: &ToolCall) -> Option<ToolInvocation>;
+
+    /// Invoke `call`, letting the tool ask the user first if it can (#216).
+    ///
+    /// Default: ignore the driver and behave like [`Self::invoke`]. Only a
+    /// fleet holding components that export `tool-askable` has anything to
+    /// do with it, and the default means adding this broke no
+    /// implementation.
+    ///
+    /// The driver is **passed, not stored**, which is the whole reason this
+    /// is a separate method rather than state like
+    /// [`Self::bind_session`]. A fleet that held a driver across a turn
+    /// would be holding a second mutable borrow of it, and a tool would be
+    /// able to ask outside a tool call.
+    fn invoke_asking(
+        &mut self,
+        call: &ToolCall,
+        _driver: &mut dyn Driver,
+    ) -> Option<ToolInvocation> {
+        self.invoke(call)
+    }
+
+    /// Tell the fleet which session the calls in this turn belong to.
+    ///
+    /// Default: ignore it. Only a fleet whose guests keep session-scoped
+    /// state needs this, and a no-op default means adding it broke no
+    /// implementation (#215).
+    ///
+    /// Called once per turn by the loop, which is the only place a tool
+    /// is dispatched from. A fleet that needs a session and is not given one
+    /// **refuses** rather than falling back to shared state, so forgetting
+    /// this is an error rather than a silent leak between sessions.
+    fn bind_session(&mut self, _session: &str) {}
+}
+
+/// A [`ToolInvoker`] with no tools — every call is absent. Used for turns that
+/// offer no tools (e.g. the simple/inline path).
+pub struct NoTools;
+impl ToolInvoker for NoTools {
+    fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
+        None
+    }
+}
+
 /// The result of dispatching one phase.
 #[derive(Debug, Clone)]
 pub enum Outcome {
@@ -257,7 +353,7 @@ pub enum Outcome {
     Blocked(BlockReason),
 }
 
-/// The core-native dispatch engine: a fixed, load-ordered set of interceptors.
+/// The dispatch engine: a fixed, load-ordered set of interceptors.
 pub struct Dispatcher {
     interceptors: Vec<Box<dyn Interceptor>>,
 }
@@ -276,7 +372,7 @@ impl Dispatcher {
     /// Read on demand rather than cached at boot: an extension may report a
     /// change after an invocation, and a set read once would then be stale in
     /// every client at the same time.
-    pub fn contributions(&mut self) -> Vec<crate::contributions::Contributions> {
+    pub fn contributions(&mut self) -> Vec<Contributions> {
         self.interceptors
             .iter_mut()
             .filter_map(|interceptor| interceptor.contributions())
@@ -287,18 +383,18 @@ impl Dispatcher {
     /// Run a contribution, routed by the declaring extension's id.
     ///
     /// # Errors
-    /// [`crate::contributions::InvokeError::Unknown`] when no loaded extension
+    /// [`InvokeError::Unknown`] when no loaded extension
     /// has that id, or it contributes no such name.
     pub fn invoke_contribution(
         &mut self,
         extension: &str,
         name: &str,
-        arguments: &[crate::contributions::ArgumentValue],
-    ) -> Result<crate::contributions::InvokeOutcome, crate::contributions::InvokeError> {
+        arguments: &[ArgumentValue],
+    ) -> Result<InvokeOutcome, InvokeError> {
         self.interceptors
             .iter_mut()
             .find(|interceptor| interceptor.id() == extension)
-            .ok_or(crate::contributions::InvokeError::Unknown)?
+            .ok_or(InvokeError::Unknown)?
             .invoke_contribution(name, arguments)
     }
 

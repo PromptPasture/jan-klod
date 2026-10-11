@@ -7,7 +7,7 @@
 #
 # A wrapper around `cargo run --example registry_index` rather than a generator
 # in its own right, and that split is the point: the fields that describe what a
-# component declares are read by `jan_klod_core::ext::list`, the same reader the
+# component declares are read by `jk_wasm::ext::list`, the same reader the
 # boot path uses, so the index cannot describe a manifest differently from how
 # the host will enforce it. What is left here is what a shell wrapper is good
 # at — resolving paths so the caller's working directory does not matter.
@@ -41,5 +41,5 @@ absolute() {
 
 exec cargo run --quiet \
     --manifest-path "$ROOT/Cargo.toml" \
-    -p jan-klod-core --features examples --example registry_index \
+    -p jk-wasm --features examples --example registry_index \
     -- "$(absolute "$1")" "$2" "$3" "$(absolute "$4")"

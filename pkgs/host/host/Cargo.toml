@@ -11,6 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 jan-klod-core = { path = "../core" }
+# The component runtime (#181): the surfaces name its capability and guest
+# types (`http`, `host_process`, `ext`, …) directly, not through the core.
+jk-wasm = { path = "../wasm" }
 # The surfaces speak JSON on the wire: `serde` derives the frame types the
 # stdio surfaces parse, `serde_json` reads and writes them. Both are already in
 # the lock via jan-klod-core, so naming them here costs no package.

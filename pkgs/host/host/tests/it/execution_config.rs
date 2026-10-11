@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::sandbox;
 use jan_klod_core::Runtime;
+use jk_wasm::sandbox;
 
 use crate::common;
 
@@ -129,7 +129,7 @@ workspace: {ws}
     let completions = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(Mutex::new(String::new()));
     let (counter, recorded) = (Arc::clone(&completions), Arc::clone(&seen));
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let counter = Arc::clone(&counter);
         let recorded = Arc::clone(&recorded);
         let arguments = arguments.clone();
@@ -148,7 +148,7 @@ workspace: {ws}
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"done"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&response).unwrap(),
@@ -542,8 +542,8 @@ fn the_long_lived_grant_is_read_from_config() {
     if !common::guests_staged(&GUESTS) {
         return;
     }
-    let policy = jan_klod_core::host_process::ProcessRunner::disabled().with_long_lived(vec![
-        jan_klod_core::host_process::LongLived {
+    let policy = jk_wasm::host_process::ProcessRunner::disabled().with_long_lived(vec![
+        jk_wasm::host_process::LongLived {
             name: "echoer".to_owned(),
             command: "cat".to_owned(),
             args: vec![],

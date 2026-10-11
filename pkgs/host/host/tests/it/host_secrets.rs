@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use jan_klod_core::ConfigSection;
+use jk_wasm::ConfigSection;
 use serde_json::json;
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};

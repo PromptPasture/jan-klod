@@ -146,6 +146,7 @@ pub struct GuestStorage {
 
 impl GuestStorage {
     /// Not session-scoped: one namespace per component, for the whole run.
+    #[must_use]
     pub const fn shared(backing: Backing) -> Self {
         Self {
             backing,
@@ -155,6 +156,7 @@ impl GuestStorage {
     }
 
     /// Session-scoped: a namespace per component *and* session.
+    #[must_use]
     pub const fn per_session(backing: Backing) -> Self {
         Self {
             backing,
@@ -184,8 +186,8 @@ pub enum Backing {
     /// Reached through [`Entries`] rather than held directly, so this crate
     /// never names the crate that knows SQLite (#180).
     Durable {
-        /// Shared with the [`AgentSession`](crate::AgentSession) that opened
-        /// it, and with every other guest in the fleet.
+        /// Shared with the agent session that opened it, and with every
+        /// other guest in the fleet.
         rows: Arc<dyn Entries>,
         /// The component id every namespace is prefixed with.
         owner: String,
@@ -251,6 +253,10 @@ impl GuestStorage {
     }
 
     /// Upsert `value`, returning the entry as stored.
+    ///
+    /// # Errors
+    /// [`StorageFault::Backend`] when the storage is session-scoped and no
+    /// session is bound, or when the backing store refuses.
     pub fn set(
         &mut self,
         namespace: String,
@@ -283,6 +289,11 @@ impl GuestStorage {
     }
 
     /// Fetch one entry.
+    ///
+    /// # Errors
+    /// [`StorageFault::Backend`] when the storage is session-scoped and no
+    /// session is bound, or when the backing store refuses; [`StorageFault::NotFound`]
+    /// when there is no such entry.
     pub fn get(&self, namespace: &str, key: &str) -> Result<StoredEntry, StorageFault> {
         let scoped = self.scope(namespace)?;
         match &self.backing {
@@ -305,6 +316,11 @@ impl GuestStorage {
     }
 
     /// Remove one entry.
+    ///
+    /// # Errors
+    /// [`StorageFault::Backend`] when the storage is session-scoped and no
+    /// session is bound, or when the backing store refuses; [`StorageFault::NotFound`]
+    /// when there is no such entry.
     pub fn delete(&mut self, namespace: &str, key: &str) -> Result<(), StorageFault> {
         let scoped = self.scope(namespace)?;
         match &mut self.backing {
@@ -317,6 +333,10 @@ impl GuestStorage {
     }
 
     /// Every entry in a namespace, unordered.
+    ///
+    /// # Errors
+    /// [`StorageFault::Backend`] when the storage is session-scoped and no
+    /// session is bound, or when the backing store refuses.
     pub fn entries_in(&self, namespace: &str) -> Result<Vec<StoredEntry>, StorageFault> {
         let scoped = self.scope(namespace)?;
         match &self.backing {
@@ -341,6 +361,10 @@ impl GuestStorage {
     }
 
     /// The most recently written entries in a namespace, newest first.
+    ///
+    /// # Errors
+    /// [`StorageFault::Backend`] when the storage is session-scoped and no
+    /// session is bound, or when the backing store refuses.
     pub fn recent(&self, namespace: &str, limit: u32) -> Result<Vec<StoredEntry>, StorageFault> {
         let mut entries = self.entries_in(namespace)?;
         entries.sort_by_key(|e| std::cmp::Reverse(e.updated_at));

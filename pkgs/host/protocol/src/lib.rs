@@ -28,6 +28,13 @@
 //! projections of one turn, and every crate above this one needs the same
 //! words for it (#180).
 //!
+//! [`intercept`] and [`contributions`] follow for the same reason: the
+//! interceptor contract and the plain shapes of what an extension contributes
+//! to a client. The wasm adapters implement those traits and the loop consumes
+//! them; in separate crates, the contract has to sit below both (#181). The
+//! [`contributions`] types are not the root's wire shapes of the same names —
+//! a surface maps one to the other.
+//!
 //! # Versioning
 //!
 //! [`PROTOCOL_VERSION`] is semver. Removing a command, renaming one, or
@@ -38,6 +45,8 @@
 //! decides — and while this version is `0.x`, a differing **minor** is a
 //! refusal too.
 
+pub mod contributions;
+pub mod intercept;
 pub mod jsonrpc;
 pub mod turn;
 
@@ -82,7 +91,7 @@ pub const COMMAND_METHODS: &[&str] = &[
 ///
 /// # This rule is deliberately duplicated
 ///
-/// `jan_klod_core::manifest::api_compatible` applies the same test to the WIT
+/// `jk_wasm::manifest::api_compatible` applies the same test to the WIT
 /// `jan-klod:interfaces` version, and this is not a copy to deduplicate. The
 /// two version *lines* are independent — a WIT change need not touch a command,
 /// and vice versa — so sharing one predicate would drag one to decisions it did

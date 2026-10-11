@@ -215,7 +215,7 @@ fn a_component_the_boot_path_would_refuse_is_refused_here_too() {
         format!(
             "name = \"tool-hello\"\nversion = \"0.1.0\"\napi-version = \"{}\"\n\
              kind = \"tool\"\ndescription = \"x\"\ncapabilities = []\n",
-            jan_klod_core::manifest::API_VERSION
+            jk_wasm::manifest::API_VERSION
         ),
     )
     .expect("writes the under-declaring manifest");

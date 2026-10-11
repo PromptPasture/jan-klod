@@ -21,7 +21,7 @@
 //! is the failure this test exists to catch and the reason its bound is
 //! well under the timeout rather than just under it.
 
-use jan_klod_core::route::HttpFn;
+use jk_wasm::route::HttpFn;
 
 use jan_klod_host::serve::Surface;
 use jan_klod_host::sessions::Agents;
@@ -48,7 +48,7 @@ fn tool_then_answer_http() -> HttpFn {
             serde_json::json!({"choices":[{"message":{"role":"assistant",
                 "content":"done"},"finish_reason":"stop"}]})
         };
-        Ok(jan_klod_core::http::WireResponse {
+        Ok(jk_wasm::http::WireResponse {
             status: 200,
             headers: vec![],
             body: serde_json::to_vec(&body).unwrap(),

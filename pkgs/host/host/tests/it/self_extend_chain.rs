@@ -75,9 +75,9 @@ fn sha256_in(text: &str) -> Option<String> {
         .map(str::to_lowercase)
 }
 
-fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
+fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
     let script = Arc::clone(script);
-    move || -> jan_klod_core::route::HttpFn {
+    move || -> jk_wasm::route::HttpFn {
         let script = Arc::clone(&script);
         Box::new(move |_m, _u, _h, body, _t| {
             script.completions.fetch_add(1, Ordering::Relaxed);
@@ -136,15 +136,15 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jan_klod_core::route::HttpFn {
     }
 }
 
-fn done() -> jan_klod_core::http::WireResponse {
+fn done() -> jk_wasm::http::WireResponse {
     reply(
         &serde_json::json!({"choices":[{"message":{"role":"assistant",
         "content":"done"},"finish_reason":"stop"}]}),
     )
 }
 
-fn reply(value: &serde_json::Value) -> jan_klod_core::http::WireResponse {
-    jan_klod_core::http::WireResponse {
+fn reply(value: &serde_json::Value) -> jk_wasm::http::WireResponse {
+    jk_wasm::http::WireResponse {
         status: 200,
         headers: vec![],
         body: serde_json::to_vec(value).expect("serialises"),
@@ -248,7 +248,7 @@ fn manifest_toml() -> String {
     format!(
         "name = \"tool-selfbuilt\"\nversion = \"0.0.0\"\napi-version = \"{api}\"\n\
          kind = \"tool\"\ndescription = \"built in session\"\ncapabilities = []\n",
-        api = jan_klod_core::manifest::API_VERSION
+        api = jk_wasm::manifest::API_VERSION
     )
 }
 

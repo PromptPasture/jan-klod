@@ -1459,21 +1459,11 @@ dependencies = [
 name = "jan-klod-core"
 version = "0.1.0"
 dependencies = [
- "jan-klod-config",
  "jan-klod-protocol",
  "jk-session",
- "landlock",
- "minisign-verify",
+ "jk-wasm",
  "rusqlite",
- "serde",
  "serde_json",
- "sha2",
- "thiserror 2.0.18",
- "toml 0.9.12+spec-1.1.0",
- "ureq",
- "url",
- "wasmtime",
- "wasmtime-wasi",
 ]
 
 [[package]]
@@ -1489,6 +1479,7 @@ dependencies = [
  "jan-klod-core",
  "jan-klod-protocol",
  "jk-session",
+ "jk-wasm",
  "ring",
  "rusqlite",
  "serde",
@@ -1520,6 +1511,25 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "jk-wasm"
+version = "0.1.0"
+dependencies = [
+ "jan-klod-config",
+ "jan-klod-protocol",
+ "landlock",
+ "minisign-verify",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
+ "ureq",
+ "url",
+ "wasmtime",
+ "wasmtime-wasi",
 ]
 
 [[package]]

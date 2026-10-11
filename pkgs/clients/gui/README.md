@@ -1,6 +1,6 @@
 # `jan-klod-gui` — the desktop window
 
-Tauri 2 window around **the web client the core serves**. Not a third codebase: `pkgs/clients/web` builds, `pkgs/host/core` serves at `/`, this opens a webview. Vision decision 5.
+Tauri 2 window around **the web client the core serves**. Not a third codebase: `pkgs/clients/web` builds, `pkgs/host/host` serves at `/`, this opens a webview. Vision decision 5.
 
 ```sh
 make gui       # build, stage beside host binaries

@@ -381,9 +381,9 @@ audit deny:
 # results are then merged into one document by `jaq` (#208).
 #
 # **One** glob, `src/*/*.cdx.json`, and that is not a shortcut: every crate in
-# both workspaces — the six host members (`jk-session` joined in Phase 21b) and
-# `jan-klod-gui` — is a direct child of `src/`, so one level of wildcard reaches
-# all seven and nothing else.
+# both workspaces — the seven host members (`jk-session` joined in Phase 21b,
+# `jk-wasm` in 21c) and `jan-klod-gui` — is a direct child of `src/`, so one
+# level of wildcard reaches all eight and nothing else.
 # It has to be exactly one level. `src/**/...` is what was here before, and in
 # `sh` (no `globstar`) `**` is just `*`, so it was never recursive; when the
 # members moved out from under `pkgs/host/core/` it silently stopped matching four of
@@ -396,8 +396,8 @@ sbom:
 	cd $(HOST_WS) && cargo cyclonedx --format json --quiet
 	cd $(GUI_DIR) && cargo cyclonedx --format json --quiet
 	@n=$$(ls $(SBOM_DOCS) | wc -l | tr -d ' '); \
-	  test "$$n" -eq 7 \
-	    || { echo "sbom: expected 7 per-crate documents, found $$n:" >&2; \
+	  test "$$n" -eq 8 \
+	    || { echo "sbom: expected 8 per-crate documents, found $$n:" >&2; \
 	         ls $(SBOM_DOCS) >&2; exit 1; }
 	cat $(SBOM_DOCS) | \
 	  jaq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \

@@ -4,7 +4,7 @@ title: Architecture
 description: High-level architecture of the Jan-Klod agent runtime
 tags: [architecture, core, extensions, rust, wasm, wasmtime]
 created: 2026-06-28T00:00:00Z
-updated: 2026-09-18T00:00:00Z
+updated: 2026-10-11T00:00:00Z
 ---
 
 > **Foundation:** **Rust + Wasmtime** host running WebAssembly Components (WIT contracts) as a standalone, user-privilege process — see [decisions/2026-06-29-component-model-rust](../decisions/2026-06-29-component-model-rust/Handoff.md). Taxonomy and contracts unchanged from Go + Wazero; host language/runtime and extension sandboxing differ. Because **nothing is trusted**, native extensions are gone; the inbound network surface (REST + SSE, stdio JSON-RPC) is host-side code in `jan-klod-host`, not a WASM extension — the planned `api-*`/`chat-*`/`host-serve`/`host-socket` design was superseded before anything shipped against it. The **agent loop** (re-architected 2026-07-01) has thin *mechanism* in **core** and all *decisions* in **interceptor** extensions — see [Thin Loop + Interceptor Middleware](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md). All implementation choices resolved as of v0.1.0.
@@ -58,7 +58,7 @@ Three languages are proven rather than claimed, each by a guest the gate runs a 
 ### One tool is not an extension
 
 Every model-facing tool is a component, with one exception: **`ext-install`**,
-implemented by the host in `core::native_tools`. It is stated here rather
+implemented by the host in `jk_wasm::native_tools`. It is stated here rather
 than left to be discovered, because "all tools are components" is a property
 worth keeping deliberately.
 
@@ -367,7 +367,7 @@ Deliberately **not an extension**; the `store-*` component family never existed.
 
 ### Compile cache
 
-Configured in the same `storage:` block: `cache-dir` (default `wasmtime-cache`, beside `config.yaml`) is where Wasmtime caches compiled components ([#60](https://github.com/PromptPasture/jan-klod/issues/60)), so second boots skip Cranelift recompilation. Wasmtime's own built-in cache (`Cache`/`CacheConfig`, `Config::cache`) wired at `Runtime::boot` — not a bespoke `.cwasm` cache. Evaluated first per the issue and adopted because it keys on everything affecting codegen (component bytes, target triple, compiler/ISA flags, Wasmtime version) and treats corrupt/foreign artefacts as misses, never errors. See `pkgs/host/core/src/wasm_cache.rs` for evaluation and [Security model](security-model.md) for what cache hits trust.
+Configured in the same `storage:` block: `cache-dir` (default `wasmtime-cache`, beside `config.yaml`) is where Wasmtime caches compiled components ([#60](https://github.com/PromptPasture/jan-klod/issues/60)), so second boots skip Cranelift recompilation. Wasmtime's own built-in cache (`Cache`/`CacheConfig`, `Config::cache`) wired at `Runtime::boot` — not a bespoke `.cwasm` cache. Evaluated first per the issue and adopted because it keys on everything affecting codegen (component bytes, target triple, compiler/ISA flags, Wasmtime version) and treats corrupt/foreign artefacts as misses, never errors. See `pkgs/host/wasm/src/wasm_cache.rs` for evaluation and [Security model](security-model.md) for what cache hits trust.
 
 ### Two tables
 
@@ -388,11 +388,11 @@ Logging is best-effort: store failures report once per turn, never cancelling it
 
 ### The envelope, and why it has its own version
 
-Every `payload` is `{"v": <EVENT_LOG_VERSION>, "data": {…}}`. `EVENT_LOG_VERSION` (`core::event_log`) is **not** the client protocol version (merging would be a mistake): stored logs outlive watching clients, so "can this build read this row?" and "can this client talk to this core?" are different questions with different answers. Readers refuse newer versions rather than guess, and accept older ones.
+Every `payload` is `{"v": <EVENT_LOG_VERSION>, "data": {…}}`. `EVENT_LOG_VERSION` (`jk_session::event_log`) is **not** the client protocol version (merging would be a mistake): stored logs outlive watching clients, so "can this build read this row?" and "can this client talk to this core?" are different questions with different answers. Readers refuse newer versions rather than guess, and accept older ones.
 
 ### Everything else is a projection of it
 
-`core::projection::transcript` turns rows into the `Vec<Message>` a turn replays — a pure function, no store/I/O. Each row places the way `conductor::run_turn` places it, not by projection rules: a `follow-up` is a user message (how steering injects), a `tool-result` is a `Role::Tool` message with the call's id (how the loop feeds results back). `text-delta` rows drop in favour of `done` (conductor's own words: deltas are non-authoritative preview), so agentic turns' intermediate assistant texts aren't in the transcript — same as the `{user, answer}` transcript this replaces.
+`jk_session::projection::transcript` turns rows into the `Vec<Message>` a turn replays — a pure function, no store/I/O. Each row places the way `conductor::run_turn` places it, not by projection rules: a `follow-up` is a user message (how steering injects), a `tool-result` is a `Role::Tool` message with the call's id (how the loop feeds results back). `text-delta` rows drop in favour of `done` (conductor's own words: deltas are non-authoritative preview), so agentic turns' intermediate assistant texts aren't in the transcript — same as the `{user, answer}` transcript this replaces.
 
 `ask` and answers drop too (load-bearing decision): the prompt goes to the *user* by an interceptor over a channel the model doesn't touch, so rendering the question as an assistant message puts words in the model's mouth, and the answer as a user message makes a permission click look user-typed.
 
@@ -410,7 +410,7 @@ Implementation lives under `pkgs/`, in three groups; every package has the same 
 
 | Group | Holds |
 |---|---|
-| `pkgs/host/*` | The host crates (`core`, `config`, `host`, `protocol`, `session`) and the Go `supervisor` |
+| `pkgs/host/*` | The host crates (`agent`, `config`, `host`, `protocol`, `session`, `wasm`) and the Go `supervisor` |
 | `pkgs/extensions/*` | Every guest, flat, named by kind (`tool-*`, `interceptor-*`, `provider-*`, `registry-*`) |
 | `pkgs/clients/*` | The terminal (`tui`), web and Tauri (`gui`) clients |
 

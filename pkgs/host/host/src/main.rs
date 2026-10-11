@@ -21,11 +21,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use jan_klod_config::Config;
-use jan_klod_core::ext_index;
-use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
 use jk_session::event_log::{verify_chain, ChainStatus};
 use jk_session::store::Store;
+use jk_wasm::ext_index;
+use jk_wasm::route::HttpFn;
 use tracing::Level;
 use tracing_subscriber::fmt::time::SystemTime;
 
@@ -120,7 +120,7 @@ fn main() -> ExitCode {
         // Internal: how the Linux sandbox confines a command. Deliberately
         // undocumented — an operator has no reason to run it, and the docs check
         // requires documented commands to exist, not the reverse.
-        Some(jan_klod_core::sandbox_landlock::CONFINE_SUBCOMMAND) => confine(&args[1..]),
+        Some(jk_wasm::sandbox_landlock::CONFINE_SUBCOMMAND) => confine(&args[1..]),
         Some("telegram") => telegram(&args[1..]),
         Some("setup") => setup(&args[1..]),
         Some("verify") => verify(&args[1..]),
@@ -170,7 +170,7 @@ fn acp() -> ExitCode {
     let factory = move || -> HttpFn {
         let policy = policy.clone();
         Box::new(move |method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+            jk_wasm::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
     let mut agent = match runtime.build_agent(&factory) {
@@ -222,7 +222,7 @@ fn mcp() -> ExitCode {
     let factory = move || -> HttpFn {
         let policy = policy.clone();
         Box::new(move |method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+            jk_wasm::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
     let mut agent = match runtime.build_agent(&factory) {
@@ -282,7 +282,7 @@ fn configured_index() -> Result<(String, Vec<ext_index::Entry>), ext_index::Inde
     // The host's own policy-bound client, so a redirect to a private address
     // ends the fetch rather than being followed on trust. A `registry.url` that
     // is not http(s) is a path, and nothing is fetched at all.
-    let http = jan_klod_core::ext::policy_bound_http();
+    let http = jk_wasm::ext::policy_bound_http();
     let entries = ext_index::load(&source, &http)?;
     Ok((source, entries))
 }
@@ -353,7 +353,7 @@ fn ext_search(args: &[String]) -> ExitCode {
 /// is a **name** resolved through the registry index.
 ///
 /// The `.wasm` test is `Path::extension`, the same rule
-/// [`jan_klod_core::ext::install`] applies to decide a path is a component —
+/// [`jk_wasm::ext::install`] applies to decide a path is a component —
 /// two different spellings of it would eventually disagree about a file, and
 /// this one decides which of three code paths runs.
 ///
@@ -367,21 +367,19 @@ fn ext_search(args: &[String]) -> ExitCode {
 fn install_from_source(
     dir: &str,
     source: &str,
-    checks: &jan_klod_core::ext::Checks,
-) -> Result<jan_klod_core::ext::Installed, ext_index::IndexError> {
+    checks: &jk_wasm::ext::Checks,
+) -> Result<jk_wasm::ext::Installed, ext_index::IndexError> {
     let dir = std::path::Path::new(dir);
-    if jan_klod_core::ext::looks_remote(source) {
-        let http = jan_klod_core::ext::policy_bound_http();
-        return Ok(jan_klod_core::ext::install_from_url(
-            dir, source, checks, &http,
-        )?);
+    if jk_wasm::ext::looks_remote(source) {
+        let http = jk_wasm::ext::policy_bound_http();
+        return Ok(jk_wasm::ext::install_from_url(dir, source, checks, &http)?);
     }
     let path = std::path::Path::new(source);
     if path.extension().and_then(|ext| ext.to_str()) == Some("wasm") {
-        return Ok(jan_klod_core::ext::install(dir, path, checks)?);
+        return Ok(jk_wasm::ext::install(dir, path, checks)?);
     }
     let (index_source, entries) = configured_index()?;
-    let http = jan_klod_core::ext::policy_bound_http();
+    let http = jk_wasm::ext::policy_bound_http();
     ext_index::install(dir, &entries, source, &index_source, checks, &http)
 }
 
@@ -431,7 +429,7 @@ fn ext_install(args: &[String]) -> ExitCode {
     // supplies the component also supply the key that vouches for it.
     let config_path = resolve_default("config.yaml");
     let mut checks =
-        match jan_klod_core::ext::Checks::from_config_path(std::path::Path::new(&config_path)) {
+        match jk_wasm::ext::Checks::from_config_path(std::path::Path::new(&config_path)) {
             Ok(checks) => checks,
             Err(err) => {
                 eprintln!("jan-klod: {err}");
@@ -446,12 +444,12 @@ fn ext_install(args: &[String]) -> ExitCode {
             // What it may ask the host for, at the moment it is installed —
             // the one time an operator is certainly looking.
             match &installed.declaration {
-                jan_klod_core::ext::Declaration::Present(manifest)
+                jk_wasm::ext::Declaration::Present(manifest)
                     if manifest.capabilities.is_empty() =>
                 {
                     println!("installed {} into {dir}/ — needs nothing", installed.name);
                 }
-                jan_klod_core::ext::Declaration::Present(manifest) => {
+                jk_wasm::ext::Declaration::Present(manifest) => {
                     println!(
                         "installed {} into {dir}/ — may use {}",
                         installed.name,
@@ -460,8 +458,7 @@ fn ext_install(args: &[String]) -> ExitCode {
                 }
                 // `install` refuses both of these, so reaching here would mean
                 // the manifest changed under us between landing and reading.
-                jan_klod_core::ext::Declaration::Absent
-                | jan_klod_core::ext::Declaration::Broken(_) => {
+                jk_wasm::ext::Declaration::Absent | jk_wasm::ext::Declaration::Broken(_) => {
                     println!(
                         "installed {} into {dir}/, but its manifest no longer reads",
                         installed.name
@@ -503,7 +500,7 @@ fn ext_list(args: &[String]) -> ExitCode {
     }
 
     let dir = resolve_default(&arg_or(&positional, 0, "ext"));
-    let staged = match jan_klod_core::ext::list(std::path::Path::new(&dir)) {
+    let staged = match jk_wasm::ext::list(std::path::Path::new(&dir)) {
         Ok(staged) => staged,
         Err(err) => {
             eprintln!("jan-klod: {err}");
@@ -517,7 +514,7 @@ fn ext_list(args: &[String]) -> ExitCode {
     let width = staged.iter().map(|s| s.name.len()).max().unwrap_or(0);
     for component in &staged {
         match &component.declaration {
-            jan_klod_core::ext::Declaration::Present(manifest) => {
+            jk_wasm::ext::Declaration::Present(manifest) => {
                 let capabilities = if manifest.capabilities.is_empty() {
                     // "needs nothing" is a claim the manifest makes, so it is
                     // printed as one rather than as a blank column.
@@ -530,13 +527,13 @@ fn ext_list(args: &[String]) -> ExitCode {
                     component.name, manifest.version, manifest.api_version, capabilities
                 );
             }
-            jan_klod_core::ext::Declaration::Absent => {
+            jk_wasm::ext::Declaration::Absent => {
                 println!(
                     "{:<width$}  no manifest — the next boot will refuse it",
                     component.name
                 );
             }
-            jan_klod_core::ext::Declaration::Broken(reason) => {
+            jk_wasm::ext::Declaration::Broken(reason) => {
                 println!("{:<width$}  unusable manifest: {reason}", component.name);
             }
         }
@@ -551,19 +548,19 @@ fn ext_remove(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let dir = resolve_default(&arg_or(args, 1, "ext"));
-    match jan_klod_core::ext::remove(std::path::Path::new(&dir), name) {
+    match jk_wasm::ext::remove(std::path::Path::new(&dir), name) {
         Ok(removed) => {
             // Which files went, not just "done": removing a manifest with no
             // component beside it is worth saying out loud, because it means
             // `ext/` had an orphan declaration.
             match removed {
-                jan_klod_core::ext::Removed::Both => {
+                jk_wasm::ext::Removed::Both => {
                     println!("removed {name} and its manifest from {dir}/");
                 }
-                jan_klod_core::ext::Removed::ComponentOnly => {
+                jk_wasm::ext::Removed::ComponentOnly => {
                     println!("removed {name} from {dir}/ — it had no manifest");
                 }
-                jan_klod_core::ext::Removed::ManifestOnly => {
+                jk_wasm::ext::Removed::ManifestOnly => {
                     println!("removed an orphan manifest for {name} from {dir}/");
                 }
             }
@@ -609,7 +606,7 @@ fn ask(args: &[String]) -> ExitCode {
     let factory = move || -> HttpFn {
         let policy = policy.clone();
         Box::new(move |method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+            jk_wasm::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
     let mut agent = match runtime.build_agent(&factory) {
@@ -708,7 +705,7 @@ fn verify(args: &[String]) -> ExitCode {
     let missing: Vec<&str> = runtime
         .extensions()
         .iter()
-        .filter(|ext| matches!(ext.state, jan_klod_core::LoadState::Missing(_)))
+        .filter(|ext| matches!(ext.state, jk_wasm::LoadState::Missing(_)))
         .map(|ext| ext.instance.id.as_str())
         .collect();
     if !missing.is_empty() {
@@ -908,7 +905,7 @@ fn verify_live(runtime: &Runtime) -> ExitCode {
     let factory = move || -> HttpFn {
         let policy = policy.clone();
         Box::new(move |method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+            jk_wasm::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
     let mut agent = match runtime.build_agent(&factory) {
@@ -1013,7 +1010,7 @@ fn rpc(args: &[String]) -> ExitCode {
     let factory = move || -> HttpFn {
         let policy = policy.clone();
         Box::new(move |method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+            jk_wasm::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
     let mut agent = match runtime.build_agent(&factory) {
@@ -1044,14 +1041,14 @@ fn rpc(args: &[String]) -> ExitCode {
 /// `exec` means `pre_exec`, which is `unsafe` — forbidden by this workspace's
 /// lints. Restricting ourselves and then calling the **safe** `exec` reaches the
 /// same place: the command replaces this process and inherits the restriction.
-/// See `jan_klod_core::sandbox_landlock` for the whole argument.
+/// See `jk_wasm::sandbox_landlock` for the whole argument.
 ///
 /// Exits `126` when it cannot confine or cannot exec, following the shell's
 /// "found but not executable" convention, so a wrapper failure is not mistaken
 /// for the command's own exit code.
 #[cfg(target_os = "linux")]
 fn confine(args: &[String]) -> ExitCode {
-    use jan_klod_core::sandbox_landlock;
+    use jk_wasm::sandbox_landlock;
 
     const CANNOT_EXECUTE: u8 = 126;
 
@@ -1178,7 +1175,7 @@ fn serve(args: &[String]) -> ExitCode {
     let factory = move || -> HttpFn {
         let policy = policy.clone();
         Box::new(move |method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+            jk_wasm::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
     // One agent per session, built on first use (#229). Nothing is built
@@ -1275,7 +1272,7 @@ fn telegram(args: &[String]) -> ExitCode {
     let factory = move || -> HttpFn {
         let policy = policy.clone();
         Box::new(move |method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+            jk_wasm::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
     let mut agent = match runtime.build_agent(&factory) {
@@ -1293,7 +1290,7 @@ fn telegram(args: &[String]) -> ExitCode {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect();
-        match jan_klod_core::http::fetch(method, url, &owned, body, 40_000) {
+        match jk_wasm::http::fetch(method, url, &owned, body, 40_000) {
             Ok(response) => Ok(response.body),
             Err(err) => Err(format!("{err:?}")),
         }

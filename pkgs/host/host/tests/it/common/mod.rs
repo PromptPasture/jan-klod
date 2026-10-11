@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
+use jk_wasm::http::WireResponse;
+use jk_wasm::route::HttpFn;
 
 pub mod minisig;
 

@@ -568,7 +568,7 @@ pub struct ToolMeta {
 
 /// Instantiated `tool-*` extensions, dispatched by name.
 ///
-/// Implements [`ToolInvoker`](crate::conductor::ToolInvoker) so the loop can call
+/// Implements [`ToolInvoker`](jan_klod_protocol::intercept::ToolInvoker) so the loop can call
 /// tools by matching the model's `tool-call` name. Unknown names return `None`.
 pub struct ToolFleet {
     /// (advertised metadata, extension), metadata resolved once via `meta`.
@@ -624,12 +624,12 @@ impl ToolFleet {
     }
 }
 
-impl crate::conductor::ToolInvoker for ToolFleet {
+impl jan_klod_protocol::intercept::ToolInvoker for ToolFleet {
     fn invoke_asking(
         &mut self,
         call: &jan_klod_protocol::turn::ToolCall,
         driver: &mut dyn jan_klod_protocol::turn::Driver,
-    ) -> Option<crate::conductor::ToolInvocation> {
+    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
         let entry = self
             .tools
             .iter_mut()
@@ -642,11 +642,11 @@ impl crate::conductor::ToolInvoker for ToolFleet {
             return self.invoke(call);
         };
         Some(match outcome {
-            Ok(content) => crate::conductor::ToolInvocation {
+            Ok(content) => jan_klod_protocol::intercept::ToolInvocation {
                 content,
                 failed: false,
             },
-            Err(content) => crate::conductor::ToolInvocation {
+            Err(content) => jan_klod_protocol::intercept::ToolInvocation {
                 content,
                 failed: true,
             },
@@ -656,7 +656,7 @@ impl crate::conductor::ToolInvoker for ToolFleet {
     fn invoke(
         &mut self,
         call: &jan_klod_protocol::turn::ToolCall,
-    ) -> Option<crate::conductor::ToolInvocation> {
+    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
         let entry = self
             .tools
             .iter_mut()
@@ -664,11 +664,11 @@ impl crate::conductor::ToolInvoker for ToolFleet {
         // A tool error is fed back to the model as the result, not an abort —
         // but it is still, per #162, a failure the wire is told about.
         Some(match entry.1.invoke(&call.arguments) {
-            Ok(content) => crate::conductor::ToolInvocation {
+            Ok(content) => jan_klod_protocol::intercept::ToolInvocation {
                 content,
                 failed: false,
             },
-            Err(content) => crate::conductor::ToolInvocation {
+            Err(content) => jan_klod_protocol::intercept::ToolInvocation {
                 content,
                 failed: true,
             },
@@ -812,24 +812,24 @@ impl LazyToolFleet {
     }
 }
 
-impl crate::conductor::ToolInvoker for LazyToolFleet {
+impl jan_klod_protocol::intercept::ToolInvoker for LazyToolFleet {
     fn invoke_asking(
         &mut self,
         call: &jan_klod_protocol::turn::ToolCall,
         driver: &mut dyn jan_klod_protocol::turn::Driver,
-    ) -> Option<crate::conductor::ToolInvocation> {
+    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
         self.ensure().ok()?.invoke_asking(call, driver)
     }
 
     fn invoke(
         &mut self,
         call: &jan_klod_protocol::turn::ToolCall,
-    ) -> Option<crate::conductor::ToolInvocation> {
+    ) -> Option<jan_klod_protocol::intercept::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
             // Like live tools: error fed to model as result, not abort.
             // Lazy failure costs one tool call, not the turn.
-            Err(err) => Some(crate::conductor::ToolInvocation {
+            Err(err) => Some(jan_klod_protocol::intercept::ToolInvocation {
                 content: format!("tool fleet failed to instantiate: {err}"),
                 failed: true,
             }),

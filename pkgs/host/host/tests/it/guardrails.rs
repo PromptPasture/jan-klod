@@ -149,7 +149,7 @@ extensions:
     );
 
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::Arc::clone(&calls);
         Box::new(move |_m, _u, _h, _b, _t| {
             let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -164,7 +164,7 @@ extensions:
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"I could not read it"},"finish_reason":"stop"}]})
             };
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&body).unwrap(),

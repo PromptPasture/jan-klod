@@ -5,11 +5,11 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use jan_klod_core::host_fs::Workspace;
-use jan_klod_core::host_process::ProcessRunner;
-use jan_klod_core::http::WireResponse;
-use jan_klod_core::route::HttpFn;
-use jan_klod_core::tool_host::ToolExtension;
+use jk_wasm::host_fs::Workspace;
+use jk_wasm::host_process::ProcessRunner;
+use jk_wasm::http::WireResponse;
+use jk_wasm::route::HttpFn;
+use jk_wasm::tool_host::ToolExtension;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 

@@ -167,10 +167,10 @@ extensions:
     // Reaches this loopback endpoint only because the policy lifts the
     // provider's `base-url` from config.
     let policy = runtime.egress_policy();
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let policy = policy.clone();
         Box::new(move |method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+            jk_wasm::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
     let mut agent = runtime
@@ -252,10 +252,10 @@ extensions:
 
     let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("boots");
     let policy = runtime.egress_policy();
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let policy = policy.clone();
         Box::new(move |method, url, headers, body, timeout| {
-            jan_klod_core::http::fetch_within(&policy, method, url, headers, body, timeout)
+            jk_wasm::http::fetch_within(&policy, method, url, headers, body, timeout)
         })
     };
     let mut agent = runtime.build_agent(&factory).expect("agent boots");

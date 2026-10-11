@@ -60,11 +60,11 @@ extensions:
     // provider being called twice rather than about two strings coming back.
     let completions = Arc::new(AtomicU32::new(0));
     let counter = Arc::clone(&completions);
-    let factory = move || -> jan_klod_core::route::HttpFn {
+    let factory = move || -> jk_wasm::route::HttpFn {
         let counter = Arc::clone(&counter);
         Box::new(move |_m, _u, _h, _b, _t| {
             counter.fetch_add(1, Ordering::Relaxed);
-            Ok(jan_klod_core::http::WireResponse {
+            Ok(jk_wasm::http::WireResponse {
                 status: 200,
                 headers: vec![],
                 body: serde_json::to_vec(&serde_json::json!({"choices":[{"message":{

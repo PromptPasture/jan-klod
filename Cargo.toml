@@ -6,6 +6,7 @@ members = [
     "pkgs/host/host",
     "pkgs/host/protocol",
     "pkgs/host/session",
+    "pkgs/host/wasm",
     "pkgs/clients/tui",
 ]
 # Both are cargo workspaces in their own right, sitting under this one's
