@@ -254,7 +254,7 @@ impl Answering {
 }
 
 impl jan_klod_host::acp::Asker for Answering {
-    fn ask(&self, _session: &str, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
+    fn ask(&self, _session: &str, prompt: &jan_klod_protocol::turn::UserPrompt) -> String {
         self.asked.borrow_mut().push(prompt.question.clone());
         // A real editor picks an `optionId` from the prompt's own options.
         assert!(

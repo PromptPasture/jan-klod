@@ -14,8 +14,8 @@
 
 use jan_klod_core::http::WireError;
 use jan_klod_core::route::HttpFn;
-use jan_klod_core::store::Store;
 use jan_klod_core::Runtime;
+use jk_session::store::Store;
 
 /// A database as an install from before the log would have it: the `entries`
 /// table alone, holding two turns of one session, with their own timestamps.

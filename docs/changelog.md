@@ -2,6 +2,7 @@
 
 ## 2026-10-11
 
+- **Refactor**: **Phase 21 — `jk-session` callers use the real paths** ([#180](https://github.com/PromptPasture/jan-klod/issues/180)). `jan-klod-core` no longer re-exports `jk_session::{event_log, projection, store}` or the turn vocabulary in `conductor`/`intercept`; every caller names `jk_session::…` and `jan_klod_protocol::turn::…` directly. No behaviour, schema or event-envelope change. Gate: `cargo tree -p jk-session` names no `wasmtime`; the Phase 14 exit gate (`pkgs/host/host/tests/it/event_log.rs`, `pkgs/host/session/tests/store.rs`) passes.
 - **Fix**: **`--version` and `--help` on both binaries** ([#247](https://github.com/PromptPasture/jan-klod/issues/247)). `jan-klod-gateway` read either flag as a config path and fell through to the boot plan; `jan-klod` refused them as unknown options. Both now print the version (`CARGO_PKG_VERSION`) or a usage listing every subcommand, and exit 0. Tests: `pkgs/host/host/tests/it/info_flags.rs`, `pkgs/clients/tui/tests/info_flags.rs`.
 - **Chore**: **Markdown lint** ([#234](https://github.com/PromptPasture/jan-klod/issues/234)). `make lint-docs` runs `markdownlint-cli2@0.23.3` over every tracked `.md` against `.markdownlint.yaml`; the pre-commit hook runs it when a `.md` is staged, and CI runs it beside `test-web`. MD060 is off because the house table style (padded cells, tight delimiter row) matches none of its styles. Existing findings fixed: whitespace, blank lines around blocks, `$` prompts dropped from output-less `console` blocks, one broken anchor.
 

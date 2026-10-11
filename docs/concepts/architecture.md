@@ -380,7 +380,7 @@ events(session TEXT, seq INTEGER, ts INTEGER, kind TEXT, payload TEXT,
 
 One row per event, `seq` numbered from 1 per session — a log reads as a gapless sequence. `seq` is allocated inside the insert (`SELECT COALESCE(MAX(seq), 0) + 1 … RETURNING seq`), preventing collisions. No update and no single-row delete: logs whose rows could be rewritten make replays claims about the present, not the past. `purge_session_events` (forgetting a whole session) is the only removal.
 
-What's logged and by what: every `conductor::Event` via `PersistingSink` (fan-out, so SSE stream and TUI receive everything); the turn-starting message; `ask`, answer, and steering follow-up via `PersistingDriver`. Answers record regardless of provenance, including defaults when nobody replied (replays can't otherwise distinguish approvals from timed-out denials). Text deltas store one row per event, not coalesced — replaying clients need them as they arrived.
+What's logged and by what: every `turn::Event` via `PersistingSink` (fan-out, so SSE stream and TUI receive everything); the turn-starting message; `ask`, answer, and steering follow-up via `PersistingDriver`. Answers record regardless of provenance, including defaults when nobody replied (replays can't otherwise distinguish approvals from timed-out denials). Text deltas store one row per event, not coalesced — replaying clients need them as they arrived.
 
 Logging is best-effort: store failures report once per turn, never cancelling it — a full disk shouldn't stop conversations.
 

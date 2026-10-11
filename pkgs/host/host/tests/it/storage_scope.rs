@@ -3,8 +3,8 @@
 //! survive restart, (2) `persist: true` keeps state, (3) components isolate
 //! namespaces and can't read session transcripts. Skips when guests not staged.
 
-use jan_klod_core::intercept::{Driver, UserPrompt};
 use jan_klod_core::Runtime;
+use jan_klod_protocol::turn::{Driver, UserPrompt};
 
 use crate::common;
 
@@ -174,7 +174,7 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
     let _ = agent.run_with_driver(&mut driver, "s1", "use bash");
 
     // Read DB directly (guest's view not under test).
-    let store = jan_klod_core::store::Store::open(&db).expect("opens the same db");
+    let store = jk_session::store::Store::open(&db).expect("opens the same db");
     let namespaces = store.list_namespaces().expect("lists namespaces");
 
     // Gate asked for `permission`; must be prefixed to prevent namespace collisions.

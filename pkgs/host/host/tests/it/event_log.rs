@@ -7,11 +7,11 @@
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
-use jan_klod_core::conductor::Event;
-use jan_klod_core::event_log::{self, decode};
-use jan_klod_core::store::Store;
 use jan_klod_core::Runtime;
+use jan_klod_protocol::turn::Event;
+use jk_session::event_log::{self, decode};
 use jk_session::event_log::{verify_chain, ChainStatus};
+use jk_session::store::Store;
 use rusqlite::params;
 
 use crate::common;

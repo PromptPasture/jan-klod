@@ -191,8 +191,8 @@ fn run_edit_turn(root: &std::path::Path, tag: &str, answer: &'static str) -> Edi
         answer: &'static str,
         asked: Vec<String>,
     }
-    impl jan_klod_core::intercept::Driver for Answering {
-        fn ask(&mut self, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
+    impl jan_klod_protocol::turn::Driver for Answering {
+        fn ask(&mut self, prompt: &jan_klod_protocol::turn::UserPrompt) -> String {
             self.asked.push(prompt.question.clone());
             self.answer.to_string()
         }

@@ -15,9 +15,11 @@ use jan_klod_protocol::jsonrpc;
 
 use std::sync::mpsc::Receiver;
 
-use jan_klod_core::conductor::{Event, EventSink, Flow, RunResult};
-use jan_klod_core::intercept::{Driver, UserPrompt};
+use jan_klod_core::conductor::RunResult;
+
 use jan_klod_core::AgentSession;
+use jan_klod_protocol::turn::{Driver, UserPrompt};
+use jan_klod_protocol::turn::{Event, EventSink, Flow};
 
 /// ACP protocol version (integer, not date like MCP).
 pub const ACP_VERSION: i64 = 1;

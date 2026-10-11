@@ -238,11 +238,11 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
     // Without it the log ends on the install's "callable from the next
     // turn" — a promise, with nothing saying whether it held.
     let store =
-        jan_klod_core::store::Store::open(dir.join("jan-klod.db")).expect("the log is readable");
+        jk_session::store::Store::open(dir.join("jan-klod.db")).expect("the log is readable");
     let rows = store.session_events("s1").expect("the session has a log");
     assert!(
         rows.iter().any(|row| {
-            row.kind == jan_klod_core::event_log::KIND_EXTENSION_LOADED
+            row.kind == jk_session::event_log::KIND_EXTENSION_LOADED
                 && row.payload.contains("tool-hello")
                 && row.payload.contains("\"loaded\":true")
         }),

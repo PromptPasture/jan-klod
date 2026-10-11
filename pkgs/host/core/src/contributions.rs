@@ -3,11 +3,11 @@
 //! The host-side mirror of `wit/client-surface.wit`: plain types with no
 //! Component-Model dependency, so a surface can carry them to a client without
 //! touching generated bindings — the same separation `intercept` keeps for loop
-//! state, and `conductor::Event` for turn events.
+//! state, and `jan_klod_protocol::turn::Event` for turn events.
 //!
 //! Not the wire types either. `jan-klod-protocol` owns those, and this crate no
 //! longer depends on it (#179): a surface maps these to notifications the way
-//! it maps `conductor::Event`, which is what keeps the kernel from knowing what
+//! it maps `jan_klod_protocol::turn::Event`, which is what keeps the kernel from knowing what
 //! a client speaks.
 //!
 //! **Every string here is attacker-influenced.** A contributed `title` can

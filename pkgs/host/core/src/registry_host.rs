@@ -620,7 +620,7 @@ impl RegistryFleet {
 impl crate::conductor::ToolInvoker for RegistryFleet {
     fn invoke(
         &mut self,
-        call: &crate::intercept::ToolCall,
+        call: &jan_klod_protocol::turn::ToolCall,
     ) -> Option<crate::conductor::ToolInvocation> {
         // Check skills first
         if let Some((_, idx)) = self.skill_names.iter().find(|(n, _)| n == &call.name) {
@@ -785,7 +785,7 @@ impl LazyRegistryFleet {
 impl crate::conductor::ToolInvoker for LazyRegistryFleet {
     fn invoke(
         &mut self,
-        call: &crate::intercept::ToolCall,
+        call: &jan_klod_protocol::turn::ToolCall,
     ) -> Option<crate::conductor::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),

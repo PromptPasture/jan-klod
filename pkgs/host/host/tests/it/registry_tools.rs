@@ -12,8 +12,8 @@
 use std::fmt::Write as _;
 
 use jan_klod_core::conductor::ToolInvoker;
-use jan_klod_core::intercept::ToolCall;
 use jan_klod_core::native_tools::NativeTools;
+use jan_klod_protocol::turn::ToolCall;
 
 use crate::common;
 use crate::ext_install::{canned_files, published, scratch, Scratch};

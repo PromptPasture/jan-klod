@@ -17,13 +17,12 @@
 //!   phase, in [`Phase`] declaration order;
 //! - *within* one phase: the load order interceptors were registered in.
 //!
-//! The vocabulary a turn is made of — [`Message`], [`Role`], [`ToolCall`],
-//! [`ToolOutcome`], [`UserPrompt`], [`Driver`] — now lives in
-//! [`jan_klod_protocol::turn`], because the event log needs the same words and
-//! sits below this crate (#180). It is re-exported here, so every path that
-//! named `intercept::Message` still does.
+//! The vocabulary a turn is made of — [`Message`],
+//! [`Role`](jan_klod_protocol::turn::Role), [`ToolCall`], [`ToolOutcome`],
+//! [`UserPrompt`], [`Driver`] — now lives in [`jan_klod_protocol::turn`],
+//! because the event log needs the same words and sits below this crate (#180).
 
-pub use jan_klod_protocol::turn::{Driver, Message, Role, ToolCall, ToolOutcome, UserPrompt};
+use jan_klod_protocol::turn::{Driver, Message, ToolCall, ToolOutcome, UserPrompt};
 
 /// The lifecycle points, in dispatch order. Mirrors the `phase` enum in
 /// `wit/interceptor.wit`.

@@ -218,7 +218,7 @@ pub enum Command {
 /// Two tests hold the ends, and neither crate needs to see the other:
 /// `pkgs/host/core/tests/protocol_events.rs` proves this is exactly what
 /// `serve::sse_frame`, `prompt_frame` and `error_frame` produce across every
-/// `conductor::Event`, and `ui/tests/parse_frame.rs` proves a client has an
+/// `turn::Event`, and `ui/tests/parse_frame.rs` proves a client has an
 /// answer for each. Adding a frame to the core fails the first; shipping a
 /// client that ignores it fails the second.
 ///
@@ -239,7 +239,7 @@ pub const SSE_FRAME_KINDS: [&str; 7] = [
 /// notification is a JSON-RPC request with no `id`, the signal for
 /// "no reply expected".
 ///
-/// The first five mirror `jan_klod_core::conductor::Event`. The rest are not
+/// The first five mirror [`turn::Event`]. The rest are not
 /// events: `Ask` is the pending prompt an interceptor blocks a turn on,
 /// answered by [`Command::TurnAnswer`]; `Error` is a turn that failed or a
 /// command that could not be served; `SessionUpdated` reports a session whose

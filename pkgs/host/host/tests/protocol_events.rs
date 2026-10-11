@@ -1,6 +1,6 @@
 //! Every turn event the conductor emits has a place in the client protocol.
 //!
-//! Without this, adding a `conductor::Event` variant is a silent hole: the
+//! Without this, adding a `jan_klod_protocol::turn::Event` variant is a silent hole: the
 //! event reaches the SSE sink and never reaches a protocol client, and nothing
 //! fails. The mapping below has no wildcard arm, so a new variant stops this
 //! file from compiling — which is the whole point of it existing.
@@ -11,10 +11,10 @@
 //! asserts *that* — a test that validated its own copy of a mapping would pass
 //! while the copy the stdio transport actually sends drifted away from it.
 
-use jan_klod_core::conductor::Event;
-use jan_klod_core::intercept::{ToolCall, ToolOutcome, UserPrompt};
 use jan_klod_host::rpc::notification_for;
 use jan_klod_host::serve;
+use jan_klod_protocol::turn::Event;
+use jan_klod_protocol::turn::{ToolCall, ToolOutcome, UserPrompt};
 use jan_klod_protocol::Notification;
 
 /// One event of each variant, every field distinguishable, so a field mapped to
@@ -123,7 +123,7 @@ fn nothing_an_event_carries_is_dropped() {
 }
 
 /// Three notifications answer to no event, and that is not an oversight: `ask`
-/// comes from `intercept::Driver::ask` blocking a turn, `error` from a failed
+/// comes from `jan_klod_protocol::turn::Driver::ask` blocking a turn, `error` from a failed
 /// turn or an unservable request, and `session/updated` from the store — none
 /// of which passes through `EventSink`.
 #[test]
@@ -263,7 +263,7 @@ fn the_error_frame_fits_the_error_notification() {
 }
 
 /// The frames above are the whole SSE surface, and this proves the shared
-/// constant lists exactly them — computed from `conductor::Event`, so adding a
+/// constant lists exactly them — computed from `jan_klod_protocol::turn::Event`, so adding a
 /// variant fails here rather than being noticed by a reader. The constant lives
 /// in `jan-klod-protocol` because a client cannot see this crate, and the
 /// client's half of the check (`ui/tests/parse_frame.rs`) reads the same one.

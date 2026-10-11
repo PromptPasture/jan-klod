@@ -327,7 +327,7 @@ impl EventSink for PersistingSink<'_> {
     }
 }
 
-/// An [`intercept::Driver`] that logs each prompt and the answer it got,
+/// An [`jan_klod_protocol::turn::Driver`] that logs each prompt and the answer it got,
 /// then behaves exactly as the driver it wraps.
 ///
 /// A wrapper, not a change to the trait: `ask` already returns the answer,

@@ -395,12 +395,12 @@ fn the_model_is_actually_told_which_tools_exist() {
 #[derive(Default)]
 struct WarningSink(Vec<String>);
 
-impl jan_klod_core::conductor::EventSink for WarningSink {
-    fn emit(&mut self, event: &jan_klod_core::conductor::Event) -> jan_klod_core::conductor::Flow {
-        if let jan_klod_core::conductor::Event::Warning(message) = event {
+impl jan_klod_protocol::turn::EventSink for WarningSink {
+    fn emit(&mut self, event: &jan_klod_protocol::turn::Event) -> jan_klod_protocol::turn::Flow {
+        if let jan_klod_protocol::turn::Event::Warning(message) = event {
             self.0.push(message.clone());
         }
-        jan_klod_core::conductor::Flow::Continue
+        jan_klod_protocol::turn::Flow::Continue
     }
 }
 

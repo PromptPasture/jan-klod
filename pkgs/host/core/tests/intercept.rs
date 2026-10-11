@@ -4,9 +4,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use jan_klod_core::intercept::{
-    BlockReason, Decision, Dispatcher, Driver, HookState, InterceptInput, Interceptor,
-    InterceptorError, Outcome, PendingRequest, Phase, ToolCall, UserPrompt, UserTurn,
+    BlockReason, Decision, Dispatcher, HookState, InterceptInput, Interceptor, InterceptorError,
+    Outcome, PendingRequest, Phase, UserTurn,
 };
+
+use jan_klod_protocol::turn::{Driver, ToolCall, UserPrompt};
 
 // ---------------------------------------------------------------------------
 // Test doubles

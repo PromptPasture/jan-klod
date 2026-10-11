@@ -12,8 +12,8 @@
 use jan_klod_core::conductor::ToolInvoker;
 use jan_klod_core::host_fs::Workspace;
 use jan_klod_core::host_process::ProcessRunner;
-use jan_klod_core::intercept::ToolCall;
 use jan_klod_core::tool_host::LazyToolFleet;
+use jan_klod_protocol::turn::ToolCall;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 

@@ -15,12 +15,6 @@
 mod bindings;
 pub mod conductor;
 
-// The session store is its own crate now (#180): an append-only log, its
-// projections, and the only place that links SQLite. Re-exported under the
-// names it had here, so every `jan_klod_core::store::Store` still resolves
-// while the call sites are repointed.
-pub use jk_session::{event_log, projection, store};
-
 pub mod contributions;
 pub mod delegate;
 pub mod egress;
@@ -45,6 +39,8 @@ mod session_entries;
 pub mod tool_host;
 mod wasm_cache;
 
+use jan_klod_protocol::turn;
+use jk_session::{event_log, projection, store};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -1465,7 +1461,7 @@ impl CombinedFleet {
 }
 
 impl conductor::ToolInvoker for CombinedFleet {
-    fn invoke(&mut self, call: &intercept::ToolCall) -> Option<conductor::ToolInvocation> {
+    fn invoke(&mut self, call: &turn::ToolCall) -> Option<conductor::ToolInvocation> {
         self.tools
             .invoke(call)
             .or_else(|| self.registry.invoke(call))
@@ -1473,8 +1469,8 @@ impl conductor::ToolInvoker for CombinedFleet {
     }
     fn invoke_asking(
         &mut self,
-        call: &intercept::ToolCall,
-        driver: &mut dyn intercept::Driver,
+        call: &turn::ToolCall,
+        driver: &mut dyn turn::Driver,
     ) -> Option<conductor::ToolInvocation> {
         // Tools may ask; registries and the host's own tools do not, so they
         // keep the default. Order matches `invoke`, or a name would resolve
@@ -1625,7 +1621,7 @@ impl AgentSession {
     /// durable transcript. The seam a test injects stub tools through.
     pub fn run_with(
         &mut self,
-        driver: &mut dyn intercept::Driver,
+        driver: &mut dyn turn::Driver,
         tools: &mut dyn conductor::ToolInvoker,
         session: &str,
         message: &str,
@@ -1648,7 +1644,7 @@ impl AgentSession {
     /// a client to answer an interceptor `ask` — e.g. permission confirmation).
     pub fn run_driven(
         &mut self,
-        driver: &mut dyn intercept::Driver,
+        driver: &mut dyn turn::Driver,
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
@@ -1666,13 +1662,13 @@ impl AgentSession {
         )
     }
 
-    /// Like [`Self::run_with`], but streams incremental [`conductor::Event`]s to
+    /// Like [`Self::run_with`], but streams incremental [`jan_klod_protocol::turn::Event`]s to
     /// `sink` as the turn runs (live TUI transcript or SSE).
     pub fn run_streaming(
         &mut self,
-        driver: &mut dyn intercept::Driver,
+        driver: &mut dyn turn::Driver,
         tools: &mut dyn conductor::ToolInvoker,
-        sink: &mut dyn conductor::EventSink,
+        sink: &mut dyn turn::EventSink,
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
@@ -1695,7 +1691,7 @@ impl AgentSession {
     /// no event stream but someone to ask.
     pub fn run_with_driver(
         &mut self,
-        driver: &mut dyn intercept::Driver,
+        driver: &mut dyn turn::Driver,
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
@@ -1717,7 +1713,7 @@ impl AgentSession {
     /// with an authenticated principal from the request (e.g. REST bearer token).
     pub fn run_with_driver_principal(
         &mut self,
-        driver: &mut dyn intercept::Driver,
+        driver: &mut dyn turn::Driver,
         session: &str,
         message: &str,
         principal: Option<String>,
@@ -1744,8 +1740,8 @@ impl AgentSession {
     /// `&mut self`.
     pub fn run_streaming_with_driver(
         &mut self,
-        driver: &mut dyn intercept::Driver,
-        sink: &mut dyn conductor::EventSink,
+        driver: &mut dyn turn::Driver,
+        sink: &mut dyn turn::EventSink,
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
@@ -1767,8 +1763,8 @@ impl AgentSession {
     /// with an authenticated principal from the request (e.g. REST bearer token).
     pub fn run_streaming_with_driver_principal(
         &mut self,
-        driver: &mut dyn intercept::Driver,
-        sink: &mut dyn conductor::EventSink,
+        driver: &mut dyn turn::Driver,
+        sink: &mut dyn turn::EventSink,
         session: &str,
         message: &str,
         principal: Option<String>,
@@ -1792,7 +1788,7 @@ impl AgentSession {
     /// non-interactive surfaces (Telegram, the blocking JSON turn).
     pub fn run_streaming_headless(
         &mut self,
-        sink: &mut dyn conductor::EventSink,
+        sink: &mut dyn turn::EventSink,
         session: &str,
         message: &str,
     ) -> conductor::RunResult {
@@ -1839,7 +1835,7 @@ impl AgentSession {
     /// The durable transcript for `session`, oldest turn first. Reads from the
     /// host-side store, so it survives a `Runtime` restart against the same DB.
     #[must_use]
-    pub fn transcript(&self, session: &str) -> Vec<intercept::Message> {
+    pub fn transcript(&self, session: &str) -> Vec<turn::Message> {
         // Returns messages, not `store::Entry`. An entry is a key/value row with
         // a namespace, a key and two timestamps; a projected turn has none of
         // those, so handing back entries would mean inventing fields that mean
@@ -1862,7 +1858,7 @@ impl AgentSession {
     /// the fork points with it, instead of needing a number the protocol never
     /// gave it ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
     #[must_use]
-    pub fn placed_transcript(&self, session: &str) -> Vec<(u64, intercept::Message)> {
+    pub fn placed_transcript(&self, session: &str) -> Vec<(u64, turn::Message)> {
         let events = self
             .store
             .lock()
@@ -1965,8 +1961,8 @@ fn run_and_persist(
     store: &Mutex<store::Store>,
     limits: conductor::Limits,
     tools: &mut dyn conductor::ToolInvoker,
-    driver: &mut dyn intercept::Driver,
-    sink: &mut dyn conductor::EventSink,
+    driver: &mut dyn turn::Driver,
+    sink: &mut dyn turn::EventSink,
     session: &str,
     message: &str,
     principal: Option<String>,
@@ -2031,7 +2027,7 @@ const REPLAYED_TURNS: u32 = 20;
 /// Each stored turn is `{"user":…,"answer":…}`; a malformed or unreadable entry
 /// is skipped rather than failing the turn — a corrupt transcript row should cost
 /// context, not the ability to talk.
-fn replay(store: &store::Store, session: &str) -> Vec<intercept::Message> {
+fn replay(store: &store::Store, session: &str) -> Vec<turn::Message> {
     // Read from the event log, not the `entries` transcript. Both are written
     // today; the transcript write goes away once every read path is off it.
     // `recent_turns` is oldest-first already, so nothing is reversed here —
@@ -2123,8 +2119,8 @@ fn reorder<T>(items: Vec<T>, order: &[usize]) -> Vec<T> {
 /// vanish into a confirmation. The default answer is a refusal, which is also
 /// the right policy there — an editor cannot answer a confirmation prompt.
 pub struct HeadlessDriver;
-impl intercept::Driver for HeadlessDriver {
-    fn ask(&mut self, prompt: &intercept::UserPrompt) -> String {
+impl turn::Driver for HeadlessDriver {
+    fn ask(&mut self, prompt: &turn::UserPrompt) -> String {
         prompt.default_answer.clone()
     }
 }

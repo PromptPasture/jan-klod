@@ -15,8 +15,8 @@ use std::rc::Rc;
 
 use jan_klod_core::conductor::ToolInvoker;
 use jan_klod_core::host_process::ProcessRunner;
-use jan_klod_core::intercept::{Driver, UserPrompt};
 use jan_klod_core::tool_host::{ToolExtension, ToolFleet};
+use jan_klod_protocol::turn::{Driver, UserPrompt};
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
@@ -67,8 +67,8 @@ fn fleet() -> Option<ToolFleet> {
     Some(ToolFleet::new(vec![tool]))
 }
 
-fn call(arguments: &str) -> jan_klod_core::intercept::ToolCall {
-    jan_klod_core::intercept::ToolCall {
+fn call(arguments: &str) -> jan_klod_protocol::turn::ToolCall {
+    jan_klod_protocol::turn::ToolCall {
         id: "c1".to_string(),
         name: "ask-probe".to_string(),
         arguments: arguments.to_string(),

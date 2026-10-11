@@ -46,12 +46,14 @@ use axum::routing::{get, post};
 use axum::Router;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use jan_klod_core::conductor::{Event, EventSink, Flow, RunResult};
-use jan_klod_core::intercept::{Driver, UserPrompt};
+use jan_klod_core::conductor::RunResult;
+
 use jan_klod_core::session::{
     answer_timeout, fork, new_session_id, session_payload, sessions_payload, Forked,
 };
 use jan_klod_core::{AgentSession, HeadlessDriver};
+use jan_klod_protocol::turn::{Driver, UserPrompt};
+use jan_klod_protocol::turn::{Event, EventSink, Flow};
 
 use crate::pending::{Parked, Pending};
 use crate::sessions::Agents;
@@ -1019,7 +1021,7 @@ fn contributions_payload(agent: &mut AgentSession) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::{health, unbounded_channel, Frame, Pending, PromptDriver};
-    use jan_klod_core::intercept::{Driver, UserPrompt};
+    use jan_klod_protocol::turn::{Driver, UserPrompt};
 
     /// #290: the frame used to be sent before the turn parked, so a client
     /// that answered on reading it could find nothing pending and get `409`.

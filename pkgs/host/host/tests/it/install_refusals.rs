@@ -14,9 +14,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use jan_klod_core::host_process::ProcessRunner;
-use jan_klod_core::intercept::{Driver, UserPrompt};
 use jan_klod_core::tool_host::ToolExtension;
 use jan_klod_core::Runtime;
+use jan_klod_protocol::turn::{Driver, UserPrompt};
 use wasmtime::component::Component;
 use wasmtime::Engine;
 

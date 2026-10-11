@@ -17,7 +17,8 @@
 use std::collections::HashMap;
 
 use crate::conductor::ToolInvoker;
-use crate::intercept::{ToolCall, ToolDefinition};
+use crate::intercept::ToolDefinition;
+use jan_klod_protocol::turn::ToolCall;
 
 /// The tool name the model uses to delegate to another agent.
 pub const DELEGATE_TOOL: &str = "delegate";

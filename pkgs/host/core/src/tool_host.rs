@@ -488,7 +488,7 @@ impl ToolExtension {
     fn invoke_asking(
         &mut self,
         arguments: &str,
-        driver: &mut dyn crate::intercept::Driver,
+        driver: &mut dyn jan_klod_protocol::turn::Driver,
     ) -> Option<Result<String, String>> {
         let asking = self.asking.as_ref()?.jan_klod_interfaces_tool_askable();
         let mut answer: Option<String> = None;
@@ -504,7 +504,7 @@ impl ToolExtension {
                     return Some(Ok(result));
                 }
                 ask_bind::exports::jan_klod::interfaces::tool_askable::Step::Asking(ask) => {
-                    answer = Some(driver.ask(&crate::intercept::UserPrompt {
+                    answer = Some(driver.ask(&jan_klod_protocol::turn::UserPrompt {
                         question: ask.question,
                         options: ask.options,
                         default_answer: ask.default_answer,
@@ -627,8 +627,8 @@ impl ToolFleet {
 impl crate::conductor::ToolInvoker for ToolFleet {
     fn invoke_asking(
         &mut self,
-        call: &crate::intercept::ToolCall,
-        driver: &mut dyn crate::intercept::Driver,
+        call: &jan_klod_protocol::turn::ToolCall,
+        driver: &mut dyn jan_klod_protocol::turn::Driver,
     ) -> Option<crate::conductor::ToolInvocation> {
         let entry = self
             .tools
@@ -655,7 +655,7 @@ impl crate::conductor::ToolInvoker for ToolFleet {
 
     fn invoke(
         &mut self,
-        call: &crate::intercept::ToolCall,
+        call: &jan_klod_protocol::turn::ToolCall,
     ) -> Option<crate::conductor::ToolInvocation> {
         let entry = self
             .tools
@@ -815,15 +815,15 @@ impl LazyToolFleet {
 impl crate::conductor::ToolInvoker for LazyToolFleet {
     fn invoke_asking(
         &mut self,
-        call: &crate::intercept::ToolCall,
-        driver: &mut dyn crate::intercept::Driver,
+        call: &jan_klod_protocol::turn::ToolCall,
+        driver: &mut dyn jan_klod_protocol::turn::Driver,
     ) -> Option<crate::conductor::ToolInvocation> {
         self.ensure().ok()?.invoke_asking(call, driver)
     }
 
     fn invoke(
         &mut self,
-        call: &crate::intercept::ToolCall,
+        call: &jan_klod_protocol::turn::ToolCall,
     ) -> Option<crate::conductor::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),

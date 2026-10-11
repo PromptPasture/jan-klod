@@ -201,7 +201,7 @@ An answer that arrives when nothing asked is refused on both — `409` over REST
 | `turn/follow-up` | `session`, `message` | — (no steering over REST) |
 | `surface/invoke` | `extension`, `name`, `arguments` | — (contributions are new) |
 
-**Notifications** (core → client). The first five are `conductor::Event` one for one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable command, `session/updated` a transcript that moved, `surface/contributions` what the extensions offer a client to render ([`wit/client-surface.wit`](../../wit/client-surface.wit)) — sent at connect and again whenever the set changes:
+**Notifications** (core → client). The first five are `turn::Event` one for one; `ask` is a turn blocked on the user, `error` a failed turn or an unservable command, `session/updated` a transcript that moved, `surface/contributions` what the extensions offer a client to render ([`wit/client-surface.wit`](../../wit/client-surface.wit)) — sent at connect and again whenever the set changes:
 
 | Notification | Params | SSE frame today |
 |---|---|---|

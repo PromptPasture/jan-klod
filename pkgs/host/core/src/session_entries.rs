@@ -16,7 +16,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::guest_storage::{Entries, Row, StorageFault};
-use crate::store::{Entry, Store, StoreError};
+use jk_session::store::{Entry, Store, StoreError};
 
 /// The session store, offered to guests as the four calls `host-storage` has.
 ///

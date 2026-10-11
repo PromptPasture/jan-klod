@@ -639,8 +639,8 @@ fn ask(args: &[String]) -> ExitCode {
 /// that write.
 struct TerminalDriver;
 
-impl jan_klod_core::intercept::Driver for TerminalDriver {
-    fn ask(&mut self, prompt: &jan_klod_core::intercept::UserPrompt) -> String {
+impl jan_klod_protocol::turn::Driver for TerminalDriver {
+    fn ask(&mut self, prompt: &jan_klod_protocol::turn::UserPrompt) -> String {
         // The question goes to stderr so `ask`'s stdout stays the answer and
         // nothing else — a script can pipe it without stripping prompts out.
         eprintln!("\n  ? {}", prompt.question);

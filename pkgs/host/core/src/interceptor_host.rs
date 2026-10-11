@@ -13,6 +13,7 @@
 //! `host-http`. `host-event` is observation-only (logs; no in-loop subscriber
 //! yet).
 
+use jan_klod_protocol::turn;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -25,9 +26,9 @@ use crate::host::ConfigSection;
 use crate::contributions;
 use crate::intercept::{
     self, BlockReason, Decision, HookState, InterceptInput, Interceptor, InterceptorError, Phase,
-    UserPrompt,
 };
 use crate::CoreError;
+use jan_klod_protocol::turn::UserPrompt;
 
 // Generated Component-Model bindings for the interceptor world; lint exemptions
 // scoped to the macro output.
@@ -215,7 +216,8 @@ const fn fault(err: &crate::guest_storage::StorageFault) -> g_storage::StoreErro
 /// backing provider sees the model, grammar, and full message list the
 /// interceptor actually asked for.
 fn to_pending_request(request: &g_llm::CompletionRequest) -> crate::intercept::PendingRequest {
-    use crate::intercept::{Message, PendingRequest, Role};
+    use crate::intercept::PendingRequest;
+    use jan_klod_protocol::turn::{Message, Role};
     PendingRequest {
         model: Some(request.model.clone()).filter(|m| !m.is_empty()),
         messages: request
@@ -560,25 +562,25 @@ const fn from_gen_phase(phase: g_icept::Phase) -> Phase {
     }
 }
 
-const fn to_gen_role(role: intercept::Role) -> g_types::Role {
+const fn to_gen_role(role: turn::Role) -> g_types::Role {
     match role {
-        intercept::Role::System => g_types::Role::System,
-        intercept::Role::User => g_types::Role::User,
-        intercept::Role::Assistant => g_types::Role::Assistant,
-        intercept::Role::Tool => g_types::Role::Tool,
+        turn::Role::System => g_types::Role::System,
+        turn::Role::User => g_types::Role::User,
+        turn::Role::Assistant => g_types::Role::Assistant,
+        turn::Role::Tool => g_types::Role::Tool,
     }
 }
 
-const fn from_gen_role(role: g_types::Role) -> intercept::Role {
+const fn from_gen_role(role: g_types::Role) -> turn::Role {
     match role {
-        g_types::Role::System => intercept::Role::System,
-        g_types::Role::User => intercept::Role::User,
-        g_types::Role::Assistant => intercept::Role::Assistant,
-        g_types::Role::Tool => intercept::Role::Tool,
+        g_types::Role::System => turn::Role::System,
+        g_types::Role::User => turn::Role::User,
+        g_types::Role::Assistant => turn::Role::Assistant,
+        g_types::Role::Tool => turn::Role::Tool,
     }
 }
 
-fn to_gen_message(m: &intercept::Message) -> g_types::Message {
+fn to_gen_message(m: &turn::Message) -> g_types::Message {
     g_types::Message {
         role: to_gen_role(m.role),
         content: m.content.clone(),
@@ -586,8 +588,8 @@ fn to_gen_message(m: &intercept::Message) -> g_types::Message {
     }
 }
 
-fn from_gen_message(m: g_types::Message) -> intercept::Message {
-    intercept::Message {
+fn from_gen_message(m: g_types::Message) -> turn::Message {
+    turn::Message {
         role: from_gen_role(m.role),
         content: m.content,
         tool_call_id: m.tool_call_id,
@@ -610,7 +612,7 @@ fn from_gen_tool(t: g_types::ToolDefinition) -> intercept::ToolDefinition {
     }
 }
 
-fn to_gen_call(c: &intercept::ToolCall) -> g_types::ToolCall {
+fn to_gen_call(c: &turn::ToolCall) -> g_types::ToolCall {
     g_types::ToolCall {
         id: c.id.clone(),
         name: c.name.clone(),
@@ -618,8 +620,8 @@ fn to_gen_call(c: &intercept::ToolCall) -> g_types::ToolCall {
     }
 }
 
-fn from_gen_call(c: g_types::ToolCall) -> intercept::ToolCall {
-    intercept::ToolCall {
+fn from_gen_call(c: g_types::ToolCall) -> turn::ToolCall {
+    turn::ToolCall {
         id: c.id,
         name: c.name,
         arguments: c.arguments,
@@ -695,7 +697,7 @@ fn from_gen_state(state: g_icept::HookState) -> HookState {
         // `to_gen_state`); `WasmInterceptor::intercept` restores the real value
         // from the state it dispatched, since a guest replacing `content` does
         // not get to decide whether the call failed.
-        g_icept::HookState::ToolResult(o) => HookState::ToolResult(intercept::ToolOutcome {
+        g_icept::HookState::ToolResult(o) => HookState::ToolResult(turn::ToolOutcome {
             tool_call_id: o.tool_call_id,
             content: o.content,
             failed: false,
@@ -792,9 +794,8 @@ fn from_gen_contributions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intercept::{
-        Dispatcher, Driver, HookState, Message, Outcome, PendingRequest, Role, UserTurn,
-    };
+    use crate::intercept::{Dispatcher, HookState, Outcome, PendingRequest, UserTurn};
+    use jan_klod_protocol::turn::{Driver, Message, Role};
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -810,7 +811,7 @@ mod tests {
     /// trip through `wit`'s `tool-outcome`, which does not carry it at all.
     #[test]
     fn a_guest_replace_cannot_flip_the_failed_flag() {
-        let dispatched = HookState::ToolResult(intercept::ToolOutcome {
+        let dispatched = HookState::ToolResult(turn::ToolOutcome {
             tool_call_id: "c1".to_owned(),
             content: "tool `read` error: NotFound".to_owned(),
             failed: true,
@@ -818,7 +819,7 @@ mod tests {
         // What `from_gen_state` produces for any guest `Replace`: the content
         // it rewrote, and `failed: false` because the guest never had the
         // real value to begin with.
-        let guest_replace = Decision::Replace(HookState::ToolResult(intercept::ToolOutcome {
+        let guest_replace = Decision::Replace(HookState::ToolResult(turn::ToolOutcome {
             tool_call_id: "c1".to_owned(),
             content: "redacted".to_owned(),
             failed: false,
@@ -838,7 +839,7 @@ mod tests {
     /// unchanged — this only patches the one case it exists for.
     #[test]
     fn other_decisions_are_left_alone() {
-        let dispatched = HookState::ToolResult(intercept::ToolOutcome {
+        let dispatched = HookState::ToolResult(turn::ToolOutcome {
             tool_call_id: "c1".to_owned(),
             content: "ok".to_owned(),
             failed: false,
@@ -915,7 +916,7 @@ mod tests {
     }
 
     fn tool_call(name: &str) -> HookState {
-        HookState::ToolCall(crate::intercept::ToolCall {
+        HookState::ToolCall(jan_klod_protocol::turn::ToolCall {
             id: "1".into(),
             name: name.into(),
             arguments: "{}".into(),
@@ -972,7 +973,7 @@ mod tests {
     }
 
     fn tool_call_with(name: &str, arguments: &str) -> HookState {
-        HookState::ToolCall(crate::intercept::ToolCall {
+        HookState::ToolCall(jan_klod_protocol::turn::ToolCall {
             id: "1".into(),
             name: name.into(),
             arguments: arguments.into(),

@@ -25,9 +25,9 @@ use std::time::Duration;
 
 use jan_klod_core::conductor::{RunResult, ToolInvocation, ToolInvoker};
 use jan_klod_core::http::{WireError, WireResponse};
-use jan_klod_core::intercept::{Driver, ToolCall, UserPrompt};
 use jan_klod_core::route::HttpFn;
 use jan_klod_core::Runtime;
+use jan_klod_protocol::turn::{Driver, ToolCall, UserPrompt};
 
 use crate::common;
 use std::collections::HashMap;

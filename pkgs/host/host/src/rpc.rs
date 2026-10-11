@@ -48,10 +48,12 @@ use jan_klod_protocol::{
     PROTOCOL_VERSION,
 };
 
-use jan_klod_core::conductor::{Event, EventSink, Flow, RunResult};
-use jan_klod_core::intercept::{Driver, UserPrompt};
+use jan_klod_core::conductor::RunResult;
+
 use jan_klod_core::session::{self, Forked};
 use jan_klod_core::AgentSession;
+use jan_klod_protocol::turn::{Driver, UserPrompt};
+use jan_klod_protocol::turn::{Event, EventSink, Flow};
 
 /// Serve frames from `input`, answering on `output`, until EOF.
 ///

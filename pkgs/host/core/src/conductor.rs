@@ -14,14 +14,14 @@
 //! What a turn *emits* — [`Event`], [`Flow`], [`EventSink`] — now lives in
 //! [`jan_klod_protocol::turn`] beside the rest of the turn vocabulary,
 //! because the event log encodes an `Event` and sits below this crate (#180).
-//! Re-exported here, so every path that named `conductor::Event` still does.
 
-pub use jan_klod_protocol::turn::{Event, EventSink, Flow};
+use jan_klod_protocol::turn::{Event, EventSink, Flow};
 
 use crate::intercept::{
-    Dispatcher, Driver, FinalAnswer, HookState, Message, Outcome, PendingRequest, Phase,
-    RawResponse, Role, ToolCall, ToolOutcome, UserTurn,
+    Dispatcher, FinalAnswer, HookState, Outcome, PendingRequest, Phase, RawResponse, UserTurn,
 };
+
+use jan_klod_protocol::turn::{Driver, Message, Role, ToolCall, ToolOutcome};
 
 /// Default cap on `ReAct` iterations to prevent infinite tool-call loops.
 /// Eight covers a real coding cycle; raise via `limits.max-iterations`.
@@ -645,9 +645,8 @@ fn validate(completion: &Completion) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intercept::{
-        BlockReason, Decision, InterceptInput, Interceptor, InterceptorError, UserPrompt,
-    };
+    use crate::intercept::{BlockReason, Decision, InterceptInput, Interceptor, InterceptorError};
+    use jan_klod_protocol::turn::UserPrompt;
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;

@@ -330,7 +330,7 @@ impl crate::conductor::Completer for ProviderCompleter {
             match chunk {
                 p_llm::CompletionChunk::TextDelta(delta) => text.push_str(&delta),
                 p_llm::CompletionChunk::ToolCallRequest(call) => {
-                    tool_calls.push(crate::intercept::ToolCall {
+                    tool_calls.push(jan_klod_protocol::turn::ToolCall {
                         id: call.id,
                         name: call.name,
                         arguments: call.arguments,
@@ -353,7 +353,7 @@ impl crate::conductor::Completer for ProviderCompleter {
 
 /// Map conductor's `pending-request` to provider's `completion-request`.
 fn intercept_to_p_request(request: &crate::intercept::PendingRequest) -> p_llm::CompletionRequest {
-    use crate::intercept::Role;
+    use jan_klod_protocol::turn::Role;
     p_llm::CompletionRequest {
         model: request.model.clone().unwrap_or_default(),
         messages: request
@@ -390,7 +390,8 @@ mod tests {
     use super::*;
     use crate::conductor::Completer;
     use crate::http::WireResponse;
-    use crate::intercept::{Message, PendingRequest, Role};
+    use crate::intercept::PendingRequest;
+    use jan_klod_protocol::turn::{Message, Role};
     use std::path::PathBuf;
 
     fn repo_root() -> PathBuf {
