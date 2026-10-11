@@ -3,8 +3,8 @@
 //! survive restart, (2) `persist: true` keeps state, (3) components isolate
 //! namespaces and can't read session transcripts. Skips when guests not staged.
 
-use jan_klod_core::Runtime;
 use jan_klod_protocol::turn::{Driver, UserPrompt};
+use jk_agent::Runtime;
 
 use crate::common;
 

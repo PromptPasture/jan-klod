@@ -12,7 +12,7 @@
 //! enabled: this is about the store, and a provider guest would only add a
 //! reason for the test to skip.
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 use jk_session::store::Store;
 use jk_wasm::http::WireError;
 use jk_wasm::route::HttpFn;

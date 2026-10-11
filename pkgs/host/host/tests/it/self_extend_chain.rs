@@ -34,7 +34,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 use crate::self_extend::shipped_execution_block;

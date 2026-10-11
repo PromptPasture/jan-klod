@@ -10,16 +10,16 @@ use std::sync::Arc;
 
 // Client transport trait (same API as jan-klod binary).
 use jan_klod_client::transport::Transport as _;
-use jan_klod_core::Runtime;
 use jan_klod_host::rpc;
 use jan_klod_protocol::{jsonrpc, PROTOCOL_VERSION};
+use jk_agent::Runtime;
 use jk_wasm::http::WireResponse;
 use jk_wasm::route::HttpFn;
 
 use crate::common;
 
 /// Offline agent with canned "pong" provider.
-fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted(tag: &str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     booted_with(tag, || common::canned_http("pong"))
 }
 
@@ -27,7 +27,7 @@ fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
 fn booted_with(
     tag: &str,
     http: impl Fn() -> HttpFn,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
         return None;
     }
@@ -80,7 +80,7 @@ fn frames(output: Vec<u8>) -> Vec<Frame> {
 }
 
 /// Scripted exchange (all frames queued front; client doesn't react).
-fn exchange(agent: &mut jan_klod_core::AgentSession, script: &[&str]) -> Vec<Frame> {
+fn exchange(agent: &mut jk_agent::AgentSession, script: &[&str]) -> Vec<Frame> {
     let input = Cursor::new(script.join("\n").into_bytes());
     let mut output = Vec::new();
     rpc::serve(input, &mut output, agent).expect("the loop runs to EOF");
@@ -314,7 +314,7 @@ fn tool_then_answer() -> (Arc<AtomicU32>, impl Fn() -> HttpFn) {
 fn booted_gated(
     tag: &str,
     http: impl Fn() -> HttpFn,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&GATED) {
         return None;
     }

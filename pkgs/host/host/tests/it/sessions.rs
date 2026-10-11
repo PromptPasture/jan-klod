@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use jan_klod_core::{AgentSession, Runtime};
 use jan_klod_host::sessions::{Agents, Factory};
+use jk_agent::{AgentSession, Runtime};
 
 use crate::common;
 
@@ -256,7 +256,7 @@ extensions:
         .run(|agent: &mut AgentSession| {
             (
                 agent.transcript("alpha").len(),
-                jan_klod_core::session::sessions_payload(agent).to_string(),
+                jk_agent::session::sessions_payload(agent).to_string(),
             )
         })
         .expect("the reader ran");

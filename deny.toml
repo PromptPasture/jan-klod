@@ -1,5 +1,5 @@
 # cargo-deny policy — the primary supply-chain gate for the Rust host workspace
-# (the repo root, whose members are pkgs/host/core, pkgs/host/config,
+# (the repo root, whose members are pkgs/host/agent, pkgs/host/config,
 # pkgs/host/host, pkgs/host/protocol, pkgs/host/session and pkgs/clients/tui), the guest
 # extensions workspace (pkgs/extensions/*, one shared Cargo.lock across all
 # guests), and the GUI shell workspace (pkgs/clients/gui, which owns the Tauri tree and is kept out of the host workspace precisely so that tree is not on
@@ -97,7 +97,7 @@ exceptions = [
 # Duplicate transitive versions are noise, not a security failure, in a young tree
 # — surface them without breaking the build. Wildcard version requirements are
 # forbidden: they defeat the locked-build guarantee — but only for registry crates.
-# Intra-workspace path deps (jan-klod-core/-config) carry no version and so read as
+# Intra-workspace path deps (jk-agent, jan-klod-config, …) carry no version and so read as
 # `*`; they resolve from the filesystem, not a registry, so a wildcard there is
 # harmless and expected for unpublished crates.
 multiple-versions = "warn"

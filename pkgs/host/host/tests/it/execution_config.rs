@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 use jk_wasm::sandbox;
 
 use crate::common;

@@ -11,7 +11,7 @@
 //! enters a running runtime, so a test that only showed it working would be
 //! the wrong half to have.
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 

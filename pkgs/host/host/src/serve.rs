@@ -46,14 +46,14 @@ use axum::routing::{get, post};
 use axum::Router;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use jan_klod_core::conductor::RunResult;
+use jk_agent::conductor::RunResult;
 
-use jan_klod_core::session::{
-    answer_timeout, fork, new_session_id, session_payload, sessions_payload, Forked,
-};
-use jan_klod_core::{AgentSession, HeadlessDriver};
 use jan_klod_protocol::turn::{Driver, UserPrompt};
 use jan_klod_protocol::turn::{Event, EventSink, Flow};
+use jk_agent::session::{
+    answer_timeout, fork, new_session_id, session_payload, sessions_payload, Forked,
+};
+use jk_agent::{AgentSession, HeadlessDriver};
 
 use crate::pending::{Parked, Pending};
 use crate::sessions::Agents;

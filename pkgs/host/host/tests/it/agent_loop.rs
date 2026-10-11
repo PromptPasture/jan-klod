@@ -8,8 +8,8 @@
 //!
 //! Skips when guests aren't staged in `ext/`; build with `make ext`.
 
-use jan_klod_core::conductor::RunResult;
-use jan_klod_core::Runtime;
+use jk_agent::conductor::RunResult;
+use jk_agent::Runtime;
 
 use crate::common;
 

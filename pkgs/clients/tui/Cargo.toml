@@ -7,7 +7,7 @@ publish.workspace = true
 
 # A UI is NOT an extension — it is a separate client *process* that drives a
 # core (the LSP/server model): over stdio, having spawned it, or over REST if one
-# is already running. This crate depends on neither `jan-klod-core` nor Wasmtime:
+# is already running. This crate depends on neither `jk-agent` nor Wasmtime:
 # it speaks only the wire contract.
 [[bin]]
 name = "jan-klod"

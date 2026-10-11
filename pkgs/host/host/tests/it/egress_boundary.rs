@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 

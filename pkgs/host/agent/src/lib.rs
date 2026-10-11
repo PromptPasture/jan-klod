@@ -770,7 +770,7 @@ mod tests {
     /// A `before-loop` interceptor that unconditionally `replace`s the user
     /// message — the in-process stub `pkgs/host/protocol/tests/intercept.rs` already uses for
     /// exactly this phase (`Behavior::ReplaceUserMessage`), reproduced here
-    /// because that file only sees `jan_klod_core`'s public API and cannot
+    /// because that file only sees `jk_agent`'s public API and cannot
     /// reach `run_and_persist`, which is private to this crate.
     struct RewriteBeforeLoop {
         replacement: String,

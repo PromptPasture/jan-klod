@@ -177,4 +177,4 @@ jobs:
       # to the above, and the half of `sandbox.rs` that picks a backend is
       # itself per-OS (it lives in `jk-wasm` since #181).
       - name: Core unit tests
-        run: cargo test -p jan-klod-core -p jk-wasm
+        run: cargo test -p jk-agent -p jk-wasm

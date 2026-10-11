@@ -16,7 +16,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 
@@ -108,7 +108,7 @@ execution:
 /// Boot an agent against the fixture server. Returns the agent and the temp dir
 /// guard, so the caller decides when the runtime drops — which is the point of
 /// the last test below.
-fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted(tag: &str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     booted_with(tag, || common::canned_http("ok"))
 }
 
@@ -116,7 +116,7 @@ fn booted(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
 fn booted_with(
     tag: &str,
     http: impl Fn() -> jk_wasm::route::HttpFn,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     booted_against(tag, &fixture_script(tag), http)
 }
 
@@ -125,7 +125,7 @@ fn booted_against(
     tag: &str,
     script: &str,
     http: impl Fn() -> jk_wasm::route::HttpFn,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&GUESTS) {
         return None;
     }
@@ -338,7 +338,7 @@ fn a_malformed_reply_leaves_the_server_down_rather_than_breaking_the_turn() {
     // capability, not a broken agent.
     let answer = agent.run("s1", "hello");
     assert!(
-        matches!(answer, jan_klod_core::conductor::RunResult::Answered { .. }),
+        matches!(answer, jk_agent::conductor::RunResult::Answered { .. }),
         "a turn must still run with a broken MCP server configured: {answer:?}"
     );
     assert!(
@@ -376,7 +376,7 @@ fn a_silent_child_gives_up_instead_of_pinning_the_core() {
     );
     let answer = agent.run("s1", "hello");
     assert!(
-        matches!(answer, jan_klod_core::conductor::RunResult::Answered { .. }),
+        matches!(answer, jk_agent::conductor::RunResult::Answered { .. }),
         "a turn must still run with a silent MCP server configured: {answer:?}"
     );
     assert!(

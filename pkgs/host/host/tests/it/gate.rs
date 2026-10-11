@@ -23,10 +23,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use jan_klod_core::conductor::RunResult;
-use jan_klod_core::Runtime;
 use jan_klod_protocol::intercept::{ToolInvocation, ToolInvoker};
 use jan_klod_protocol::turn::{Driver, ToolCall, UserPrompt};
+use jk_agent::conductor::RunResult;
+use jk_agent::Runtime;
 use jk_wasm::http::{WireError, WireResponse};
 use jk_wasm::route::HttpFn;
 

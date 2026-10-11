@@ -6,15 +6,12 @@
 
 use std::path::PathBuf;
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 
 /// Offline agent with canned provider (like `rpc.rs`).
-fn booted(
-    tag: &str,
-    reply: &'static str,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted(tag: &str, reply: &'static str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
         return None;
     }
@@ -45,7 +42,7 @@ extensions:
 }
 
 /// Send lines and collect all response frames.
-fn exchange(agent: &mut jan_klod_core::AgentSession, lines: &[&str]) -> Vec<serde_json::Value> {
+fn exchange(agent: &mut jk_agent::AgentSession, lines: &[&str]) -> Vec<serde_json::Value> {
     let input = lines.join("\n") + "\n";
     let mut output = Vec::new();
     jan_klod_host::mcp::serve(std::io::Cursor::new(input), &mut output, agent)
@@ -162,7 +159,7 @@ fn two_calls_without_a_session_continue_the_same_one() {
     }
 
     // Transcript proves: one session with both turns, not two separate ones.
-    let sessions = jan_klod_core::session::sessions_payload(&agent);
+    let sessions = jk_agent::session::sessions_payload(&agent);
     let ids: Vec<&str> = sessions["sessions"]
         .as_array()
         .map(|rows| {
@@ -186,7 +183,7 @@ fn two_calls_without_a_session_continue_the_same_one() {
 
 /// Agent whose provider asks for workspace write first, then answers.
 /// Temp dir allows test to verify the write didn't happen.
-fn booted_writing(tag: &str) -> Option<(common::TempDir, jan_klod_core::AgentSession, PathBuf)> {
+fn booted_writing(tag: &str) -> Option<(common::TempDir, jk_agent::AgentSession, PathBuf)> {
     const GUESTS: [&str; 4] = [
         "provider-openai.wasm",
         "interceptor-permission.wasm",

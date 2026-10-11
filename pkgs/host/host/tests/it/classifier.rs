@@ -4,8 +4,8 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use jan_klod_core::conductor::RunResult;
-use jan_klod_core::Runtime;
+use jk_agent::conductor::RunResult;
+use jk_agent::Runtime;
 use jk_wasm::http::WireResponse;
 use jk_wasm::route::HttpFn;
 

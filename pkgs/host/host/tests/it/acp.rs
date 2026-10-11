@@ -12,15 +12,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use jan_klod_core::Runtime;
 use jan_klod_host::acp::Connection;
+use jk_agent::Runtime;
 
 use crate::common;
 
-fn booted(
-    tag: &str,
-    reply: &'static str,
-) -> Option<(common::TempDir, jan_klod_core::AgentSession)> {
+fn booted(tag: &str, reply: &'static str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
         return None;
     }
@@ -70,7 +67,7 @@ impl Editor {
     /// its default. Tests that *do* answer supply their own.
     fn send(
         &mut self,
-        agent: &mut jan_klod_core::AgentSession,
+        agent: &mut jk_agent::AgentSession,
         line: &str,
     ) -> Option<serde_json::Value> {
         self.send_with(agent, line, &jan_klod_host::acp::NoAsker)
@@ -79,7 +76,7 @@ impl Editor {
     /// The same, with a chosen [`jan_klod_host::acp::Asker`].
     fn send_with<A: jan_klod_host::acp::Asker>(
         &mut self,
-        agent: &mut jan_klod_core::AgentSession,
+        agent: &mut jk_agent::AgentSession,
         line: &str,
         asker: &A,
     ) -> Option<serde_json::Value> {
@@ -102,7 +99,7 @@ impl Editor {
     }
 
     /// Handshake, then a session, returning its id.
-    fn opened(&mut self, agent: &mut jan_klod_core::AgentSession) -> String {
+    fn opened(&mut self, agent: &mut jk_agent::AgentSession) -> String {
         let hello = self
             .send(
                 agent,
@@ -273,11 +270,7 @@ impl jan_klod_host::acp::Asker for Answering {
 /// Boot an agent whose provider asks for a real workspace write, then answers.
 fn booted_writing(
     tag: &str,
-) -> Option<(
-    common::TempDir,
-    jan_klod_core::AgentSession,
-    std::path::PathBuf,
-)> {
+) -> Option<(common::TempDir, jk_agent::AgentSession, std::path::PathBuf)> {
     const GUESTS: [&str; 4] = [
         "provider-openai.wasm",
         "interceptor-permission.wasm",

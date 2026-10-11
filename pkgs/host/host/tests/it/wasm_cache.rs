@@ -11,7 +11,7 @@
 //!
 //! Skips (passes as a no-op) when the guest is not staged in `ext/`.
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 

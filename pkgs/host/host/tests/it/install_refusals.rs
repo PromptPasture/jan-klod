@@ -13,8 +13,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use jan_klod_core::Runtime;
 use jan_klod_protocol::turn::{Driver, UserPrompt};
+use jk_agent::Runtime;
 use jk_wasm::host_process::ProcessRunner;
 use jk_wasm::tool_host::ToolExtension;
 use wasmtime::component::Component;

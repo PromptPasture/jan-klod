@@ -15,11 +15,11 @@ use jan_klod_protocol::jsonrpc;
 
 use std::sync::mpsc::Receiver;
 
-use jan_klod_core::conductor::RunResult;
+use jk_agent::conductor::RunResult;
 
-use jan_klod_core::AgentSession;
 use jan_klod_protocol::turn::{Driver, UserPrompt};
 use jan_klod_protocol::turn::{Event, EventSink, Flow};
+use jk_agent::AgentSession;
 
 /// ACP protocol version (integer, not date like MCP).
 pub const ACP_VERSION: i64 = 1;
@@ -69,7 +69,7 @@ pub trait Asker {
     }
 }
 
-/// [`Asker`] that never asks (headless refusal, like [`jan_klod_core::HeadlessDriver`]).
+/// [`Asker`] that never asks (headless refusal, like [`jk_agent::HeadlessDriver`]).
 pub struct NoAsker;
 impl Asker for NoAsker {
     fn ask(&self, _session: &str, prompt: &UserPrompt) -> String {
@@ -457,7 +457,7 @@ impl Connection {
     /// serve it anyway — is a decision for the box that runs a turn, since
     /// before then there is nothing it could affect.
     fn new_session(&mut self, params: &serde_json::Value) -> serde_json::Value {
-        let id = jan_klod_core::session::new_session_id();
+        let id = jk_agent::session::new_session_id();
         self.sessions.push(id.clone());
         let cwd = params
             .get("cwd")

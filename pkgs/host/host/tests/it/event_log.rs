@@ -7,8 +7,8 @@
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
-use jan_klod_core::Runtime;
 use jan_klod_protocol::turn::Event;
+use jk_agent::Runtime;
 use jk_session::event_log::{self, decode};
 use jk_session::event_log::{verify_chain, ChainStatus};
 use jk_session::store::Store;

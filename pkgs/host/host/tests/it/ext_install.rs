@@ -622,7 +622,7 @@ extensions:
     )
     .expect("writes a config");
 
-    let runtime = jan_klod_core::Runtime::boot(&config, &scratch.ext)
+    let runtime = jk_agent::Runtime::boot(&config, &scratch.ext)
         .expect("the core boots against what install put there");
     let loaded = runtime
         .extensions()

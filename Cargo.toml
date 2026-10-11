@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "pkgs/host/core",
+    "pkgs/host/agent",
     "pkgs/host/config",
     "pkgs/host/host",
     "pkgs/host/protocol",

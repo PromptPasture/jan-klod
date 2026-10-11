@@ -27,7 +27,7 @@
 
 use std::path::{Path, PathBuf};
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 

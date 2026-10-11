@@ -16,9 +16,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use jan_klod_core::conductor::RunResult;
-use jan_klod_core::AgentSession;
 use jan_klod_protocol::turn::{Driver, UserPrompt};
+use jk_agent::conductor::RunResult;
+use jk_agent::AgentSession;
 
 /// One inbound Telegram message worth answering.
 #[derive(Debug, Clone, PartialEq, Eq)]

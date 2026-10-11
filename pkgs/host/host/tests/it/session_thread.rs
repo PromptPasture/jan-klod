@@ -15,8 +15,8 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use jan_klod_core::{AgentSession, Runtime};
 use jan_klod_host::session_thread::{queue, serve};
+use jk_agent::{AgentSession, Runtime};
 
 use crate::common;
 

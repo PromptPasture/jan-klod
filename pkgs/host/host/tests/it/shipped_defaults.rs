@@ -14,9 +14,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use jan_klod_client::{stream_turn, StreamEvent};
-use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
 use jan_klod_host::sessions::Agents;
+use jk_agent::Runtime;
 use jk_wasm::http::WireResponse;
 use jk_wasm::route::HttpFn;
 

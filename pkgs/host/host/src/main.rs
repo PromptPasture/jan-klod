@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use jan_klod_config::Config;
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 use jk_session::event_log::{verify_chain, ChainStatus};
 use jk_session::store::Store;
 use jk_wasm::ext_index;
@@ -196,7 +196,7 @@ fn acp() -> ExitCode {
 ///
 /// Boots the same runtime `ask` does, because `tools/call ask` runs a real
 /// turn. The driver is **headless by construction** — see
-/// `jan_klod_core::HeadlessDriver`: stdin here carries protocol frames, so
+/// `jk_agent::HeadlessDriver`: stdin here carries protocol frames, so
 /// anything that prompted would read a frame as an answer.
 ///
 /// Frames on stdout and nothing else, per the MCP stdio transport — which is
@@ -619,13 +619,13 @@ fn ask(args: &[String]) -> ExitCode {
 
     let mut driver = TerminalDriver;
     match agent.run_with_driver(&mut driver, "ask", &question) {
-        jan_klod_core::conductor::RunResult::Answered { text, .. } => {
+        jk_agent::conductor::RunResult::Answered { text, .. } => {
             println!("{text}");
             ExitCode::SUCCESS
         }
         // Not `{other:?}`: the Debug of a Rust enum is not a diagnosis. A turn
         // that fails has a message written for a person; print that.
-        jan_klod_core::conductor::RunResult::Failed(message) => {
+        jk_agent::conductor::RunResult::Failed(message) => {
             eprintln!("jan-klod: {message}");
             ExitCode::FAILURE
         }
@@ -923,13 +923,13 @@ fn verify_live(runtime: &Runtime) -> ExitCode {
     let outcome = agent.run("verify", "Reply with the single word: ok");
     let elapsed = started.elapsed();
     match outcome {
-        jan_klod_core::conductor::RunResult::Answered { text, .. } => {
+        jk_agent::conductor::RunResult::Answered { text, .. } => {
             let reply = text.trim();
             let shown: String = reply.chars().take(60).collect();
             println!("live: the model answered in {elapsed:?} — {shown:?}");
             ExitCode::SUCCESS
         }
-        jan_klod_core::conductor::RunResult::Failed(message) => {
+        jk_agent::conductor::RunResult::Failed(message) => {
             eprintln!("live: {message}");
             ExitCode::FAILURE
         }

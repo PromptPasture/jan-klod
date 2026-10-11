@@ -11,7 +11,7 @@
 //! # Why it is a crate
 //!
 //! So that `rusqlite` is a dependency of one crate rather than of everything
-//! that can reach a session. `jan-klod-core` linked SQLite into the same
+//! that can reach a session. The old core crate linked SQLite into the same
 //! binary as the component runtime, and nothing in the type system said which
 //! half a given line belonged to. Prior art for the boundary: Pi keeps its
 //! SQLite session backend in a package of its own for the same reason.

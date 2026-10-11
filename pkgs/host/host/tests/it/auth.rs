@@ -10,9 +10,9 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::thread;
 
-use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
 use jan_klod_host::sessions::Agents;
+use jk_agent::Runtime;
 
 use crate::common;
 use std::collections::HashMap;

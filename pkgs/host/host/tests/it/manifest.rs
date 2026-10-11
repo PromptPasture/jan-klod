@@ -15,7 +15,7 @@
 //!
 //! Skips (passes as a no-op) when the guests are not staged in `ext/`.
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 use jk_wasm::LoadState;
 
 use crate::common;
@@ -311,8 +311,8 @@ fn declaring_a_capability_the_config_does_not_grant_still_boots() {
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
     let out = agent.run("s", "hello");
     assert!(
-        matches!(out, jan_klod_core::conductor::RunResult::Answered { .. })
-            || matches!(out, jan_klod_core::conductor::RunResult::Failed(_)),
+        matches!(out, jk_agent::conductor::RunResult::Answered { .. })
+            || matches!(out, jk_agent::conductor::RunResult::Failed(_)),
         "the turn ran one way or the other; what matters is that boot did not refuse"
     );
 }

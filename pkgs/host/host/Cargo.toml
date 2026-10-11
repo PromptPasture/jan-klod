@@ -10,13 +10,13 @@ name = "jan-klod-gateway"
 path = "src/main.rs"
 
 [dependencies]
-jan-klod-core = { path = "../core" }
+jk-agent = { path = "../agent" }
 # The component runtime (#181): the surfaces name its capability and guest
 # types (`http`, `host_process`, `ext`, …) directly, not through the core.
 jk-wasm = { path = "../wasm" }
 # The surfaces speak JSON on the wire: `serde` derives the frame types the
 # stdio surfaces parse, `serde_json` reads and writes them. Both are already in
-# the lock via jan-klod-core, so naming them here costs no package.
+# the lock via jk-agent, so naming them here costs no package.
 serde.workspace = true
 serde_json.workspace = true
 # YAML config parsing for setup audit.
@@ -43,7 +43,7 @@ tracing-subscriber = { version = "0.3", features = ["json", "fmt", "ansi"] }
 # Examples and integration tests drive the guests over the Component Model:
 # spike_gate (Slice 1a gate), provider_probe (live single provider leg),
 # component_harness (offline per-guest interface checks), and routing (the exit
-# gate: the routed manager-agent-loop turn, via jan-klod-core's broker). They need
+# gate: the routed manager-agent-loop turn, via jk-agent's broker). They need
 # wasmtime + config + serde_json to instantiate the category worlds and read the
 # instance section. None of this ships in the `jan-klod` binary.
 [dev-dependencies]
@@ -71,7 +71,7 @@ blake2 = "0.10"
 ring = "0.17.14"
 # The registry-index fixtures state a digest for the bytes they describe, the
 # way a generated index does. **Zero new packages**, measured before adding:
-# `sha2` 0.10 is already a direct dependency of jan-klod-core and shares
+# `sha2` 0.10 is already a direct dependency of jk-agent and shares
 # `digest 0.10` with the `blake2` pin above.
 sha2 = "0.10"
 # SQLite for integration tests (chain verification).

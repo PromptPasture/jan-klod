@@ -26,8 +26,8 @@
 //! `JK_REQUIRE_GUESTS=1` does **not** force this one, for the reason
 //! `polyglot_ts.rs` gives: that flag means "the Rust guests must be staged".
 
-use jan_klod_core::conductor::RunResult;
-use jan_klod_core::Runtime;
+use jk_agent::conductor::RunResult;
+use jk_agent::Runtime;
 
 use crate::common;
 

@@ -27,7 +27,7 @@
 //! put that on every `make gate` to test the same boundary this does in about
 //! a second. What is under test is the sandbox, not `wit-bindgen`.
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 use crate::execution_config::run_command_in;

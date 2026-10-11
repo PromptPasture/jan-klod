@@ -47,12 +47,12 @@ use jan_klod_protocol::{
     PROTOCOL_VERSION,
 };
 
-use jan_klod_core::conductor::RunResult;
+use jk_agent::conductor::RunResult;
 
-use jan_klod_core::session::{self, Forked};
-use jan_klod_core::AgentSession;
 use jan_klod_protocol::turn::{Driver, UserPrompt};
 use jan_klod_protocol::turn::{Event, EventSink, Flow};
+use jk_agent::session::{self, Forked};
+use jk_agent::AgentSession;
 
 /// Serve frames from `input`, answering on `output`, until EOF.
 ///
@@ -745,7 +745,7 @@ fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::i
 
 /// What the loaded extensions contribute, as the notification clients read.
 ///
-/// The kernel's shapes are not the wire's — `jan-klod-core` does not depend on
+/// The kernel's shapes are not the wire's — `jk-agent` does not depend on
 /// `jan-klod-protocol` — so a surface maps between them, the same way
 /// [`notification_for`] maps a turn event.
 fn contributions_notification(agent: &mut AgentSession) -> Notification {

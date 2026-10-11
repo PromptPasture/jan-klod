@@ -1,7 +1,7 @@
 //! Tool wiring: enabled `tool.*` extensions flow into the fleet.
 //! Tests config -> capability -> fleet (offline). Skips when guests not staged.
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 

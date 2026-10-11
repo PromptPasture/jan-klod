@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::{AgentSession, Runtime};
+use jk_agent::{AgentSession, Runtime};
 use jk_wasm::route::HttpFn;
 
 use crate::session_thread::{self, Jobs};

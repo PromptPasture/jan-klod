@@ -17,7 +17,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::Runtime;
+use jk_agent::Runtime;
 
 use crate::common;
 
@@ -202,7 +202,7 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
     // transport — so what is asserted here is the *promise*: install in
     // one turn, call in the next, same session, no restart.
     let one = agents.of("s1");
-    one.run(|agent: &mut jan_klod_core::AgentSession| {
+    one.run(|agent: &mut jk_agent::AgentSession| {
         agent.run("s1", "install the hello tool");
     })
     .expect("turn one ran");
@@ -211,7 +211,7 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
     // made the old one out of date.
     agents
         .of("s1")
-        .run(|agent: &mut jan_klod_core::AgentSession| {
+        .run(|agent: &mut jk_agent::AgentSession| {
             agent.run("s1", "now greet the world");
         })
         .expect("turn two ran");
@@ -314,7 +314,7 @@ fn a_session_that_installed_nothing_can_call_what_another_installed() {
     // its turn, with no help from this test.
     agents
         .of("installer")
-        .run(|agent: &mut jan_klod_core::AgentSession| {
+        .run(|agent: &mut jk_agent::AgentSession| {
             agent.run("installer", "install the hello tool");
         })
         .expect("A's turn ran");
@@ -322,7 +322,7 @@ fn a_session_that_installed_nothing_can_call_what_another_installed() {
     // B has never been mentioned before now.
     agents
         .of("bystander")
-        .run(|agent: &mut jan_klod_core::AgentSession| {
+        .run(|agent: &mut jk_agent::AgentSession| {
             agent.run("bystander", "now greet the world");
         })
         .expect("B's turn ran");

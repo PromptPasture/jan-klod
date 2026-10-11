@@ -8,9 +8,9 @@
 //! frame in produces a frame out.
 
 use futures_util::{SinkExt as _, StreamExt as _};
-use jan_klod_core::Runtime;
 use jan_klod_host::serve::Surface;
 use jan_klod_host::sessions::Agents;
+use jk_agent::Runtime;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::Message;
 

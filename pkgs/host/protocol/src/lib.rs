@@ -218,7 +218,7 @@ pub enum Command {
 /// Every `event:` kind the SSE projection can emit, sorted.
 ///
 /// Here rather than in the core because **a client cannot see the core**: this
-/// crate is the only thing `jan-klod-core` and a UI both depend on, which is
+/// crate is the only thing `jk-agent` and a UI both depend on, which is
 /// what lets the producer and the consumer be checked against one list instead
 /// of against each other's prose. Without that, a client can simply not know a
 /// frame — #81, where every tool result in a healthy turn reached the user as

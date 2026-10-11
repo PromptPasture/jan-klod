@@ -1,6 +1,6 @@
 //! The shared turn vocabulary — what a turn is made of, named once (#180).
 //!
-//! These types were in `jan-klod-core`, beside the loop that produces them.
+//! These types were in the old core crate, beside the loop that produces them.
 //! That worked while one crate held everything. It stops working at the first
 //! crate boundary: the event log encodes an [`Event`] and rebuilds a
 //! transcript out of [`Message`]s, so `jk-session` needs this vocabulary, and

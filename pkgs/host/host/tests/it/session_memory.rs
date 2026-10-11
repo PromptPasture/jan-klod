@@ -4,8 +4,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use jan_klod_core::conductor::RunResult;
-use jan_klod_core::Runtime;
+use jk_agent::conductor::RunResult;
+use jk_agent::Runtime;
 use jk_wasm::http::WireResponse;
 use jk_wasm::route::HttpFn;
 
@@ -514,8 +514,7 @@ extensions:
         })
     };
 
-    let runtime =
-        jan_klod_core::Runtime::boot(&config, common::repo_root().join("ext")).expect("boots");
+    let runtime = jk_agent::Runtime::boot(&config, common::repo_root().join("ext")).expect("boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
     let _ = agent.run("s", "hello");
 

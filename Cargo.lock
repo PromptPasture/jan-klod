@@ -1456,17 +1456,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jan-klod-core"
-version = "0.1.0"
-dependencies = [
- "jan-klod-protocol",
- "jk-session",
- "jk-wasm",
- "rusqlite",
- "serde_json",
-]
-
-[[package]]
 name = "jan-klod-host"
 version = "0.1.0"
 dependencies = [
@@ -1476,8 +1465,8 @@ dependencies = [
  "futures-util",
  "jan-klod",
  "jan-klod-config",
- "jan-klod-core",
  "jan-klod-protocol",
+ "jk-agent",
  "jk-session",
  "jk-wasm",
  "ring",
@@ -1499,6 +1488,17 @@ name = "jan-klod-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "jk-agent"
+version = "0.1.0"
+dependencies = [
+ "jan-klod-protocol",
+ "jk-session",
+ "jk-wasm",
+ "rusqlite",
  "serde_json",
 ]
 
