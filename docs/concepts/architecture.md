@@ -40,7 +40,7 @@ The host is seven `jk-*` crates, each depending only on the ones listed before i
 | `jk-host` | `pkgs/host/host` | Every inbound surface (REST + SSE, WebSocket, stdio JSON-RPC, ACP, MCP, Telegram); ships the `jan-klod-gateway` binary |
 | `jk-tui` | `pkgs/clients/tui` | The terminal client; depends on `jk-protocol` alone and ships the `jan-klod` binary |
 
-The Tauri shell, `jk-gui`, is its own workspace and ships `jan-klod-gui`. Binary names did not change with the package names.
+Binary names did not change with the package names.
 
 > **Why the loop is in core (not an extension).** With every decision moved to interceptors, the loop is mechanism only: provider call, tool dispatch, interceptor dispatch, streaming handles, cancel, steering queue. Measured 2026-10-11 ([#182](https://github.com/PromptPasture/jan-klod/issues/182)), that is **548 non-test lines** in `pkgs/host/agent/src/conductor.rs` (422 without comments and blanks) plus **454** for the phase dispatcher in `pkgs/host/protocol/src/intercept.rs` (232) — not the ~200 first estimated, and size was never the argument. Native Rust keeps "nothing trusted" (core is the trusted host; all providers/tools/stores/interceptors stay sandboxed WASM) and avoids WASM loop driving WASM interceptor chain across component boundaries twice. Trade-off: the conductor is no longer swappable/polyglot. See [the decision](../decisions/2026-07-01-thin-loop-interceptors/BRAINSTORM.md).
 
@@ -49,7 +49,7 @@ The Tauri shell, `jk-gui`, is its own workspace and ships `jan-klod-gui`. Binary
 The system, read top-down per the [vision](../decisions/2026-09-08-harness-platform-vision/Vision.md#architecture--five-layers), unifies built and planned parts so the target is visible from the current state:
 
 ```
-L4 Clients        TUI (ratatui, built) | Web client + Tauri shell (Phase 17) | IDE via ACP (Phase 18) | chat channels (Telegram, built)
+L4 Clients        TUI (ratatui, built) | Web client + GUI shell (removed 2026-10-24, to be redone — #318) | IDE via ACP (Phase 18) | chat channels (Telegram, built)
 L3 Protocol       one versioned command/event schema (built) over stdio JSON-RPC (built) | REST + SSE (built, a projection) | WebSocket (Phase 13c)
 L2 Extensions     provider | tool | interceptor | registry | agent | chat        (WASM Components, polyglot — built)
 L1 Capabilities   host-fs | host-process | host-http | host-storage | host-config | host-log | host-event   (default-deny, built)
@@ -130,7 +130,7 @@ There is no `api-*`/`chat-*` category. That design (network-facing extensions be
 
 An interceptor may return **`ask`** — a question routed through the loop to the attached driver (TUI, Telegram, a REST/SSE client), which surfaces it in its idiom; the loop suspends and re-invokes the same interceptor with the answer. This lets rule-based permission gates confirm with the user even though the UI is separate — the interceptor never touches a UI.
 
-**UIs are not extensions** — TUI/GUI/web are optional separate client processes connecting over the host-side REST + SSE / stdio JSON-RPC surface (LSP model: core is server, UI is thin client). See [User interfaces](#user-interfaces-separate-clients).
+**UIs are not extensions** — they are optional separate client processes connecting over the host-side REST + SSE / stdio JSON-RPC surface (LSP model: core is server, UI is thin client). See [User interfaces](#user-interfaces-separate-clients).
 
 Jan-Klod speaks ACP bidirectionally — as a client (`agent-*` extensions call other agents) and as a server (callable by other ACP orchestrators).
 
@@ -180,60 +180,9 @@ UIs are **not extensions, not part of core.** They are optional separate **clien
 | Launch | Surface | Technology | Status |
 |---|---|---|---|
 | `jan-klod` (default) | Terminal UI | `ratatui`, over stdio JSON-RPC — it spawns the gateway; `--addr` drives a running one over REST + SSE instead | built |
-| browser → core `/` | Web UI | a static, dependency-light TypeScript front-end served by the core over **REST + SSE** (not WebSocket — see below) | **built** (#118 client, #119 serving) |
-| `jan-klod --gui` | Native window | a **Tauri shell around the same web front-end** — system webview, not a third client codebase | **built** (#142; see below) |
+| browser / native window | Web UI and GUI shell | — | **removed** 2026-10-24 ([#318](https://github.com/PromptPasture/jan-klod/issues/318)); to be redone. The Phase 17 build (a TypeScript SPA served at `/`, and a Tauri shell around it) is recorded in the [roadmap](roadmap.md#phase-17--web-client--gui-shell) and the git history |
 | editor | IDE integration | `jan-klod-gateway acp` — ACP agent side on stdio, mapped onto the same turn path | **built** (18a is MCP, 18b is this) |
 | other agents | MCP server | `jan-klod-gateway mcp` — `ask`, `session_list`, `session_get` over MCP stdio | **built** |
-
-#### The window is a separate workspace, and that is a supply-chain decision
-
-`jan-klod --gui` opens the **same** front-end the browser gets — the one core serves at `/` — in a system webview. No third codebase (Vision decision 5).
-
-The Tauri shell is `pkgs/clients/gui`, **its own cargo workspace**, not a host member. Not tidiness: Tauri adds **329 packages** not needed otherwise; as a member they'd land in `src/Cargo.lock` (406 → 735) and be resolved/built by every `cargo test`, `cargo clippy --workspace`, and CI run regardless of window changes. Kept separate, they're behind `make gui` only.
-
-Cost measured before implementation ([#141]):
-
-| | |
-|---|---|
-| Packages added, as measured then | **+256** (dedup vs. host; +329 today) |
-| Clean release build | 332 CPU-seconds, 838 MB `target/` |
-| Release binary | 9.6 MB (no bundled browser) |
-| `deny.toml` entries | **11** (5 MPL-2.0, 6 unmaintained-advisory) |
-
-All eleven are named crate-by-crate (not policy-widened) and structural: `wry` (Tauri's webview binding) depends on `dom_query` and `dirs`, so thinner alternatives pay the same licences. `deny.toml` carries reasoning and scope — dropping the shell drops that block.
-
-Three consequences:
-
-- **Default build path excludes it.** `make all` and `make gate` do not. `make gui` builds it and stages the binary beside `jan-klod` (found as a sibling, then `PATH`).
-- **Supply-chain gates cover it.** `make lockfile`, `make deny`, `make audit` name all three workspaces; the widened tree doesn't escape.
-- **Opt-in ship.** `make bundle GUI=1` adds it, suffixing `-gui`; `install.sh --gui` requests it. Client choice is orthogonal to distribution (second axis, not fourth) — see `scripts/distributions/README.md`.
-
-On macOS the webview is WKWebView (no install needed). On Linux it is `webkit2gtk-4.1` (system package); `jan-klod --gui` names it on shell failure instead of falling back to terminal.
-
-[#141]: https://github.com/PromptPasture/jan-klod/issues/141
-
-#### The window is handed the token, and only on the core's origin
-
-The web client keeps the gateway token in `sessionStorage` and prompts for 401 (`pkgs/clients/web/src/api.ts`). A window launched with a token shouldn't force a retype, so the shell seeds it via Tauri initialization script — making the window a credential boundary.
-
-Two rules (both in `pkgs/clients/gui/src/main.rs`, both tested):
-
-- The seed **checks `location.origin` first.** Initialization scripts run in every webview frame, so an unguarded one would hand the token to embedded pages.
-- Navigation **off the core's origin is refused** and handed to the system browser (second-line guard).
-
-`docs/concepts/security-model.md` details the checks and names the tests.
-
-#### The web client's bundle is committed, and the alternative costs more than it looks
-
-`pkgs/clients/web` builds to 5.5 kB ES module with no runtime dependencies; core embeds it via `include_str!` so the binary carries the page — no directory to ship. `include_str!` resolves at **compile time** — the bundle is either in the tree when `cargo build` runs or not; a decision, not a detail.
-
-**Committed** for two reasons. First: the alternative is not "build in CI" — it is **Node becoming a core-build dependency**. Every `cargo build`, `make gate`, and CI job would need `npm run build` first; none install Node today. Large tax on everyone who never touches the web client so one generated file stays absent from git.
-
-Second: this repo does this three times already. `pkgs/host/protocol/schema/protocol.schema.json` is generated and committed with a drift test; `ext/*.manifest.toml` from real imports; `wit/wkg.lock` likewise. "No generated artifacts" isn't this repo's property, so preserving it here buys nothing while costing the first reason.
-
-**What the choice costs.** Committed bundles can go stale: editing `pkgs/clients/web/src` and forgetting to rebuild serves the old page silently. `make web-dist-drift` catches it (#127): rebuilds into a temp tree and diffs (same regenerate-and-compare as the schema test). Works because esbuild is reproducible — macOS-built, Linux rebuilds byte-for-byte.
-
-Unlike the schema's, it needs **Node**, so it's not on `make gate`; it runs in CI's lint-test job, not locally. Narrower guard: catches staleness on every push/PR, not at commit. That asymmetry is the real cost.
 
 All UIs are clients of one surface, share one backend, carry no agent logic. Each holds no state the core lacks: every view is a session event log projection (Phase 14) delivered over the protocol (Phase 13).
 
@@ -426,9 +375,9 @@ Implementation lives under `pkgs/`, in three groups; every package has the same 
 |---|---|
 | `pkgs/host/*` | The host crates (`agent`, `config`, `host`, `protocol`, `session`, `wasm`) and the Go `supervisor` |
 | `pkgs/extensions/*` | Every guest, flat, named by kind (`tool-*`, `interceptor-*`, `provider-*`, `registry-*`) |
-| `pkgs/clients/*` | The terminal (`tui`), web and Tauri (`gui`) clients |
+| `pkgs/clients/*` | The terminal client (`tui`) |
 
-There are **three cargo workspaces**: the repo-root `Cargo.toml` (the host crates and `tui`), `pkgs/extensions/Cargo.toml` (the guests, built for `wasm32-wasip2`), and `pkgs/clients/gui/Cargo.toml` (kept apart for the reason given under [User interfaces](#user-interfaces-separate-clients)). Cargo cannot share `[workspace.lints]` across workspaces, so the three blocks are kept identical by `make lints-drift`; every other lint and supply-chain config (`deny.toml`, `.golangci.yml`, `.config/nextest.toml`) sits at the root and covers all of them. `wit/` (the contracts), `ext/` (staged components), `scripts/` and `docs/` stay at the root.
+There are **two cargo workspaces**: the repo-root `Cargo.toml` (the host crates and `tui`) and `pkgs/extensions/Cargo.toml` (the guests, built for `wasm32-wasip2`). Cargo cannot share `[workspace.lints]` across workspaces, so the two blocks are kept identical by `make lints-drift`; every other lint and supply-chain config (`deny.toml`, `.golangci.yml`, `.config/nextest.toml`) sits at the root and covers all of them. `wit/` (the contracts), `ext/` (staged components), `scripts/` and `docs/` stay at the root.
 
 ## Stack
 
@@ -440,7 +389,7 @@ There are **three cargo workspaces**: the repo-root `Cargo.toml` (the host crate
 | Extension format | WASM Component Model + WIT interfaces (`wit-bindgen`) — every extension |
 | HTTP surface | host-side `axum`; REST + SSE + `GET /ws`; `GET /health`, `GET /sessions`, `POST /sessions`, `GET /session/:id`, `POST /session/:id/message`, `GET /ws`. The session stays on one thread and is reached by job |
 | SQL (host-side) | `rusqlite` bundled; host-side store (not SQLite-in-wasm) |
-| UI clients (separate, optional) | TUI (`ratatui`, `jan-klod`); native window via Tauri (`jan-klod --gui`); web via browser |
+| UI clients (separate, optional) | TUI (`ratatui`, `jan-klod`) |
 | Build | Cargo (native binary; no CGo in the core) |
 | Linting | Clippy (Rust core); `golangci-lint` for any Go-language tooling/guests |
 | Observability | Structured logging + Prometheus + OpenTelemetry |

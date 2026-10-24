@@ -9,12 +9,12 @@ members = [
     "pkgs/host/wasm",
     "pkgs/clients/tui",
 ]
-# Both are cargo workspaces in their own right, sitting under this one's
-# directory. Each declares its own `[workspace]`, so cargo's upward search stops
-# there and neither is silently adopted as a member — naming them here says so
-# out loud, and makes a future glob in `members` safe. `pkgs/host/supervisor`
-# (Go) and `pkgs/clients/web` (TypeScript) carry no manifest and need no entry.
-exclude = ["pkgs/extensions", "pkgs/clients/gui"]
+# A cargo workspace in its own right, sitting under this one's directory. It
+# declares its own `[workspace]`, so cargo's upward search stops there and it is
+# not silently adopted as a member — naming it here says so out loud, and makes
+# a future glob in `members` safe. `pkgs/host/supervisor` (Go) carries no
+# manifest and needs no entry.
+exclude = ["pkgs/extensions"]
 
 [workspace.package]
 edition = "2021"

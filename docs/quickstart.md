@@ -18,7 +18,7 @@ make setup                  # once: pinned cargo plugins, git hooks, WIT deps
 make bundle DIST=coding
 ```
 
-`make bundle` produces `dist/jan-klod-<version>-<os>-<arch>-coding.tar.gz`, with `jan-klod`, `jan-klod-gateway`, pre-filled `config.yaml`, and `ext/`. Unpack it and put the binaries on your PATH. `DIST` takes `coding`, `headless-chat`, or `minimal`; add `GUI=1` for the desktop window.
+`make bundle` produces `dist/jan-klod-<version>-<os>-<arch>-coding.tar.gz`, with `jan-klod`, `jan-klod-gateway`, pre-filled `config.yaml`, and `ext/`. Unpack it and put the binaries on your PATH. `DIST` takes `coding`, `headless-chat`, or `minimal`.
 
 Check that both binaries are found:
 
@@ -101,18 +101,6 @@ The single argument is the **session id**. To drive a gateway that is already li
 ```sh
 jan-klod --addr 127.0.0.1:8787 my-session
 ```
-
-### The same client, in a window
-
-```sh
-jan-klod --gui
-```
-
-This spawns or attaches a gateway, then opens the core's web client in a desktop window using the system webview. No bundled browser, no separate GUI codebase: it's the **same** page a browser gets at `/`, so anything true of one is true of the other. The token comes across, so no retype.
-
-`--gui` takes `--addr` like other modes and **no session id** — the page chooses its own, refusing if one is passed.
-
-The window ships only in the `-gui` archive (`install.sh --gui`, or `make bundle GUI=1` from checkout). Without it, `--gui` says the shell isn't installed and exits non-zero. On Linux, install `libwebkit2gtk-4.1-0` and `libayatana-appindicator3-1` if the window won't open. On macOS, it's built in.
 
 To run the gateway as a background service or share between clients:
 

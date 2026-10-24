@@ -45,15 +45,12 @@ jan-klod --addr 127.0.0.1:8787 my-session
 
 No paths: gateway finds `config.yaml` and `ext/` in CWD or install dir (lets you `cd` to any repo). Positional names work only in checkouts.
 
-Three surface modes (launch option, not install):
+Two surface modes (launch option, not install):
 
 ```sh
 jan-klod my-session          # a line REPL
 jan-klod tui my-session      # the full-screen terminal UI
-jan-klod --gui               # the web client in a desktop window
 ```
-
-`--gui` needs the archive (`install.sh --gui` or `make bundle GUI=1`); says so rather than fallback. Browser reaches `/` on gateway without install.
 
 One-off answer, no server:
 

@@ -21,10 +21,9 @@ Hosted on **GitHub Pages**; self-hosted mode always supported.
 ## ZIP layout — standard
 
 ```
-jan-klod-<version>-<os>-<arch>[-<distribution>][-gui]/
+jan-klod-<version>-<os>-<arch>[-<distribution>]/
   jan-klod-gateway    ← the core binary (platform-specific)
-  jan-klod            ← the client: line REPL, or `tui`, or `--gui` by launch mode
-  jan-klod-gui        ← the Tauri window — `-gui` archives only (make bundle GUI=1)
+  jan-klod            ← the client: line REPL, or `tui`, by launch mode
   config.yaml         ← pre-filled from selections
   ext/                ← provider/interceptor/tool guests (persistence, the REST
                         surface, telegram, and delegation are host-side in the core
@@ -66,7 +65,7 @@ Three places name them — definitions, `scripts/install.sh`, and `.github/workf
 
 ### When a Configurator UI arrives
 
-No interactive Configurator yet — the landing page is static. When built, it reads the same definitions rather than carrying its own list. The client choice (TUI, GUI, browser) is a separate toggle beside the distribution picker because it is a separate question. Distributions are data, not a menu: the menu is a view of the data.
+No interactive Configurator yet — the landing page is static. When built, it reads the same definitions rather than carrying its own list. The client choice is a separate toggle beside the distribution picker because it is a separate question. Distributions are data, not a menu: the menu is a view of the data.
 
 ## Extension registry
 

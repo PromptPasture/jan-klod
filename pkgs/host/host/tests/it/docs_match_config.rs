@@ -237,11 +237,8 @@ fn the_installer_offers_the_distributions_the_release_builds() {
 
     let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
         .expect("the release workflow is readable");
-    // Only the distribution name: a line may carry `GUI=1` after it, which is a
-    // second, orthogonal axis rather than a fourth distribution (see
-    // scripts/distributions/README.md, and `the_release_builds_a_gui_archive_if_
-    // the_installer_offers_one` below). Splitting here keeps that axis from
-    // reading as a distribution nothing defines.
+    // Only the distribution name: anything after it on the line is not part of
+    // the name, and must not read as a distribution nothing defines.
     let built: BTreeSet<String> = workflow
         .lines()
         .filter_map(|l| l.trim().strip_prefix("make bundle DIST="))
@@ -260,45 +257,6 @@ fn the_installer_offers_the_distributions_the_release_builds() {
         "release.yml builds {built:?} but scripts/distributions/ defines \
          {defined:?} — a distribution nobody publishes is a 404 for whoever \
          asks the installer for it"
-    );
-}
-
-/// `install.sh --gui` and `make bundle GUI=1` must both exist, or neither.
-///
-/// `--gui` makes the installer ask for a `…-gui.tar.gz`, only produced when
-/// `GUI=1` is passed. Different files can't see each other; the failure would
-/// surface after a tag — when it can't be fixed. Checked as a biconditional to
-/// catch the reverse: a release paying for a Tauri build on four runners that no
-/// installer flag can reach is an archive nobody downloads.
-#[test]
-fn the_release_builds_a_gui_archive_if_the_installer_offers_one() {
-    let root = common::repo_root();
-    let installer =
-        std::fs::read_to_string(root.join("scripts/install.sh")).expect("install.sh is readable");
-    let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
-        .expect("the release workflow is readable");
-
-    let offers_gui = installer.contains("--gui)");
-    let builds_gui = workflow
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("make bundle DIST="))
-        .any(|rest| rest.split_whitespace().any(|word| word == "GUI=1"));
-
-    assert_eq!(
-        offers_gui,
-        builds_gui,
-        "install.sh {} `--gui` but release.yml {} a `GUI=1` bundle — whichever \
-         side is missing, a user following the other one gets a 404",
-        if offers_gui {
-            "offers"
-        } else {
-            "does not offer"
-        },
-        if builds_gui {
-            "builds"
-        } else {
-            "does not build"
-        },
     );
 }
 

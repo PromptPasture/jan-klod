@@ -2,7 +2,7 @@
 
 The `jan-klod-gateway` binary and the surfaces it serves: REST and SSE, WebSocket, ACP, MCP, and Telegram. Each surface is a transport over a kernel `AgentSession`; none of it is agent behaviour.
 
-Depends on [`jk-agent`](../agent), [`jk-config`](../config), [`jk-protocol`](../protocol), [`jk-session`](../session), and embeds the web client from [`pkgs/clients/web/dist`](../../clients/web).
+Depends on [`jk-agent`](../agent), [`jk-config`](../config), [`jk-protocol`](../protocol), and [`jk-session`](../session).
 
 ```sh
 make serve                  # run the gateway against config.yaml and the staged ext/

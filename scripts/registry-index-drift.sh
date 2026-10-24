@@ -2,10 +2,9 @@
 # Check that `index.json` is a function of the staged components and nothing
 # else — and that this check can actually fail.
 #
-# Same shape as scripts/web-dist-drift.sh and ext-new-selftest.sh: regenerate,
-# compare, fail on a difference. What is different here is what it compares
-# against. `pkgs/clients/web/dist/` is committed, so its drift check diffs a rebuild
-# against the committed bytes. `ext/*.wasm` and `ext/*.manifest.toml` are
+# Same shape as ext-new-selftest.sh: regenerate, compare, fail on a
+# difference. What is different here is what it compares against.
+# `ext/*.wasm` and `ext/*.manifest.toml` are
 # **not** committed (see .gitignore), and a Rust wasm build is not byte-stable
 # across machines, so a committed index.json would carry digests that differ per
 # clone and drift on every run. The property worth holding is therefore not
