@@ -66,7 +66,6 @@ fn a_disconnected_client_does_not_hold_the_turn_open() {
     if !common::guests_staged(&GUESTS) {
         return;
     }
-    // Intentionally long: heartbeat (not deadline) should end the wait.
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "120");
 
     let dir = std::env::temp_dir().join(format!("jk-gone-{}", std::process::id()));

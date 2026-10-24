@@ -48,7 +48,6 @@ fn install_into(prefix: &Path) -> PathBuf {
         .flatten()
     {
         let path = entry.path();
-        // Components and their manifests: the runtime refuses a component without one.
         let name = entry.file_name();
         let carried = path.extension().is_some_and(|e| e == "wasm")
             || name.to_string_lossy().ends_with(".manifest.toml");
@@ -111,7 +110,6 @@ fn an_installed_gateway_serves_from_a_directory_that_is_not_a_checkout() {
     let port = free_port();
     let addr = format!("127.0.0.1:{port}");
 
-    // Launched as `jan-klod` launches it; relative config paths would not resolve from `work`.
     let child = Command::new(&gateway)
         .args(["serve", "--bind", &addr])
         .current_dir(&work)
@@ -124,7 +122,6 @@ fn an_installed_gateway_serves_from_a_directory_that_is_not_a_checkout() {
     let _gateway = Gateway(child);
 
     assert!(
-        // Generous: Cranelift-compiling the staged components takes ~24s alone, more on a busy runner.
         wait_until_listening(&addr, Duration::from_secs(180)),
         "the gateway never came up at {addr} — an installed jan-klod could not start \
          from {}",
@@ -149,7 +146,6 @@ fn an_installed_gateway_verifies_its_own_components_from_anywhere() {
     let gateway = install_into(&prefix);
     let work = elsewhere(&prefix);
 
-    // `install.sh` runs this after installing, so a regression here breaks every install.
     let output = Command::new(&gateway)
         .arg("verify")
         .current_dir(&work)
@@ -169,7 +165,6 @@ fn an_installed_gateway_verifies_its_own_components_from_anywhere() {
         stdout.contains("start cleanly"),
         "every component starts: {stdout}"
     );
-    // `0 missing`, not `!contains("missing")`: the summary line always has that word.
     assert!(stdout.contains("0 missing"), "nothing is missing: {stdout}");
 }
 
@@ -217,7 +212,6 @@ fn ask_answers_on_stdout_from_an_installed_layout() {
     let gateway = install_into(&prefix);
     let work = elsewhere(&prefix);
 
-    // A local endpoint the installed config does not name, so no network or key is needed.
     let data = prefix.join("share/jan-klod");
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds");
     let port = listener.local_addr().expect("addr").port();
@@ -275,7 +269,6 @@ extensions:
         stdout.contains(answer),
         "the answer is on stdout: {stdout:?}"
     );
-    // stdout is the answer and nothing else, so a script can pipe it.
     assert!(
         !stdout.contains('?'),
         "no prompt text leaked into stdout: {stdout:?}"
@@ -295,7 +288,6 @@ fn verify_live_reports_a_provider_that_does_not_answer() {
     let work = elsewhere(&prefix);
     let data = prefix.join("share/jan-klod");
 
-    // A closed port, as a stopped local model looks: the most common first-run failure.
     let dead = {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds");
         listener.local_addr().expect("addr").port()

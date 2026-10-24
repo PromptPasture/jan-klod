@@ -26,8 +26,6 @@ mod component {
     use bindings::exports::jan_klod::interfaces::extension_lifecycle::{
         ExtensionContext, Guest as Lifecycle, HealthStatus,
     };
-    // Named imports: the workspace denies wildcard-imports, and wit-bindgen names
-    // every interface's trait `Guest`, so each one is aliased.
     use bindings::exports::jan_klod::interfaces::tool_callable::{
         Guest as ToolCallable, ToolError, ToolMeta,
     };
@@ -82,7 +80,6 @@ mod component {
         }
 
         fn invoke(arguments: String) -> Result<String, ToolError> {
-            // A missing plan is empty, not a failure.
             let stored = match host_storage::get(NAMESPACE, KEY) {
                 Ok(entry) => Some(entry.value),
                 Err(StoreError::NotFound) => None,
@@ -94,7 +91,6 @@ mod component {
             let mut plan = Plan::parse(stored.as_deref());
 
             plan.apply(&arguments).map_err(|err| {
-                // The reason goes to the log, not the error: `tool-error` carries no message.
                 log(LogLevel::Info, &format!("refused: {err}"));
                 ToolError::InvalidArguments
             })?;

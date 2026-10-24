@@ -101,7 +101,6 @@ fn a_denied_tool_argument_blocks_with_the_reason_surfaced() {
 
     let dir = std::env::temp_dir().join(format!("jk-guardrails-deny-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    // A readable file, so a pass means the guardrail refused, not that the read failed.
     std::fs::write(dir.join("secrets.txt"), "contents\n").unwrap();
     let config = write_config(
         &dir,
@@ -136,7 +135,6 @@ extensions:
         let calls = std::sync::Arc::clone(&calls);
         Box::new(move |_m, _u, _h, _b, _t| {
             let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            // First reach for the file; answer in words once the block returns.
             let body = if n == 0 {
                 serde_json::json!({"choices":[{"message":{"role":"assistant","tool_calls":[
                     {"id":"c1","function":{"name":"fs",

@@ -357,7 +357,6 @@ mod tests {
             Some("updated"),
             "value should be updated"
         );
-        // The timestamp can match within one millisecond, so only presence is checked.
         assert!(
             updated_at2.is_some(),
             "updated_at should be present in updated fact"

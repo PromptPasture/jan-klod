@@ -19,7 +19,6 @@ use std::collections::HashMap;
 
 /// Stub env vars the shipped config expands (placeholder values; no provider HTTP uses them).
 fn stub_env() {
-    // Idempotent (all tests set these concurrently).
     #[allow(unsafe_code)]
     for key in [
         "OPENAI_API_KEY",
@@ -54,7 +53,6 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("the shipped config boots");
 
-    // Check load state: the report string always says "0 missing".
     let absent: Vec<&str> = runtime
         .extensions()
         .iter()
@@ -67,7 +65,6 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
         runtime.report()
     );
 
-    // Use start_all_eager: since #59 plain start_all is lazy for tool-*, but shipped tools must instantiate.
     let started = runtime
         .start_all_eager()
         .expect("every enabled extension starts");
@@ -199,13 +196,11 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("the shipped config boots");
     let factory = write_then_answer_http;
-    // Probe is built from a borrow before the registry takes the runtime by value.
     let mut probe = runtime
         .build_agent(&factory)
         .expect("the shipped config builds an agent");
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
 
-    // Default tools must reach the model (or the "no tools" defect hides).
     let advertised = probe.tool_names();
     for expected in ["fs", "edit", "find"] {
         assert!(

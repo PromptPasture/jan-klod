@@ -52,10 +52,8 @@ fn fleet_dispatches_a_tool_call_by_name() {
     ));
     let result = result.expect("fs dispatched");
     assert!(result.content.contains("wrote a.txt"));
-    // #162: success must flag the result, not just prose.
     assert!(!result.failed, "a successful write is not `failed`");
 
-    // None makes the loop report "no tool" to the model.
     assert_eq!(fleet.invoke(&call("nonexistent", "{}")), None);
 }
 
@@ -110,7 +108,6 @@ fn fs_tool_writes_reads_and_greps_through_the_fleet() {
         Some("1:fn main(){}")
     );
 
-    // Hits carry paths, so one grep replaces find-then-read.
     fleet
         .invoke(&call(
             "fs",
@@ -202,7 +199,6 @@ fn a_tree_grep_skips_credential_files() {
     std::fs::create_dir_all(workspace_dir.join("src")).unwrap();
     let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
 
-    // The source file mentions the same word, so the search is not vacuous.
     std::fs::write(
         workspace_dir.join(".env"),
         "API_TOKEN=hunter2-must-not-leak\n",

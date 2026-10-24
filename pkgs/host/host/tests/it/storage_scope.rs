@@ -26,7 +26,6 @@ impl Driver for AlwaysDriver {
 /// Config with permission gate and optional-persist storage.
 fn config_with(dir: &std::path::Path, db: &std::path::Path, persist: bool) -> std::path::PathBuf {
     let path = dir.join("config.yaml");
-    // Store path makes session durable; `persist` flag lets gate reach it.
     let persist_line = if persist { "\n      persist: true" } else { "" };
     std::fs::write(
         &path,
@@ -56,7 +55,6 @@ extensions:
 
 /// Mock provider: calls bash once, then answers.
 fn tool_calling_provider() -> impl Fn() -> jk_wasm::route::HttpFn {
-    // Annotated return type needed for closure's higher-ranked lifetimes.
     move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::atomic::AtomicU32::new(0);
         Box::new(move |_m, _u, _h, _b, _t| {
@@ -166,7 +164,6 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
     let mut driver = AlwaysDriver { asked };
     let _ = agent.run_with_driver(&mut driver, "s1", "use bash");
 
-    // Read DB directly (guest's view not under test).
     let store = jk_session::store::Store::open(&db).expect("opens the same db");
     let namespaces = store.list_namespaces().expect("lists namespaces");
 
@@ -181,7 +178,6 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
             .any(|ns| ns.starts_with("ext/interceptor.permission/")),
         "the grant landed under the component's own subtree: {namespaces:?}"
     );
-    // Sessions live in the `events` table, which guests cannot address.
     assert!(
         !namespaces.iter().any(|ns| ns == "s1"),
         "the session is not reachable as a namespace any more: {namespaces:?}"

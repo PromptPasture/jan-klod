@@ -40,7 +40,6 @@ fn fake_core() -> SocketAddr {
         loop {
             let frame = "event: delta\ndata: {\"text\":\"still going\"}\n\n";
             if stream.write_all(frame.as_bytes()).is_err() {
-                // `cancel` shut the socket down, as a real server would see it.
                 return;
             }
             thread::sleep(Duration::from_millis(20));
@@ -60,7 +59,6 @@ fn cancel_stops_a_turn_streaming_forever_over_rest() {
         let _ = tx.send(result);
     });
 
-    // Cancel only once the turn is streaming; cancelling before connect tests something else.
     thread::sleep(Duration::from_millis(200));
     transport.cancel("s1").expect("a turn is running to cancel");
 
@@ -88,7 +86,6 @@ fn a_cancel_that_resets_the_connection_still_ends_the_turn_cleanly() {
             if let Some((first_tx, cancelled_rx)) = hold.take() {
                 let _ = first_tx.send(());
                 let _ = cancelled_rx.recv();
-                // Several 20 ms frames reach the shut-down socket meanwhile.
                 thread::sleep(Duration::from_millis(100));
             }
         });

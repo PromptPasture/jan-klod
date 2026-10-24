@@ -340,7 +340,6 @@ mod tests {
             .set("plan".into(), "k".into(), "from s1".into())
             .expect("writes");
 
-        // Rebound on the same storage: a fleet outlives a session.
         first.bind_session("s2");
         assert!(
             matches!(first.get("plan", "k"), Err(StorageFault::NotFound)),

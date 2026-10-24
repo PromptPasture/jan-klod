@@ -83,7 +83,6 @@ fn str_field(obj: &Value, key: &str) -> String {
 fn message_to_json(msg: &Message) -> Value {
     match msg.role {
         Role::System => {
-            // Should be stripped before this is called; fallback so conversation makes sense.
             json!({"role": "user", "content": msg.content})
         }
         Role::User => json!({"role": "user", "content": msg.content}),
@@ -156,7 +155,6 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
 fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| ProviderError::Transient)?;
 
-    // Surface API errors in a 200 body.
     if value.get("type").and_then(Value::as_str) == Some("error") {
         let kind = value
             .pointer("/error/type")
@@ -243,7 +241,6 @@ const fn map_http_error(err: HttpError) -> ProviderError {
         HttpError::ClientError(401 | 403) => ProviderError::AuthFailed,
         HttpError::ClientError(404) => ProviderError::ModelNotFound,
         HttpError::ClientError(429) => ProviderError::RateLimited,
-        // Not transient: a refused connection, DNS, or TLS failure will not clear on retry.
         HttpError::ConnectionFailed | HttpError::Timeout | HttpError::TlsError => {
             ProviderError::Unreachable
         }
@@ -261,7 +258,6 @@ impl Lifecycle for Component {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
         let section: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
 
-        // Prefer `api-key-secret` read through host-secrets; fall back to `api-key`.
         let api_key = section
             .get("api-key-secret")
             .and_then(Value::as_str)
@@ -277,7 +273,6 @@ impl Lifecycle for Component {
             api_key,
             model: config_str(&section, "model"),
         };
-        // Never log the api-key.
         log(
             LogLevel::Info,
             &format!(

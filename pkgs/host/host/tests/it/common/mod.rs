@@ -1,4 +1,3 @@
-// Each binary compiles independently; not all items needed.
 #![allow(dead_code)]
 
 use std::io::{Read, Write};
@@ -143,12 +142,10 @@ impl Countable {
         let port = listener.local_addr().expect("has an address").port();
         let hits = Arc::new(AtomicU32::new(0));
         let counted = Arc::clone(&hits);
-        // Blocking accept; the thread dies with the test process.
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut socket) = stream else { continue };
                 counted.fetch_add(1, Ordering::SeqCst);
-                // Read until headers end; short read → RST (defect #78, #83)
                 let mut seen = Vec::new();
                 let mut byte = [0_u8; 1];
                 while socket.read(&mut byte).unwrap_or(0) == 1 {

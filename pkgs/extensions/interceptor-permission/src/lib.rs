@@ -92,14 +92,12 @@ mod component {
     }
 
     /// The confirmation to put to the driver. `always`/`never` are offered only with a scope.
-    // `match` rather than `map_or_else`: the closure pair buries the subject of the question.
     #[allow(
         clippy::option_if_let_else,
         reason = "side-effecting arm reads worse as closures"
     )]
     fn prompt(tool: &str, arguments: &str, reason: &str, scope: Option<&str>) -> UserPrompt {
         let mut options = vec!["yes".to_string(), "no".to_string()];
-        // Lead with what the call does: the user must see the change to weigh it.
         let what = crate::rules::summarise(tool, arguments);
         let question = match scope {
             Some(key) => {
@@ -162,14 +160,12 @@ mod component {
                 return Ok(Decision::Proceed);
             };
             let reason = concern.describe(&call.name);
-            // No scope for an escape: that makes it un-rememberable, not merely un-remembered.
             let scope = concern
                 .is_rememberable()
                 .then(|| crate::rules::scope_key(&call.name, &call.arguments));
 
             match input.answer {
                 None => {
-                    // A standing decision answers for the user; unreadable state asks.
                     if let Some(key) = &scope {
                         match recall(key) {
                             Some(Verdict::Allow) => {
@@ -201,7 +197,6 @@ mod component {
                         scope.as_deref(),
                     )))
                 }
-                // Resumed with the driver's answer; `always`/`never` also record a decision.
                 Some(answer) => {
                     let answer = Answer::parse(&answer);
                     if let (Some(key), Some(verdict)) = (&scope, answer.standing()) {
@@ -211,7 +206,6 @@ mod component {
                         log(LogLevel::Info, &format!("tool `{}` approved", call.name));
                         Ok(Decision::Proceed)
                     } else {
-                        // Past a few refusals, the refusal itself becomes the standing answer.
                         let standing = match &scope {
                             Some(key) => {
                                 let count = count_refusal(key);

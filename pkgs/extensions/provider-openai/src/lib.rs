@@ -1,7 +1,6 @@
 //! `provider-openai` — OpenAI-compatible implementation of `llm-provider`.
 //! Reference network extension; one build serves every OpenAI-compatible endpoint via `base-url`, `api-key` and `model`.
 
-// Generated Component-Model bindings; lints are relaxed only here.
 #[allow(
     unsafe_code,
     missing_docs,
@@ -127,7 +126,6 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
         obj.insert("temperature".to_owned(), json!(temp));
     }
     if let Some(grammar) = &request.grammar {
-        // Not standard, but several compatible backends accept grammar for constrained decoding.
         obj.insert("grammar".to_owned(), json!(grammar));
     }
     Value::Object(obj)
@@ -143,7 +141,6 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     let message = choice.get("message").ok_or(ProviderError::Transient)?;
 
     let mut chunks = VecDeque::new();
-    // Include both text and tool calls: models often narrate before acting.
     if let Some(content) = message.get("content").and_then(Value::as_str) {
         if !content.is_empty() {
             chunks.push_back(CompletionChunk::TextDelta(content.to_owned()));
@@ -202,7 +199,6 @@ const fn map_http_error(err: HttpError) -> ProviderError {
         HttpError::ClientError(401 | 403) => ProviderError::AuthFailed,
         HttpError::ClientError(404) => ProviderError::ModelNotFound,
         HttpError::ClientError(429) => ProviderError::RateLimited,
-        // Not transient: a refused connection, DNS, or TLS failure will not clear on retry.
         HttpError::ConnectionFailed | HttpError::Timeout | HttpError::TlsError => {
             ProviderError::Unreachable
         }
@@ -231,7 +227,6 @@ impl Lifecycle for Component {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
         let section: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
 
-        // Prefer `api-key-secret` read through host-secrets; fall back to `api-key`.
         let api_key = section
             .get("api-key-secret")
             .and_then(Value::as_str)
@@ -251,7 +246,6 @@ impl Lifecycle for Component {
         if config.base_url.is_empty() {
             return Err("provider-openai: `base-url` is required".to_owned());
         }
-        // Never log the api-key
         log(
             LogLevel::Info,
             &format!(
@@ -362,7 +356,6 @@ impl LlmProvider for Component {
     }
 }
 
-// `export!` emits the `unsafe extern "C"` shims that the allow below covers.
 #[allow(
     unsafe_code,
     missing_docs,

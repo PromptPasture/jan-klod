@@ -42,7 +42,6 @@ pub fn truncate(output: String) -> String {
     if output.len() <= MAX_OUTPUT_BYTES {
         return output;
     }
-    // Slicing mid-char panics; back off to a char boundary.
     let mut safe_len = MAX_OUTPUT_BYTES;
     while safe_len > 0 && !output.is_char_boundary(safe_len) {
         safe_len -= 1;
@@ -89,7 +88,6 @@ fn match_name(pattern: &str, name: &str) -> bool {
     let pat: Vec<char> = pattern.chars().collect();
     let text: Vec<char> = name.chars().collect();
     let (mut pi, mut ti) = (0, 0);
-    // Backtrack point: last `*` and how much text it has eaten.
     let mut star: Option<usize> = None;
     let mut eaten = 0;
     while ti < text.len() {
@@ -160,7 +158,6 @@ pub fn walk(root: &str, pattern: &str, list: &dyn Fn(&str) -> Option<Vec<Entry>>
     let mut paths = Vec::new();
     let mut bounded_by = None;
     let mut visits = 0usize;
-    // (path relative to root, depth); "" at root.
     let mut queue = vec![(String::new(), 0usize)];
 
     while let Some((dir, depth)) = queue.pop() {
@@ -214,7 +211,6 @@ mod tests {
         assert!(super::hidden_credential(".env", "src/**/*.rs"));
         assert!(!super::hidden_credential(".env", "**/.env"));
         assert!(!super::hidden_credential(".env", ".env"));
-        // A key is still a key when the pattern is about keys generally.
         assert!(super::hidden_credential("server.pem", "**/*.pem"));
     }
 
@@ -237,7 +233,6 @@ mod tests {
         ] {
             assert!(super::is_credential_file(name), "{name} holds credentials");
         }
-        // Ordinary files must not be caught; would break tools.
         for name in [
             "main.rs",
             "environment.rs",
@@ -296,7 +291,6 @@ mod tests {
 
     #[test]
     fn backtracking_star_matches_repeated_prefixes() {
-        // Naive greedy matching fails this; the `*` must give chars back.
         assert!(matches("*abc", "aababc"));
         assert!(matches("a*b*c", "axxbyyc"));
         assert!(!matches("a*b*c", "axxbyy"));
@@ -349,7 +343,6 @@ mod tests {
     #[test]
     fn an_unreadable_directory_is_skipped_not_fatal() {
         let list = tree(&[("", &[("ghost", true), ("a.rs", false)])]);
-        // "ghost" has no entry in the fake tree → listing it returns None.
         assert_eq!(walk(".", "*.rs", &list).paths, vec!["a.rs"]);
     }
 
@@ -400,7 +393,6 @@ mod tests {
 
     #[test]
     fn truncation_at_multibyte_boundary_does_not_panic() {
-        // A 2-byte char ('é') repeated so the cap lands mid-character.
         let big = "é".repeat(MAX_OUTPUT_BYTES);
         let result = truncate(big);
         assert!(

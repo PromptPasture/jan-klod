@@ -114,7 +114,6 @@ workspace: {ws}
     )
     .unwrap();
 
-    // Completion 0 requests command; 1 delivers result and ends turn.
     let completions = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(Mutex::new(String::new()));
     let (counter, recorded) = (Arc::clone(&completions), Arc::clone(&seen));
@@ -145,7 +144,6 @@ workspace: {ws}
         })
     };
 
-    // `LandlockBackend` re-execs `current_exe()`, so it must be pointed at the gateway, not the test binary (#124).
     let runtime = Runtime::boot(&config, common::repo_root().join("ext"))
         .expect("runtime boots")
         .with_sandbox_wrapper(env!("CARGO_BIN_EXE_jan-klod-gateway"));
@@ -191,9 +189,6 @@ fn no_execution_block_denies_the_same_command() {
         turn.tool_result
     );
 }
-
-// Every `proc-error` maps to `ExecutionFailed`, so each value test runs a control
-// and changes only the config value under test.
 
 /// Two seconds, then a word: outlasts a one-second budget, sits under a generous one.
 const SLOW: (&str, [&str; 2]) = ("sh", ["-c", "sleep 2; echo slept"]);
@@ -286,9 +281,6 @@ fn env_passthrough_grants_one_name_and_not_the_rest() {
     );
 }
 
-// Denials assert the effect (the command did not run), not warning text, since a
-// bug could warn and carry on.
-
 /// `enabled: true` with no usable workspace still denies. The root must be unopenable: an absent key adopts `$PWD`.
 #[test]
 fn enabled_without_a_usable_workspace_denies_the_command() {
@@ -343,9 +335,6 @@ fn an_unsatisfiable_require_denies_the_command() {
         turn.tool_result
     );
 }
-
-// Confinement must come from the config boot path. The `sandbox_*.rs` tests build
-// `ProcessRunner` by hand and say nothing about it. Each test runs unconfined first.
 
 /// A directory outside any workspace, holding the escape target. Its own tree, since `run_command_in` deletes its temp tree when the turn ends.
 fn escape_target(tag: &str) -> (PathBuf, common::TempDir) {
@@ -415,9 +404,6 @@ fn a_confined_config_built_runner_can_still_write_inside_the_workspace() {
         turn.tool_result
     );
 }
-
-// Long-lived children (#109): a guest's string must never become a program. Asserted
-// across the Component Model boundary, since the guest is the distrusted party.
 
 /// A config with one granted long-lived child.
 const GRANTED: &str =
@@ -569,8 +555,6 @@ fn a_long_lived_child_does_not_outlive_the_runtime() {
     if !common::guests_staged(&GUESTS) {
         return;
     }
-    // `sleep`, not `cat`: `cat` exits when stdin closes, so the test would pass without a kill.
-    // `exec` makes the printed pid the one that survives.
     let grant = "execution:\n  enabled: true\n  long-lived:\n    - name: reporter\n      \
                  command: sh\n      args: [\"-c\", \"echo $$; exec sleep 30\"]\n";
     let turn = run_spawn_and_leak(grant, "reporter");

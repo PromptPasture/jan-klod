@@ -76,7 +76,6 @@ mod component {
         }
 
         fn invoke(arguments: String) -> Result<String, ToolError> {
-            // A missing memory is empty, not a failure.
             let stored = match host_storage::get(NAMESPACE, KEY) {
                 Ok(entry) => Some(entry.value),
                 Err(StoreError::NotFound) => None,

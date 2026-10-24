@@ -107,7 +107,6 @@ extensions:
     });
     surface.serve_once(&agents).expect("serves the SSE request");
     let sse = sse_client.join().expect("sse client thread");
-    // Header casing is the server's choice (#224), so compare case-insensitively.
     assert!(
         sse.to_lowercase()
             .contains("content-type: text/event-stream"),

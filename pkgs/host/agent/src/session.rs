@@ -8,7 +8,7 @@ use jk_protocol::turn::{Message, Role};
 
 /// How long a turn waits for a confirmation before taking the prompt's default
 /// answer. Short enough that a client that vanished mid-prompt cannot pin the server open.
-#[allow(clippy::duration_suboptimal_units)] // no stable `Duration::from_mins`
+#[allow(clippy::duration_suboptimal_units)]
 const DEFAULT_ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Overrides [`DEFAULT_ANSWER_TIMEOUT`], in seconds. Read per wait so tests can set it.
@@ -30,7 +30,6 @@ pub fn sessions_payload(agent: &AgentSession) -> serde_json::Value {
         .list_sessions()
         .into_iter()
         .map(|id| {
-            // From the projection, not log row 1, which need not be a user message.
             let preview = agent
                 .transcript(&id)
                 .into_iter()
@@ -63,8 +62,6 @@ fn as_json(seq: u64, message: &Message) -> serde_json::Value {
         Role::Assistant => "assistant",
         Role::Tool => "tool",
     };
-    // `seq` is the log position `session/fork` takes as `at-seq`. Sparse: events
-    // without a message (ask, answer, delta) still consume a seq.
     let mut object = serde_json::json!({ "seq": seq, "role": role, "content": message.content });
     if let Some(id) = &message.tool_call_id {
         object["tool-call-id"] = serde_json::json!(id);
@@ -87,7 +84,6 @@ pub enum Forked {
 pub fn fork(agent: &AgentSession, id: &str, at_seq: u64) -> Forked {
     let child = new_session_id();
     match agent.fork_session(id, at_seq, &child) {
-        // Usually a wrong `at-seq` or session id; report it rather than return a fake fork.
         Ok(0) => Forked::Empty(format!(
             "session `{id}` has no events at or before seq {at_seq}"
         )),
@@ -160,7 +156,6 @@ mod tests {
         );
         assert_eq!(result["tool-call-id"], serde_json::json!("call-1"));
         assert_eq!(result["content"], serde_json::json!("# Jan-Klod"));
-        // Log position is part of the wire shape: `session/fork` takes it as `at-seq` (#106).
         assert_eq!(result["seq"], serde_json::json!(4));
         assert_eq!(plain["seq"], serde_json::json!(1));
     }

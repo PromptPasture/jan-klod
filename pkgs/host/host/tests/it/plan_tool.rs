@@ -22,7 +22,6 @@ struct Script {
 impl Script {
     fn new(calls: &[&str]) -> Arc<Self> {
         Arc::new(Self {
-            // Reversed so a turn can `pop` the next one cheaply.
             calls: Mutex::new(calls.iter().rev().map(|s| (*s).to_string()).collect()),
             seen: Mutex::new(Vec::new()),
         })
@@ -171,7 +170,6 @@ fn two_sessions_do_not_share_a_plan() {
 
     let turns = script.turns();
     assert_eq!(turns.len(), 2, "both turns ran the tool: {turns:?}");
-    // If the host ignored the session key, s1's step would appear here.
     assert!(
         !turns[1].contains("belongs to s1"),
         "s2 was shown s1's plan: {}",

@@ -38,7 +38,6 @@ pub fn complete(root: &Path, fragment: &str) -> Completion {
     let mut entries = Vec::new();
     let mut truncated = false;
 
-    // `require_git(false)` honours `.gitignore` outside git repos too.
     for found in ignore::WalkBuilder::new(root)
         .hidden(true)
         .require_git(false)
@@ -79,7 +78,6 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        // The counter restarts each process, so start empty rather than inherit a stale tree.
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(root.join("src")).expect("tree");
         std::fs::create_dir_all(root.join("target")).expect("tree");
@@ -97,15 +95,11 @@ mod tests {
         let text = "look at @src/ma";
         assert_eq!(fragment(text, text.len()), Some("src/ma"));
 
-        // Mid-message, with more after the caret.
         let mid = "see @src/lib.rs and also";
         assert_eq!(fragment(mid, 15), Some("src/lib.rs"));
 
-        // A space ends the reference.
         assert_eq!(fragment("see @src and", 12), None);
-        // No `@` at all.
         assert_eq!(fragment("plain words", 11), None);
-        // The `@` itself offers everything.
         assert_eq!(fragment("@", 1), Some(""));
     }
 

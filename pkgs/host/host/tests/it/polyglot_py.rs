@@ -29,7 +29,6 @@ fn a_python_tool_answers_a_real_tool_call() {
     );
     std::fs::create_dir_all(&dir.0).expect("creates the temp dir");
     let config = dir.0.join("config.yaml");
-    // Resolved by the same naming rule as every other instance: the host must not know this is Python.
     std::fs::write(
         &config,
         "
@@ -50,7 +49,6 @@ extensions:
     )
     .expect("writes the config");
 
-    // Completion 0 calls the tool; completion 1 answers.
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let factory = move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::Arc::clone(&calls);
@@ -73,7 +71,6 @@ extensions:
         })
     };
 
-    // Booting is itself an assertion: a linker missing a WASI import fails here.
     let runtime = Runtime::boot(&config, &ext_dir).expect("the runtime boots with a Python guest");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
     let out = agent.run("py-1", "greet polyglot");
@@ -82,7 +79,6 @@ extensions:
         "the turn completed: {out:?}"
     );
 
-    // The string is built by the guest, so finding it means the component ran.
     let recorded = agent
         .transcript("py-1")
         .iter()

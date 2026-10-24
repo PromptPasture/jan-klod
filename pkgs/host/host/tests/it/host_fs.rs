@@ -37,7 +37,6 @@ fn host_fs_round_trips_through_a_guest() {
     )
     .expect("tool instantiates");
 
-    // Write-then-read round-trips through host-fs.
     let wrote = tool
         .invoke(r#"{"op":"write","path":"notes/todo.md","contents":"buy milk"}"#)
         .expect("write succeeds");
@@ -51,7 +50,6 @@ fn host_fs_round_trips_through_a_guest() {
         .expect("read succeeds");
     assert_eq!(out, "buy milk");
 
-    // Escaping path denied by path-jail (surfaced as tool error).
     let escape = tool.invoke(r#"{"op":"write","path":"../escape.txt","contents":"x"}"#);
     assert!(
         escape.is_err(),
@@ -69,7 +67,6 @@ fn host_fs_is_default_deny_without_a_workspace() {
         return;
     };
 
-    // No workspace → every host-fs op denied.
     let mut tool = ToolExtension::instantiate(
         &engine,
         "tool.fs",

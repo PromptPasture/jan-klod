@@ -169,7 +169,6 @@ pub fn url_from_config(registry: Option<&serde_json::Value>) -> Result<Option<St
 /// [`IndexError::NoUrl`] when it names no registry, and whatever
 /// [`url_from_config`] refuses.
 pub fn url_from_config_path(path: &Path) -> Result<String, IndexError> {
-    // `top_level`: `from_path` would expand `${VAR}` in every enabled instance and demand a provider API key.
     let registry =
         jk_config::Config::top_level(path, "registry").map_err(|err| IndexError::Config {
             path: path.display().to_string(),
@@ -363,7 +362,6 @@ pub fn install(
 ) -> Result<Installed, IndexError> {
     let entry = find(entries, name, source)?;
 
-    // A caller's `--sha256` is not overridden, nor silently preferred; disagreement is refused above.
     let mut checks = checks.clone();
     match &checks.sha256 {
         Some(given) if !given.eq_ignore_ascii_case(&entry.sha256) => {

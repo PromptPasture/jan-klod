@@ -41,7 +41,7 @@ fn append_custom_section(path: &std::path::Path) {
     content.push(u8::try_from(name.len()).expect("a short fixed name fits in one byte"));
     content.extend_from_slice(name);
     content.extend_from_slice(&payload);
-    bytes.push(0x00); // custom section id
+    bytes.push(0x00);
     bytes.push(u8::try_from(content.len()).expect("this content is well under 128 bytes"));
     bytes.extend_from_slice(&content);
     std::fs::write(path, bytes).expect("writes the mutated component back");
@@ -65,7 +65,6 @@ fn a_second_boot_against_the_same_config_dir_skips_cranelift() {
         first.report()
     );
 
-    // Same config dir gives the same default cache dir, so this is a warm second boot.
     let second = Runtime::boot(&config, &ext).expect("warm boot loads from the cache");
     assert_eq!(
         second.compile_cache_stats(),

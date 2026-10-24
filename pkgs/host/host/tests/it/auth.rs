@@ -41,7 +41,6 @@ extensions:
 /// the status line plus body.
 fn request(port: u16, target: &str, auth: Option<&str>) -> String {
     let header = auth.map_or_else(String::new, |t| format!("Authorization: Bearer {t}\r\n"));
-    // A 400 on the answer route reads as "no answer yet" and stalls until timeout.
     let body = if target.ends_with("/answer") {
         r#"{"answer":"yes"}"#
     } else {
@@ -57,7 +56,6 @@ fn request(port: u16, target: &str, auth: Option<&str>) -> String {
         )
     };
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
-    // Bounded read: a lost response would otherwise hang the test forever (#286).
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(60)))
         .unwrap();
@@ -86,7 +84,6 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
 
-    // One surface for all four requests: per-request serve_once_authed races (#246).
     let (none, wrong, right, health) = surface.serve_while(
         &agents,
         {
@@ -114,7 +111,6 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
         "the right token is served: {right}"
     );
     assert!(right.contains("pong"), "and gets a real answer: {right}");
-    // The supervisor probes this without credentials during a blue/green flip.
     assert!(health.contains("200 OK"), "/health stays open: {health}");
 }
 
@@ -142,7 +138,6 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
         .expect("serves");
     let response = client.join().expect("client thread");
 
-    // Open by default: a secret on loopback adds friction without a threat.
     assert!(
         response.contains("200 OK"),
         "no token configured means no gate: {response}"
@@ -175,7 +170,6 @@ fn drive_confirmation(port: u16) -> (String, String, String) {
         collected.push('\n');
         if line.starts_with("event: prompt") && refused.is_empty() {
             refused = request(port, "/session/p/answer", None);
-            // Kept so the test can tell acceptance from a timeout denial.
             accepted = request(port, "/session/p/answer", Some(TOKEN));
         }
     }
@@ -216,7 +210,6 @@ extensions:
     )
     .unwrap();
 
-    // First completion calls a dangerous tool, so the gate asks; then it answers.
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let counted = std::sync::Arc::clone(&calls);
     let factory = move || -> jk_wasm::route::HttpFn {
@@ -294,7 +287,6 @@ fn principal_resolves_from_credentials_in_the_guard() {
     principals.insert("operator".to_string(), "operator-secret".to_string());
     principals.insert("admin".to_string(), "admin-secret".to_string());
 
-    // Multiple principals with different tokens, all on one surface (#246).
     let (
         no_token,
         wrong_token,
@@ -363,7 +355,6 @@ fn principal_resolves_from_credentials_in_the_guard() {
         "/health should be open with token: {health_with_auth}"
     );
 
-    // `/` and `/app.js` were exempt when the web client existed (#318); now refused.
     assert!(
         index_no_auth.contains("401"),
         "/ is no longer exempt from the token: {index_no_auth}"

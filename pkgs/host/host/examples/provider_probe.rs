@@ -2,7 +2,6 @@
 //! Instantiate `provider-world` with real `host-http`, issue completion, print chunks.
 //! Needs API-key env + network (real call).
 
-// bindgen!-generated code; exempt from workspace lints
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 use jk_config::Config;
@@ -127,7 +126,6 @@ fn main() -> Result<()> {
         .next()
         .unwrap_or_else(|| "Reply with exactly one word: pong".to_string());
 
-    // First enabled provider from config
     let config = Config::from_path(&config_path)?;
     let instance = config
         .enabled()

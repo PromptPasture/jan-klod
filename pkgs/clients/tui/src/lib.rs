@@ -126,17 +126,11 @@ pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
     };
     Some(match kind {
         "delta" => StreamEvent::Delta(field("text")),
-        // `id` pairs an invocation with its result (#154); `serve::sse_frame` sends `arguments` (#161).
         "tool" => StreamEvent::Tool {
             id: field("id"),
             name: field("name"),
             arguments: Some(field("arguments")),
         },
-        // Field names are `serve::sse_frame`'s for `Event::ToolResult`. Without this
-        // arm every tool result would fall through to the error case.
-        //
-        // `failed` defaults to `false` when absent, so an older core still works
-        // (#162). Its failures therefore show as successes, as before the flag.
         "tool-result" => StreamEvent::ToolResult {
             id: field("id"),
             content: field("content"),
@@ -147,7 +141,6 @@ pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
         },
         "warning" => StreamEvent::Warning(field("message")),
         "done" => StreamEvent::Done(field("answer")),
-        // Keep in step with `serve::prompt_frame`: the answer goes to this session (#103).
         "prompt" => StreamEvent::Prompt {
             session: field("session"),
             question: field("question"),
@@ -192,7 +185,6 @@ pub fn stream_turn(
     message: &str,
     on_event: &mut dyn FnMut(StreamEvent),
 ) -> Result<(), String> {
-    // A fresh, unshared slot: nothing outside this crate can cancel through here.
     stream_turn_cancellable(addr, session, message, on_event, &Mutex::new(None))
 }
 
@@ -218,14 +210,12 @@ pub(crate) fn stream_turn_cancellable(
     );
     let mut stream =
         TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
-    #[allow(clippy::duration_suboptimal_units)] // no stable Duration::from_mins
+    #[allow(clippy::duration_suboptimal_units)]
     let read_timeout = Duration::from_secs(300);
     stream
         .set_read_timeout(Some(read_timeout))
         .map_err(|err| err.to_string())?;
 
-    // Stored before writing the request, so an early `cancel` still has a socket.
-    // `ClearLiveOnDrop` clears it on every exit.
     let clone = stream
         .try_clone()
         .map_err(|err| format!("cloning the turn's socket: {err}"))?;
@@ -238,7 +228,6 @@ pub(crate) fn stream_turn_cancellable(
         .write_all(request.as_bytes())
         .map_err(|err| format!("sending request: {err}"))?;
 
-    // Skip HTTP headers up to the first blank line, then parse SSE frames (a blank line ends one).
     let reader = BufReader::new(stream);
     let mut in_body = false;
     let mut kind: Option<String> = None;
@@ -246,9 +235,6 @@ pub(crate) fn stream_turn_cancellable(
     for line in reader.lines() {
         let line = match line {
             Ok(line) => line,
-            // A cancel can make a late frame reset the connection (ECONNRESET on
-            // Linux) instead of ending it. An empty slot means the cancel took the
-            // socket, so this is not a failure (#289).
             Err(_) if live_socket.lock().is_ok_and(|slot| slot.is_none()) => break,
             Err(err) => return Err(format!("reading response: {err}")),
         };
@@ -452,7 +438,6 @@ pub fn send_turn(addr: &str, session: &str, message: &str) -> Result<String, Str
 
     let mut stream =
         TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
-    // Model latency can be long: 5-minute read cap (no stable `Duration::from_mins`).
     #[allow(clippy::duration_suboptimal_units)]
     let read_timeout = Duration::from_secs(300);
     stream
@@ -486,7 +471,6 @@ fn parse_answer(raw: &str) -> Result<String, String> {
     }
 }
 
-// parse_answer is private, so its tests stay here; parse_frame's are in tests/parse_frame.rs.
 #[cfg(test)]
 mod tests {
     use super::*;

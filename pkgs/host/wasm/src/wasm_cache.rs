@@ -68,7 +68,6 @@ pub fn build_engine(
         path: dir.display().to_string(),
         message: source.to_string(),
     })?;
-    // `with_directory` requires an absolute path; the directory exists, so canonicalizing cannot fail.
     let canonical = dir.canonicalize().map_err(|source| CoreError::Cache {
         path: dir.display().to_string(),
         message: source.to_string(),
@@ -163,8 +162,6 @@ mod tests {
             "the first compile of unseen bytes is a miss"
         );
 
-        // A second independent `Engine`/`Cache` on the same directory models a real second boot; reusing one
-        // engine would prove only an in-process cache.
         let (engine2, cache2) =
             build_engine(&dir.0, &serde_json::json!({})).expect("builds a second engine");
         Component::new(&engine2, WAT_A).expect("compiles from the cache");

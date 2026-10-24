@@ -24,7 +24,6 @@ fn a_full_turn() -> App {
     app.take_submission().expect("the user said something");
     app.begin_turn();
 
-    // Long enough to wrap at both widths; a short fixture would hide the overflow bug.
     app.apply_delta(
         "Reading the file first, and then a considerably longer sentence whose \
          only job is to be wider than sixty columns so that the wrap is doing \
@@ -137,7 +136,6 @@ fn no_color_on_sixteen_colours_loses_nothing_but_colour() {
                 .collect()
         };
 
-        // Unicode and ASCII differ by design, so compare information: each state's mark must be present and distinct.
         assert_eq!(
             plain(coloured).len(),
             plain(mono).len(),

@@ -138,7 +138,6 @@ impl SandboxBackend for NoBackend {
     }
 
     fn confine(&self, _command: Command, _policy: &SandboxPolicy) -> Result<Command, SandboxError> {
-        // Dropped, not returned: an unconfined command must never come out of `confine`.
         Err(SandboxError::Unsupported)
     }
 }
@@ -219,7 +218,6 @@ fn absence() -> String {
     }
     #[cfg(target_os = "linux")]
     {
-        // Recomputed from the deciding function: the operator needs to know which cause.
         linux_backend().err().map_or_else(
             || {
                 format!(
@@ -487,7 +485,6 @@ mod tests {
     #[test]
     fn no_backend_refuses_rather_than_confining_nothing_quietly() {
         let policy = parse("{}").unwrap();
-        // `Command` lacks equality; match instead (the `Ok` arm is unreachable).
         let Err(err) = NoBackend.confine(Command::new("true"), &policy) else {
             panic!("a backend that confines nothing must refuse, not hand the command back")
         };

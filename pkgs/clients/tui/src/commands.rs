@@ -29,7 +29,6 @@ pub const COMMANDS: [Command; 6] = [
     Command {
         name: "/newline",
         summary: "insert a line break",
-        // The fallback where a terminal sends neither `Shift+Enter` nor `Alt+Enter`.
         availability: Availability::Ready,
     },
     Command {
@@ -124,13 +123,10 @@ pub fn matching_with<'a>(typed: &str, contributed: &'a [Contributed]) -> Vec<Ent
             .map(|c| Entry {
                 name: c.name.as_str(),
                 summary: c.summary.as_str(),
-                // A contribution is offered because an extension is loaded and
-                // said so, which is the same condition as it being able to run.
                 availability: Availability::Ready,
                 source: Source::Extension(c.extension.as_str()),
             }),
     );
-    // Stable, so the two groups keep their order and only an exact match moves.
     found[..built_in].sort_by_key(|c| usize::from(c.name != typed));
     found[built_in..].sort_by_key(|c| usize::from(!slashed_equals(c.name, typed)));
     found
@@ -265,7 +261,6 @@ mod tests {
         );
         assert_eq!(matching("/newl").len(), 1);
 
-        // Typing a full name must select it, not the longer name listed first.
         let exact: Vec<&str> = matching("/new").iter().map(|c| c.name).collect();
         assert_eq!(
             exact,

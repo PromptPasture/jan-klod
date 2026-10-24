@@ -121,14 +121,12 @@ fn json_rpc_stdio(child: u32, method: &str, params: Option<Value>) -> Result<Val
     let line = format!("{request}\n");
     host_process::write_stdin(child, &line).map_err(|e| format!("write failed: {e:?}"))?;
 
-    // A reply may arrive across several reads; accumulate until a newline.
     let mut buffered = String::new();
     let mut waited = 0;
     while waited < STDIO_REPLY_BUDGET_MS {
         let chunk = host_process::read_stdout(child, 8192, STDIO_POLL_MS)
             .map_err(|e| format!("read failed: {e:?}"))?;
         if chunk.is_empty() {
-            // Empty means "nothing in the window", not EOF. Liveness check tells the difference.
             if !host_process::is_running(child) {
                 return Err("server exited".to_owned());
             }
@@ -171,7 +169,6 @@ fn connect_stdio(id: &str, child_name: &str) -> Server {
         };
     };
     let wire = Wire::Stdio(child);
-    // Stdio has no connect step; `initialize` is what proves the child speaks MCP.
     if let Err(err) = json_rpc(
         &wire,
         "initialize",
@@ -267,7 +264,6 @@ impl Lifecycle for Component {
                     continue;
                 }
                 if transport == "stdio" {
-                    // `child` names the `execution.long-lived` entry; defaults to the server name.
                     let child = entry
                         .get("child")
                         .and_then(Value::as_str)
@@ -362,7 +358,6 @@ impl McpRegistry for Component {
                     if !srv.status {
                         return None;
                     }
-                    // Tools are matched by bare name, after any `server::` prefix.
                     let bare = name.split("::").last().unwrap_or(&name);
                     srv.tools
                         .iter()
@@ -400,7 +395,6 @@ impl McpRegistry for Component {
             })
             .ok_or(McpError::ServerNotFound)?;
 
-        // Reconnect by re-listing tools on the same child; spawning again would leak its handle.
         let updated = connect_over(&server_id, wire);
         SERVERS.with(|s| {
             if let Some(slot) = s.borrow_mut().get_mut(idx) {

@@ -70,7 +70,6 @@ impl EgressPolicy {
             return Err(WireError::InvalidUrl);
         };
 
-        // Address literals need no lookup and must not get one (resolver is an attack vector).
         if let Ok(ip) = host.parse::<IpAddr>() {
             return if is_public(ip) {
                 Ok(Destination::AsNamed)
@@ -79,8 +78,6 @@ impl EgressPolicy {
             };
         }
 
-        // Hostname: all resolved addresses must be public; even one private address
-        // (e.g., round-robin alternate) causes refusal.
         let resolved = (host.as_str(), port)
             .to_socket_addrs()
             .map_err(|_| WireError::ConnectionFailed)?;
@@ -94,7 +91,6 @@ impl EgressPolicy {
         if addrs.is_empty() {
             return Err(WireError::ConnectionFailed);
         }
-        // All classified as public; connecting to any of them is safe.
         Ok(Destination::Resolved(addrs))
     }
 }
@@ -107,7 +103,6 @@ fn origin_of(url: &str) -> Option<String> {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next()?;
-    // Credentials are not part of an origin.
     let authority = authority.rsplit('@').next()?;
     if authority.is_empty() {
         return None;
@@ -161,9 +156,7 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
         || ip.is_documentation()
         || ip.is_unspecified()
         || a == 0
-        // Carrier-grade NAT (ISP internal: 100.64.0.0/10)
         || (a == 100 && (64..=127).contains(&b))
-        // Benchmarking (198.18.0.0/15) and reserved (240.0.0.0/4)
         || (a == 198 && (b == 18 || b == 19))
         || a >= 240)
 }
@@ -172,12 +165,10 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() {
         return false;
     }
-    // IPv4-mapped addresses are checked as IPv4.
     if let Some(v4) = ip.to_ipv4_mapped() {
         return is_public_v4(v4);
     }
     let first = ip.segments()[0];
-    // Reject unique-local (fc00::/7) and link-local (fe80::/10).
     !((first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80)
 }
 
@@ -218,19 +209,16 @@ mod tests {
 
     #[test]
     fn a_configured_local_endpoint_is_reachable() {
-        // Self-hosted model on loopback: grant is per-origin only.
         let policy = EgressPolicy::public_only().allowing("http://127.0.0.1:11434/v1");
         assert_eq!(
             policy.check("http://127.0.0.1:11434/v1/chat/completions"),
             Ok(Destination::AsNamed)
         );
-        // Different port on same host stays blocked.
         assert_eq!(
             policy.check("http://127.0.0.1:5432/"),
             Err(WireError::ConnectionFailed),
             "allowing Ollama must not allow the database next to it"
         );
-        // Different scheme on same port stays blocked.
         assert_eq!(
             policy.check("https://127.0.0.1:11434/v1"),
             Err(WireError::ConnectionFailed)
@@ -239,7 +227,6 @@ mod tests {
 
     #[test]
     fn a_default_port_matches_an_explicit_one() {
-        // https default (443) and http default (80) are normalized.
         let policy = EgressPolicy::public_only().allowing("https://api.example.test");
         assert_eq!(
             policy.check("https://api.example.test:443/v1/chat"),
@@ -262,7 +249,6 @@ mod tests {
 
     #[test]
     fn credentials_in_the_authority_do_not_change_the_origin() {
-        // `http://public.test@127.0.0.1/` points at 127.0.0.1, not public.test.
         let policy = EgressPolicy::public_only().allowing("http://public.test");
         assert_eq!(
             policy.check("http://public.test@127.0.0.1/"),

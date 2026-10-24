@@ -243,7 +243,6 @@ mod tests {
 
     #[test]
     fn greeting_prefix_does_not_over_match() {
-        // "good" alone does not match; "good morning" does.
         assert!(!is_simple("good"));
         assert!(is_simple("good morning"));
     }

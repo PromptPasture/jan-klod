@@ -206,7 +206,6 @@ fn an_existing_database_gains_the_table_and_keeps_the_log() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("jan-klod.db");
 
-    // Schema predates `events`, as in a deployed `jan-klod.db`; raw rusqlite avoids a test-only Store method.
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -452,7 +451,6 @@ fn recent_turns_matches_last_turns_at_exactly_the_bound() {
     let store = Store::open_in_memory().unwrap();
     build_session(&store, "s", &[1; 20]);
     assert_recent_turns_matches_last_turns(&store, "s", 20);
-    // Bounds one below, at, and one above the turn count.
     assert_recent_turns_matches_last_turns(&store, "s", 19);
     assert_recent_turns_matches_last_turns(&store, "s", 21);
 }
@@ -508,7 +506,6 @@ fn recent_turns_agrees_with_last_turns_across_many_generated_logs() {
         for turns in [0, 1, 2, turn_count, turn_count + 1, 200] {
             assert_recent_turns_matches_last_turns(&store, &session, turns);
         }
-        // Bounds strictly inside the log's turn count, not only at its edges.
         for _ in 0..5 {
             let bound = if turn_count == 0 {
                 0
@@ -540,7 +537,6 @@ fn recent_turns_reads_a_small_bounded_tail_of_a_long_session_with_the_same_messa
         whole.len()
     );
 
-    // `Message` has no `PartialEq`, so compare `(role, content, tool_call_id)` tuples.
     let as_tuples = |messages: Vec<jk_protocol::turn::Message>| {
         messages
             .into_iter()

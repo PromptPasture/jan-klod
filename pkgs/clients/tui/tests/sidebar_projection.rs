@@ -13,7 +13,6 @@ fn the_sidebar_issues_no_command_and_holds_no_transport() {
 
     let mut checked = 0usize;
     for (n, line) in text.lines().enumerate() {
-        // A `//` inside a string literal can only make this miss, never falsely match.
         let code = line.split("//").next().unwrap_or_default();
         checked += 1;
         assert!(

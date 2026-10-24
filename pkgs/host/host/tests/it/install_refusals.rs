@@ -70,8 +70,6 @@ fn install_turn(tag: &str, driver: &mut dyn Driver) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("jk-instref-{tag}-{}", std::process::id()));
     let ext = dir.join("ext");
     std::fs::create_dir_all(&ext).expect("creates the temp ext dir");
-    // A populated `ext/` of its own: the repo's would take the install, and an empty one
-    // would never reach a tool, so "nothing installed" would pass for the wrong reason.
     let staged = common::repo_root().join("ext");
     for guest in [
         "provider-openai",
@@ -86,8 +84,6 @@ fn install_turn(tag: &str, driver: &mut dyn Driver) -> std::path::PathBuf {
             }
         }
     }
-    // Signed by a key this config trusts. Unsigned, the install is refused for
-    // provenance whatever the operator answers, which once made this test pass wrongly.
     let incoming = dir.join("incoming");
     std::fs::create_dir_all(&incoming).expect("creates the incoming dir");
     let signer = common::minisig::Signer::new();

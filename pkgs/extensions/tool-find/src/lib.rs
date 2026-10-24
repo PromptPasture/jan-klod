@@ -104,7 +104,6 @@ mod component {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(".");
 
-            // Only a refused root fails the call; unreadable subdirectories are skipped.
             if host_fs::list_dir(root).is_err() {
                 return Err(ToolError::ExecutionFailed);
             }

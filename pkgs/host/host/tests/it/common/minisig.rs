@@ -68,8 +68,6 @@ impl Signer {
         line2.extend_from_slice(&self.key_id);
         line2.extend_from_slice(signature.as_ref());
 
-        // The global signature covers the signature bytes plus the trusted
-        // comment *text*, which is what makes that comment tamper-evident.
         let mut global_input = Vec::new();
         global_input.extend_from_slice(signature.as_ref());
         global_input.extend_from_slice(trusted.as_bytes());

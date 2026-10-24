@@ -2,7 +2,6 @@
 //! Inserted at `select-model`, before `interceptor-context` counts the budget, and only when no
 //! system message exists, so repeat turns do not accumulate copies.
 
-// Pure logic: unit-tested natively; CM glue compiles for wasm32 only.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod prompt {
     /// The built-in instructions, used when config supplies no `prompt`.
@@ -100,7 +99,6 @@ files you read.";
     #[must_use]
     pub fn resolve_with_project(configured: Option<&str>, project: Option<&str>) -> Option<String> {
         let base = resolve(configured)?;
-        // A missing AGENTS.md must not drop the standing prompt.
         let Some(project) = project.map(str::trim).filter(|text| !text.is_empty()) else {
             return Some(base);
         };
@@ -168,7 +166,6 @@ files you read.";
             assert!(both.contains("from AGENTS.md"));
             assert!(both.contains("cannot grant permissions the sandbox refuses"));
 
-            // `prompt: ""` switches the project section off too, so half an "off" never happens.
             assert_eq!(
                 resolve_with_project(Some(""), Some("Run cargo nextest")),
                 None
@@ -177,7 +174,6 @@ files you read.";
 
         #[test]
         fn the_default_names_what_the_runtime_actually_enforces() {
-            // Each mention must be a real runtime behaviour, or the model is misled.
             for expected in ["workspace-relative", "confirmed", "edit", "truncated"] {
                 assert!(
                     DEFAULT.contains(expected),
@@ -193,7 +189,6 @@ files you read.";
 
         #[test]
         fn an_empty_configured_prompt_switches_instructions_off() {
-            // Distinct from an absent key: the prompt can be silenced without disabling the extension.
             assert_eq!(resolve(Some("")), None);
             assert_eq!(resolve(Some("   \n ")), None);
         }
@@ -292,7 +287,6 @@ mod component {
 
     impl Interceptor for Component {
         fn subscribed_phases() -> Vec<Phase> {
-            // Before `select-context`, so the budget counts these tokens.
             vec![Phase::SelectModel]
         }
 
@@ -309,7 +303,6 @@ mod component {
                 .iter()
                 .any(|m| matches!(m.role, Role::System))
             {
-                // Already set by the driver or another interceptor: never duplicate it.
                 return Ok(Decision::Proceed);
             }
             request.messages.insert(
@@ -357,14 +350,12 @@ mod component {
             if name != PROMPT_COMMAND {
                 return Err(InvokeError::Unknown);
             }
-            // Any value other than a plain yes gets the summary: the argument is a convenience, not a gate.
             let verbose = arguments.iter().any(|argument| {
                 argument.name == VERBOSE && matches!(argument.value.trim(), "true" | "yes" | "1")
             });
             let text = PROMPT.with(|slot| prompt::summary(slot.borrow().as_deref(), verbose));
             Ok(Outcome {
                 text,
-                // Reading does not change what is contributed; only config (a reboot) does.
                 contributions_changed: false,
             })
         }

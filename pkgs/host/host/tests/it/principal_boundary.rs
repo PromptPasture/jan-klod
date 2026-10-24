@@ -56,7 +56,6 @@ fn send_message(port: u16, session: &str, auth: Option<&str>, message: &str) -> 
         body.len()
     );
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects to localhost");
-    // A lost response must fail the test, not hang it (#286).
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(60)))
         .unwrap();
@@ -71,7 +70,6 @@ fn send_message(port: u16, session: &str, auth: Option<&str>, message: &str) -> 
 #[test]
 fn two_sessions_with_different_principals_each_see_their_own_principal() {
     let ext_dir = common::repo_root().join("ext");
-    // Build the probe with `make extensions`.
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-principal-probe.wasm"]) {
         return;
     }
@@ -93,7 +91,6 @@ fn two_sessions_with_different_principals_each_see_their_own_principal() {
         p
     };
 
-    // One surface for all requests: a per-request serve_once_authed races a stopping surface (#246).
     let (alice_1, bob_1, alice_2) = surface.serve_while(&agents, principals, |port| {
         let alice_1 = send_message(port, "session-alice", Some(ALICE_TOKEN), "hello from alice");
         let bob_1 = send_message(port, "session-bob", Some(BOB_TOKEN), "hello from bob");
@@ -106,7 +103,6 @@ fn two_sessions_with_different_principals_each_see_their_own_principal() {
         (alice_1, bob_1, alice_2)
     });
 
-    // A 200 means the probe ran at before-loop without error.
     assert!(
         alice_1.contains("200") && bob_1.contains("200") && alice_2.contains("200"),
         "all three requests should succeed: alice_1={alice_1} bob_1={bob_1} alice_2={alice_2}"
@@ -134,7 +130,6 @@ fn a_guest_ignoring_the_principal_field_still_works() {
 
     let client = thread::spawn(move || send_message(port, "session-test", None, "hello"));
 
-    // No principals configured: serve.rs allows loopback-only access.
     let principals = HashMap::new();
 
     surface

@@ -63,7 +63,6 @@ fn message_for(record: Record) -> Option<Message> {
             content,
             tool_call_id: None,
         }),
-        // An ask, its answer, and extension loads are not conversation: the model never saw them.
         Record::Ask { .. } | Record::Answer(_) | Record::ExtensionLoaded { .. } => None,
         Record::Event(event) => match event {
             Event::Done { text, .. } => Some(Message {

@@ -68,7 +68,6 @@ fn sha256_of(path: &Path) -> Option<String> {
             path.display()
         );
         let text = String::from_utf8(output.stdout).expect("a digest is ASCII");
-        // Both tools print `<hex>  <path>`.
         return text.split_whitespace().next().map(str::to_ascii_lowercase);
     }
     None
@@ -144,7 +143,6 @@ fn a_valid_component_lands_with_its_manifest_and_is_then_loadable() {
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert_eq!(listed[0].declaration, installed.declaration);
 
-    // What install accepts must also load in the runtime.
     let engine = wasmtime::Engine::default();
     wasmtime::component::Component::from_file(&engine, scratch.ext.join("tool-fs.wasm"))
         .expect("what install accepted, the runtime can load");
@@ -160,7 +158,6 @@ fn a_manifest_that_under_declares_is_refused_and_nothing_lands() {
     let scratch = scratch("under-declared");
     let source = offer(&scratch, "tool-fs");
 
-    // tool-fs really imports `host-fs`; say it needs nothing.
     let manifest = scratch.incoming.join("tool-fs.manifest.toml");
     let text = std::fs::read_to_string(&manifest).expect("reads the manifest");
     assert!(
@@ -199,8 +196,6 @@ fn a_component_whose_stem_names_no_category_is_refused_and_nothing_lands() {
     }
     let scratch = scratch("uncategorised");
     let signer = Signer::new();
-    // The same real component, renamed the way an agent might name what it
-    // just built.
     let staged = common::repo_root().join("ext");
     let source = scratch.incoming.join("self-built.wasm");
     std::fs::copy(staged.join("tool-fs.wasm"), &source).expect("copies the component");
@@ -239,8 +234,6 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     let scratch = scratch("digest");
     let source = offer(&scratch, "tool-fs");
     let Some(digest) = sha256_of(&source) else {
-        // No independent hasher on this machine; asserting against our own
-        // would prove only that the code agrees with itself.
         return;
     };
 
@@ -256,7 +249,6 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     .expect("the component matches its own digest");
     ext::remove(&scratch.ext, "tool-fs").expect("removes it again");
 
-    // Digests are hex, so case does not matter.
     ext::install(
         &scratch.ext,
         &source,
@@ -332,9 +324,6 @@ fn a_manifest_from_another_api_version_is_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-// Fixtures come from `common::minisig`. The first test checks that a valid
-// signature is accepted, so the refusals below cannot pass for the wrong reason.
-
 use crate::common::minisig::Signer;
 
 /// Sign both files of an offer with `signer`.
@@ -380,7 +369,7 @@ fn a_signature_over_the_component_but_not_the_manifest_is_refused() {
     let scratch = scratch("half-signed");
     let source = offer(&scratch, "tool-fs");
     let signer = Signer::new();
-    signer.sign(&source); // the component only
+    signer.sign(&source);
 
     let err = ext::install(&scratch.ext, &source, &signed_checks(&signer))
         .expect_err("half a signature must not be enough");
@@ -478,7 +467,6 @@ fn allow_unsigned_needs_a_digest_and_says_so() {
         "an unsigned component is refused by default: {err:?}"
     );
 
-    // The flag alone: refused, because then nothing at all would vouch for it.
     let err = ext::install(
         &scratch.ext,
         &source,
@@ -544,7 +532,6 @@ fn a_component_installed_here_is_loaded_by_a_real_boot() {
     let (source, checks) = signed_offer(&scratch, "tool-fs");
     ext::install(&scratch.ext, &source, &checks).expect("installs");
 
-    // `tool.fs` loads the installed `tool-fs.wasm`.
     let config = scratch.root.join("config.yaml");
     std::fs::write(
         &config,
@@ -763,7 +750,6 @@ fn an_unsigned_remote_install_does_not_fetch_signatures() {
     let two = vec![files[0].clone(), files[1].clone()];
     let (http, asked) = canned_files(two);
 
-    // Digest from the system tool, not the code under test.
     let Some(digest) = sha256_of(&scratch.incoming.join("tool-fs.wasm")) else {
         return;
     };
@@ -837,7 +823,6 @@ fn a_redirect_to_a_refused_destination_ends_a_remote_install() {
         forbidden.port
     ));
 
-    // Permits redirector, not sentinel (asymmetry redirect exploits).
     let entry = format!("http://127.0.0.1:{redirect_port}/tool-fs.wasm");
     let policy = jk_wasm::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{redirect_port}"));

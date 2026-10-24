@@ -256,7 +256,6 @@ pub fn scope_key(name: &str, arguments: &str) -> String {
         return format!("{name}:{}", op.to_lowercase());
     }
     if let Some(command) = value.get("command").and_then(serde_json::Value::as_str) {
-        // Program only, so `shell:cargo` matches across argument changes.
         let program = command.split_whitespace().next().unwrap_or(command);
         let program = program.rsplit('/').next().unwrap_or(program);
         return format!("{name}:{}", program.to_lowercase());
@@ -269,7 +268,6 @@ pub fn scope_key(name: &str, arguments: &str) -> String {
 #[must_use]
 pub fn summarise(name: &str, arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
-        // Say the arguments are unparseable rather than echoing raw bytes.
         return format!("`{name}` with arguments that are not valid JSON");
     };
     let field = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
@@ -296,7 +294,6 @@ pub fn summarise(name: &str, arguments: &str) -> String {
                 },
             ),
             "replace" | "insert" => match field("contents") {
-                // An empty `contents` is a deletion.
                 Some("") => format!("delete lines in {where_}"),
                 Some(text) => format!("{op} in {where_}: \"{}\"", one_line(text, 100)),
                 None => format!("{op} in {where_}"),
@@ -463,10 +460,8 @@ mod tests {
                 !policy.args_escape_scope(&args),
                 "{contents:?} is file content, not a path"
             );
-            // Still gated, but rememberably.
             assert_eq!(policy.review("edit", &args), Some(Concern::NotKnownSafe));
         }
-        // A real escape in the path argument still trips, even beside such content.
         assert!(
             policy.args_escape_scope(r#"{"op":"replace","path":"/etc/passwd","contents":"// x"}"#)
         );
@@ -478,7 +473,6 @@ mod tests {
         let policy = Policy::default();
         let args = r#"{"command":"cat /etc/passwd"}"#;
         assert!(policy.args_escape_scope(args));
-        // Therefore un-rememberable: "always allow shell:cat" must not approve reading anything.
         assert_eq!(policy.review("shell", args), Some(Concern::EscapesScope));
         assert!(!Concern::EscapesScope.is_rememberable());
     }
@@ -572,7 +566,6 @@ mod tests {
                 "{args:?} modifies a file and must be confirmed"
             );
         }
-        // Viewing is allowed so the model can anchor edits without prompting per look.
         assert_eq!(
             policy.review("edit", r#"{"op":"view","path":"src/main.rs"}"#),
             None
@@ -624,11 +617,8 @@ mod tests {
                 "{path} holds secrets and everything a tool returns goes to the provider"
             );
         }
-        // Un-rememberable, for the same reason a scope escape is: "always allow fs:read"
-        // must not become standing approval to read every secret.
         assert!(!Concern::TouchesCredentials.is_rememberable());
 
-        // Ordinary source stays silent, or the gate would get switched off.
         assert_eq!(
             policy.review("fs", r#"{"op":"read","path":"src/main.rs"}"#),
             None
@@ -670,7 +660,6 @@ mod tests {
     #[test]
     fn arguments_that_cannot_be_classified_are_not_safe() {
         let policy = Policy::default();
-        // Malformed JSON cannot be classified, so it asks (fail closed).
         assert_eq!(policy.review("fs", "not json"), Some(Concern::NotKnownSafe));
     }
 
@@ -685,7 +674,6 @@ mod tests {
             "widening for cargo must not widen for curl"
         );
 
-        // An empty list confirms everything — the strictest setting, and reachable.
         let strict = Policy::from_config(&json!({ "safe-calls": [] }));
         assert_eq!(strict.review("find", "{}"), Some(Concern::NotKnownSafe));
     }
@@ -700,7 +688,6 @@ mod tests {
         let standing = denial_message("write to `a.txt`", true);
         assert!(standing.contains("rest of the session"), "{standing}");
         assert!(standing.contains("do not attempt it again"), "{standing}");
-        // The two must differ: "ask the user" and "stop asking" are opposite instructions.
         assert_ne!(once, standing);
     }
 
@@ -732,7 +719,6 @@ mod tests {
     fn an_unreadable_stored_verdict_falls_back_to_asking() {
         assert_eq!(Verdict::parse("allow"), Some(Verdict::Allow));
         assert_eq!(Verdict::parse("deny"), Some(Verdict::Deny));
-        // Corrupt or legacy values must not read as approval.
         for junk in ["", "yes", "true", "1", "ALLOW", "allowed"] {
             assert_eq!(Verdict::parse(junk), None, "{junk:?} must not be a verdict");
         }
@@ -741,7 +727,6 @@ mod tests {
     #[test]
     fn a_scope_escape_outranks_a_rememberable_concern() {
         let policy = Policy::default();
-        // Unclassified AND an escape: the escape must win, or "always allow fs:write" covers /etc/passwd.
         let concern = policy.review("fs", r#"{"op":"write","path":"/etc/passwd"}"#);
         assert_eq!(concern, Some(Concern::EscapesScope));
         assert!(
@@ -767,14 +752,11 @@ mod tests {
 
     #[test]
     fn a_standing_decision_is_keyed_by_the_kind_of_action() {
-        // Multi-op tools key on the op, so approving reads never approves writes.
         assert_eq!(scope_key("fs", r#"{"op":"write","path":"a"}"#), "fs:write");
         assert_ne!(
             scope_key("fs", r#"{"op":"write","path":"a"}"#),
             scope_key("fs", r#"{"op":"delete","path":"a"}"#)
         );
-        // The same kind of action keys the same regardless of its arguments —
-        // otherwise "always" would never match a second time.
         assert_eq!(
             scope_key("fs", r#"{"op":"write","path":"a"}"#),
             scope_key("fs", r#"{"op":"write","path":"b","contents":"x"}"#)
@@ -791,7 +773,6 @@ mod tests {
             scope_key("shell", r#"{"command":"/usr/bin/cargo"}"#),
             "shell:cargo"
         );
-        // Approving `cargo` for the run must not also approve `curl`.
         assert_ne!(
             scope_key("shell", r#"{"command":"cargo"}"#),
             scope_key("shell", r#"{"command":"curl"}"#)
@@ -807,7 +788,6 @@ mod tests {
     #[test]
     fn a_mutating_op_on_an_allowed_tool_is_still_confirmed() {
         let policy = Policy::default();
-        // `fs:read` being safe must not make `fs` safe.
         for args in [
             r#"{"op": "write", "path": "out.txt", "contents": "x"}"#,
             r#"{"op": "WRITE", "path": "out.txt"}"#,
@@ -886,7 +866,6 @@ mod tests {
     fn config_replaces_the_allowlist_rather_than_extending_it() {
         let policy = Policy::from_config(&json!({ "safe-calls": ["ping"] }));
         assert!(policy.is_known_safe("ping", "{}"));
-        // Replaced, not extended: narrowing can only add prompts.
         assert!(!policy.is_known_safe("find", r#"{"pattern":"*"}"#));
         assert!(!policy.is_known_safe("fs", r#"{"op":"read","path":"a"}"#));
     }

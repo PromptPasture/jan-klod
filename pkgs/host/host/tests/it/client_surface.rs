@@ -100,7 +100,6 @@ fn a_client_is_told_what_is_contributed_as_soon_as_it_connects() {
         .iter()
         .find(|set| set.extension == "interceptor.system")
         .expect("interceptor.system contributes");
-    // Named by the host from the instance id, not by the guest about itself.
     assert_eq!(system.extension, "interceptor.system");
     assert!(
         system
@@ -152,7 +151,6 @@ fn invoking_a_contributed_command_answers_from_the_extension() {
         .next()
         .expect("the invocation is answered");
     let outcome = result(answered);
-    // `verbose` returns the full prompt, which opens with this line: the guest answered.
     assert!(
         outcome["text"]
             .as_str()

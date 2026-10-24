@@ -304,11 +304,6 @@ pub struct SessionGetResult {
     pub messages: Vec<TranscriptMessage>,
 }
 
-// Wire half of `wit/client-surface.wit`, mirroring it deliberately.
-//
-// Every string here is data: a contributed `title` can carry arbitrary MCP text,
-// so a renderer must escape it (no terminal escapes, markup or unbounded length).
-
 /// One argument a contributed command takes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Argument {

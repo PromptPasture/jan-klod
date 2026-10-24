@@ -129,7 +129,6 @@ mod component {
                 .iter()
                 .map(|tool| Doc::new(&tool.name, &tool.description))
                 .collect();
-            // Only the user's text ranks the fleet; a tool named anywhere in the conversation stays.
             let asked = joined(&request, |role| matches!(role, Role::User));
             let conversation = joined(&request, |_| true);
             let keep = select(

@@ -101,8 +101,6 @@ impl Plan {
                 })
             })
             .collect();
-        // Plans stored before `issued` existed fall back to the highest id present.
-        // That can reuse an id, which beats restarting at 1 and reusing every id.
         let issued = stored
             .and_then(|text| serde_json::from_str::<Value>(text).ok())
             .and_then(|value| value.get("issued").and_then(Value::as_u64))

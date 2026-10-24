@@ -78,7 +78,6 @@ fn what_a_component_imports_matches_what_its_manifest_declares() {
         return;
     }
     let ext_dir = common::repo_root().join("ext");
-    // Without a manifest there is nothing to compare, so fail rather than pass silently.
     for guest in GUESTS {
         let manifest = ext_dir.join(format!("{}.manifest.toml", guest.trim_end_matches(".wasm")));
         assert!(
@@ -97,7 +96,6 @@ fn what_a_component_imports_matches_what_its_manifest_declares() {
 
     let mut compared = 0;
     for extension in runtime.extensions() {
-        // The manifest is named for the component, not the instance.
         let component = extension.instance.component_file();
         let Some(observed) = &extension.capabilities else {
             panic!(
@@ -149,16 +147,12 @@ fn the_capability_sets_are_the_ones_expected() {
             .unwrap_or_else(|| panic!("{component} was not loaded"))
     };
 
-    // Exports excluded: `tool-callable` is implemented, not needed.
     assert_eq!(of("tool-fs.wasm"), vec!["host-fs"]);
-    // Type-only imports (`llm-types`) grant nothing, so they are excluded.
     assert_eq!(
         of("provider-openai.wasm"),
         vec!["host-config", "host-http", "host-log", "host-secrets"]
     );
-    // Escape probe uses plain `std`, so it asks only for logging; `sandbox_boundary.rs` relies on this.
     assert_eq!(of("tool-escape-probe.wasm"), vec!["host-log"]);
-    // Distinguishes a command-capable tool, as #46's deferred sandbox warning needs.
     assert_eq!(of("tool-shell.wasm"), vec!["host-process"]);
     assert!(
         !of("tool-fs.wasm").contains(&"host-process".to_string()),
@@ -185,7 +179,6 @@ fn a_component_importing_more_than_it_declares_is_refused() {
         ext.join("tool-fetch.wasm"),
     )
     .unwrap();
-    // `tool-fetch` imports host-config and host-http. Drop the http line.
     let manifest = std::fs::read_to_string(real_ext.join("tool-fetch.manifest.toml")).unwrap();
     assert!(
         manifest.contains("\"host-http\","),
@@ -204,7 +197,6 @@ fn a_component_importing_more_than_it_declares_is_refused() {
     )
     .unwrap();
 
-    // `Runtime` is not `Debug`, so bind the error rather than `expect_err`.
     let Err(error) = Runtime::boot(&config, &ext) else {
         panic!("a manifest that under-declares must be refused, and this booted");
     };
@@ -237,7 +229,6 @@ fn declaring_a_capability_the_config_does_not_grant_still_boots() {
     let _guard = common::TempDir(dir.clone());
 
     std::fs::copy(real_ext.join("tool-fs.wasm"), ext.join("tool-fs.wasm")).unwrap();
-    // Declared but neither imported nor granted (no `execution:` block).
     let manifest = std::fs::read_to_string(real_ext.join("tool-fs.manifest.toml")).unwrap();
     std::fs::write(
         ext.join("tool-fs.manifest.toml"),
@@ -288,7 +279,6 @@ fn a_component_with_no_manifest_is_refused() {
     let ext = dir.join("ext");
     std::fs::create_dir_all(&ext).unwrap();
     let _guard = common::TempDir(dir.clone());
-    // The component alone, as a hand-copied or pre-manifest bundle would leave it.
     std::fs::copy(
         common::repo_root().join("ext").join("tool-fs.wasm"),
         ext.join("tool-fs.wasm"),
@@ -372,7 +362,6 @@ fn the_grant_is_off_by_default() {
     .unwrap();
 
     let config = dir.join("config.yaml");
-    // Both explicit `false` and absent must refuse.
     for body in [
         "\nallow-unmanifested: false\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
         "\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
@@ -434,7 +423,6 @@ fn a_component_built_against_another_api_version_is_refused() {
     let _guard = common::TempDir(dir.clone());
     std::fs::copy(real_ext.join("tool-fs.wasm"), ext.join("tool-fs.wasm")).unwrap();
 
-    // Derived from the host constant, not literals, which go stale when `wit/` is bumped.
     let ours = jk_wasm::manifest::API_VERSION;
     let current = format!("api-version = \"{ours}\"");
     let manifest = std::fs::read_to_string(real_ext.join("tool-fs.manifest.toml")).unwrap();
@@ -442,7 +430,6 @@ fn a_component_built_against_another_api_version_is_refused() {
         manifest.contains(&current),
         "the fixture rewrites this line, so it has to be there: {manifest}"
     );
-    // A different major is incompatible under both pre-1.0 and post-1.0 rules.
     let theirs = "9.0.0";
     std::fs::write(
         ext.join("tool-fs.manifest.toml"),

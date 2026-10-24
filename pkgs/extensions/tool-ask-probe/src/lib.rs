@@ -87,7 +87,6 @@ mod component {
             if flag(&arguments, "skip") {
                 return Ok(Step::Done(r#"{"asked":false,"answer":null}"#.to_string()));
             }
-            // Asks again even with an answer in hand; only the host's bound stops this.
             if flag(&arguments, "forever") {
                 return Ok(Step::Asking(Ask {
                     question: QUESTION.to_string(),

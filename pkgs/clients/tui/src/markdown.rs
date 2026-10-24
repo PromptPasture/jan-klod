@@ -69,7 +69,6 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
     unterminated_fence(text).map_or_else(
         || render_closed(text, max, theme),
         |at| {
-            // The open fence and what follows are not settled Markdown, so they go out verbatim.
             let mut lines = render_closed(&text[..at], max, theme);
             lines.extend(verbatim(
                 &text[at..],
@@ -91,7 +90,7 @@ pub(crate) fn verbatim(text: &str, max: usize, indent: &str, style: Style) -> Ve
         .collect()
 }
 
-#[allow(clippy::too_many_lines)] // one arm per Markdown construct; splitting hides the mapping
+#[allow(clippy::too_many_lines)]
 fn render_closed(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
     let body = Style::default().fg(theme.body());
     let secondary = Style::default().fg(theme.secondary());
@@ -103,7 +102,6 @@ fn render_closed(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
     let mut spans: Vec<(String, Style)> = Vec::new();
     let mut style = body;
     let mut prefix = none.clone();
-    // Next number per nesting level; `None` for bullets.
     let mut lists: Vec<Option<u64>> = Vec::new();
     let mut quote_depth = 0usize;
     let mut in_code: Option<String> = None;
@@ -134,7 +132,6 @@ fn render_closed(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
             Event::End(TagEnd::Strong) => style = style.remove_modifier(Modifier::BOLD),
             Event::End(TagEnd::Link) => {
                 if let Some(url) = link.take() {
-                    // Text plus URL, not an OSC 8 link, which some terminals would show as nothing.
                     spans.push((format!(" ({url})"), muted));
                 }
             }

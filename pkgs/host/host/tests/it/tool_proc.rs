@@ -66,7 +66,6 @@ workspace: {ws}
     )
     .unwrap();
 
-    // Each turn makes two completions: even ones request the tool, odd ones carry its result.
     let arguments: Vec<String> = calls.iter().map(serde_json::Value::to_string).collect();
     let nth = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -193,7 +192,6 @@ fn a_child_the_model_forgot_does_not_outlive_the_runtime() {
     if !common::guests_staged(&GUESTS) {
         return;
     }
-    // Prints its pid and stays up; only a kill ends it within thirty seconds.
     let grant = "execution:\n  enabled: true\n  long-lived:\n    - name: reporter\n      \
                  command: sh\n      args: [\"-c\", \"echo $$; exec sleep 30\"]\n";
     let turns = run_turns(

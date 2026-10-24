@@ -80,7 +80,6 @@ fn the_configured_chain_decides_which_provider_is_tried_first() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // `beta` first: alphabetical order would answer from alpha instead.
     let beta_first = config_with_chain(
         &dir,
         "providers:\n  - provider: beta\n  - provider: alpha\n",
@@ -113,7 +112,6 @@ fn an_unknown_name_in_the_chain_does_not_break_the_agent() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // Unknown providers in chain are warnings; enabled ones still run in order.
     let config = config_with_chain(
         &dir,
         "providers:\n  - provider: ollama\n  - provider: beta\n  - provider: alpha\n",
@@ -132,11 +130,9 @@ fn a_provider_the_chain_omits_is_still_reachable() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // Unlisted enabled providers stay reachable, after chain entries.
     let config = config_with_chain(&dir, "providers:\n  - provider: beta\n");
     assert_eq!(answer(&config, &ext_dir), "from-beta");
 
-    // No chain: falls back to boot order, which answers from alpha.
     let config = config_with_chain(&dir, "");
     assert_eq!(answer(&config, &ext_dir), "from-alpha");
 }

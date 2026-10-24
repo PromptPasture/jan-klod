@@ -45,9 +45,7 @@ fn required_key_vars_in(config: &str) -> BTreeSet<String> {
         let indent = line.len() - line.trim_start().len();
         let trimmed = line.trim();
 
-        // `  provider:` opens the block; any other 2-space key closes it.
         if indent == 2 && trimmed.ends_with(':') {
-            // Flush the previous block's pending var before switching.
             if in_providers && instance_enabled {
                 vars.extend(pending_var.take());
             }
@@ -59,7 +57,6 @@ fn required_key_vars_in(config: &str) -> BTreeSet<String> {
         if !in_providers {
             continue;
         }
-        // `    <name>:` starts a new instance — bank the previous one first.
         if indent == 4 && trimmed.ends_with(':') {
             if instance_enabled {
                 vars.extend(pending_var.take());
@@ -123,11 +120,10 @@ fn assert_names_a_required_key(doc: &str) {
         !exported.is_empty(),
         "{doc} tells the reader to export something (it is the getting-started path)"
     );
-    // Checked per config, not pooled: pooling would let one provider's key satisfy every config (#114, #63).
     for (label, config) in shipped_configs() {
         let required = required_key_vars_in(&config);
         if required.is_empty() {
-            continue; // a config with no enabled provider asks for no key
+            continue;
         }
         assert!(
             exported.iter().any(|var| required.contains(var)),
@@ -217,8 +213,6 @@ fn the_installer_offers_the_distributions_the_release_builds() {
 
     let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
         .expect("the release workflow is readable");
-    // Only the distribution name: anything after it on the line is not part of
-    // the name, and must not read as a distribution nothing defines.
     let built: BTreeSet<String> = workflow
         .lines()
         .filter_map(|l| l.trim().strip_prefix("make bundle DIST="))
@@ -243,31 +237,7 @@ fn the_installer_offers_the_distributions_the_release_builds() {
 /// Every key in the shipped config must be read by code. The whitelist makes a new key fail until it is wired or removed.
 #[test]
 fn every_config_key_is_one_the_runtime_reads() {
-    // `extensions.<category>` values the runtime instantiates.
-    //   provider    — build_agent, pass 1
-    //   interceptor — build_agent, pass 2
-    //   registry    — build_agent, pass 1 (skills / mcp)
-    //   tool        — build_agent, pass 1
-    // The runtime's own list, not a copy (#222: a category nothing dispatches once slipped through).
     const CONSUMED_CATEGORIES: [&str; 4] = jk_wasm::CATEGORIES;
-    // Top-level keys, and what reads each.
-    //   extensions — Config::from_path
-    //   workspace  — Runtime::open_workspace
-    //   execution  — Runtime::open_process_runner
-    //   classifier — Runtime::open_classifier
-    //   storage    — Runtime::open_store
-    //   limits     — Runtime::limits
-    //   allow-unmanifested — Runtime::boot, the named widening for a component
-    //                        that ships no manifest
-    //   providers  — order_chain, applied in build_agent
-    //   routing    — interceptor-task-router, via host-config
-    //   registry   — ext::Checks::from_config, the trusted-keys grant for
-    //                `ext install`, and ext_index::url_from_config, the index
-    //                `ext search` reads. Distinct from `extensions.registry`,
-    //                which is the category above; they share a word and
-    //                nothing else.
-    //   observability — Config::from_path, the output-format setting that the
-    //                   tracing subscriber reads at boot
     const CONSUMED_TOP_LEVEL: [&str; 11] = [
         "allow-unmanifested",
         "extensions",
@@ -293,7 +263,6 @@ fn every_config_key_is_one_the_runtime_reads() {
             continue;
         }
         let indent = line.len() - line.trim_start().len();
-        // Matches `key:` and `key: value`; bare-key matching would miss scalars.
         let Some((key, _)) = line.trim().split_once(':') else {
             continue;
         };
@@ -330,8 +299,6 @@ fn every_config_key_is_one_the_runtime_reads() {
          it is inert (as `api`, `chat` and `agent` are)."
     );
 
-    // Reverse check: a category the runtime handles but the config never shows
-    // is a feature nobody will discover.
     for consumed in CONSUMED_CATEGORIES {
         assert!(
             categories.iter().any(|c| c == consumed),
@@ -356,12 +323,10 @@ fn every_test_that_skips_does_so_through_the_shared_policy() {
         }
         let source = std::fs::read_to_string(&path).expect("a test file is readable");
         for (line_no, line) in source.lines().enumerate() {
-            // Code only — skip comments to avoid flagging prose explaining the policy.
             let code = line.trim_start();
             if code.starts_with("//") || code.starts_with("///") || code.starts_with("//!") {
                 continue;
             }
-            // Policy helpers own the word; anywhere else it is a bare skip.
             if line.contains("skipping") && !line.contains("common::") {
                 let file = path
                     .file_name()
@@ -372,7 +337,6 @@ fn every_test_that_skips_does_so_through_the_shared_policy() {
             }
         }
     }
-    // `common/mod.rs` is where the policy lives, so exclude its messages.
     offenders.retain(|o| !o.starts_with("mod.rs"));
 
     assert!(
@@ -386,7 +350,6 @@ fn every_test_that_skips_does_so_through_the_shared_policy() {
 /// The parser must distinguish enabled from disabled, or the checks above pass for the wrong reason.
 #[test]
 fn only_enabled_providers_count_as_required() {
-    // The root config has a disabled provider, which lets this tell the two apart.
     let root = std::fs::read_to_string(common::repo_root().join("config.yaml"))
         .expect("the shipped config.yaml is readable");
     let required = required_key_vars_in(&root);
@@ -411,7 +374,6 @@ fn the_security_model_cites_tests_that_exist() {
     let page = root.join("docs/concepts/security-model.md");
     let text = std::fs::read_to_string(&page).expect("the security model page is readable");
 
-    // A bare `::<name>` citation inherits the previous path.
     let mut checked = 0;
     let mut last_path: Option<String> = None;
     for token in text.split('`') {
@@ -433,7 +395,6 @@ fn the_security_model_cites_tests_that_exist() {
             continue;
         };
         let path = path.as_str();
-        // Relative to a workspace root, falling back to the repository root.
         let candidates = [
             root.join("pkgs/host").join(path),
             root.join("pkgs/extensions").join(path),
@@ -446,7 +407,6 @@ fn the_security_model_cites_tests_that_exist() {
             )
         });
         let source = std::fs::read_to_string(found).expect("the cited file is readable");
-        // Take the leading identifier, so `::a_name` suffixes parse.
         let name = name
             .split(|c: char| !(c.is_alphanumeric() || c == '_'))
             .next()
@@ -493,7 +453,6 @@ fn the_commands_table_lists_every_wire_command() {
 #[test]
 fn every_declared_instance_resolves_to_a_component() {
     let root = common::repo_root();
-    // Parsing expands enabled instances' `${VAR}`; the value does not matter.
     std::env::set_var("OPENAI_API_KEY", "placeholder-for-parsing");
     let config =
         jk_config::Config::from_path(root.join("config.yaml")).expect("the shipped config parses");
@@ -582,8 +541,6 @@ fn every_documented_command_exists() {
                     if word.is_empty() {
                         continue;
                     }
-                    // `make` also appears in prose ("make sure"); only check plausible
-                    // targets.
                     let present = if verify {
                         main_rs.contains(&format!("Some(\"{word}\")"))
                     } else {
@@ -639,7 +596,6 @@ fn no_shell_block_recommends_positional_serve_paths() {
             if !in_shell {
                 continue;
             }
-            // Every subcommand that takes `[config] [ext]` positionally has the same footgun.
             for sub in ["serve", "verify", "telegram"] {
                 let Some(rest) = trimmed.split_once(&format!("jan-klod-gateway {sub}")) else {
                     continue;
@@ -666,7 +622,6 @@ fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
     let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
         .expect("release.yml is readable");
 
-    // `registry.url` names the index; its parent is the site root.
     let url = config
         .lines()
         .map(str::trim)
@@ -678,7 +633,6 @@ fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
         .rsplit_once('/')
         .expect("registry.url has a path, so it has a parent");
 
-    // What the workflow told the generator to write into every entry's `url`.
     let generated_base = workflow
         .lines()
         .map(str::trim)
@@ -695,7 +649,6 @@ fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
          published index would name a path the site does not have"
     );
 
-    // And the copies that put the files at those paths.
     assert!(
         workflow.contains(&format!("_site/{index_file}")),
         "registry.url names `{index_file}` at the site root, and release.yml \
@@ -723,7 +676,6 @@ fn every_tool_a_workflow_pins_matches_versions_mk() {
             .to_owned()
     };
 
-    // `wkg` ships as a bare binary, so it is matched by `tag:` rather than `tool@`.
     let expected = [
         ("cargo-deny@", pin("CARGO_DENY_VERSION")),
         ("cargo-audit@", pin("CARGO_AUDIT_VERSION")),
@@ -740,7 +692,6 @@ fn every_tool_a_workflow_pins_matches_versions_mk() {
             continue;
         };
         for (line_no, line) in text.lines().enumerate() {
-            // Comments may name old versions as history; only installed versions count.
             if line.trim_start().starts_with('#') {
                 continue;
             }

@@ -6,7 +6,6 @@
 /// Most matching lines a tree-wide grep reports; past this the caller should narrow the search.
 const MAX_MATCHES: usize = 400;
 
-// Only the wasm32 glue calls this module outside tests; the allow covers native builds.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod fs {
     use crate::MAX_MATCHES;
@@ -121,7 +120,6 @@ mod fs {
         #[test]
         fn an_unreadable_file_is_skipped_not_fatal() {
             let read = files(&[("b.rs", "hit")]);
-            // "a.rs" is absent from the fake workspace (binary/gone/not UTF-8).
             let hits = grep_tree(&["a.rs".to_string(), "b.rs".to_string()], "hit", &read);
             assert_eq!(hits.lines, vec!["b.rs:1:hit"]);
         }

@@ -76,7 +76,6 @@ impl SandboxBackend for LandlockBackend {
         if policy.network {
             wrapped.arg(NETWORK_FLAG);
         }
-        // `--` so a command starting with `-` is not read as our flag.
         wrapped
             .arg("--")
             .arg(command.get_program())
@@ -153,7 +152,6 @@ where
         }
     }
     out.command = args.collect();
-    // An empty program name is not a command; a later spawn failure would read like a sandbox refusal.
     let nothing_to_run = out.command.first().is_none_or(|program| program.is_empty());
     if !saw_separator || nothing_to_run {
         return Err(ConfineArgsError::NoCommand);
@@ -166,8 +164,6 @@ where
 pub fn grantable(path: &Path) -> bool {
     path.exists()
 }
-
-// ─── Linux half: applying the ruleset ───
 
 /// Whether this kernel can enforce anything, and what to say when it cannot.
 ///
@@ -273,9 +269,6 @@ pub fn apply(plan: &Confinement) -> Result<(), String> {
         ))
         .map_err(|err| format!("Landlock refused the read rule for `/`: {err}"))?;
 
-    // `/dev/null` for every command (#212); see `DEV_NULL_RULE` in `sandbox_seatbelt.rs`.
-    // `WriteFile` alone, not `from_all`: directory rights are invalid on a file rule and Landlock
-    // refuses the whole ruleset.
     created = created
         .add_rule(PathBeneath::new(
             PathFd::new("/dev/null")
@@ -409,7 +402,6 @@ mod tests {
 
     #[test]
     fn a_confine_that_cannot_read_its_policy_refuses_rather_than_running() {
-        // Each would otherwise run the command unconfined.
         for (argv, expected) in [
             (
                 vec![WRITABLE_FLAG],

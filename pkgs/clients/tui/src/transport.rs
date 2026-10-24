@@ -142,8 +142,6 @@ impl Transport for Rest {
     }
 
     fn cancel(&self, _session: &str) -> Result<(), String> {
-        // An error, not a silent no-op: `/cancel` "working" on nothing misleads.
-        // `take` leaves the slot empty for the reader to see (#289).
         let taken = self
             .live
             .lock()
@@ -173,7 +171,6 @@ impl Transport for Rest {
     }
 
     fn follow_up(&self, _session: &str, _message: &str) -> Result<(), String> {
-        // REST has no route to a turn in flight, so it cannot steer. Say so rather than drop the keystroke.
         Err(
             "this connection is REST, which cannot steer a turn in flight — \
              start the gateway over stdio to follow up, or wait for this turn \
@@ -258,8 +255,6 @@ impl Stdio {
     /// Turn a handshake failure into an actionable message. If the gateway exited,
     /// its stderr says why, which a bare "connection closed" does not.
     fn explain(&self, err: String, logs: Logs) -> String {
-        // `try_wait`, not `wait`: a version mismatch leaves the gateway running
-        // and waiting for the next frame, and blocking on it would hang.
         let exited = self
             .child
             .lock()
@@ -282,7 +277,6 @@ impl Stdio {
         let id = self.send(&Rpc::Hello {
             version: PROTOCOL_VERSION.to_owned(),
         })?;
-        // Contributions arrive before this answer, so they are caught here.
         let result = self.read_until(&id, &mut |event| {
             if let StreamEvent::Contributions(sets) = event {
                 if let Ok(mut held) = self.contributed.lock() {
@@ -310,7 +304,6 @@ impl Stdio {
         let frame = jsonrpc::Request::new(id.clone(), command.clone());
         let line = serde_json::to_string(&frame).map_err(|err| err.to_string())?;
         {
-            // Release the writer before returning, so `answer` never waits on a reading turn.
             let mut writer = self.writer.lock().map_err(|_| "the writer is poisoned")?;
             writeln!(writer, "{line}").map_err(|err| format!("writing to the gateway: {err}"))?;
             writer
@@ -321,7 +314,6 @@ impl Stdio {
     }
 
     /// Read frames until answer to `id`, handing notifications to `on_event`.
-    // Hold the reader for the whole exchange so turns cannot interleave frames.
     #[allow(clippy::significant_drop_tightening)]
     fn read_until(
         &self,
@@ -347,7 +339,6 @@ impl Stdio {
                     jsonrpc::Outcome::Error(error) if &response.id == id => {
                         return Err(error.message)
                     }
-                    // Another thread's refused request: surface it, since the answer was not taken.
                     jsonrpc::Outcome::Error(error) => on_event(StreamEvent::Error(error.message)),
                     jsonrpc::Outcome::Result(_) => {}
                 }
@@ -433,8 +424,6 @@ impl Transport for Stdio {
     }
 
     fn cancel(&self, session: &str) -> Result<(), String> {
-        // Written, not awaited. Turn thread owns reader, can't read ack.
-        // Refusal comes as error response, which `read_until` surfaces.
         self.send(&Rpc::TurnCancel {
             session: session.to_owned(),
         })?;
@@ -456,8 +445,6 @@ impl Transport for Stdio {
     }
 
     fn answer(&self, session: &str, answer: &str) -> Result<(), String> {
-        // Written, not awaited. Turn thread owns reader. Refusal is error
-        // response, surfaced by `read_until`; turn thread displays it.
         self.send(&Rpc::TurnAnswer {
             session: session.to_owned(),
             answer: answer.to_owned(),
@@ -466,9 +453,6 @@ impl Transport for Stdio {
     }
 
     fn follow_up(&self, session: &str, message: &str) -> Result<(), String> {
-        // Written, not awaited. Turn thread owns reader. Core queues on
-        // `state.follow_ups`, answers `{"queued": true}`. Refusal is error
-        // response, surfaced by `read_until`.
         self.send(&Rpc::TurnFollowUp {
             session: session.to_owned(),
             message: message.to_owned(),
@@ -490,7 +474,6 @@ impl Transport for Stdio {
             name: name.to_owned(),
             arguments: Vec::new(),
         })?;
-        // A changed contribution set arrives before this answer, so it is taken here.
         let result = self.read_until(&id, &mut |event| {
             if let StreamEvent::Contributions(sets) = event {
                 if let Ok(mut held) = self.contributed.lock() {
@@ -573,11 +556,9 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
             content: content.clone(),
             failed: *failed,
         }),
-        // Nothing renders contributions yet (#190); the event is still delivered.
         Notification::SurfaceContributions { extensions } => {
             Some(StreamEvent::Contributions(extensions.clone()))
         }
-        // Dropped: this client shows one session, so list changes are noise.
         Notification::SessionUpdated { .. } => None,
     }
 }
@@ -678,8 +659,6 @@ mod tests {
 
     #[test]
     fn an_ask_keeps_its_options_and_its_default() {
-        // Core uses default if no answer; losing it shows a choice core won't
-        // honour.
         let event = event_for(&Notification::Ask {
             session: "s".to_owned(),
             question: "Run it?".to_owned(),
@@ -722,7 +701,6 @@ mod tests {
             &[],
             Logs::Discard,
         );
-        // Not `expect_err`: Stdio lacks Debug (no printing live child).
         let Err(err) = outcome else {
             panic!("there is no gateway at that path")
         };
@@ -781,7 +759,6 @@ mod tests {
         let bin = dir.join(format!("jk-gateway-{}.sh", std::process::id()));
         let _ = std::fs::remove_file(&sent);
 
-        // Handshake reply: client's id, accepted version, then log frames.
         let script = format!(
             r#"#!/bin/sh
 IFS= read -r hello
@@ -802,7 +779,6 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
             .follow_up("s1", "use the other file")
             .expect("steering is written, not waited for");
 
-        // The fake gateway writes asynchronously; poll for the frame.
         let mut frame = String::new();
         for _ in 0..100 {
             if let Ok(text) = std::fs::read_to_string(&sent) {
@@ -907,12 +883,10 @@ IFS= read -r goodbye
         };
         assert!(gateway.alive(), "the child is still blocked on stdin");
 
-        // Any frame lets the script finish.
         gateway
             .send(&Rpc::SessionList)
             .expect("the frame that lets the fake gateway finish");
 
-        // The exit is asynchronous; the deadline only expires for a stuck child.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut seen_dead = false;
         while std::time::Instant::now() < deadline {
@@ -935,7 +909,6 @@ IFS= read -r goodbye
         let dir = std::env::temp_dir();
         let bin = dir.join(format!("jk-gateway-create-{}.sh", std::process::id()));
 
-        // Handshake reply, then the `session/create` answer.
         let script = format!(
             r#"#!/bin/sh
 IFS= read -r hello

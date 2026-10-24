@@ -84,7 +84,6 @@ pub fn rank(docs: &[Doc], query: &str) -> Vec<usize> {
                     if count == 0.0 {
                         return 0.0;
                     }
-                    // Terms in every tool's description carry no signal; idf discounts them.
                     let having = docs.iter().filter(|d| d.count(term) > 0).count() as f64;
                     let idf = ((total - having + 0.5) / (having + 0.5)).ln_1p();
                     let norm = count * (K1 + 1.0);
@@ -97,7 +96,6 @@ pub fn rank(docs: &[Doc], query: &str) -> Vec<usize> {
         .filter(|(_, score)| *score > 0.0)
         .collect();
 
-    // Stable sort keeps tied scores in input order; scores are finite, so partial_cmp cannot fail.
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.into_iter().map(|(index, _)| index).collect()
 }

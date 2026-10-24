@@ -64,13 +64,11 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
         }
     }
 
-    // Shown only when something contributes; an empty section would teach readers to expect one.
     let contributed = app.contributed_status();
     if !contributed.is_empty() {
         lines.push(Line::default());
         heading(&mut lines, "EXTENSIONS", width, theme);
         for item in contributed {
-            // Already made inert on arrival; `row` only fits it to the pane.
             row(
                 &mut lines,
                 &format!("{} {}", item.extension, item.text),
@@ -325,7 +323,6 @@ mod tests {
         for glyphs in [GlyphSet::Unicode, GlyphSet::Ascii] {
             let theme = Theme::new(Mode::Dark, Depth::TrueColor, glyphs);
             let mut app = App::default();
-            // One long row of each kind.
             app.set_contributions(&reporting(&"wide".repeat(40)));
             app.record_tool_invoked(
                 "c1".into(),
@@ -395,7 +392,6 @@ mod tests {
         "second".chars().for_each(|c| app.push_char(c));
         app.take_submission();
         let cleared = plain(&view(&app, info(&cwd), 28, theme()));
-        // `state ready` contains "read", so only the THIS TURN section is checked.
         let this_turn = cleared
             .split("THIS TURN")
             .nth(1)

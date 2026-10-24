@@ -97,7 +97,6 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
 /// A runtime whose `ext/` holds the provider and selector, with a signed
 /// `tool-hello` waiting outside it. Returns the temp root, config and offer.
 fn fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
-    // Keyed by test: parallel tests sharing one `ext/` would install into each other's runtime.
     let dir = std::env::temp_dir().join(format!("jk-install-call-{tag}-{}", std::process::id()));
     let ext = dir.join("ext");
     let incoming = dir.join("incoming");
@@ -162,7 +161,6 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
 
     let script = Arc::new(Script {
         calls: Mutex::new(vec![
-            // Popped in order: turn two calls the tool that turn one installs.
             "tool-hello|{}".to_string(),
             format!(
                 "ext-install|{}",
@@ -179,14 +177,12 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
     let factory = provider(&script);
     let agents = jk_host::sessions::Agents::new(runtime, Arc::new(factory));
 
-    // The adoption runs in the session thread between turns (#231), for every transport.
     let one = agents.of("s1");
     one.run(|agent: &mut jk_agent::AgentSession| {
         agent.run("s1", "install the hello tool");
     })
     .expect("turn one ran");
 
-    // Same session; the adoption rebuilt the agent underneath.
     agents
         .of("s1")
         .run(|agent: &mut jk_agent::AgentSession| {
@@ -203,14 +199,12 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
 
     let results = script.results.lock().expect("not poisoned").clone();
     assert_eq!(results.len(), 2, "both turns ran a tool");
-    // "replace me" is the ext-new stub's answer; a host refusal or absent tool reads differently.
     assert!(
         results[1].contains("replace me"),
         "the freshly installed tool did not answer in the same session: {}",
         results[1]
     );
 
-    // The load must be recorded in the session log, not just promised by the install.
     let store =
         jk_session::store::Store::open(dir.join("jan-klod.db")).expect("the log is readable");
     let rows = store.session_events("s1").expect("the session has a log");
@@ -224,7 +218,6 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
          that nothing confirms arrived"
     );
 
-    // Offered, not just dispatchable: the script calls by name regardless of the advertisement.
     let advertised = script
         .advertised_hello
         .lock()
@@ -258,7 +251,6 @@ fn a_session_that_installed_nothing_can_call_what_another_installed() {
 
     let script = Arc::new(Script {
         calls: Mutex::new(vec![
-            // Popped from the back: B calls the tool it never installed.
             "tool-hello|{}".to_string(),
             format!(
                 "ext-install|{}",
@@ -275,7 +267,6 @@ fn a_session_that_installed_nothing_can_call_what_another_installed() {
     let factory = provider(&script);
     let agents = jk_host::sessions::Agents::new(runtime, Arc::new(factory));
 
-    // The adoption runs inside A's session thread, after its turn.
     agents
         .of("installer")
         .run(|agent: &mut jk_agent::AgentSession| {
@@ -302,7 +293,6 @@ fn a_session_that_installed_nothing_can_call_what_another_installed() {
         !last.contains("no tool named"),
         "the bystander could not see what another session installed: {last}"
     );
-    // The advertisement must be rebuilt for B too: an unoffered tool is unusable by a model.
     let advertised = script
         .advertised_hello
         .lock()

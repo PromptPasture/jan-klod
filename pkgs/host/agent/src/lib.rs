@@ -178,11 +178,6 @@ impl Runtime {
             .map_err(|source| CoreError::Store {
                 message: source.to_string(),
             })?;
-        // Converts transcripts written before the event log. Done here, not in
-        // `Store::open`, so the store stays ignorant of payload format.
-        //
-        // A failure does not fail the boot: the `entries` rows survive and the
-        // next open retries. Refusing to start would make one old session an unusable install.
         match event_log::migrate_transcripts(&store) {
             Ok(0) => {}
             Ok(sessions) => eprintln!(
@@ -473,8 +468,6 @@ impl AgentSession {
     /// host-side store, so it survives a `Runtime` restart against the same DB.
     #[must_use]
     pub fn transcript(&self, session: &str) -> Vec<turn::Message> {
-        // Messages, not `store::Entry`: a projected turn has no namespace or key,
-        // so entries would mean inventing fields. Unbounded, unlike `replay`.
         let events = self
             .store
             .lock()
@@ -540,13 +533,9 @@ impl AgentSession {
     /// All known session ids, newest first.
     #[must_use]
     pub fn list_sessions(&self) -> Vec<String> {
-        // Sessions come from the log, not `entries`: an empty list is a legitimate
-        // answer, so a read of `entries` would go silently wrong once that write goes away.
-        // A pre-log database has entries but no events until the migration runs.
         self.store
             .lock()
             .map(|store| {
-                // Not `unwrap_or_default()`: that would report a broken query as "no sessions".
                 store.event_sessions().unwrap_or_else(|err| {
                     eprintln!("WARN [core] listing sessions failed: {err}");
                     Vec::new()
@@ -554,8 +543,6 @@ impl AgentSession {
             })
             .unwrap_or_default()
             .into_iter()
-            // Interceptor namespaces (`ext/<component>/…`) are never event sessions;
-            // the filter guards against a slashed id reaching the picker.
             .filter(|session| !session.contains('/'))
             .collect()
     }
@@ -576,20 +563,15 @@ fn run_and_persist(
     message: &str,
     principal: Option<String>,
 ) -> conductor::RunResult {
-    // Locked only around each use, never across the turn: a guest writing
-    // `host-storage` mid-dispatch takes the same lock and would deadlock.
     let history = store
         .lock()
         .map(|store| replay(&store, session))
         .unwrap_or_default();
-    // Every entry point funnels through here, so every turn is logged without opting in.
     let mut logged_sink = event_log::PersistingSink::new(sink, store, session);
     let mut logged_driver = event_log::PersistingDriver::new(driver, store, session);
-    // Logs the message the model receives, not `message`: a `before-loop`
-    // interceptor may `replace` it (#84). Called once, before any event, so this row opens the log.
     let mut log_effective_message =
         |effective: &str| event_log::log_user_message(store, session, effective);
-    let result = conductor::run_turn(
+    conductor::run_turn(
         dispatcher,
         providers,
         tools,
@@ -601,10 +583,7 @@ fn run_and_persist(
         limits,
         principal,
         &mut log_effective_message,
-    );
-    // No transcript append: the turn records itself as it runs. A second
-    // `{user, answer}` row would duplicate the session in two formats.
-    result
+    )
 }
 
 /// How many past turns are replayed into a new one. Token-aware trimming is the
@@ -615,7 +594,6 @@ const REPLAYED_TURNS: u32 = 20;
 /// The conversation so far, oldest first, as loop messages. An unreadable row
 /// is skipped rather than failing the turn.
 fn replay(store: &store::Store, session: &str) -> Vec<turn::Message> {
-    // Reads the event log, not `entries`. `recent_turns` is already oldest first.
     let events = store
         .recent_turns(session, REPLAYED_TURNS)
         .unwrap_or_default();

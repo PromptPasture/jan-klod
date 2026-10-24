@@ -323,7 +323,6 @@ impl App {
             || stops.last().copied(),
             |at| stops.iter().rev().find(|&&i| i < at).copied(),
         );
-        // Hold at the oldest block rather than wrapping: a wrap would jump to the far end.
         if moved.is_some() {
             self.cursor = moved;
             return true;
@@ -364,8 +363,6 @@ impl App {
         self.composer.push(c);
         self.maybe_open_menu();
         if c == '@' {
-            // Opened here only, so deleting to older `@` doesn't reopen
-            // a dismissed list.
             self.completion = Some((String::new(), 0, paths::Completion::default()));
         }
     }
@@ -425,8 +422,6 @@ impl App {
                         summary: crate::untrusted::inert(&command.description),
                     })
             })
-            // A contribution whose name cleaned away to nothing cannot be
-            // typed, matched or invoked, so it is not offered.
             .filter(|c| !c.name.is_empty())
             .collect();
         self.contributed_status = sets
@@ -439,7 +434,6 @@ impl App {
                     detail: crate::untrusted::inert(&item.detail),
                 })
             })
-            // A blank row would read as a rendering fault.
             .filter(|item| !item.text.is_empty())
             .collect();
     }
@@ -468,8 +462,6 @@ impl App {
         if self.composer.text() == "/" {
             self.menu = Some(0);
         } else if self.menu_query().is_none() {
-            // It stopped looking like a command — a space, a newline, or the
-            // slash was deleted.
             self.menu = None;
         }
     }
@@ -498,8 +490,6 @@ impl App {
     /// Returns whether anything was accepted. `false` on empty means `Enter`
     /// still submits.
     pub fn menu_accept(&mut self) -> bool {
-        // Copied out before anything is mutated: an entry borrows the
-        // contributed list, which lives in `self`.
         let Some((name, availability, extension)) =
             self.menu_entries().get(self.menu_selected()).map(|entry| {
                 (
@@ -516,8 +506,6 @@ impl App {
         };
         self.menu = None;
         self.composer.set("");
-        // A contribution is not dispatched by name here: two extensions may
-        // contribute the same one, and only the pair identifies it.
         if let Some(extension) = extension {
             self.invoke_requested = Some((extension, name));
             return true;
@@ -525,19 +513,15 @@ impl App {
         match availability {
             Availability::Ready => match name.as_str() {
                 "/newline" => self.composer.push('\n'),
-                // Ask before quitting, as `Ctrl+D` and idle `Ctrl+C` do.
                 "/quit" => self.request_quit(),
-                // Records the request; the caller sends the cancel.
                 "/cancel" => {
                     if !self.cancel() {
                         self.record(Who::Status, "no turn is running".to_string());
                     }
                 }
-                // `/new` and `/sessions` record a request for the caller; `/help` is local.
                 "/new" => self.request_new_session(),
                 "/sessions" => self.request_sessions(),
                 "/help" => self.toggle_help(),
-                // Unreachable while the command table and this match agree; a status line beats a panic.
                 other => self.record(Who::Status, format!("{other} is not wired up")),
             },
             Availability::Pending(reason) => {
@@ -575,8 +559,6 @@ impl App {
             });
         match open {
             Some(block) => {
-                // A failure opens itself. The core reports failure; the client does
-                // not infer it from the text.
                 block.expanded = failed;
                 block.status = ToolStatus::Done { content, failed };
             }
@@ -679,7 +661,6 @@ impl App {
         else {
             return false;
         };
-        // The `@` goes too: accepted text is a plain path. `'@'` is one byte, hence `+ 1`.
         let typed = self
             .completion
             .as_ref()
@@ -706,15 +687,10 @@ impl App {
             self.composer.up(width);
             return;
         }
-        // A cleared composer starts the walk over, not resuming from recall's
-        // position. Otherwise clearing and pressing `↑` lands on the entry
-        // *before* the one just discarded, unlike emptying anywhere else.
         if self.composer.is_empty() {
             self.recall = None;
         }
         let next = match self.recall {
-            // At the oldest: stop rather than wrap. Wrapping hands the newest
-            // message at the moment they asked for the oldest.
             Some((0, _)) => return,
             Some((i, _)) => i - 1,
             None => match self.history.len().checked_sub(1) {
@@ -739,8 +715,6 @@ impl App {
             self.composer.set(&text);
             self.recall = Some((i + 1, text));
         } else {
-            // Past the newest is an empty composer: the pre-recall draft was overwritten
-            // by the first recall and is not restored.
             self.composer.set("");
             self.recall = None;
         }
@@ -920,10 +894,7 @@ impl App {
             front.selected.map(|i| front.prompt.options[i].clone())?
         };
         let Pending { prompt, .. } = self.prompts.pop_front().expect("front just checked above");
-        // `take` clears the composer and its caret together: an answer left
-        // in the buffer would send as the next message.
         self.composer.take();
-        // The next queued prompt shows immediately rather than behind a closed dialog.
         self.dialog_open = !self.prompts.is_empty();
         self.record(Who::Status, format!("{} → {answer}", prompt.question));
         Some((prompt.session, answer))
@@ -947,7 +918,6 @@ impl App {
             self.disconnected = true;
             self.record_error(reason);
         }
-        // Unconditional, even on repeat calls: nothing runs without a transport.
         self.phase = Phase::Idle;
         self.prompts.clear();
         self.dialog_open = false;
@@ -1266,8 +1236,6 @@ impl App {
             return;
         }
         if self.dialog_open {
-            // The ask modal owns every key; a quit confirm under it would be
-            // unreachable, same reason as `request_sessions` refuses.
             return;
         }
         let mid_turn = self.turn() != Turn::Idle;
@@ -1346,8 +1314,6 @@ fn session_message_entry(message: SessionMessage) -> Option<Entry> {
             text: message.content,
         }),
         "tool" => {
-            // `session/get` carries no tool name or `failed` flag, so the call id
-            // stands in for the name and results are assumed to have succeeded.
             let id = message.tool_call_id.unwrap_or_default();
             Some(Entry::Tool(ToolBlock {
                 name: id.clone(),
@@ -1500,7 +1466,6 @@ mod tests {
             "the reason was not recorded"
         );
 
-        // A prompt nobody can answer must not stay `Blocked` forever.
         app.begin_turn();
         app.ask(Prompt {
             session: "s1".into(),
@@ -1508,7 +1473,7 @@ mod tests {
             options: vec!["y".into()],
             default: "y".into(),
         });
-        app.disconnect("again"); // idempotent: no second narration
+        app.disconnect("again");
         assert_eq!(app.turn(), Turn::Idle);
         assert_eq!(
             format!("{:?}", app.transcript).matches("again").count(),
@@ -1549,7 +1514,6 @@ mod tests {
             "the full text did not land in the transcript"
         );
 
-        // The toast expires; the transcript line does not move.
         app.tick(1_000);
         assert!(app.toast().is_none(), "the toast should have expired");
         assert!(
@@ -1736,8 +1700,6 @@ mod tests {
              assume position 0"
         );
 
-        // A core that contradicts itself (`default` not among `options`)
-        // must not have this guess at a selection.
         let mut confused = App::default();
         confused.ask(Prompt {
             session: "s1".into(),
@@ -1896,7 +1858,6 @@ mod tests {
     /// A toggle with nothing under the cursor is a no-op.
     #[test]
     fn toggling_opens_the_selected_block_and_does_nothing_with_no_selection() {
-        // The tool block is entry zero so that a toggle wrongly acting on "the first block" is caught.
         let mut app = App::default();
         app.record_tool_invoked("c1".into(), "read".into(), None);
         app.record(Who::You, "hello");
@@ -1909,7 +1870,6 @@ mod tests {
         assert!(app.toggle_expanded());
         assert!(!tools(&app)[0].expanded, "same key closed it");
 
-        // A cursor that outlived its entry costs a keystroke, not the client.
         app.transcript.clear();
         assert!(!app.toggle_expanded(), "stale index doesn't panic");
     }
@@ -1993,7 +1953,7 @@ mod tests {
         let mut app = App::default();
         app.set_session("cli");
         app.open_sessions(entries(&["cli", "other"]));
-        app.sessions_move(1); // "other"
+        app.sessions_move(1);
         app.begin_turn();
 
         assert_eq!(
@@ -2012,7 +1972,6 @@ mod tests {
             "refusal explains why"
         );
 
-        // Idle, the same choice is accepted.
         app.end_turn();
         assert_eq!(app.sessions_confirm(), Some("other".to_string()));
     }
@@ -2145,7 +2104,7 @@ mod tests {
         );
 
         let mut used = App::default();
-        used.take_submission(); // whitespace-only; exercises the path
+        used.take_submission();
         used.push_char('h');
         used.take_submission();
         used.should_quit = false;
@@ -2167,7 +2126,7 @@ mod tests {
         app.request_quit();
         assert!(app.quit_confirm_open());
 
-        app.quit_confirm_move(); // select "quit"
+        app.quit_confirm_move();
         app.quit_confirm_accept();
         assert!(
             !app.should_quit,

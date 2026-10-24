@@ -77,7 +77,6 @@ fn every_distribution_boots_with_its_own_config() {
             panic!("distribution `{name}` does not boot with its own config: {err}")
         });
 
-        // Boot does not catch an enabled instance whose component is missing; it just never loads.
         let parsed = jk_config::Config::from_path(&config)
             .unwrap_or_else(|err| panic!("distribution `{name}`'s config parses: {err}"));
         let missing: Vec<String> = parsed
@@ -103,7 +102,6 @@ fn every_distribution_boots_with_its_own_config() {
 fn headless_chat_does_not_run_commands() {
     let config = common::repo_root().join("scripts/distributions/headless-chat/config.yaml");
     let text = std::fs::read_to_string(&config).expect("the config is readable");
-    // Scope to the `execution:` block; `enabled:` also appears under every provider.
     let block = text.split_once("\nexecution:").map_or_else(
         || {
             panic!(
@@ -124,7 +122,6 @@ fn headless_chat_does_not_run_commands() {
         setting, "false",
         "headless-chat runs no commands, so its execution block must say so"
     );
-    // Absent tools keep a careless `enabled: true` harmless.
     let guests = std::fs::read_to_string(
         common::repo_root().join("scripts/distributions/headless-chat/guests"),
     )

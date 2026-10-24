@@ -138,7 +138,6 @@ impl Manifest {
             version: string("version")?,
             api_version: string("api-version")?,
             kind: string("kind")?,
-            // Absent reads as empty: the only optional key.
             description: table
                 .get("description")
                 .and_then(toml::Value::as_str)

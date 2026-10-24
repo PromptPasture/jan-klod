@@ -46,13 +46,12 @@ fn log(level: LogLevel, message: &str) {
 /// Parse YAML front matter from `content`, returning `(front_matter, body)`.
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     let rest = content.strip_prefix("---")?;
-    // Allow `---\n` or `---\r\n`
     let rest = rest
         .strip_prefix('\n')
         .or_else(|| rest.strip_prefix("\r\n"))?;
     let end = rest.find("\n---")?;
     let front = &rest[..end];
-    let after_close = &rest[end + 4..]; // skip "\n---"
+    let after_close = &rest[end + 4..];
     let body = after_close
         .strip_prefix('\n')
         .or_else(|| after_close.strip_prefix("\r\n"))

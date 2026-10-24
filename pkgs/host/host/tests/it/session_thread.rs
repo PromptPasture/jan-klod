@@ -45,7 +45,6 @@ extensions:
     )
     .expect("writes the config");
 
-    // Counts calls, so "both ran" means the provider was hit twice.
     let completions = Arc::new(AtomicU32::new(0));
     let counter = Arc::clone(&completions);
     let factory = move || -> jk_wasm::route::HttpFn {
@@ -76,7 +75,6 @@ fn two_threads_queue_turns_in_two_sessions_without_holding_the_session() {
     };
     let (jobs, queued) = queue::<AgentSession>();
 
-    // Spawn eagerly: a lazy iterator would run after the loop had already ended.
     let mut callers = Vec::new();
     for session in ["s1", "s2"] {
         let jobs = jobs.clone();
@@ -86,7 +84,6 @@ fn two_threads_queue_turns_in_two_sessions_without_holding_the_session() {
             })
         }));
     }
-    // The loop ends when the last handle goes; the callers hold clones.
     drop(jobs);
 
     serve(&mut agent, &queued);

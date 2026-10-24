@@ -46,7 +46,6 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         git(&workspace_dir, &["init", "--quiet"]),
         "git init succeeds"
     );
-    // Local identity (doesn't touch machine's git config).
     git(
         &workspace_dir,
         &["config", "user.email", "test@example.com"],
@@ -96,7 +95,6 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         .expect("show succeeds");
     assert!(show.contains("add main"), "the commit is shown: {show}");
 
-    // Refused by the guest before any process spawns.
     for mutating in [
         r#"{"op":"commit"}"#,
         r#"{"op":"push"}"#,
@@ -113,7 +111,6 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         assert!(out.contains("reads a repository only"), "{out}");
     }
 
-    // Flag injection is refused by the op allowlist.
     let smuggled = tool
         .invoke(r#"{"op":"show","rev":"--upload-pack=touch /tmp/pwned"}"#)
         .expect("a refusal is a result");

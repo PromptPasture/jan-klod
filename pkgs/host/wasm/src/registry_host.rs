@@ -482,7 +482,6 @@ impl McpExtension {
     /// # Errors
     /// Returns an error string if the tool errors or the guest traps.
     pub fn invoke_tool(&mut self, qualified_name: &str, arguments: &str) -> Result<String, String> {
-        // Strip the server prefix; the MCP registry resolves by bare tool name per-server.
         let bare = qualified_name.split("::").last().unwrap_or(qualified_name);
         let reg = self.world.jan_klod_interfaces_mcp_registry();
         match reg.call_invoke_tool(&mut self.store, bare, arguments) {
@@ -759,8 +758,6 @@ impl jk_protocol::intercept::ToolInvoker for LazyRegistryFleet {
     ) -> Option<jk_protocol::intercept::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
-            // Like LazyToolFleet: instantiation failures feed back as this call's
-            // result, not an abort.
             Err(err) => Some(jk_protocol::intercept::ToolInvocation {
                 content: format!("registry fleet failed to instantiate: {err}"),
                 failed: true,

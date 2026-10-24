@@ -20,7 +20,6 @@ pub fn width(text: &str) -> usize {
 #[must_use]
 pub fn wrap(text: &str, max: usize) -> Vec<String> {
     if max == 0 {
-        // Nothing fits in zero cells; one empty line keeps the caller's row shape.
         return vec![String::new()];
     }
 
@@ -28,7 +27,6 @@ pub fn wrap(text: &str, max: usize) -> Vec<String> {
         .chars()
         .take_while(|c| *c == ' ' || *c == '\t')
         .collect();
-    // An indent as wide as the pane would leave no room and loop forever.
     let indent = if width(&indent) >= max {
         String::new()
     } else {
@@ -65,7 +63,6 @@ pub fn wrap(text: &str, max: usize) -> Vec<String> {
             continue;
         }
 
-        // Wider than the pane: break only between graphemes, or a combining mark is stranded.
         for cluster in word.graphemes(true) {
             let cluster_width = width(cluster);
             if current_width + cluster_width > max && current_width > hanging {
@@ -102,7 +99,6 @@ pub fn hard_wrap(text: &str, max: usize) -> Vec<String> {
         current.push_str(cluster);
         used += cells;
     }
-    // A blank line is still a line: a caller laying out rows needs it to exist.
     lines.push(current);
     lines
 }
@@ -159,7 +155,6 @@ mod tests {
     /// Emoji clusters are never split.
     #[test]
     fn a_grapheme_cluster_is_never_split() {
-        // Family emoji: multiple scalars joined by zero-width joiners.
         let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
         assert!(family.chars().count() > 1, "this test needs a cluster");
         let text = format!("{family}{family}{family}");
@@ -213,12 +208,10 @@ mod tests {
         assert_fits(&lines, 12);
         assert_eq!(lines.concat(), aligned, "a cell was invented or lost");
 
-        // Leading whitespace is content here, not an indent to reproduce.
         assert_eq!(hard_wrap("    x", 10), vec!["    x".to_string()]);
         assert_eq!(hard_wrap("", 10), vec![String::new()], "a blank line stays");
         assert_eq!(hard_wrap("anything", 0), vec![String::new()]);
 
-        // Wide clusters still cannot be halved.
         let cjk = hard_wrap("日本語のテキストです", 5);
         assert_fits(&cjk, 5);
         assert_eq!(cjk.concat(), "日本語のテキストです");

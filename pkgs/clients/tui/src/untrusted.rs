@@ -18,7 +18,6 @@ use crate::wrap::width;
 
 /// Whether `c` must not reach a frame.
 const fn is_hostile(c: char) -> bool {
-    // `is_control` covers C0, DEL and C1.
     if c.is_control() {
         return true;
     }
@@ -43,9 +42,7 @@ pub fn inert_within(text: &str, cells: usize, marker: &str) -> String {
     if cells == 0 {
         return String::new();
     }
-    // The marker's width comes out of the budget.
     let Some(budget) = cells.checked_sub(width(marker)) else {
-        // No room for even the marker: cut to the marker itself, truncated.
         return marker.chars().take(cells).collect();
     };
     let mut out = String::new();

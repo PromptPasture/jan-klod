@@ -141,7 +141,6 @@ fn a_guest_cannot_read_the_hosts_filesystem() {
 /// empty environment is not mistaken for the boundary.
 #[test]
 fn a_guest_cannot_read_the_hosts_environment() {
-    // Set before instantiation: `inherit_env` snapshots when the WasiCtx is built.
     std::env::set_var("OPENAI_API_KEY", "sk-guest-env-must-not-leak");
     std::env::set_var("JAN_KLOD_TOKEN", "bearer-guest-env-must-not-leak");
     let engine = Engine::default();
@@ -159,7 +158,6 @@ fn a_guest_cannot_read_the_hosts_environment() {
         "and gets no environment at all: {report}"
     );
 
-    // A guest sees only its own argv[0], not the host's config or bind address.
     let args = tool.invoke(r#"{"op":"args"}"#).unwrap_or_else(|err| err);
     for ours in ["--bind", "config.yaml", "serve", "--live"] {
         assert!(
@@ -192,7 +190,6 @@ fn a_guest_gets_no_standard_input() {
         return;
     }
 
-    // `--exact` needs the module-qualified path; derive it to avoid drift.
     let test_path = module_path!().split_once("::").map_or_else(
         || TEST_NAME.to_owned(),
         |(_, module)| format!("{module}::{TEST_NAME}"),

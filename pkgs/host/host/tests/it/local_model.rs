@@ -33,8 +33,6 @@ impl FakeOllama {
     fn start(answer: &'static str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
-        // Blocking accept: `Drop` wakes it with a connection. Non-blocking would
-        // also leak `O_NONBLOCK` to accepted sockets on BSD (verified on this host).
         let requests = Arc::new(AtomicU32::new(0));
         let saw_authorization = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicU32::new(0));
@@ -50,52 +48,45 @@ impl FakeOllama {
                 log.push(format!("{what}: {e:?}"));
             }
         };
-        thread::spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok((mut socket, _)) => {
-                        // The connection `Drop` makes to release this accept
-                        // carries no request, so leave before counting it.
-                        if stopped.load(Ordering::Relaxed) != 0 {
-                            break;
-                        }
-                        counted.fetch_add(1, Ordering::Relaxed);
-                        // Read the whole request under a deadline: answering early leaves
-                        // bytes unread, so the close sends RST and discards the response.
-                        if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
-                            fault("set_read_timeout", &e);
-                        }
-                        let request = match common::read_request(&mut socket) {
-                            Ok(request) => request.to_lowercase(),
-                            Err(e) => {
-                                fault("read_request", &e);
-                                continue;
-                            }
-                        };
-                        if request.contains("authorization:") {
-                            authed.fetch_add(1, Ordering::Relaxed);
-                        }
-                        let body = serde_json::json!({
-                            "choices": [{
-                                "message": { "role": "assistant", "content": answer },
-                                "finish_reason": "stop"
-                            }]
-                        })
-                        .to_string();
-                        let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                            body.len()
-                        );
-                        if let Err(e) = socket.write_all(response.as_bytes()) {
-                            fault("write_all", &e);
-                        }
-                    }
-                    // Stop and record rather than spin; the test checks `faults` first.
-                    Err(e) => {
-                        fault("accept", &e);
+        thread::spawn(move || loop {
+            match listener.accept() {
+                Ok((mut socket, _)) => {
+                    if stopped.load(Ordering::Relaxed) != 0 {
                         break;
                     }
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
+                        fault("set_read_timeout", &e);
+                    }
+                    let request = match common::read_request(&mut socket) {
+                        Ok(request) => request.to_lowercase(),
+                        Err(e) => {
+                            fault("read_request", &e);
+                            continue;
+                        }
+                    };
+                    if request.contains("authorization:") {
+                        authed.fetch_add(1, Ordering::Relaxed);
+                    }
+                    let body = serde_json::json!({
+                        "choices": [{
+                            "message": { "role": "assistant", "content": answer },
+                            "finish_reason": "stop"
+                        }]
+                    })
+                    .to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    if let Err(e) = socket.write_all(response.as_bytes()) {
+                        fault("write_all", &e);
+                    }
+                }
+                Err(e) => {
+                    fault("accept", &e);
+                    break;
                 }
             }
         });
@@ -127,7 +118,6 @@ fn a_keyless_local_model_completes_a_turn_over_a_real_socket() {
 
     let ollama = FakeOllama::start("the local model answered");
     let config = dir.join("config.yaml");
-    // Shape of the shipped `provider.ollama` block.
     std::fs::write(
         &config,
         format!(
@@ -146,8 +136,6 @@ extensions:
     .unwrap();
 
     let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
-    // The real client and policy, not a canned `HttpFn`: loopback is reachable only
-    // because the policy lifts the provider's `base-url` from config.
     let policy = runtime.egress_policy();
     let factory = move || -> jk_wasm::route::HttpFn {
         let policy = policy.clone();
@@ -174,7 +162,6 @@ extensions:
         ollama.requests.load(Ordering::Relaxed) >= 1,
         "the request actually crossed a socket"
     );
-    // Check faults before the header counter, which an unreported read failure would satisfy vacuously.
     let faults = ollama
         .faults
         .lock()
@@ -186,7 +173,6 @@ extensions:
          the request it answered: {faults:?}"
     );
 
-    // No key configured, so no Authorization header may be invented.
     assert_eq!(
         ollama.saw_authorization.load(Ordering::Relaxed),
         0,
@@ -204,7 +190,6 @@ fn an_unreachable_provider_says_so_and_names_the_endpoint() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // Bind and immediately drop, so the port is real and closed.
     let port = {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds");
         listener.local_addr().expect("addr").port()
@@ -251,7 +236,6 @@ extensions:
         !message.contains("ProviderError {"),
         "no generated-binding Debug reaches the user: {message}"
     );
-    // A typo'd base-url and a denied origin fail the same, so hint at egress.
     assert!(
         message.contains("egress"),
         "the message mentions egress: {message}"

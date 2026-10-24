@@ -1,7 +1,6 @@
 //! `tool-edit` — hash-anchored line edits routed through `host-fs`.
 //! Anchor is `fnv1a32(lineno \0 text)`; a stale anchor is rejected without a write.
 
-// Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod edit {
 
@@ -160,7 +159,6 @@ mod edit {
 
         #[test]
         fn identical_lines_get_distinct_anchors() {
-            // Position + text are hashed, so duplicates resolve uniquely.
             let view = render_view("}\n}\n");
             let lines: Vec<&str> = view.lines().collect();
             assert_ne!(
@@ -203,7 +201,6 @@ mod edit {
         fn stale_anchor_is_rejected_without_a_write() {
             let content = "a\nb\nc\n";
             let stale = anchor_of(content, 2);
-            // The file moved on: line 2 is now at line 3.
             let changed = "header\na\nb\nc\n";
             let err = replace(changed, &stale, None, "B").unwrap_err();
             assert!(err.contains("matches no line"), "got {err}");
@@ -355,7 +352,6 @@ mod component {
                 return Ok(guest_fs::truncate(edit::render_view(&content)));
             }
 
-            // `contents` must be present (even empty); absent key would silently delete.
             let contents = field("contents").ok_or(ToolError::InvalidArguments)?;
             let applied = match op.as_str() {
                 "replace" => {

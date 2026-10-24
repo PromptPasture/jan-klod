@@ -49,7 +49,6 @@ fn every_tests_directory_belongs_to_a_crate_cargo_builds() {
     let mut orphans = Vec::new();
     for dir in &dirs {
         let Some(parent) = dir.parent() else { continue };
-        // Beside package manifest (cargo builds) or no manifest (fixture).
         if is_package(parent) == Some(false) {
             orphans.push(dir.clone());
         }

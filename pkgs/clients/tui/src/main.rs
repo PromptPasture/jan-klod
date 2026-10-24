@@ -49,7 +49,6 @@ fn main() -> ExitCode {
     let use_tui = mode == Mode::Tui;
     let session = parsed.session.unwrap_or_else(|| "cli".to_string());
 
-    // A full-screen TUI cannot share the terminal with gateway log lines.
     let logs = if use_tui {
         Logs::Discard
     } else {
@@ -57,7 +56,6 @@ fn main() -> ExitCode {
     };
     let (transport, _gateway): (Arc<dyn Transport>, Option<Child>) = match parsed.addr {
         Some(addr) => {
-            // Held until `main` returns; dropping it early would orphan the gateway.
             let spawned = ensure_gateway(&addr);
             (Arc::new(Rest::new(addr)), spawned)
         }
@@ -140,7 +138,6 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                  [--addr <host:port>] [--ascii] [session]"
             ));
         } else if looks_like_an_address(arg) {
-            // Refused rather than used as a session: a session named `127.0.0.1:8787` is never meant.
             return Err(format!(
                 "jan-klod: `{arg}` looks like an address, not a session id. Use \
                  `--addr {arg}` to drive a gateway that is already running."
@@ -207,13 +204,10 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
             }
             StreamEvent::Done(text) => final_answer = text,
             StreamEvent::Tool { name, .. } => eprint!("\n  ⚙ {name}… "),
-            // Closes the open line. The content is not printed: it is often long, and the answer arrives as `Done`.
             StreamEvent::ToolResult { .. } => eprint!("✓"),
             StreamEvent::Warning(msg) => eprint!("\n  ⚠ {msg}"),
             StreamEvent::Error(msg) => eprint!("\n  error: {msg}"),
-            // No menu or panes here; ignoring a contribution is valid by the contract.
             StreamEvent::Contributions(_) => {}
-            // The turn blocks until answered, so ask on the stdin the REPL owns.
             StreamEvent::Prompt {
                 session: prompt_session,
                 question,
@@ -228,7 +222,6 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
                     Ok(_) if !typed.trim().is_empty() => typed.trim().to_string(),
                     _ => default,
                 };
-                // The notification's session, not this loop's: a client may drive several (#103).
                 if let Err(err) = transport.answer(&prompt_session, &answer) {
                     eprintln!("  error sending answer: {err}");
                 }
@@ -256,7 +249,6 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
         bin.display()
     );
     let child = Command::new(&bin)
-        // `--bind` keeps config/ext unnamed so the gateway resolves them itself.
         .args(["serve", "--bind", addr])
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -376,7 +368,6 @@ mod tests {
 
     #[test]
     fn an_address_where_a_session_belongs_names_the_flag() {
-        // Every old positional spelling is refused, with the fix named.
         for typo in [
             "127.0.0.1:8787",
             "localhost:8787",

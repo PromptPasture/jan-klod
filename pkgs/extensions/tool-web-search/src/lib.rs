@@ -7,7 +7,6 @@
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 const TIMEOUT_MS: u32 = 10_000;
 
-// Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod search {
     use std::fmt::Write as _;
@@ -48,7 +47,6 @@ mod search {
 
         let encoded_query = url_encode(query);
 
-        // base_url may already carry a query string.
         let separator = if base_url.contains('?') { "&" } else { "?" };
         let url = format!("{base_url}{separator}q={encoded_query}&api_key={api_key}");
         Ok(url)
@@ -266,7 +264,6 @@ mod component {
             let base_url = BASE_URL.with(std::cell::Cell::take);
             let api_key = API_KEY.with(std::cell::Cell::take);
 
-            // take() empties the cells; put the values back for the next call.
             BASE_URL.with(|u| u.set(base_url.clone()));
             API_KEY.with(|k| k.set(api_key.clone()));
 

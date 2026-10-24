@@ -10,7 +10,6 @@ const DEFAULT_COUNT: u64 = 20;
 /// Longest accepted `rev` or `path`, bounding argv.
 const MAX_ARG_LEN: usize = 200;
 
-// Only the wasm32 glue calls this module outside tests; the allow covers native builds.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod git {
     use crate::{DEFAULT_COUNT, MAX_ARG_LEN, MAX_COUNT};
@@ -249,7 +248,6 @@ mod git {
 
         #[test]
         fn an_argument_that_looks_like_an_option_is_refused() {
-            // The classic: a "revision" that is really `git show --upload-pack=…`.
             let err = argv(&Request {
                 rev: Some("--upload-pack=sh"),
                 ..req("show")
@@ -436,7 +434,6 @@ mod component {
                 count: value.get("count").and_then(serde_json::Value::as_u64),
             };
 
-            // Refusals are results, not tool errors, so the model can correct the argument.
             let args = match git::argv(&request) {
                 Ok(args) => args,
                 Err(message) => return Ok(format!("REFUSED: {message}")),

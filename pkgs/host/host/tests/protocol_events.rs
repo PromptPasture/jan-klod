@@ -33,7 +33,6 @@ fn every_event() -> Vec<Event> {
 #[test]
 fn every_event_maps_to_a_notification() {
     for event in every_event() {
-        // Catches a plausible but wrong notification.
         let expected = match &event {
             Event::TextDelta(_) => "TextDelta",
             Event::ToolInvoked(_) => "ToolInvoked",
@@ -134,9 +133,6 @@ fn the_notifications_without_an_event_are_accounted_for() {
          `surface/contributions`"
     );
 }
-
-// SSE frames are a projection of the protocol: every key a frame carries must reach
-// its notification with an equal value.
 
 /// Frame keys the protocol spells differently: the `error` frame's `error` is `message`, to match `warning`.
 const RENAMES: &[(&str, &str)] = &[("error", "message")];

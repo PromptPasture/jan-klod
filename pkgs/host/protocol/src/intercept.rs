@@ -391,7 +391,6 @@ impl Dispatcher {
                                 ),
                             });
                         }
-                        // Fail open.
                         break;
                     }
                 }

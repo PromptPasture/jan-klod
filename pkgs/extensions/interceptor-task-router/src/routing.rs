@@ -81,10 +81,8 @@ mod tests {
 
     #[test]
     fn a_route_yields_its_model_in_either_form() {
-        // Bare is the form that means what it says.
         assert_eq!(model_from_route("gpt-4o"), Some("gpt-4o"));
         assert_eq!(model_from_route("qwen2.5:7b"), Some("qwen2.5:7b"));
-        // `provider/model` is accepted for existing configs; only the model is applied.
         assert_eq!(model_from_route("openai/gpt-4o"), Some("gpt-4o"));
         assert_eq!(model_from_route("ollama/qwen2.5:7b"), Some("qwen2.5:7b"));
         assert_eq!(model_from_route("openai/"), None);
@@ -93,7 +91,6 @@ mod tests {
 
     #[test]
     fn a_provider_prefix_is_reported_rather_than_silently_dropped() {
-        // The chain is fixed at boot, so the provider half cannot be honoured and must be reported.
         assert_eq!(unhonoured_provider("groq/llama-3.3-70b"), Some("groq"));
         assert_eq!(
             unhonoured_provider("gpt-4o"),

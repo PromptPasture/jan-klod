@@ -199,9 +199,7 @@ impl Glyph {
             Self::DiffAdded => ("+", "+"),
             Self::DiffRemoved => ("-", "-"),
             Self::Caret => ("›", ">"),
-            // The doubled idle caret: the same "type here", but `Enter` does something else.
             Self::CaretSteering => ("»", ">>"),
-            // `V` rather than `v` (`Expanded`): both mean "more this way", told apart by position.
             Self::MoreBelow => ("⇣", "V"),
             Self::Elided => ("…", "..."),
         }
@@ -278,7 +276,6 @@ impl Theme {
     }
 
     fn detect_mode(lookup: &impl Fn(&str) -> Option<String>) -> Mode {
-        // Presence, not value, wins outright.
         if lookup("NO_COLOR").is_some() {
             return Mode::Mono;
         }
@@ -286,7 +283,6 @@ impl Theme {
             Some("dark") => return Mode::Dark,
             Some("light") => return Mode::Light,
             Some("mono") => return Mode::Mono,
-            // An unrecognised value falls through: a typo should not stop the client.
             _ => {}
         }
         lookup("COLORFGBG")
@@ -309,7 +305,6 @@ impl Theme {
         if force_ascii {
             return GlyphSet::Ascii;
         }
-        // POSIX precedence: the first variable that is set decides, even against UTF-8.
         let locale = ["LC_ALL", "LC_CTYPE", "LANG"].into_iter().find_map(lookup);
         match locale {
             Some(locale) if is_utf8(&locale) => GlyphSet::Unicode,
@@ -478,7 +473,6 @@ mod tests {
 
     /// WCAG 2.1 relative luminance of a role's truecolor form. Only truecolor is
     /// checked: the downsampled forms map onto palettes this crate does not define.
-    // Written as the WCAG weighted sum; `suboptimal_flops` would obscure it.
     #[allow(clippy::suboptimal_flops)]
     fn relative_luminance(color: Color) -> f64 {
         let Color::Rgb(r, g, b) = color else {
@@ -556,12 +550,10 @@ mod tests {
     /// one light enough. `chalk` (light raised) and `ink-2` (dark code surface)
     /// demand ranges that do not overlap. If this fails, a surface moved and #135
     /// is worth reopening.
-    // Solved WCAG ratios for the foreground; `suboptimal_flops` would obscure them.
     #[allow(clippy::suboptimal_flops)]
     #[test]
     fn no_single_ramp_step_can_give_muted_an_aa_floor_from_both_ends() {
         const AA: f64 = 4.5;
-        // ratio = (L_light + 0.05) / (L_dark + 0.05): a ceiling vs light, a floor vs dark.
         let light_raised = relative_luminance(
             Theme::new(Mode::Light, Depth::TrueColor, GlyphSet::Unicode).raised(),
         );
@@ -781,7 +773,6 @@ mod tests {
 
     #[test]
     fn detection_reads_nothing_the_caller_did_not_hand_it() {
-        // Opposites of the defaults, injected only: a `std::env` read would not match.
         let theme = detect(
             &[
                 ("JAN_KLOD_THEME", "light"),
@@ -820,7 +811,6 @@ mod tests {
                 let text = fs::read_to_string(&path).expect("a readable source file");
                 checked += 1;
                 for (n, line) in text.lines().enumerate() {
-                    // A `//` inside a string only hides code: this can miss a literal, never invent one.
                     let code = line.split("//").next().unwrap_or_default();
                     assert!(
                         !code.contains("Color::"),
@@ -835,7 +825,6 @@ mod tests {
             }
         }
 
-        // A scan that finds nothing would pass for the wrong reason.
         assert!(
             checked >= 7,
             "only {checked} files were scanned — this test has stopped finding \
@@ -869,8 +858,6 @@ mod tests {
 
     #[test]
     fn monochrome_still_tells_every_state_apart() {
-        // Carets are located, not read, so they are excluded. The pair is checked
-        // against each other in `the_two_carets_are_told_apart_in_both_vocabularies`.
         let states = Glyph::ALL
             .iter()
             .filter(|g| !matches!(**g, Glyph::Caret | Glyph::CaretSteering));
@@ -943,7 +930,6 @@ mod tests {
                 Theme::new(mode, Depth::Indexed256, GlyphSet::Unicode).body(),
                 Color::Indexed(_)
             ));
-            // Basic16 is named variants, so only "not Rgb or Indexed" can be asserted.
             let basic = Theme::new(mode, Depth::Basic16, GlyphSet::Unicode).body();
             assert!(!matches!(basic, Color::Rgb(..) | Color::Indexed(_)));
         }
@@ -975,7 +961,6 @@ mod tests {
 
         assert_eq!(dark.background(), darkest);
         assert_eq!(light.background(), lightest);
-        // No second palette: light text comes from the same ramp.
         assert!(RAMP
             .iter()
             .any(|s| s.resolve(Depth::TrueColor) == light.body()));

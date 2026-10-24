@@ -136,7 +136,6 @@ fn a_client_negotiates_then_drives_the_read_only_commands() {
     let served = exchange(
         &mut agent,
         &[
-            // Pre-handshake: refused (unverified version).
             r#"{"jsonrpc":"2.0","id":1,"method":"session/list"}"#,
             &format!(
                 r#"{{"jsonrpc":"2.0","id":2,"method":"protocol/hello","params":{{"version":"{PROTOCOL_VERSION}"}}}}"#
@@ -154,7 +153,6 @@ fn a_client_negotiates_then_drives_the_read_only_commands() {
         "no turn ran, so nothing was reported unprompted"
     );
 
-    // Nothing is served before the handshake.
     assert_eq!(code(responses[0]), Some(jsonrpc::INVALID_REQUEST));
     assert_eq!(responses[0].id, jsonrpc::Id::Number(1));
 
@@ -169,7 +167,6 @@ fn a_client_negotiates_then_drives_the_read_only_commands() {
         .to_owned();
     assert!(!created.is_empty(), "a created session has an id");
 
-    // String id is echoed back.
     assert_eq!(responses[3].id, jsonrpc::Id::Text("four".to_owned()));
     assert!(
         result(responses[3])["sessions"].is_array(),
@@ -177,13 +174,11 @@ fn a_client_negotiates_then_drives_the_read_only_commands() {
         result(responses[3])
     );
 
-    // Unknown session: empty transcript, as REST GET returns.
     assert_eq!(
         result(responses[4]),
         &serde_json::json!({ "id": "nothing-here", "messages": [] })
     );
 
-    // Fork with no events is a caller error, not a store failure.
     assert_eq!(code(responses[5]), Some(jsonrpc::INVALID_PARAMS));
 }
 
@@ -207,7 +202,6 @@ fn an_incompatible_client_is_refused_and_hung_up_on() {
         "the second frame was never served: {responses:#?}"
     );
     assert_eq!(code(responses[0]), Some(jsonrpc::INCOMPATIBLE_VERSION));
-    // Refusal carries core's version, since no HelloResult is sent.
     let jsonrpc::Outcome::Error(error) = &responses[0].outcome else {
         panic!("an error")
     };
@@ -223,12 +217,10 @@ fn a_client_one_minor_behind_is_refused() {
     let Some((_dir, mut agent)) = booted("minor") else {
         return;
     };
-    // Guard: update the frame below if PROTOCOL_VERSION leaves 0.2.
     assert!(
         PROTOCOL_VERSION.starts_with("0.2."),
         "this case is written against a 0.2 core, not {PROTOCOL_VERSION}"
     );
-    // Client 0.1.0 is one minor behind the 0.2 core.
     let served = exchange(
         &mut agent,
         &[r#"{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{"version":"0.1.0"}}"#],
@@ -256,7 +248,6 @@ fn tool_then_answer() -> (Arc<AtomicU32>, impl Fn() -> HttpFn) {
         Box::new(move |_m, _u, _h, body, _t| {
             let request = String::from_utf8_lossy(body.unwrap_or(b"")).into_owned();
             let body = if request.contains("\"grammar\"") {
-                // Intent classifier: "agentic" runs the loop.
                 serde_json::json!({
                     "choices": [{
                         "message": { "role": "assistant", "content": "agentic" },
@@ -264,8 +255,6 @@ fn tool_then_answer() -> (Arc<AtomicU32>, impl Fn() -> HttpFn) {
                     }]
                 })
             } else if request.contains(r#""role":"tool""#) {
-                // The turn resumed after a tool ran. A cancelled turn never
-                // gets here, which is what the count proves.
                 counted.fetch_add(1, Ordering::Relaxed);
                 serde_json::json!({
                     "choices": [{
@@ -274,7 +263,6 @@ fn tool_then_answer() -> (Arc<AtomicU32>, impl Fn() -> HttpFn) {
                     }]
                 })
             } else {
-                // First completion: call a tool the permission gate will ask about.
                 serde_json::json!({
                     "choices": [{
                         "message": {
@@ -370,8 +358,6 @@ fn a_turn_streams_its_events_and_answers_the_request() {
     );
     assert!(answered["agentic"].is_boolean(), "{answered}");
 
-    // Second connection: a fork queued behind the turn is refused as mid-turn,
-    // and the session must outlive the connection that created it.
     let next = exchange(
         &mut agent,
         &[
@@ -383,7 +369,6 @@ fn a_turn_streams_its_events_and_answers_the_request() {
     );
     let next = self::responses(&next);
     assert_eq!(next.len(), 2);
-    // First test to reach the fork success path.
     let forked = result(next[1]);
     assert!(
         forked["copied"].as_u64().unwrap_or(0) >= 1,
@@ -404,7 +389,6 @@ fn a_client_can_fork_at_a_seq_it_read_from_session_get() {
         r#"{{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{{"version":"{PROTOCOL_VERSION}"}}}}"#
     );
 
-    // Run the turn on its own exchange: a session/get queued behind it is refused as mid-turn.
     exchange(
         &mut agent,
         &[
@@ -423,7 +407,6 @@ fn a_client_can_fork_at_a_seq_it_read_from_session_get() {
     let responses = self::responses(&served);
     let transcript = result(responses[1]);
 
-    // The declared type must accept the real wire bytes, or it drifts unnoticed.
     let typed: jk_protocol::SessionGetResult = serde_json::from_value(transcript.clone())
         .unwrap_or_else(|e| panic!("session/get must match SessionGetResult: {e}: {transcript}"));
     assert_eq!(typed.id, "fork-src");
@@ -454,7 +437,6 @@ fn a_client_can_fork_at_a_seq_it_read_from_session_get() {
     let forked = result(next[1]);
     let child = forked["id"].as_str().expect("a fork names its new session");
 
-    // Inclusive: the child's transcript ends with the message forked at.
     let read_back = exchange(
         &mut agent,
         &[
@@ -495,7 +477,6 @@ fn a_cancel_stops_the_turn_instead_of_letting_it_finish() {
                 r#"{{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{{"version":"{PROTOCOL_VERSION}"}}}}"#
             ),
             r#"{"jsonrpc":"2.0","id":2,"method":"session/message","params":{"session":"rpc-cancel","message":"use bash to clean up, then report"}}"#,
-            // The sink reads this between the turn's own events, the only way to see a cancel mid-turn.
             r#"{"jsonrpc":"2.0","id":3,"method":"turn/cancel","params":{"session":"rpc-cancel"}}"#,
         ],
     );
@@ -538,8 +519,6 @@ fn a_confirmation_is_asked_and_answered_over_the_same_pipe() {
     let Some((_dir, mut agent)) = booted_gated("ask", provider) else {
         return;
     };
-    // Fail fast on a lost answer rather than wait out the default. Five seconds matches
-    // api_prompt.rs: the env var is process-global under plain `cargo test`.
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "5");
 
     let (core_in, mut to_core) = std::io::pipe().expect("a pipe");
@@ -567,7 +546,6 @@ fn a_confirmation_is_asked_and_answered_over_the_same_pipe() {
             let asked = line.contains(r#""method":"ask""#);
             seen.push(line);
             if asked {
-                // Only now, in reply to the question, is an answer accepted.
                 writeln!(
                     to_core,
                     r#"{{"jsonrpc":"2.0","id":3,"method":"turn/answer","params":{{"session":"rpc-ask","answer":"yes"}}}}"#
@@ -578,7 +556,7 @@ fn a_confirmation_is_asked_and_answered_over_the_same_pipe() {
                 break;
             }
         }
-        drop(to_core); // EOF, so the core's loop returns
+        drop(to_core);
         seen
     });
 
@@ -604,8 +582,6 @@ fn a_confirmation_is_asked_and_answered_over_the_same_pipe() {
 /// answer is the steered one. REST has no way to deliver a follow-up.
 #[test]
 fn a_follow_up_steers_the_turn_it_arrives_during() {
-    // Asserts on the answer text, not a call count: a dropped follow-up would
-    // still produce an unsteered second completion.
     let provider = || -> HttpFn {
         Box::new(move |_m, _u, _h, body, _t| {
             let request = String::from_utf8_lossy(body.unwrap_or(b"")).into_owned();
@@ -702,7 +678,7 @@ extensions:
         r#"{{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{{"version":"{PROTOCOL_VERSION}"}}}}"#
     )
     .expect("writes hello");
-    drop(stdin); // EOF, so the loop returns and the process exits
+    drop(stdin);
 
     let finished = child.wait_with_output().expect("the gateway runs");
     let stdout = String::from_utf8(finished.stdout).expect("stdout is utf-8");
@@ -727,7 +703,6 @@ extensions:
         serde_json::json!(PROTOCOL_VERSION)
     );
 
-    // Boot logs exist and went to stderr, so the clean stdout is not vacuous.
     assert!(
         stderr.contains("INFO ["),
         "the boot log is on stderr, where a client will not parse it: {stderr:?}"
@@ -746,7 +721,6 @@ fn the_shipped_client_drives_the_shipped_gateway_over_stdio() {
         common::TempDir(std::env::temp_dir().join(format!("jk-rpc-client-{}", std::process::id())));
     std::fs::create_dir_all(&dir.0).expect("creates the temp dir");
     let config = dir.0.join("config.yaml");
-    // Port 1 fails immediately, with no DNS lookup.
     std::fs::write(
         &config,
         "
@@ -765,7 +739,6 @@ extensions:
     .expect("writes the config");
     let ext = common::repo_root().join("ext");
 
-    // Ok only after the protocol/hello handshake succeeds.
     let transport = jk_tui::transport::Stdio::spawn_from(
         std::path::Path::new(env!("CARGO_BIN_EXE_jan-klod-gateway")),
         &[
@@ -781,7 +754,6 @@ extensions:
         let outcome = transport.stream_turn("client-stdio", "hello", &mut |event| {
             events.push(event);
         });
-        // Match the error text: a bare is_err also fits a crashed child.
         let Err(err) = outcome else {
             panic!("attempt {attempt}: nothing is listening on port 1, so the turn cannot succeed")
         };
@@ -789,7 +761,6 @@ extensions:
             err.contains("all providers failed"),
             "attempt {attempt}: the provider's own failure came back: {err}"
         );
-        // Warnings arrive as streamed notifications before the failure.
         assert!(
             events
                 .iter()
@@ -797,5 +768,4 @@ extensions:
             "attempt {attempt}: the fallback warnings streamed to the client: {events:?}"
         );
     }
-    // The second turn is the one that would expose a mismatched request id.
 }

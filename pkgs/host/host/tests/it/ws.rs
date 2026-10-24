@@ -135,11 +135,9 @@ fn talk_until(port: u16, frames: Vec<String>, gap: std::time::Duration, done: &s
                 .expect("connects");
             for frame in frames {
                 socket.send(Message::text(frame)).await.expect("sends");
-                // Let each frame take effect first: a turn/cancel sent before its turn starts would not act.
                 tokio::time::sleep(gap).await;
             }
             let mut seen = Vec::new();
-            // Stop at `done`, not on a drain timeout, so elapsed time measures the turn.
             while let Ok(Some(Ok(message))) =
                 tokio::time::timeout(std::time::Duration::from_secs(30), socket.next()).await
             {
@@ -382,7 +380,6 @@ extensions:
 /// The ask is answered on the same socket it arrived on, which REST would need a second connection for.
 #[test]
 fn a_turn_streams_and_its_ask_is_answered_in_band() {
-    // The elapsed assertion below tells an in-band answer from a timeout; "all done" cannot.
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");
     let started = std::time::Instant::now();
     let Some((_guard, agents)) = booted_asking("turn") else {

@@ -10,7 +10,6 @@ use whatlang::{detect, Lang};
 pub fn is_heuristic_eligible(text: &str) -> bool {
     match detect(text) {
         Some(info) if info.is_reliable() => info.lang() == Lang::Eng,
-        // Unreliable detection (e.g. "hi"): leave trivial greetings to heuristics, not a model call.
         _ => true,
     }
 }
@@ -36,7 +35,6 @@ mod tests {
 
     #[test]
     fn short_ambiguous_input_stays_eligible() {
-        // Short text: too ambiguous to bypass; must reach greeting heuristics.
         for s in ["hi", "ok", "hey", "yo"] {
             assert!(is_heuristic_eligible(s), "{s:?} should stay eligible");
         }

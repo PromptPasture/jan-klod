@@ -124,7 +124,6 @@ pub fn write_config_atomically(
     config_path: &Path,
     config: &serde_json::Value,
 ) -> Result<(), ConfigWriteError> {
-    // serde_yaml_ng uses IndexMap, so key order is deterministic.
     let yaml_bytes = serde_yaml_ng::to_string(config)
         .map_err(ConfigWriteError::Serialize)?
         .into_bytes();
@@ -136,10 +135,8 @@ pub fn write_config_atomically(
         source,
     })?;
 
-    // Digest the bytes that will be in place.
     let digest = calculate_digest(&yaml_bytes);
 
-    // If rename fails the temp file is left and `config.yaml` is unchanged.
     fs::rename(&tpath, config_path).map_err(|source| {
         let _ = fs::remove_file(&tpath);
         ConfigWriteError::Write {
@@ -148,7 +145,6 @@ pub fn write_config_atomically(
         }
     })?;
 
-    // Best effort: the config is already written if this fails.
     let dpath = digest_path(config_path);
     fs::write(&dpath, &digest).map_err(|source| ConfigWriteError::Digest {
         path: dpath.display().to_string(),
@@ -254,8 +250,8 @@ mod tests {
         assert!(dpath.exists());
 
         let digest_content = fs::read_to_string(&dpath).unwrap();
-        assert_eq!(digest_content.len(), 64); // SHA256 hex
-        assert!(!digest_content.ends_with('\n')); // No trailing newline
+        assert_eq!(digest_content.len(), 64);
+        assert!(!digest_content.ends_with('\n'));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

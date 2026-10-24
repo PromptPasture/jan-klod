@@ -34,18 +34,15 @@ fn the_generated_guest_answers_when_called() {
         return;
     };
 
-    // Instantiation runs `init` and `start`, so reaching the next line proves both succeeded.
     let mut guest = ToolExtension::instantiate(
         &engine,
         INSTANCE_ID,
         &component,
-        // Granted no workspace or command runner, as a real guest would be.
         None,
         ProcessRunner::disabled(),
     )
     .expect("the generated guest instantiates and starts");
 
-    // Yours: what your guest advertises to the model.
     let meta = guest.meta().expect("meta is readable");
     assert_eq!(meta.name, "tool-hello");
     assert!(
@@ -53,7 +50,6 @@ fn the_generated_guest_answers_when_called() {
         "a tool with no description is one the model cannot choose: {meta:?}"
     );
 
-    // Yours: what your `invoke` returns.
     let answer = guest.invoke("{}").expect("invoke succeeds");
     assert_eq!(
         answer, "replace me",

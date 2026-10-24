@@ -98,7 +98,6 @@ fn the_distribution_offers_the_agent_a_way_to_install_what_it_built() {
         names.contains(&"ext-install"),
         "the agent cannot install what it compiles: {names:?}"
     );
-    // Control: the fleet is real, not an empty list.
     assert!(
         names.contains(&"shell"),
         "the compiling half of the chain is missing too: {names:?}"
@@ -223,7 +222,6 @@ fn the_coding_distribution_refuses_the_same_command() {
         !ws.join("target").exists(),
         "no build happened: cargo never ran, so it created no target directory"
     );
-    // The model sees only `execution-failed`: tool-proc-probe does not pass ProcError's message through.
     assert!(
         turn.produced("execution-failed"),
         "and the model was told the call failed rather than being handed an \

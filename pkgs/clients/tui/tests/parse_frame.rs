@@ -38,7 +38,6 @@ fn parse_frame_maps_each_event_kind() {
             failed: false,
         })
     );
-    // `failed` must be read (#162): a failed call must not arrive as a success.
     assert_eq!(
         parse_frame(
             "tool-result",
@@ -50,7 +49,6 @@ fn parse_frame_maps_each_event_kind() {
             failed: true,
         })
     );
-    // An older core omits `failed`. That is a compatible mismatch, not malformed: refusing it would break the turn.
     assert_eq!(
         parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#),
         Some(StreamEvent::ToolResult {
@@ -87,7 +85,6 @@ fn a_tool_result_is_never_reported_as_an_error() {
 #[test]
 fn an_unknown_kind_is_dropped_rather_than_shown_as_a_failure() {
     assert_eq!(parse_frame("weird", "{}"), None);
-    // A plausible but unknown kind: the realistic case of a core one frame ahead.
     assert_eq!(
         parse_frame("tool-progress", r#"{"id":"c1","pct":40}"#),
         None
@@ -122,7 +119,6 @@ fn parse_frame_reads_a_prompt_with_its_options() {
 
 #[test]
 fn a_prompt_without_options_still_parses() {
-    // A future/odd prompt must not turn into an Error the user cannot answer.
     assert_eq!(
         parse_frame(
             "prompt",

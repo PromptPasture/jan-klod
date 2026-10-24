@@ -50,7 +50,6 @@ extensions:
             matches!(out, RunResult::Answered { .. }),
             "the turn completes"
         );
-        // Two messages per turn: the transcript projects from the event log.
         assert_eq!(
             agent.transcript("chat-1").len(),
             2,
@@ -118,7 +117,6 @@ extensions:
         dir.join("jan-klod.db").exists(),
         "store lands beside config.yaml"
     );
-    // cwd is process-wide; parallel tests can't chdir to `elsewhere` safely.
     assert!(
         !elsewhere.join("jan-klod.db").exists(),
         "not in a sibling directory"

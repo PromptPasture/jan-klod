@@ -66,7 +66,6 @@ fn glob_walks_the_workspace_and_respects_the_jail() {
         vec!["target/debug/build.rs"]
     );
 
-    // Path scopes walk; pattern relative to it, results are not.
     let scoped = tool
         .invoke(r#"{"pattern":"*.rs","path":"src/util"}"#)
         .expect("glob succeeds");

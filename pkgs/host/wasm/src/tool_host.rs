@@ -271,14 +271,11 @@ impl g_proc::Host for ToolHost {
         }
     }
 
-    // Unknown handle is `Denied`: a guest can pass any integer.
-
     fn granted(&mut self) -> Vec<String> {
         self.process.long_lived_names()
     }
 
     fn spawn(&mut self, name: String) -> Result<u32, g_proc::ProcError> {
-        // Admit before spawn: a spawn-then-check window breaks default-deny.
         self.children
             .spawn(&self.process, &name)
             .map_err(to_gen_proc_error)
@@ -357,7 +354,6 @@ impl ToolExtension {
     ///
     /// # Errors
     /// Returns a [`CoreError`] if wiring, instantiation, or lifecycle fails.
-    // Eight independent operator-granted bounds; a struct would hide which one a call site forgot.
     #[allow(clippy::too_many_arguments)]
     pub fn instantiate_with_http(
         engine: &Engine,
@@ -380,7 +376,6 @@ impl ToolExtension {
         g_storage::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = ToolHost {
-            // Not full stdio: stdin would let guests read permission prompt answers.
             wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: id.to_string(),
@@ -581,7 +576,6 @@ impl jk_protocol::intercept::ToolInvoker for ToolFleet {
             .tools
             .iter_mut()
             .find(|(meta, _)| meta.name == call.name)?;
-        // Non-asking tool: fall through to `invoke`; `None` would mean no such tool.
         let Some(outcome) = entry.1.invoke_asking(&call.arguments, driver) else {
             return self.invoke(call);
         };
@@ -605,7 +599,6 @@ impl jk_protocol::intercept::ToolInvoker for ToolFleet {
             .tools
             .iter_mut()
             .find(|(meta, _)| meta.name == call.name)?;
-        // Tool errors go back to the model as the result (#162), flagged failed.
         Some(match entry.1.invoke(&call.arguments) {
             Ok(content) => jk_protocol::intercept::ToolInvocation {
                 content,
@@ -656,7 +649,6 @@ impl LazyToolFleet {
     }
 
     /// Register a compiled tool to be instantiated on first use.
-    // Mirrors `instantiate_with_http`'s list; the two diverging would be the bug.
     #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
@@ -751,7 +743,6 @@ impl jk_protocol::intercept::ToolInvoker for LazyToolFleet {
     ) -> Option<jk_protocol::intercept::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
-            // Like live tools: error becomes the result; a lazy failure costs one call.
             Err(err) => Some(jk_protocol::intercept::ToolInvocation {
                 content: format!("tool fleet failed to instantiate: {err}"),
                 failed: true,

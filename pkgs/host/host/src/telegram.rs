@@ -80,14 +80,11 @@ pub fn poll_once(
     let body = fetch("GET", &get_updates_url(token, offset), &[], None)?;
     let updates = parse_updates(&body);
 
-    // Shared with the driver: a turn that stops to ask polls for its answer, consuming updates the outer loop
-    // must not re-fetch or lose.
     let cursor = Rc::new(Cell::new(next_offset(&updates).unwrap_or(offset)));
     let deferred = Rc::new(RefCell::new(Vec::new()));
 
     let mut queue: VecDeque<Update> = updates.into_iter().collect();
     while let Some(update) = queue.pop_front() {
-        // Refused before a session is created (#257); an empty allowlist denies all.
         if let Some(allowed) = allowed_senders {
             if !allowed.contains(&update.sender_id) {
                 eprintln!(
@@ -113,7 +110,6 @@ pub fn poll_once(
                 RunResult::Failed(reason) => format!("(sorry — the turn failed: {reason})"),
             };
         send_message(fetch, token, update.chat_id, &answer)?;
-        // Anything that arrived while this turn was waiting runs next, in order.
         queue.extend(deferred.borrow_mut().drain(..));
     }
 
@@ -165,7 +161,6 @@ impl Driver for ChatDriver<'_> {
             )
         };
         if send_message(self.fetch, self.token, self.chat_id, &question).is_err() {
-            // The question never reached anyone, so nobody can answer it.
             return prompt.default_answer.clone();
         }
         self.wait_for_reply()
@@ -188,7 +183,6 @@ impl ChatDriver<'_> {
                 if reply.is_none() && update.chat_id == self.chat_id {
                     reply = Some(update.text);
                 } else {
-                    // Not an answer to this question — queue it, never drop it.
                     self.deferred.borrow_mut().push(update);
                 }
             }

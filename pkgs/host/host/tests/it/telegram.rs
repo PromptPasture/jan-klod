@@ -142,7 +142,6 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
         if url.contains("getUpdates") {
             let n = polls.get();
             polls.set(n + 1);
-            // Poll 0 asks; poll 1 answers "yes" alongside an unrelated chat's message.
             let result = if n == 0 {
                 serde_json::json!([{
                     "update_id": 100,
@@ -299,7 +298,6 @@ fn assert_confirmation_flow(sent: &[String], next: i64, dir: &std::path::Path) {
         question.contains("always"),
         "the standing options are offered: {question}"
     );
-    // No terminal here, so the question itself must carry the decision.
     assert!(
         question.contains("note.txt") && question.contains("hi"),
         "the question names the file and shows the content: {question}"

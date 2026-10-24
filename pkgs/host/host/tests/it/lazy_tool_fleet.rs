@@ -48,13 +48,11 @@ fn a_pending_tool_is_not_instantiated_until_metadata_is_asked_for() {
         false,
     );
 
-    // Pushing a pending tool must not run the guest.
     assert!(
         !fleet.is_instantiated(),
         "a freshly-pushed pending tool must not be live yet"
     );
 
-    // Metadata request (the `select-tools` path in `build_agent`) triggers it.
     let names = fleet.tool_names().expect("the pending tool instantiates");
     assert_eq!(names, vec!["fs".to_string()]);
     assert!(
@@ -85,7 +83,6 @@ fn a_pending_tool_is_not_instantiated_until_invoked() {
     );
     assert!(!fleet.is_instantiated());
 
-    // The `tool-call` dispatch path triggers it, distinct from advertising.
     let result = fleet.invoke(&call(
         "fs",
         r#"{"op":"write","path":"a.txt","contents":"hi"}"#,

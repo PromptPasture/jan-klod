@@ -218,7 +218,6 @@ fn parse_instances(extensions: Value) -> Result<Vec<ExtensionInstance>, ConfigEr
             };
             let component = format!("{category}-{kind}");
             let mut config = Value::Object(entry);
-            // Only enabled instances need secrets resolved; disabled may reference unset ${VAR}.
             if enabled {
                 expand_env(&mut config, &id)?;
             }

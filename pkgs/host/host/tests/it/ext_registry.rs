@@ -58,7 +58,6 @@ fn a_name_from_a_local_index_installs_offline() {
     let source = write_index(&scratch, &component, &signature);
     let (http, asked) = canned_files(files);
 
-    // The path branch never calls `http` for the index; the recorded URLs prove it.
     let entries = ext_index::load(&source, &http).expect("a local index reads");
     assert_eq!(entries.len(), 1);
     assert_eq!(
@@ -101,7 +100,6 @@ fn bytes_that_are_not_the_ones_the_index_describes_are_refused() {
     let signature = String::from_utf8(files[2].1.clone()).expect("a .minisig is text");
     let source = write_index(&scratch, &honest, &signature);
 
-    // The index describes the honest bytes; the server answers with a flipped one.
     let middle = files[0].1.len() / 2;
     files[0].1[middle] ^= 0xff;
     let (http, _) = canned_files(files);
@@ -253,12 +251,10 @@ fn ext_search_prints_the_capabilities_of_every_hit() {
         "an entry nothing vouches for says so: {out}"
     );
 
-    // `list --remote` renders the same view.
     let (ok, listed, err) = gateway(&scratch.incoming, &["list", "--remote"]);
     assert!(ok, "ext list --remote failed: {err}");
     assert_eq!(listed, out, "one traversal, one rendering");
 
-    // No hits is a success with an explanation, not a failure.
     let (ok, empty, _) = gateway(&scratch.incoming, &["search", "nothing-like-this"]);
     assert!(ok, "a search with no hits is not a failure");
     assert!(
@@ -288,8 +284,6 @@ fn a_broken_registry_fails_the_command_with_a_message() {
         "a malformed index is a refusal, never a panic: {err}"
     );
 
-    // And a config that names no registry at all says which key is missing,
-    // rather than searching nothing.
     std::fs::write(
         scratch.incoming.join("config.yaml"),
         "registry:\n  trusted-keys: []\n",

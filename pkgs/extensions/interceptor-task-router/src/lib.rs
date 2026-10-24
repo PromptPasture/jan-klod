@@ -132,14 +132,12 @@ mod component {
                 );
                 return Ok(Decision::Proceed);
             };
-            // host-config serves quoted JSON strings.
             let route = raw.trim().trim_matches('"');
             let Some(model) = routing::model_from_route(route) else {
                 return Ok(Decision::Proceed);
             };
 
             if let Some(provider) = routing::unhonoured_provider(route) {
-                // Log names the endpoint request won't reach (chain fixed at boot).
                 log(
                     LogLevel::Warn,
                     &format!(

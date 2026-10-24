@@ -11,5 +11,4 @@ pub mod session_thread;
 pub mod sessions;
 pub mod setup;
 pub mod telegram;
-// Private: reached through `serve`'s router, never named by a caller.
 mod ws;

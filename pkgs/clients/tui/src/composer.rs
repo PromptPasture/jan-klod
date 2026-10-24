@@ -357,7 +357,6 @@ mod tests {
         assert_eq!(c.caret(), 0, "one cluster back is the start");
         c.right();
         assert_eq!(c.caret(), family.len());
-        // Overrunning either end is a no-op.
         c.right();
         c.right();
         assert_eq!(c.caret(), family.len());
@@ -431,7 +430,6 @@ mod tests {
         assert_eq!(shown.last().map(String::as_str), Some("line19"));
         assert_eq!(row, Composer::MAX_ROWS - 1, "the caret's row is on screen");
 
-        // And scrolling follows the caret rather than pinning the end.
         c.home();
         for _ in 0..15 {
             c.left();
@@ -467,7 +465,6 @@ mod tests {
 
     #[test]
     fn vertical_motion_moves_by_visual_row_not_logical_line() {
-        // One logical line wrapped into three rows of four cells.
         let mut c = typed("abcdefghijkl");
         assert_eq!(c.rows(4).0.len(), 3);
         assert!(c.on_last_row(4) && !c.on_first_row(4));
@@ -501,7 +498,6 @@ mod tests {
             "\nbravo",
             "column 5 on a two-character row clamps to its end"
         );
-        // The column is re-read from the caret on each press, so it is 2 here, not 5.
         c.up(40);
         assert_eq!(
             &c.text()[c.caret()..],
@@ -515,7 +511,6 @@ mod tests {
         let mut c = typed("日本語\nabcdef");
         c.end();
         c.up(40);
-        // `日本語` is six cells; the caret was at column 6 on `abcdef`.
         assert_eq!(
             c.caret(),
             "日本語".len(),

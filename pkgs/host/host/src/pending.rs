@@ -43,7 +43,6 @@ impl Pending {
     /// Deliver `answer` to the turn parked on `session`.
     /// `false` when nothing is parked, so the client is not told an answer arrived when it did not.
     pub fn answer(&self, session: &str, answer: String) -> bool {
-        // Removed, not read: an answer is delivered once.
         let Some(waiting) = self.lock().remove(session) else {
             return false;
         };
@@ -129,7 +128,6 @@ mod tests {
             !pending.answer("s1", "too late".to_string()),
             "an answer found a waiter that is gone"
         );
-        // And the session can be parked again.
         assert!(pending.park("s1").is_some());
     }
 
@@ -150,7 +148,6 @@ mod tests {
         let parked = pending.park("s1").expect("parks");
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                // Late enough that the waiter is already blocked.
                 std::thread::sleep(Duration::from_millis(20));
                 assert!(pending.answer("s1", "from elsewhere".to_string()));
             });

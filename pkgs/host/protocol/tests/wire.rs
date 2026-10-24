@@ -163,7 +163,6 @@ fn every_notification() -> Vec<Notification> {
             session: "s1".to_owned(),
             preview: "hello".to_owned(),
         },
-        // Fully populated: the schema is derived from this value.
         Notification::SurfaceContributions {
             extensions: vec![jk_protocol::Contributions {
                 extension: "interceptor.system".to_owned(),
@@ -281,7 +280,6 @@ fn a_request_is_the_command_flattened_into_the_envelope() {
         .expect("serializes"),
         r#"{"jsonrpc":"2.0","id":1,"method":"session/message","params":{"session":"s1","message":"hello"}}"#
     );
-    // No fields means no `params` member, which makes `flatten` legal over an adjacently tagged enum.
     assert_eq!(
         serde_json::to_string(&jsonrpc::Request::new(
             jsonrpc::Id::Number(2),
@@ -360,7 +358,6 @@ fn a_response_carries_either_a_result_or_an_error() {
         .expect("serializes"),
         r#"{"jsonrpc":"2.0","id":"a","error":{"code":-32601,"message":"no such command"}}"#
     );
-    // `data` is absent, not null, when there is none.
     let with_data = serde_json::to_string(&jsonrpc::Response::error(
         jsonrpc::Id::Number(1),
         jsonrpc::Error::new(jsonrpc::INTERNAL_ERROR, "boom")
@@ -381,7 +378,6 @@ fn the_error_codes_are_the_ones_the_spec_reserves() {
     assert_eq!(jsonrpc::METHOD_NOT_FOUND, -32601);
     assert_eq!(jsonrpc::INVALID_PARAMS, -32602);
     assert_eq!(jsonrpc::INTERNAL_ERROR, -32603);
-    // The server-defined range is -32000..=-32099.
     assert!(
         (-32099..=-32000).contains(&jsonrpc::INCOMPATIBLE_VERSION),
         "server-defined codes live in -32099..=-32000, got {}",
@@ -417,7 +413,6 @@ fn an_unreadable_frame_is_answered_with_a_null_id() {
     );
     let back: jsonrpc::Response = serde_json::from_str(&text).expect("parses");
     assert_eq!(back.id, jsonrpc::Id::Null, "null reads back as Null");
-    // Distinct from an id a client could send.
     assert_ne!(jsonrpc::Id::Null, jsonrpc::Id::Number(0));
     assert_ne!(jsonrpc::Id::Null, jsonrpc::Id::Text(String::new()));
 }
@@ -436,10 +431,8 @@ fn a_differing_minor_is_refused_while_the_major_is_zero() {
             "{refused} must not be accepted by a 0.1 core"
         );
     }
-    // From 1.0, additive minors pass.
     assert!(jk_protocol::compatible("1.3.0", "1.1.0"));
     assert!(!jk_protocol::compatible("1.3.0", "2.0.0"));
-    // This build is compatible with itself, which fails if PROTOCOL_VERSION stops parsing.
     assert!(jk_protocol::compatible(PROTOCOL_VERSION, PROTOCOL_VERSION));
 }
 
@@ -460,12 +453,6 @@ fn a_refused_handshake_says_what_the_core_speaks() {
     );
 }
 
-// ─── JSON Schema export ──────────────────────────────────────────────────────
-//
-// The schema under `schema/` is what non-Rust clients generate from. It is written by
-// the generator below from the same samples the wire tests use.
-//
-// `schemars` was rejected: seven extra packages, including a second major of `syn` (#41).
 /// Where the committed schema lives.
 fn schema_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/protocol.schema.json")
@@ -496,7 +483,6 @@ fn field_schema(value: &serde_json::Value) -> serde_json::Value {
             let first = items.first().unwrap_or_else(|| {
                 panic!("extend field_schema: a sample list must be non-empty, got {value}")
             });
-            // One element describes the list, so all elements must agree.
             let item = field_schema(first);
             assert!(
                 items.iter().all(|other| field_schema(other) == item),
@@ -504,8 +490,6 @@ fn field_schema(value: &serde_json::Value) -> serde_json::Value {
             );
             serde_json::json!({ "type": "array", "items": item })
         }
-        // Unsigned integer, not a bare `number`: every numeric field here is a count or
-        // position. The first genuine float lands in the panic below, on purpose.
         serde_json::Value::Number(number) if number.is_u64() => {
             serde_json::json!({ "type": "integer", "minimum": 0 })
         }
@@ -521,7 +505,6 @@ fn variant_schema(envelope: &serde_json::Value) -> serde_json::Value {
         .and_then(serde_json::Value::as_str)
         .expect("every envelope is tagged");
     let Some(params) = object.get("params") else {
-        // No fields: serde omits `params`.
         return serde_json::json!({
             "title": method,
             "type": "object",
@@ -621,7 +604,6 @@ fn response_schemas() -> Vec<serde_json::Value> {
 /// The whole schema, built from the samples above.
 fn generated_schema() -> serde_json::Value {
     let one_of = |mut variants: Vec<serde_json::Value>| {
-        // Sorted by title so reordering samples is not a schema change.
         variants.sort_by(|a, b| a["title"].as_str().cmp(&b["title"].as_str()));
         serde_json::json!({ "oneOf": variants })
     };
@@ -651,7 +633,6 @@ fn generated_schema() -> serde_json::Value {
                 "required": ["version"],
                 "additionalProperties": false,
             },
-            // Read side of the contract (#106): `session/fork` took a seq no client could read.
             "SessionGetResult": {
                 "type": "object",
                 "properties": {
@@ -743,7 +724,6 @@ fn the_schema_covers_every_command_and_notification() {
         .iter()
         .map(expected_notification_method)
         .collect::<Vec<_>>();
-    // The framed definitions are checked too: a command absent from the frame cannot be sent.
     for (def, names) in [
         ("Command", &commands),
         ("jsonrpc.Request", &commands),
@@ -821,7 +801,6 @@ fn the_hand_written_frames_still_match_the_types() {
         }
     }
 
-    // The error object, with `data` absent and present.
     let described = members(&schema["$defs"]["jsonrpc.Error"]["properties"]);
     for error in [
         jsonrpc::Error::new(jsonrpc::PARSE_ERROR, "bad json"),

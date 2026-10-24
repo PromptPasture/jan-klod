@@ -48,7 +48,6 @@ fn time_it(mut run: impl FnMut() -> String) -> (Duration, String) {
     let warm = run();
     let started = Instant::now();
     let out = run();
-    // Compare counts, not text: rg emits hits in thread-completion order.
     assert_eq!(
         hits(&warm),
         hits(&out),
@@ -88,7 +87,6 @@ fn setup(tag: &str, files: usize) -> Option<(Bench, usize)> {
         built.elapsed()
     );
 
-    // Compile and instantiate before any clock starts.
     let engine = Engine::default();
     let component = Component::from_file(&engine, common::repo_root().join("ext/tool-fs.wasm"))
         .expect("component compiles");

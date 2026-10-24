@@ -13,7 +13,6 @@ use crate::host::ConfigSection;
 use crate::http::{WireError, WireResponse};
 use crate::CoreError;
 
-// Lint exemptions scoped to macro output.
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod provider_bind {
     wasmtime::component::bindgen!({

@@ -1,7 +1,6 @@
 //! A TinyGo component answers a call through the committed fixture `pkgs/extensions/spike/spike.wasm`; needs no toolchain.
 //! Rebuild the fixture (`make -C pkgs/extensions spike-guest`) only when committing a new one.
 
-// Dominated by `bindgen!` output; exempt from the workspace's doc/style lints.
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 use std::path::{Path, PathBuf};

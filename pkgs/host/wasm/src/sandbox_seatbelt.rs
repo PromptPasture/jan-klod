@@ -30,7 +30,6 @@ impl SandboxBackend for SeatbeltBackend {
         wrapped
             .arg("-p")
             .arg(profile)
-            // `--` so a command starting with `-` is not read as a sandbox-exec flag.
             .arg("--")
             .arg(command.get_program())
             .args(command.get_args());
@@ -52,7 +51,6 @@ const DEV_NULL_RULE: &str = "(allow file-write* (literal \"/dev/null\"))\n";
 /// faithfully; refused rather than approximated, since a mangled grant is one the operator believes they have.
 pub fn profile(policy: &SandboxPolicy) -> Result<String, SandboxError> {
     let mut profile = String::from("(version 1)\n(deny default)\n");
-    // Minimum a shell needs to start; reads are not narrowed (see module docs).
     profile.push_str("(allow process-exec)\n(allow process-fork)\n(allow sysctl-read)\n");
     profile.push_str("(allow file-read*)\n");
     profile.push_str(DEV_NULL_RULE);

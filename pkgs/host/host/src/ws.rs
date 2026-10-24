@@ -29,7 +29,6 @@ impl Write for Frames {
             if *byte == b'\n' {
                 let line = String::from_utf8_lossy(&self.partial).into_owned();
                 self.partial.clear();
-                // A closed receiver means the connection is gone; reported as a write error, which `rpc` handles.
                 self.lines
                     .send(line)
                     .map_err(|_| std::io::Error::other("the socket is closed"))?;
@@ -58,16 +57,13 @@ pub async fn serve_socket(socket: WebSocket, agents: Arc<Agents>) {
         let _ = sink.send(Message::Close(None)).await;
     });
 
-    // Hands frames over only: while a turn runs, something other than the turn must be reading.
     let (handover, incoming) = channel::<Incoming>();
     let reading = tokio::spawn(async move {
         while let Some(Ok(message)) = stream.next().await {
             let handed = match message {
                 Message::Text(text) => handover.send(Incoming::Line(text.to_string())),
-                // Not this protocol; handed on because silence looks like a lost message.
                 Message::Binary(_) => handover.send(Incoming::NotUtf8),
                 Message::Close(_) => break,
-                // The transport's own; `axum` answers pings itself.
                 Message::Ping(_) | Message::Pong(_) => Ok(()),
             };
             if handed.is_err() {
@@ -77,7 +73,6 @@ pub async fn serve_socket(socket: WebSocket, agents: Arc<Agents>) {
     });
 
     let _ = tokio::task::spawn_blocking(move || connection(incoming, &outbox, &agents)).await;
-    // Connection over; the writer stops when the outbox drops with `connection`.
     reading.abort();
     let _ = writing.await;
 }
@@ -100,12 +95,9 @@ fn connection(mut incoming: Receiver<Incoming>, outbox: &UnboundedSender<String>
             continue;
         }
 
-        // Routed per frame (#229): a turn must run on the agent owning its session. Parsed twice because
-        // the job cannot borrow the request it was routed by.
         let jobs = match rpc::parse(&line) {
             Ok(request) => rpc::session_of(&request.command)
                 .map_or_else(|| agents.housekeeping(), |session| agents.of(session)),
-            // Unparseable frames go to housekeeping, which refuses them like any agent.
             Err(_) => agents.housekeeping(),
         };
         let lines = outbox.clone();
@@ -128,7 +120,6 @@ fn connection(mut incoming: Receiver<Incoming>, outbox: &UnboundedSender<String>
             let closing = matches!(served, Served::Close(_));
             let (Served::Answer(answer) | Served::Close(answer)) = served;
             let _ = wire.write(&answer);
-            // Handed back so the loop owns the queue again.
             (incoming, negotiated, closing)
         });
         match served {
@@ -139,7 +130,6 @@ fn connection(mut incoming: Receiver<Incoming>, outbox: &UnboundedSender<String>
                     return;
                 }
             }
-            // The session is gone; nothing more can be answered here.
             Err(_) => return,
         }
     }

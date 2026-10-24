@@ -75,7 +75,6 @@ extensions:
     let factory = Arc::new(|| -> jk_wasm::route::HttpFn {
         Box::new(move |_m, _u, _h, body, _t| {
             let asked = String::from_utf8_lossy(body.unwrap_or_default()).into_owned();
-            // Tool call on a turn's first completion; an answer once its result is in history.
             let reply = if asked.contains("tool_call_id") {
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"all done"},"finish_reason":"stop"}]})

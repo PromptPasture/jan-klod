@@ -118,8 +118,6 @@ fn parse_capabilities(yaml_str: &str) -> Result<Capabilities, Box<dyn std::error
 
 /// Load and parse the capabilities file from its expected location.
 fn load_capabilities() -> Result<Capabilities, Box<dyn std::error::Error>> {
-    // When running tests, we resolve relative to the repository root.
-    // Tests run from pkgs/host/config/tests but the file is at scripts/capabilities.yaml
     let paths = vec![
         "scripts/capabilities.yaml",
         "../../scripts/capabilities.yaml",
@@ -183,10 +181,7 @@ fn no_group_is_empty_after_filtering_pending() {
             .members
             .iter()
             .any(|m| !cap.pending.contains_key(m.as_str()));
-        // Allow groups with only pending members (they won't be offered)
-        // but document this expectation.
         if !has_active_members {
-            // This group has only pending members; it's ok but should be rare
             eprintln!("Note: group '{name}' has only pending members and won't be offered");
         }
     }
@@ -196,7 +191,6 @@ fn no_group_is_empty_after_filtering_pending() {
 fn pending_section_documents_phase_30_guests() {
     let cap = load_capabilities().expect("failed to load capabilities");
 
-    // These should be in pending per the issue
     let expected_pending = vec![
         "tool-memory",
         "tool-web-search",
@@ -217,9 +211,7 @@ fn groups_are_ordered() {
     let cap = load_capabilities().expect("failed to load capabilities");
     let mut orders: Vec<_> = cap.groups.values().map(|g| g.order).collect();
     orders.sort_unstable();
-    // Check that orders are distinct (no duplicates)
     orders.dedup();
-    // With dedup, if the length is less than the number of groups, there were duplicates
     assert_eq!(
         orders.len(),
         cap.groups.len(),
@@ -231,7 +223,6 @@ fn groups_are_ordered() {
 fn provider_groups_documented() {
     let cap = load_capabilities().expect("failed to load capabilities");
 
-    // Both provider groups should exist
     assert!(
         cap.groups.contains_key("provider-openai"),
         "provider-openai group must exist"
@@ -244,7 +235,6 @@ fn provider_groups_documented() {
     let openai = cap.groups.get("provider-openai").unwrap();
     let anthropic = cap.groups.get("provider-anthropic").unwrap();
 
-    // Both are optional (choose one, not required to have both)
     assert!(
         !openai.required || !anthropic.required,
         "at least one provider should be optional"
@@ -255,7 +245,6 @@ fn provider_groups_documented() {
 fn all_members_are_in_registry_or_pending() {
     let cap = load_capabilities().expect("failed to load capabilities");
 
-    // Load and parse the built registry from dist/index.json
     let registry_paths = vec![
         "dist/index.json",
         "../../dist/index.json",
@@ -276,7 +265,6 @@ fn all_members_are_in_registry_or_pending() {
         "failed to load or parse dist/index.json; run 'make registry-index' to generate it",
     );
 
-    // Extract extension names from the registry
     let mut registry_names = std::collections::HashSet::new();
     if let Some(extensions) = registry["extensions"].as_array() {
         for ext in extensions {
@@ -286,7 +274,6 @@ fn all_members_are_in_registry_or_pending() {
         }
     }
 
-    // Check that every group member is either in the registry or pending
     for (group_name, group) in &cap.groups {
         for member in &group.members {
             let is_in_registry = registry_names.contains(member.as_str());
@@ -329,7 +316,6 @@ fn file_tools_group_bundled() {
         .get("file-tools")
         .expect("file-tools group must exist");
 
-    // All three should be present (bundled)
     assert!(
         file_tools.members.contains(&"tool-fs".to_string()),
         "file-tools must include tool-fs"
@@ -366,12 +352,6 @@ fn shell_access_includes_tool_proc() {
 #[test]
 #[allow(clippy::similar_names)]
 fn test_merge_conflicting_groups() {
-    // This test validates that when two capability groups enable the same
-    // extension with different configurations, the merge logic preserves both
-    // configs through per-instance naming (e.g., "guardrails" and "guardrails-1")
-    // rather than silently overwriting one with the other.
-
-    // Simulate group A: enables "interceptor-guardrails" with strict mode.
     let mut group_a_exts: HashMap<String, serde_json::Value> = HashMap::new();
     group_a_exts.insert(
         "interceptor-guardrails".to_string(),
@@ -381,7 +361,6 @@ fn test_merge_conflicting_groups() {
         }),
     );
 
-    // Simulate group B: enables the same extension with permissive mode.
     let mut group_b_exts: HashMap<String, serde_json::Value> = HashMap::new();
     group_b_exts.insert(
         "interceptor-guardrails".to_string(),
@@ -391,41 +370,29 @@ fn test_merge_conflicting_groups() {
         }),
     );
 
-    // Merge logic: combine both groups' extensions.
-    // When a conflict is detected (same extension name, different config),
-    // create a per-instance variant by appending a suffix.
     let mut merged_extensions: HashMap<String, serde_json::Value> = HashMap::new();
 
-    // Add all extensions from group A.
     for (name, config) in &group_a_exts {
         merged_extensions.insert(name.clone(), config.clone());
     }
 
-    // Merge extensions from group B.
     for (name, config_b) in &group_b_exts {
         if let Some(config_a) = merged_extensions.get(name) {
-            // If the same extension name exists with different config,
-            // create a per-instance variant.
             if config_a != config_b {
                 let variant_name = format!("{name}-1");
                 merged_extensions.insert(variant_name, config_b.clone());
-                // The original (from group A) remains unchanged.
             }
-            // If configs are identical, skip (no duplicate needed).
         } else {
-            // Extension doesn't exist yet, add it.
             merged_extensions.insert(name.clone(), config_b.clone());
         }
     }
 
-    // Verify the merge result: both the original and variant should exist.
     assert_eq!(
         merged_extensions.len(),
         2,
         "merged extensions should contain both the original and the variant"
     );
 
-    // Verify that the original (group A's config) is preserved.
     let original_config = merged_extensions
         .get("interceptor-guardrails")
         .expect("original singleton should be preserved");
@@ -439,7 +406,6 @@ fn test_merge_conflicting_groups() {
         "original should retain group A's rules"
     );
 
-    // Verify that the variant (group B's config) is preserved under a new name.
     let variant_config = merged_extensions
         .get("interceptor-guardrails-1")
         .expect("variant should be created for conflicting config");
@@ -453,7 +419,6 @@ fn test_merge_conflicting_groups() {
         "variant should preserve group B's rules"
     );
 
-    // Ensure no silent config loss: both configs must be different and present.
     assert_ne!(
         original_config, variant_config,
         "original and variant configs must be distinct"

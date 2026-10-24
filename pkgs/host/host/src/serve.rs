@@ -66,7 +66,6 @@ impl App {
     where
         F: FnOnce(&mut AgentSession) -> Reply + Send + 'static,
     {
-        // `None` is work belonging to no session (store reads, contributions); it goes to the housekeeping agent.
         let jobs = session.map_or_else(
             || self.agents.housekeeping(),
             |session| self.agents.of(session),
@@ -87,8 +86,6 @@ impl App {
             return;
         }
         if self.served.fetch_add(1, Ordering::Relaxed) + 1 >= self.limit {
-            // `notify_one`, not `notify_waiters`: only the first stores a permit. An instant response (401, `/health`) before the shutdown
-            // future is first polled would otherwise notify nobody and serve forever (#286).
             self.stop.notify_one();
         }
     }
@@ -182,7 +179,6 @@ impl Surface {
         agents: &Arc<Agents>,
         principals: HashMap<String, String>,
     ) -> std::io::Result<()> {
-        // No closure: nothing asks this to stop, and a thread parked for "forever" could not be woken if the server fails.
         self.run(agents, principals, usize::MAX, None::<fn(u16)>)
     }
 
@@ -210,7 +206,6 @@ impl Surface {
         let port = self.port();
         let stop = Arc::clone(&app.stop);
 
-        // No session loop here: agents live on the registry's threads (#229), so a surface can start from any thread.
         let outcome = std::thread::scope(|scope| {
             let serving = {
                 let stopping = Arc::clone(&app.stop);
@@ -228,7 +223,6 @@ impl Surface {
             };
             if let Some(alongside) = alongside {
                 alongside(port);
-                // Done means stop; `notify_one` keeps the permit if the server is not yet waiting (#286).
                 stop.notify_one();
             }
             serving.join()
@@ -285,7 +279,6 @@ async fn create_session() -> Response {
 }
 
 async fn list_sessions(State(app): State<App>) -> Response {
-    // Store reads: any agent can answer; none owns it.
     app.on_session(None, |agent: &mut AgentSession| handle_list_sessions(agent))
         .await
 }
@@ -295,13 +288,11 @@ async fn contributions(State(app): State<App>) -> Response {
 }
 
 async fn invoke(State(app): State<App>, body: String) -> Response {
-    // On the housekeeping agent's instances, a question #231 must answer for adoption too.
     app.on_session(None, move |agent| handle_invoke(agent, &body))
         .await
 }
 
 async fn get_session(State(app): State<App>, Path(id): Path<String>) -> Response {
-    // A store read: no need for the session's agent, and routing there would queue behind its running turn.
     app.on_session(None, move |agent| handle_get_session(agent, &id))
         .await
 }
@@ -324,7 +315,6 @@ async fn answer(State(app): State<App>, Path(id): Path<String>, body: String) ->
                 }
                 .into_response()
             } else {
-                // Now only means: nothing is parked for this session.
                 error_reply(409, "no confirmation is pending").into_response()
             }
         }
@@ -352,7 +342,6 @@ async fn message(
             })
             .await;
     }
-    // The turn runs on the session's thread and sends frames here; queued, never awaited, since a turn can park as long as a person takes.
     let (frames, stream) = unbounded_channel::<Frame>();
     let pending = Arc::clone(&app.pending);
     let queued = app.agents.of(&id).send(move |agent: &mut AgentSession| {
@@ -422,7 +411,6 @@ fn handle_invoke(agent: &mut AgentSession, body: &str) -> Reply {
             })
             .to_string(),
         },
-        // A name nobody contributes is the caller's mistake; the other two are the extension's; the status codes say which.
         Err(error @ jk_protocol::contributions::InvokeError::Unknown) => {
             error_reply(404, &error.to_string())
         }
@@ -597,9 +585,7 @@ struct PromptDriver<'a> {
 
 impl Driver for PromptDriver<'_> {
     fn ask(&mut self, prompt: &UserPrompt) -> String {
-        // Parked before the frame is sent: an answer arriving before the park finds nothing pending and gets `409` (#290).
         let Some(parked) = self.pending.park(&self.session) else {
-            // Something is already parked for this session; two questions and one answer route cannot be told apart, so this one takes its default.
             return prompt.default_answer.clone();
         };
         let (kind, payload) = prompt_frame(prompt, &self.session);
@@ -611,7 +597,6 @@ impl Driver for PromptDriver<'_> {
             })
             .is_err()
         {
-            // The client is gone; nobody can answer, so take the safe default.
             return prompt.default_answer.clone();
         }
         self.wait_for_answer(&parked)
@@ -631,11 +616,9 @@ impl PromptDriver<'_> {
                 return Some(answer);
             }
             if remaining <= slice {
-                // The real deadline, not a tick.
                 return None;
             }
             if self.frames.send(Frame::Comment).is_err() {
-                // The receiver is gone, so the client is: nobody can answer. The heartbeat's other job.
                 return None;
             }
         }
@@ -650,13 +633,12 @@ fn authorised(
     principals: &HashMap<String, String>,
     path: &str,
 ) -> Option<String> {
-    // `/health` is always open (supervisor probe); everything else needs a token.
     if path == "/health" {
-        return Some(String::new()); // Allow, but no principal (open path)
+        return Some(String::new());
     }
 
     if principals.is_empty() {
-        return Some(String::new()); // Allow, but no principal
+        return Some(String::new());
     }
 
     headers
@@ -869,11 +851,8 @@ mod tests {
                 });
                 let frame = received.blocking_recv().expect("the prompt frame is sent");
                 assert!(matches!(frame, Frame::Named { .. }), "a named prompt frame");
-                // No client can answer sooner than this.
                 let refused = !pending.answer("s1", "yes".to_owned());
                 if refused {
-                    // Deliver it once the turn parks, so a failure is reported
-                    // now rather than after the answer timeout.
                     while !pending.answer("s1", "yes".to_owned()) {
                         std::thread::yield_now();
                     }

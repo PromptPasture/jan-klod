@@ -2,7 +2,6 @@
 //! Loads config, wires host capabilities, compiles components and drives lifecycle; no agent
 //! behaviour lives here. The only crate that names `wasmtime`.
 
-// Generated Component-Model bindings; lint exemptions scoped to the macro output.
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bindings;
 pub mod egress;
@@ -107,7 +106,6 @@ fn host_capabilities(component: &Component, engine: &Engine) -> Vec<String> {
     let mut found: Vec<String> = component
         .component_type()
         .imports(engine)
-        // Import names look like `jan-klod:interfaces/host-fs@0.1.0`.
         .filter_map(|(name, _)| {
             name.strip_prefix("jan-klod:interfaces/")
                 .and_then(|rest| rest.split('@').next())
@@ -162,7 +160,6 @@ fn inspect(
     let capabilities = host_capabilities(component, engine);
     let verdict = match manifest::Manifest::beside(path)? {
         Some(declared) => {
-            // Contract version first, so a mismatch names both versions instead of failing in the linker.
             if manifest::api_compatible(manifest::API_VERSION, &declared.api_version) {
                 let undeclared = declared.undeclared(&capabilities);
                 if undeclared.is_empty() {
@@ -268,7 +265,6 @@ fn load_instance(
         path: path.display().to_string(),
         source: source.into(),
     })?;
-    // Cross-check against the manifest through the same `inspect` as `ext install`.
     let inspected = inspect(&component, engine, &path).map_err(|source| CoreError::Manifest {
         id: instance.id.clone(),
         source,
@@ -282,7 +278,6 @@ fn load_instance(
                 ours: manifest::API_VERSION.to_owned(),
             });
         }
-        // Needing more than it admits to is mislabelled or lying.
         Verdict::UnderDeclared { interfaces } => {
             return Err(CoreError::Undeclared {
                 id: instance.id.clone(),
@@ -290,15 +285,12 @@ fn load_instance(
                 interfaces: interfaces.join(", "),
             });
         }
-        // No manifest: refused, since an undeclared component cannot be inspected before running.
-        // `allow-unmanifested` is the named widening for local development.
         Verdict::NoManifest if !allow_unmanifested => {
             return Err(CoreError::NoManifest {
                 id: instance.id.clone(),
                 component: instance.component_file(),
             });
         }
-        // Consistent, or unmanifested where allowed (a deliberate widening).
         Verdict::Consistent | Verdict::NoManifest => {}
     }
     Ok((LoadState::Compiled(component), Some(inspected.capabilities)))
@@ -323,11 +315,9 @@ impl Runtime {
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let config = Config::from_path(config_path)?;
         let agent = config.agent.clone();
-        // Wasmtime's built-in compile cache (#60): a second boot skips Cranelift for every guest.
         let (engine, compile_cache) = wasm_cache::build_engine(&config_dir, &agent)?;
         let linker = build_linker(&engine)?;
 
-        // Enabled instances in deterministic dependency order.
         let mut order: Vec<&ExtensionInstance> = config.enabled().collect();
         order.sort_by(|a, b| {
             boot_rank(&a.category)
@@ -336,8 +326,6 @@ impl Runtime {
         });
 
         let ext_dir = ext_dir.as_ref();
-        // Top-level, not under `extensions:`, whose keys must all be instance mappings
-        // (`ConfigError::CategoryNotMap`).
         let allow_unmanifested = agent
             .get("allow-unmanifested")
             .and_then(serde_json::Value::as_bool)
@@ -481,7 +469,6 @@ impl Runtime {
                 )?;
             }
             ("interceptor", _) => {
-                // Constant classifier: this path must not make a model call; `instantiate` supplies the real one.
                 let provider_fn: interceptor_host::ProviderFn =
                     Box::new(|_request| "agentic".to_string());
                 interceptor_host::WasmInterceptor::instantiate(
@@ -610,7 +597,6 @@ impl Runtime {
             .get("allow-unmanifested")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
-        // Load before recording: a half-adopted runtime is worse than a refused adoption.
         let (state, capabilities) =
             load_instance(&self.engine, &self.ext_dir, &instance, allow_unmanifested)?;
         if let LoadState::Missing(path) = &state {
@@ -642,13 +628,10 @@ impl Runtime {
         http_factory: &dyn Fn() -> route::HttpFn,
         storage: &dyn Fn() -> Arc<dyn guest_storage::Entries>,
     ) -> Result<Instantiated, CoreError> {
-        // Shared, default-deny substrates for tools (opt-in via config).
         let workspace = self.open_workspace();
         let project_instructions = Self::project_instructions(workspace.as_ref());
         let process = self.open_process_runner(workspace.as_ref());
 
-        // Pass 1: providers (eager) and pending tools/registries, before interceptors so
-        // tool-selector sees combined advertised metadata.
         let ProvidersAndTools {
             providers,
             provider_ids,
@@ -665,9 +648,6 @@ impl Runtime {
             registry: registry_fleet,
             native: self.native_tools(),
         };
-        // Only if an interceptor is enabled: resolving instantiates every pending tool/registry.
-        // Counted from the resolved instances, not by asking what an interceptor wants: core holds
-        // mechanism, not policy (#59).
         let any_interceptor_enabled = self.extensions.iter().any(|ext| {
             ext.instance.category == "interceptor" && matches!(ext.state, LoadState::Compiled(_))
         });
@@ -677,11 +657,8 @@ impl Runtime {
             serde_json::Value::Array(Vec::new())
         };
 
-        // An interceptor consulting a model gets its own provider instance: the conductor holds
-        // the chain mutably for the whole turn, so sharing would alias it.
         let classifier = self.open_classifier(http_factory)?;
 
-        // Pass 2: interceptors, each served the tool set at `select-tools`.
         let interceptors = self.instantiate_interceptors(
             &tools_advert,
             project_instructions.as_deref(),
@@ -689,7 +666,6 @@ impl Runtime {
             storage,
         )?;
 
-        // Order by the `providers:` config, not boot order, so the documented top-to-bottom list applies.
         let ordered = order_chain(self.agent.get("providers"), &provider_ids);
         let providers = reorder(providers, &ordered);
 
@@ -723,8 +699,6 @@ impl Runtime {
                     .collect()
             })
             .unwrap_or_default();
-        // The index `ext search` reads; `None` makes it say no registry is configured rather than
-        // report empty matches.
         let index_source = registry
             .and_then(|r| r.get("url"))
             .and_then(serde_json::Value::as_str)
@@ -740,7 +714,6 @@ impl Runtime {
         storage: &dyn Fn() -> Arc<dyn guest_storage::Entries>,
     ) -> Result<ProvidersAndTools, CoreError> {
         let mut providers: Vec<Box<dyn jk_protocol::intercept::Completer>> = Vec::new();
-        // Instance ids parallel to `providers`, to match the chain by name without downcasting.
         let mut provider_ids: Vec<String> = Vec::new();
         let mut tool_fleet = tool_host::LazyToolFleet::new(self.engine.clone());
         let mut registry_fleet = registry_host::LazyRegistryFleet::new(self.engine.clone());
@@ -761,23 +734,18 @@ impl Runtime {
                     provider_ids.push(ext.instance.id.clone());
                 }
                 "tool" => {
-                    // Egress is per instance, never default (like `host-fs` needing a workspace).
-                    // Resolved now: the factory borrows this call's stack frame.
                     let network = ext
                         .instance
                         .config
                         .get("network")
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
-                    // Durability is opt-in per instance; see `guest_storage::GuestStorage`.
                     let persist = ext
                         .instance
                         .config
                         .get("persist")
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
-                    // `scope: session` also keys namespaces by session (#215); the default is
-                    // run-scoped, which a permission gate's standing grants need.
                     let per_session = ext
                         .instance
                         .config
@@ -842,14 +810,11 @@ impl Runtime {
             let mut config = self.interceptor_config(&ext.instance);
             if let serde_json::Value::Object(map) = &mut config {
                 map.entry("tools").or_insert_with(|| tools_advert.clone());
-                // The host does the permitted reading; the guest receives data, not a capability.
                 if let Some(project) = project_instructions {
                     map.entry("project-instructions")
                         .or_insert_with(|| serde_json::Value::String(project.to_string()));
                 }
             }
-            // Durability opt-in, off by default: `interceptor-permission` grants are run-scoped,
-            // and a session store would make them survive restart.
             let persist = ext
                 .instance
                 .config
@@ -909,7 +874,6 @@ impl Runtime {
                 }
             }
         }
-        // Escape hatch for anything config doesn't name (sidecar, proxy), one origin at a time.
         if let Some(list) = self.agent.get("network").and_then(|n| n.get("allow")) {
             for url in list.as_array().into_iter().flatten() {
                 if let Some(url) = url.as_str() {
@@ -928,7 +892,6 @@ impl Runtime {
             .get("workspace")
             .and_then(serde_json::Value::as_str)
         {
-            // Explicit means explicit, even for a root this would not adopt itself.
             r
         } else {
             let cwd = std::env::current_dir().ok()?;
@@ -943,7 +906,6 @@ impl Runtime {
                 return None;
             }
             root_owned = cwd.to_string_lossy().into_owned();
-            // The grant is implicit; the notice should not be.
             eprintln!("INFO [core] workspace: {root_owned} (file tools are jailed here)");
             &root_owned
         };
@@ -977,7 +939,6 @@ impl Runtime {
                     .and_then(|e| e.get("output-cap"))
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(64 * 1024);
-                // Named env vars are a one-at-a-time grant; children otherwise get `host_process::BASE_ENV`.
                 let passthrough: Vec<String> = exec
                     .and_then(|e| e.get("env-passthrough"))
                     .and_then(serde_json::Value::as_array)
@@ -988,9 +949,6 @@ impl Runtime {
                             .collect()
                     })
                     .unwrap_or_default();
-                // Long-lived children the operator named: a narrower grant than `enabled`, so a guest's
-                // string never becomes a program (#109). Entries missing `name`/`command` are skipped:
-                // a half-written grant reads as none.
                 let long_lived: Vec<host_process::LongLived> = exec
                     .and_then(|e| e.get("long-lived"))
                     .and_then(serde_json::Value::as_array)
@@ -1019,8 +977,6 @@ impl Runtime {
                             .collect()
                     })
                     .unwrap_or_default();
-                // What a command may do once running. An unreadable policy denies execution
-                // rather than running unconfined.
                 let policy = match sandbox::SandboxPolicy::from_config(exec, ws) {
                     Ok(policy) => policy,
                     Err(err) => {
@@ -1031,9 +987,6 @@ impl Runtime {
                         return host_process::ProcessRunner::disabled();
                     }
                 };
-                // One `host_backend()` for report and wiring, so the boot line cannot describe
-                // confinement the runner lacks. `with_sandbox_wrapper` overrides only which binary
-                // Landlock re-executes; an unresolved override leaves `backend` `None` and downgrades the mode.
                 let backend = self
                     .sandbox_wrapper
                     .as_ref()
@@ -1041,7 +994,6 @@ impl Runtime {
                         sandbox::host_backend_at(wrapper)
                     });
                 let effective = policy.resolve(backend.as_deref());
-                // `require: true` asked for no command, not an unconfined one: refusal is the config working.
                 if let Some(refusal) = policy.refusal(&effective) {
                     eprintln!("WARN [core] {refusal}");
                     return host_process::ProcessRunner::disabled();
@@ -1061,7 +1013,6 @@ impl Runtime {
                 )
                 .with_env_passthrough(passthrough)
                 .with_long_lived(long_lived);
-                // Same pair for mode and confinement, so `Os` is never reported while unconfined.
                 match (effective.mode, backend) {
                     (sandbox::SandboxMode::Os, Some(backend)) => {
                         runner.with_sandbox(std::sync::Arc::from(backend), policy)
@@ -1160,7 +1111,6 @@ impl jk_protocol::intercept::ToolInvoker for CombinedFleet {
         call: &turn::ToolCall,
         driver: &mut dyn turn::Driver,
     ) -> Option<jk_protocol::intercept::ToolInvocation> {
-        // Only tools may ask; order matches `invoke` so a name resolves the same either way.
         self.tools
             .invoke_asking(call, driver)
             .or_else(|| self.registry.invoke(call))
@@ -1300,8 +1250,6 @@ impl fmt::Display for BootReport<'_> {
             match &ext.state {
                 LoadState::Compiled(_) => {
                     compiled += 1;
-                    // Name the lazy category so an operator can tell it from eagerly started ones;
-                    // a static fact (`is_lazy_category`), not live state.
                     let note = if is_lazy_category(&ext.instance.category) {
                         "  (lazy: instantiated on first use, not at boot)"
                     } else {
@@ -1320,8 +1268,6 @@ impl fmt::Display for BootReport<'_> {
             }
         }
         writeln!(f, "{compiled} loaded, {} missing", exts.len() - compiled)?;
-        // Proof the compile cache works, from Wasmtime's counters: a second boot against the same
-        // `storage.cache-dir` reports one hit per compiled component.
         let (hits, misses) = self.0.compile_cache_stats();
         write!(
             f,
@@ -1542,7 +1488,6 @@ mod tests {
 
     #[test]
     fn the_configured_chain_sets_the_fallback_order() {
-        // Boot order is alphabetical; the config asks for the reverse.
         let ids = ids(&["anthropic", "openai"]);
         let chain = serde_json::json!([{ "provider": "openai" }, { "provider": "anthropic" }]);
         assert_eq!(order_chain(Some(&chain), &ids), vec![1, 0]);
@@ -1552,7 +1497,6 @@ mod tests {
     fn no_chain_keeps_boot_order() {
         let ids = ids(&["anthropic", "openai"]);
         assert_eq!(order_chain(None, &ids), vec![0, 1]);
-        // A malformed/empty list is the same as none, not "no providers".
         assert_eq!(
             order_chain(Some(&serde_json::json!("nonsense")), &ids),
             vec![0, 1]
@@ -1561,8 +1505,6 @@ mod tests {
 
     #[test]
     fn an_enabled_provider_the_chain_omits_still_runs_last() {
-        // Dropping something the user enabled would be a worse surprise than
-        // ordering it after the configured chain.
         let ids = ids(&["anthropic", "openai"]);
         let chain = serde_json::json!([{ "provider": "openai" }]);
         assert_eq!(order_chain(Some(&chain), &ids), vec![1, 0]);
@@ -1570,7 +1512,6 @@ mod tests {
 
     #[test]
     fn a_named_provider_that_is_not_enabled_is_skipped() {
-        // The shipped config lists `ollama` as a last resort nobody enabled.
         let ids = ids(&["openai"]);
         let chain = serde_json::json!([{ "provider": "openai" }, { "provider": "ollama" }]);
         assert_eq!(order_chain(Some(&chain), &ids), vec![0]);
@@ -1589,7 +1530,6 @@ mod tests {
             reorder(vec!["a", "b", "c"], &[2, 0, 1]),
             vec!["c", "a", "b"]
         );
-        // Out-of-range indices cannot panic or duplicate an item.
         assert_eq!(reorder(vec!["a", "b"], &[1, 9, 0]), vec!["b", "a"]);
     }
 
@@ -1597,19 +1537,12 @@ mod tests {
     #[test]
     fn a_workspace_is_not_adopted_from_home_or_a_root() {
         let home = PathBuf::from("/Users/someone");
-        // A project directory is adopted: this is what makes the runtime usable
-        // with no configuration at all.
         assert!(adoptable_workspace(&home.join("code/project"), Some(&home)));
         assert!(adoptable_workspace(&PathBuf::from("/srv/app"), Some(&home)));
 
-        // The home directory is every document, key and dotfile the user owns,
-        // and it is where a shell starts.
         assert!(!adoptable_workspace(&home, Some(&home)));
-        // A filesystem root makes the "jail" the machine.
         assert!(!adoptable_workspace(&PathBuf::from("/"), Some(&home)));
 
-        // With no HOME in the environment, only the root check applies — refusing
-        // everything would break every container that does not set it.
         assert!(adoptable_workspace(&PathBuf::from("/work"), None));
         assert!(!adoptable_workspace(&PathBuf::from("/"), None));
     }
@@ -1641,14 +1574,12 @@ extensions:
         )
         .unwrap();
 
-        // ext/ dir is empty, so the enabled tool resolves as missing.
         let runtime = Runtime::boot(&cfg, dir.join("ext")).unwrap();
         let exts = runtime.extensions();
         assert_eq!(exts.len(), 1, "only the enabled instance is resolved");
         assert_eq!(exts[0].instance.id, "tool.fs");
         assert!(matches!(exts[0].state, LoadState::Missing(_)));
 
-        // No components compiled, so starting is a clean no-op.
         assert_eq!(runtime.start_all().unwrap(), [] as [std::string::String; 0]);
 
         std::fs::remove_dir_all(&dir).ok();

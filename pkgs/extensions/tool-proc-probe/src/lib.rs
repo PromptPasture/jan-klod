@@ -77,7 +77,6 @@ mod component {
             let value: serde_json::Value =
                 serde_json::from_str(&arguments).map_err(|_| ToolError::InvalidArguments)?;
 
-            // `granted: true` lists the long-lived names as text, so tests need no result format.
             if value
                 .get("granted")
                 .and_then(serde_json::Value::as_bool)
@@ -86,7 +85,6 @@ mod component {
                 return Ok(format!("granted {}", host_process::granted().join(" ")));
             }
 
-            // Outcome is text, not error: ToolError carries no message, so a refusal would look like a crash.
             if let Some(name) = value.get("spawn").and_then(serde_json::Value::as_str) {
                 let child = match host_process::spawn(name) {
                     Ok(child) => child,
@@ -95,7 +93,6 @@ mod component {
                         return Ok(format!("spawn-refused {name} {err:?}"));
                     }
                 };
-                // Write then read back: a handle alone proves only that a number was issued.
                 if let Some(send) = value.get("send").and_then(serde_json::Value::as_str) {
                     if let Err(err) = host_process::write_stdin(child, send) {
                         log(LogLevel::Warn, &format!("write-stdin failed ({err:?})"));
@@ -103,7 +100,6 @@ mod component {
                 }
                 let out = host_process::read_stdout(child, 4096, 2000).unwrap_or_default();
                 let running = host_process::is_running(child);
-                // `leak: true` skips the kill, to exercise the host's lifetime guarantee.
                 if !value
                     .get("leak")
                     .and_then(serde_json::Value::as_bool)

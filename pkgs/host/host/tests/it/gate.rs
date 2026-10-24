@@ -182,7 +182,6 @@ routing:
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
 
-    // Call 0: primary fails. Call 1: secondary succeeds.
     let call = Cell::new(0u32);
     let factory = || {
         let n = call.get();
@@ -415,7 +414,6 @@ extensions:
     let factory = std::sync::Arc::new(|| -> HttpFn {
         Box::new(move |_m, _u, _h, body, _t| {
             let asked = String::from_utf8_lossy(body.unwrap_or_default()).into_owned();
-            // A turn whose tool call was already answered carries a tool_call_id in its history.
             let wants_tool = asked.contains("use bash") && !asked.contains("tool_call_id");
             let reply = if wants_tool {
                 serde_json::json!({"choices":[{"message":{"role":"assistant","tool_calls":[
@@ -550,7 +548,6 @@ fn phase20_one_session_still_serialises_the_same_two_turns() {
             "the first turn never parked"
         );
         let second = phase20_open_stream(port, "same", "just answer");
-        // Short window: it must not arrive while the first turn is parked.
         let early = phase20_read_for(&second, "event: done", Duration::from_millis(1500));
         let ack = phase20_answer(port, "same", "yes");
         assert!(ack.contains("accepted") || ack.contains("409"), "{ack}");

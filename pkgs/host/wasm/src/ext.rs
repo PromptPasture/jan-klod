@@ -58,7 +58,6 @@ impl Checks {
     /// # Errors
     /// [`ExtError::Config`] if file can't be read/parsed or [`Checks::from_config`] refuses.
     pub fn from_config_path(path: &Path) -> Result<Self, ExtError> {
-        // top_level: avoid expanding ${VAR} in enabled instances (no provider API key needed).
         let registry =
             jk_config::Config::top_level(path, "registry").map_err(|err| ExtError::Config {
                 path: path.display().to_string(),
@@ -94,7 +93,6 @@ pub fn looks_remote(spec: &str) -> bool {
 pub fn check_remote(url: &str) -> Result<(), ExtError> {
     crate::egress::EgressPolicy::public_only()
         .check(url)
-        // Addresses unused: refusal before bytes move; fetch re-checks per hop.
         .map(|_| ())
         .map_err(|err| ExtError::RefusedByPolicy {
             url: url.to_owned(),
@@ -190,7 +188,6 @@ pub fn install_from_url(
     let wanted = wanted(url, checks.allow_unsigned)?;
     let incoming = staging_dir();
     let _ = std::fs::remove_dir_all(&incoming);
-    // Private dir: unverified component/signature staged before checking.
     crate::wasm_cache::ensure_private_dir(&incoming).map_err(|source| ExtError::Staging {
         path: incoming.display().to_string(),
         source,
@@ -222,7 +219,6 @@ fn fetch_all(
     http: &crate::route::HttpFn,
 ) -> Result<String, ExtError> {
     for (remote, file) in wanted {
-        // Check each URL (manifest and signature URLs are destinations too).
         check_remote(remote)?;
         let response = http("GET", remote, &[], None, 0).map_err(|err| ExtError::Fetch {
             url: remote.clone(),
@@ -287,7 +283,6 @@ fn verify_signature(
 
     for (index, key) in keys.iter().enumerate() {
         let key = minisign_verify::PublicKey::from_base64(key.trim()).map_err(|err| {
-            // Unparseable operator key: show error, don't skip to "untrusted".
             ExtError::MalformedTrustedKey {
                 index,
                 detail: err.to_string(),
@@ -636,7 +631,6 @@ pub fn remove(dir: &Path, name: &str) -> Result<Removed, ExtError> {
         });
     }
 
-    // Component first: a failure part-way leaves a manifest that `list` reports as broken.
     if had_component {
         std::fs::remove_file(&component).map_err(|source| ExtError::Undeletable {
             path: component.display().to_string(),
@@ -667,7 +661,6 @@ pub fn remove(dir: &Path, name: &str) -> Result<Removed, ExtError> {
 /// # Errors
 /// A distinct [`ExtError`] per refusal; on any, `dir` is unchanged and staging is removed.
 pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, ExtError> {
-    // Validate before copying: a waived signature without a digest leaves nothing vouching for the bytes.
     if checks.allow_unsigned && checks.sha256.is_none() {
         return Err(ExtError::DigestRequiredWhenUnsigned);
     }
@@ -686,12 +679,10 @@ pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, 
             path: source.display().to_string(),
         });
     };
-    // Same rule as `Runtime::adopt_installed`: a stem naming no category would install but never be callable (#222).
     crate::categorise(&name).map_err(|reason| ExtError::UncategorisedStem { reason })?;
 
     let landing = dir.join(format!("{name}.{COMPONENT_EXT}"));
     if landing.exists() {
-        // Refused, not replaced: overwriting would swap the component the running config was verified against.
         return Err(ExtError::AlreadyInstalled {
             name,
             dir: dir.display().to_string(),
@@ -699,17 +690,14 @@ pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, 
     }
 
     let staging = dir.join(STAGING).join(&name);
-    // Start empty: a leftover from an interrupted run must not be mistaken for this one's.
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|source| ExtError::Staging {
         path: staging.display().to_string(),
         source,
     })?;
 
-    // Every exit goes through `staged`, which removes the staging dir whatever the outcome.
     let outcome = stage_and_check(&staging, source, &name, checks);
     let _ = std::fs::remove_dir_all(&staging);
-    // Prune `.staging` itself when empty so `list` need not skip it.
     let _ = std::fs::remove_dir(dir.join(STAGING));
     outcome
 }
@@ -761,7 +749,6 @@ fn check_structure(staged: &Path, shown: &Path) -> Result<(), ExtError> {
         })?;
     match inspected.verdict {
         Verdict::Consistent => Ok(()),
-        // Unreachable: staged above.
         Verdict::NoManifest => Err(ExtError::NoManifest {
             path: shown.display().to_string(),
         }),
@@ -798,10 +785,8 @@ fn stage_and_check(
         source: err,
     })?;
 
-    // Cheapest check first.
     verify_digest(&staged_component, source, checks.sha256.as_deref())?;
 
-    // Required: `allow-unmanifested` is for components already on disk, not new installs.
     let source_manifest = manifest_path(source);
     if !source_manifest.exists() {
         return Err(ExtError::NoManifest {
@@ -814,10 +799,6 @@ fn stage_and_check(
         source: err,
     })?;
 
-    // Provenance over both files, before compiling: a manifest has none of its own, so signing only the
-    // `.wasm` would trust an attacker's description of what it may ask the host for.
-    // Signatures are read beside the source, checked against the staged bytes, and not carried into `ext/`.
-    // With the signature waived, the digest above is the only evidence (hence `install` refuses the flag without one).
     if !checks.allow_unsigned {
         verify_signature(
             &staged_component,
@@ -835,8 +816,6 @@ fn stage_and_check(
 
     check_structure(&staged_component, source)?;
 
-    // Manifest first: a component arriving before its manifest could be loaded unmanifested by a
-    // concurrent boot, while an early manifest is an inert orphan.
     let landed_manifest = manifest_path(&dir.join(format!("{name}.{COMPONENT_EXT}")));
     std::fs::rename(&staged_manifest, &landed_manifest).map_err(|err| ExtError::Landing {
         path: landed_manifest.display().to_string(),
@@ -844,7 +823,6 @@ fn stage_and_check(
     })?;
     let landed_component = dir.join(format!("{name}.{COMPONENT_EXT}"));
     if let Err(err) = std::fs::rename(&staged_component, &landed_component) {
-        // Take the manifest back out so a failure leaves `ext/` as it was.
         let _ = std::fs::remove_file(&landed_manifest);
         return Err(ExtError::Landing {
             path: landed_component.display().to_string(),
@@ -915,7 +893,6 @@ mod tests {
             "tool-abc",
             Some(&manifest_for("tool-abc", "\"host-fs\"")),
         );
-        // Not a component, so not staged — `list` must not report it.
         std::fs::write(dir.0.join("notes.txt"), "ignored").expect("writes a stray file");
 
         let staged = list(&dir.0).expect("lists");
@@ -1032,7 +1009,6 @@ mod tests {
         let dir = temp_dir(tag);
         let ext = dir.0.join("ext");
         std::fs::create_dir_all(&ext).expect("creates ext/");
-        // One innocent bystander, so "unchanged" means something.
         stage(
             &ext,
             "tool-present",
@@ -1142,9 +1118,7 @@ mod tests {
         std::fs::write(&source, b"\0asm").expect("writes a component");
 
         for bad in [
-            // 63 characters: one short, the classic truncated paste.
             "016481a6eb79d32a82af4a1f7d49af56b11af9431870a857016e4696e62aca2",
-            // 64 characters, one of them not hex.
             "z16481a6eb79d32a82af4a1f7d49af56b11af9431870a857016e4696e62aca26",
             "",
             "sha256:016481a6",
@@ -1209,7 +1183,6 @@ mod tests {
              ends — the second install would delete the first's downloads"
         );
 
-        // Staged files are unverified, so the dir must not be a world-readable drop box.
         for dir in [&first, &second] {
             crate::wasm_cache::ensure_private_dir(dir).expect("staging dir is creatable");
         }

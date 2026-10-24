@@ -38,7 +38,6 @@ pub const BINDINGS: &[Binding] = &[
         action: "quit",
         context: Context::Idle,
     },
-    // One row per dialog is enough to make its key discoverable.
     Binding {
         keys: "Ctrl+S",
         action: "switch session",
@@ -54,7 +53,6 @@ pub const BINDINGS: &[Binding] = &[
         action: "quit",
         context: Context::Idle,
     },
-    // Only useful where the layout hides the sidebar pane (narrow widths).
     Binding {
         keys: "Ctrl+B",
         action: "sidebar (narrow widths)",

@@ -84,7 +84,6 @@ fn contributions_render_at_both_sizes_in_both_themes() {
         );
 
         for (name, theme) in themes() {
-            // At 60×20 the sidebar may be collapsed, so the dialog draws the same view.
             let pane = usize::from(frame.sidebar.map_or(frame.content.width, |s| s.width))
                 .saturating_sub(2);
             let text = plain(&sidebar::view(&app, info, pane, theme));

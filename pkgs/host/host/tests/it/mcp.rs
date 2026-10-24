@@ -47,7 +47,6 @@ fn exchange(agent: &mut jk_agent::AgentSession, lines: &[&str]) -> Vec<serde_jso
     let text = String::from_utf8(output).expect("frames are UTF-8");
     text.lines()
         .map(|line| {
-            // Transport is newline-delimited, so every line must parse.
             serde_json::from_str(line)
                 .unwrap_or_else(|err| panic!("{line:?} is not a frame: {err}"))
         })
@@ -71,7 +70,6 @@ fn an_editor_initializes_lists_tools_and_calls_ask() {
         ],
     );
 
-    // The notification gets no reply, so three frames.
     assert_eq!(frames.len(), 3, "{frames:#?}");
     assert_eq!(frames[0]["id"], 1);
     assert_eq!(frames[0]["result"]["protocolVersion"], "2025-11-25");
@@ -150,7 +148,6 @@ fn two_calls_without_a_session_continue_the_same_one() {
         );
     }
 
-    // One session holds both turns, not one per call.
     let sessions = jk_agent::session::sessions_payload(&agent);
     let ids: Vec<&str> = sessions["sessions"]
         .as_array()
@@ -261,7 +258,6 @@ fn a_write_requiring_turn_is_refused_and_nothing_is_written() {
         "the model asked to write {} and the gate refused, with nobody to ask",
         target.display()
     );
-    // A refusal is an answer, not a transport failure.
     assert!(frames[0].get("error").is_none(), "{:#?}", frames[0]);
 }
 

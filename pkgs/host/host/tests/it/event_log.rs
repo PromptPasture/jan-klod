@@ -72,7 +72,6 @@ fn a_turn_appends_its_events_in_order() {
         "every row belongs to the session that produced it"
     );
 
-    // Input, assistant text, outcome. `text-delta` shows deltas reach the log uncoalesced (acceptance line 2).
     assert_eq!(
         log.iter().map(|row| row.kind.as_str()).collect::<Vec<_>>(),
         vec![event_log::KIND_USER_MESSAGE, "text-delta", "done"],
@@ -86,7 +85,6 @@ fn a_turn_appends_its_events_in_order() {
         log[0].payload
     );
 
-    // `Done` is the authoritative answer; a log without it is an unfinished turn.
     let last = log.last().expect("non-empty");
     assert_eq!(last.kind, "done", "the log ends with the turn's outcome");
     let Ok(Event::Done { text, .. }) = decode(&last.kind, &last.payload) else {
@@ -344,7 +342,6 @@ extensions:
         "the install attempt is not in the log, so nothing records that it \
          happened: {decoded:?}"
     );
-    // Must be the install tool's own refusal: a bare `failed` also passes with the tool disabled.
     let refusal = decoded.iter().find_map(|event| match event {
         Event::ToolResult(outcome) if outcome.failed => Some(outcome.content.clone()),
         _ => None,
@@ -375,7 +372,6 @@ fn an_edited_event_breaks_the_chain() {
             .expect("event appends");
     }
 
-    // Tamper with one payload directly, as an attacker with database access would.
     let conn = rusqlite::Connection::open(dir.join("test.db")).expect("connection opens");
     conn.execute(
         "UPDATE events SET payload = ? WHERE session = ? AND seq = ?",
@@ -388,7 +384,6 @@ fn an_edited_event_breaks_the_chain() {
     let store = Store::open(dir.join("test.db")).expect("store re-opens");
     let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
 
-    // Event 4's prev_digest no longer matches event 3.
     match result.status {
         ChainStatus::Intact => panic!("chain should be broken after payload edit"),
         ChainStatus::Broken { seq, .. } => {
@@ -449,7 +444,6 @@ fn a_reordered_pair_breaks_the_chain() {
         )
         .expect("row 4 retrieved");
 
-    // A temporary seq avoids a primary-key clash during the swap.
     conn.execute(
         "UPDATE events SET seq = 999999 WHERE session = ? AND seq = ?",
         params!["test-session", 3i64],
@@ -514,7 +508,6 @@ fn a_deleted_event_breaks_the_chain() {
     let store = Store::open(dir.join("test.db")).expect("store re-opens");
     let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
 
-    // Event 4's prev_digest points at the deleted event 3.
     match result.status {
         ChainStatus::Intact => panic!("chain should be broken after deletion"),
         ChainStatus::Broken { seq, .. } => {

@@ -55,7 +55,6 @@ impl Viewport {
             self.offset = max;
         } else if self.offset > max {
             self.offset = max;
-            // At the bottom it re-attaches: two states that look identical would diverge on the next append.
             self.attached = true;
         }
         self
@@ -69,7 +68,6 @@ impl Viewport {
         if start < self.offset {
             self.offset = start;
         } else if end > self.offset + height {
-            // `saturating_sub`, not a clamp, so an arithmetic mistake is not hidden.
             let wanted = end.saturating_sub(height);
             self.offset = if wanted > max { max } else { wanted };
         }
@@ -205,7 +203,6 @@ mod tests {
 
         assert!(detached.to_bottom(100, H).attached());
 
-        // Scrolling back to the bottom re-attaches too.
         let mut v = detached;
         for _ in 0..10 {
             v = v.page_down(100, H);
@@ -217,7 +214,6 @@ mod tests {
     #[test]
     fn a_pane_that_grows_past_the_transcript_does_not_leave_blank_rows() {
         let detached = Viewport::default().reflow(100, H).page_up(H);
-        // The terminal is resized taller than everything left below.
         let v = detached.reflow(100, 200);
         assert_eq!(v.offset(), 0);
         assert!(
@@ -238,24 +234,19 @@ mod tests {
     /// Reveal scrolls the least that shows the block (#155).
     #[test]
     fn reveal_scrolls_the_least_that_brings_a_block_on_screen() {
-        // A 100-line transcript in a 10-row pane, sitting at the bottom.
         let bottom = Viewport::default().reflow(100, 10);
         assert_eq!(bottom.offset(), 90);
 
-        // Already on screen: nothing moves, and it stays attached.
         assert_eq!(bottom.reveal(92, 3, 100, 10), bottom);
 
-        // Block above the window: it becomes the top row.
         let up = bottom.reveal(20, 3, 100, 10);
         assert_eq!(up.offset(), 20);
         assert!(!up.attached(), "scrolling back detaches");
 
-        // Block below the window: its last line becomes the bottom row.
         let down = up.reveal(40, 2, 100, 10);
         assert_eq!(down.offset(), 32, "the block's last line is the last row");
         assert!(!down.attached());
 
-        // Newest block (at max_offset) re-attaches.
         let back = up.reveal(97, 3, 100, 10);
         assert_eq!(back.offset(), 90);
         assert!(back.attached(), "arriving at the bottom re-attaches");

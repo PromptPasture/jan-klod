@@ -23,7 +23,6 @@ pub fn keep_indices(tokens: &[usize], is_system: &[bool], budget: usize) -> Vec<
         return (0..tokens.len()).collect();
     }
 
-    // System messages reserve their cost first; the rest share what is left.
     let system_total: usize = tokens
         .iter()
         .zip(is_system)
@@ -40,7 +39,6 @@ pub fn keep_indices(tokens: &[usize], is_system: &[bool], budget: usize) -> Vec<
             remaining -= tokens[i];
             kept_recent.push(i);
         } else if kept_recent.is_empty() {
-            // Always keep current turn even if it overflows.
             kept_recent.push(i);
             break;
         } else {
@@ -67,7 +65,6 @@ mod tests {
 
     #[test]
     fn over_budget_drops_oldest_non_system() {
-        // total 85 > budget 45; system(10) + recent window within 35.
         let tokens = [10, 30, 30, 15];
         let is_system = [true, false, false, false];
         let kept = keep_indices(&tokens, &is_system, 45);

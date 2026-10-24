@@ -50,17 +50,11 @@ fn event_loop(
     theme: Theme,
 ) -> std::io::Result<()> {
     let mut app = App::default();
-    // The session id lives in `App`, since switch and `/new` replace it.
     app.set_session(session.to_string());
     take_connect_facts(&mut app, transport);
     let mut view = Viewport::default();
-    // Last frame's geometry: scroll keys need line count and pane height,
-    // which only `render` knows.
     let mut pane = Pane::default();
-    // Fixed at startup, so completion does not follow a later chdir.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    // `described` and `cwd` are fixed for the run. The session id is not
-    // here because it can change; read it from `app.session()`.
     let described = transport.describe();
     let meta = Meta {
         described: &described,
@@ -71,7 +65,6 @@ fn event_loop(
     ));
 
     let mut rx: Option<mpsc::Receiver<Result<StreamEvent, String>>> = None;
-    // Spinner frame. `wrapping_add` so overflow cannot panic.
     let mut tick: usize = 0;
 
     while !app.should_quit {
@@ -82,8 +75,6 @@ fn event_loop(
                     Step::Drained => break,
                     Step::Ended => {
                         rx = None;
-                        // Any end (answered, failed, or sender dropped) returns to Idle;
-                        // `finish_turn` covers only the answered path.
                         app.end_turn();
                         break;
                     }
@@ -91,18 +82,13 @@ fn event_loop(
             }
         }
 
-        // Only this loop holds the transport, so it executes requests raised since the last frame.
         drain_transport_requests(&mut app, transport);
 
         terminal.draw(|frame| render(frame, &app, theme, &mut view, &mut pane, tick, &meta))?;
 
-        // Short timeout so streamed deltas redraw promptly.
         if !event::poll(Duration::from_millis(POLL_MS))? {
-            // Advance on timeout, not on delta arrival, so a silent turn still looks alive.
             tick = tick.wrapping_add(1);
-            // Toasts expire on the same tick, so expiry is testable without a clock.
             app.tick(tick);
-            // Detect a gateway that exited silently; mid-turn errors surface in `apply_event`.
             if !app.disconnected() && !transport.alive() {
                 app.disconnect(format!("{} exited", transport.describe()));
             }
@@ -114,17 +100,13 @@ fn event_loop(
         if key.kind != KeyEventKind::Press {
             continue;
         }
-        // Editing and scrolling are pure key mapping, kept out of the loop.
         if edit_or_scroll(&key, &mut app, &mut view, pane, theme) {
-            // Completion is a function of the buffer, so refresh once after any edit.
             app.refresh_completion(&cwd);
             continue;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => app.quit(),
-            // `Ctrl+C` on an empty, idle composer asks before quitting. Any other
-            // `Ctrl+C` cancels the turn; the transport decides how.
             KeyCode::Char('d') if ctrl => app.request_quit(),
             KeyCode::Char('c') if ctrl => {
                 if app.turn() == Turn::Idle && app.input().is_empty() {
@@ -134,21 +116,16 @@ fn event_loop(
                 }
             }
             KeyCode::Char('s') if ctrl => app.request_sessions(),
-            // The switcher's `Enter` needs `transport.session_get`, which `App`
-            // cannot hold, so it stays out of `enter_means`.
             KeyCode::Enter if app.sessions_open() => switch_session(&mut app, transport),
             KeyCode::Enter => match enter_means(&app) {
-                // Answered even while the turn runs: the turn is blocked waiting for it.
                 Enter::Answer => {
                     if let Some((prompt_session, answer)) = app.take_answer() {
                         let transport = Arc::clone(transport);
-                        // The prompt's own session, not this loop's `session`: a client may drive several.
                         thread::spawn(move || {
                             let _ = transport.answer(&prompt_session, &answer);
                         });
                     }
                 }
-                // Closed dialog: reopen it rather than answer blind.
                 Enter::ReopenPrompt => app.open_dialog(),
                 Enter::Steer => {
                     let session = app.session().to_string();
@@ -189,7 +166,6 @@ fn take_connect_facts(app: &mut App, transport: &Arc<dyn Transport>) {
 /// Executes the asks the model raised since the last frame. `session/get` is
 /// not here: the switcher answers it from a keystroke.
 fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
-    // Raised by Ctrl+C or the menu. `App::cancel` refuses a second ask, so this sends once.
     if app.take_cancel_request() {
         match transport.cancel(app.session()) {
             Ok(()) => app.record_status("cancelling — the answer so far is kept"),
@@ -197,7 +173,6 @@ fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
         }
     }
 
-    // Safe to call synchronously here: `App::sessions_confirm` refuses switches mid-turn.
     if app.take_sessions_request() {
         match transport.session_list() {
             Ok(sessions) => app.open_sessions(
@@ -213,18 +188,15 @@ fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
         }
     }
 
-    // A contributed command's answer goes to the status line, not the transcript.
     if let Some((extension, name)) = app.take_invoke_request() {
         match transport.invoke_contribution(&extension, &name) {
             Ok(text) if text.is_empty() => app.record_status(format!("{name} ran")),
             Ok(text) => app.record_status(text),
             Err(err) => app.record_error(format!("{name}: {err}")),
         }
-        // The invocation may have changed the contributed set; re-read it.
         app.set_contributions(&transport.contributions());
     }
 
-    // `session/create` needs no id and cannot race the turn's reader.
     if app.take_new_session_request() {
         match transport.create_session() {
             Ok(id) => app.load_session(id, Vec::new()),
@@ -327,11 +299,9 @@ fn edit_or_scroll(
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    // Open dialogs own all keys, so they are checked first.
     if dialog_priority_keys(key, app, pane) {
         return true;
     }
-    // `@` completion goes before the menu; the two lists are mutually exclusive by construction.
     if app.completion_open() {
         match key.code {
             KeyCode::Esc => {
@@ -364,15 +334,12 @@ fn edit_or_scroll(
                 app.menu_move(1);
                 return true;
             }
-            // On an empty result `Enter` falls through to submit, so the composer stays sendable.
             KeyCode::Enter | KeyCode::Tab if app.menu_accept() => return true,
             _ => {}
         }
     }
-    // The transcript cursor uses Alt+Up/Down, since bare arrows belong to the composer.
     match key.code {
         KeyCode::Char('o') if ctrl => {
-            // Consumed even with nothing selected, so no `o` is typed.
             app.toggle_expanded();
             reveal_cursor(app, view, pane, theme);
             return true;
@@ -390,14 +357,12 @@ fn edit_or_scroll(
         _ => {}
     }
     match key.code {
-        // Ctrl+U/D scroll only when the composer is empty; with content they edit it.
         KeyCode::PageUp => *view = view.page_up(pane.height),
         KeyCode::PageDown => *view = view.page_down(pane.total, pane.height),
         KeyCode::Char('u') if ctrl && app.composer.is_empty() => *view = view.half_up(pane.height),
         KeyCode::Char('d') if ctrl && app.composer.is_empty() => {
             *view = view.half_down(pane.total, pane.height);
         }
-        // Readline-style editing, as far as the terminal delivers it.
         KeyCode::Left if alt => app.composer.word_left(),
         KeyCode::Right if alt => app.composer.word_right(),
         KeyCode::Left => app.composer.left(),
@@ -408,11 +373,8 @@ fn edit_or_scroll(
         KeyCode::Char('e') if ctrl => app.composer.end(),
         KeyCode::Char('w') if ctrl => app.composer.delete_word_back(),
         KeyCode::Char('k') if ctrl => app.composer.kill_to_end(),
-        // Kills the line when there is content; empty falls through to scroll.
         KeyCode::Char('u') if ctrl => app.composer.kill_line(),
-        // Terminals disagree on which of Shift+Enter and Alt+Enter arrives; `/newline` covers neither.
         KeyCode::Enter if shift || alt => app.composer.push('\n'),
-        // Up/Down: `App` decides between history and the caret.
         KeyCode::Up => app.history_up(pane.composer_width),
         KeyCode::Down => app.history_down(pane.composer_width),
         KeyCode::Backspace => app.backspace(),
@@ -445,7 +407,6 @@ fn dialog_priority_keys(
         return true;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    // `?` on empty composer opens help; elsewhere it's punctuation.
     if key.code == KeyCode::Char('?')
         && !ctrl
         && !key.modifiers.contains(KeyModifiers::ALT)
@@ -454,7 +415,6 @@ fn dialog_priority_keys(
         app.toggle_help();
         return true;
     }
-    // `Ctrl+B` opens the sidebar dialog only where there is no sidebar pane.
     if key.code == KeyCode::Char('b') && ctrl && pane.sidebar_hidden {
         app.toggle_sidebar_dialog();
         return true;
@@ -580,7 +540,6 @@ const fn sidebar_dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mu
 /// Scrolls so the selected block is visible after a cursor move or a height change.
 fn reveal_cursor(app: &App, view: &mut Viewport, pane: Pane, theme: Theme) {
     let Some(at) = app.cursor() else { return };
-    // Uses last frame's pane; a resize leaves it stale for one frame at most.
     let (start, rows) = blocks::span_of(&app.transcript, at, pane.transcript_width, theme);
     *view = view.reveal(start, rows, pane.total, pane.height);
 }
@@ -605,7 +564,6 @@ fn apply_event(
     match receiver.try_recv() {
         Ok(Ok(StreamEvent::Delta(text))) => app.apply_delta(&text),
         Ok(Ok(StreamEvent::Done(answer))) => {
-            // Interrupt open tools first, so they do not look still running.
             app.interrupt_open_tools();
             app.finish_turn(answer);
             return Step::Ended;
@@ -620,7 +578,6 @@ fn apply_event(
             content,
             failed,
         })) => app.record_tool_result(&id, content, failed),
-        // The full text also lands in the transcript, so an expired toast loses nothing.
         Ok(Ok(StreamEvent::Warning(msg))) => app.toast_warning(msg, tick),
         Ok(Ok(StreamEvent::Prompt {
             session,
@@ -633,15 +590,12 @@ fn apply_event(
             options,
             default,
         }),
-        // A turn error reported by the core: the turn ends, but the transport stays up.
         Ok(Ok(StreamEvent::Error(err))) => {
             app.interrupt_open_tools();
             app.record_error(err);
             return Step::Ended;
         }
-        // Contributions changed mid-turn; apply them without touching the turn.
         Ok(Ok(StreamEvent::Contributions(sets))) => app.set_contributions(&sets),
-        // The transport failed, not the turn: report a disconnect.
         Ok(Err(err)) => {
             app.disconnect(err);
             return Step::Ended;
@@ -656,7 +610,6 @@ fn apply_event(
 const fn caret_glyph(turn: Turn) -> Glyph {
     match turn {
         Turn::Streaming => Glyph::CaretSteering,
-        // Cancelling and Blocked keep the idle caret: steering is not offered there.
         Turn::Idle | Turn::Cancelling | Turn::Blocked => Glyph::Caret,
     }
 }
@@ -669,7 +622,6 @@ fn composer_label(app: &App) -> String {
             match app.turn() {
                 Turn::Streaming => "steer this turn",
                 Turn::Cancelling => "cancelling",
-                // Blocked implies a pending prompt, so it never reaches this branch.
                 Turn::Idle | Turn::Blocked => "message",
             }
             .to_string()
@@ -696,7 +648,6 @@ fn status_context(app: &App) -> Context {
     match app.turn() {
         Turn::Streaming => Context::Streaming,
         Turn::Cancelling => Context::Cancelling,
-        // Blocked implies a pending prompt, so it is handled above.
         Turn::Idle | Turn::Blocked => Context::Idle,
     }
 }
@@ -720,7 +671,6 @@ fn status_hint_from(table: &[keymap::Binding], app: &App, narrow: bool) -> Strin
     };
     if context == Context::DialogOpen {
         if let Some(prompt) = app.pending_prompt() {
-            // The default varies per prompt, so it cannot live in the per-build keymap.
             return format!("{base} (default: `{}`)", prompt.default);
         }
     }
@@ -758,7 +708,6 @@ fn render(
     let area = frame.area();
     let regions = layout::regions(area.width, area.height);
 
-    // Too small to draw honestly: a squeezed border reads as a rendering bug.
     if regions.too_small {
         render_too_small(frame, area, theme);
         return;
@@ -780,7 +729,6 @@ fn render(
 
     let content = regions.content;
 
-    // The composer grows with its content, then scrolls. Width excludes the border and the caret.
     let caret = format!("{} ", theme.glyph(caret_glyph(app.turn())));
     let caret_cells = jk_tui::wrap::width(&caret);
     let composer_width = usize::from(content.width).saturating_sub(2 + caret_cells);
@@ -792,16 +740,12 @@ fn render(
         Layout::vertical([Constraint::Min(1), Constraint::Length(composer_height + 2)])
             .areas(content);
 
-    // `blocks::transcript` builds the lines; this function only places them on screen.
-    // Narrow terminals (`single_column`) drop the transcript border.
     let border = !regions.single_column;
     let reserved = if border { 2 } else { 0 };
     let inner_width = usize::from(transcript_area.width).saturating_sub(reserved);
     let inner_height = usize::from(transcript_area.height).saturating_sub(reserved);
     let lines = blocks::transcript(&app.transcript, app.cursor(), inner_width, theme);
 
-    // Re-clamp to this frame's content, then record it. An attached view follows
-    // new output; a detached one holds its position.
     *view = view.reflow(lines.len(), inner_height);
     *pane = Pane {
         total: lines.len(),
@@ -813,7 +757,6 @@ fn render(
 
     let offset = u16::try_from(view.offset()).unwrap_or(u16::MAX);
     let transcript = if border {
-        // The detach marker is a glyph and a count, not a tint: colour vanishes under `Mode::Mono`.
         let mut block = Block::bordered().title("jan-klod");
         let below = view.below(lines.len(), inner_height);
         if below > 0 {
@@ -831,9 +774,7 @@ fn render(
     };
     frame.render_widget(transcript, transcript_area);
 
-    // The title and status bar say what the field is and which keys act; the caret is the third signal.
     let title = composer_label(app);
-    // The cursor is the terminal's own, placed below; a drawn block would not blink.
     let composer: Vec<Line<'static>> = composer_rows
         .into_iter()
         .enumerate()
@@ -851,14 +792,12 @@ fn render(
         .collect();
     let input = Paragraph::new(composer).block(Block::bordered().title(title));
     frame.render_widget(input, input_area);
-    // +1 for the border, and the caret column is already in display cells.
     frame.set_cursor_position((
         input_area.x + 1 + u16::try_from(caret_cells + caret_col).unwrap_or(0),
         input_area.y + 1 + u16::try_from(caret_row).unwrap_or(0),
     ));
     render_menu(frame, app, theme, input_area);
     render_completion(frame, app, theme, input_area);
-    // Drawn last, over everything. At most one of these is open; each is a no-op when closed.
     render_prompt_dialog(frame, app, theme);
     render_sessions_dialog(frame, app, theme);
     render_help(frame, app, theme);
@@ -1161,7 +1100,6 @@ fn render_completion(frame: &mut Frame, app: &App, theme: Theme, input_area: Rec
             .collect()
     };
     if app.completion_truncated() {
-        // A glyph and words, not only a colour, so the truncation shows under `Mode::Mono`.
         rows.push(Line::from(Span::styled(
             format!(
                 " {} more, keep typing to narrow",
@@ -1174,14 +1112,12 @@ fn render_completion(frame: &mut Frame, app: &App, theme: Theme, input_area: Rec
 }
 
 fn render_menu(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
-    // Floats above the composer so the line being typed stays visible.
     if app.menu_query().is_none() {
         return;
     }
     {
         let entries = app.menu_entries();
         let rows: Vec<Line<'static>> = if entries.is_empty() {
-            // Show an empty state rather than closing: a vanishing list reads as a dropped keystroke.
             vec![Line::from(Span::styled(
                 " no command matches".to_string(),
                 Style::default().fg(theme.muted()),
@@ -1198,7 +1134,6 @@ fn render_menu(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
                         theme.body()
                     });
                     let mut spans = vec![
-                        // Glyph as well as colour, so the highlight shows under `Mode::Mono`.
                         Span::styled(
                             if selected {
                                 format!("{} ", theme.glyph(Glyph::Collapsed))
@@ -1269,8 +1204,6 @@ mod tests {
             assert_eq!(app.input(), "ab\n");
         }
 
-        // Plain `Enter` must fall through: submitting is the event loop's job,
-        // and consuming it here would make the composer impossible to send.
         let mut app = App::default();
         "ab".chars().for_each(|c| app.push_char(c));
         assert!(!key(&mut app, KeyCode::Enter, KeyModifiers::NONE));
@@ -1285,7 +1218,6 @@ mod tests {
         assert!(key(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL));
         assert_eq!(app.input(), "", "the line was killed");
 
-        // Empty composer: the key falls through to the half-page scroll.
         let mut empty = App::default();
         let mut view = Viewport::default().reflow(100, 10);
         let consumed = edit_or_scroll(
@@ -1311,7 +1243,6 @@ mod tests {
     #[test]
     fn a_control_chord_is_never_typed_into_the_buffer() {
         let mut app = App::default();
-        // `Ctrl+Z` has no binding and must not type a `z`.
         assert!(!key(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL));
         assert_eq!(app.input(), "");
     }
@@ -1379,7 +1310,6 @@ mod tests {
             "a slash inside a message is a slash"
         );
 
-        // A space ends it, because a command is the whole buffer.
         let mut spaced = App::default();
         "/new ".chars().for_each(|c| spaced.push_char(c));
         assert!(spaced.menu_query().is_none());
@@ -1425,7 +1355,6 @@ mod tests {
                 jk_tui::commands::Availability::Ready => match command.name {
                     "/newline" => assert_eq!(app.input(), "\n"),
                     "/quit" => assert!(app.should_quit),
-                    // No turn runs in this fresh `App`, so `/cancel` says so and raises no ask.
                     "/cancel" => {
                         assert!(
                             !app.take_cancel_request(),
@@ -1437,7 +1366,6 @@ mod tests {
                             app.transcript
                         );
                     }
-                    // Each raises the ask its drain acts on; `/help` opens the overlay directly.
                     "/new" => assert!(
                         app.take_new_session_request(),
                         "/new did not ask for a fresh session/create"
@@ -1477,7 +1405,6 @@ mod tests {
             "a six-item list wraps, unlike history"
         );
 
-        // Esc closes and leaves the text alone.
         assert!(key(&mut app, KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.menu_query().is_none());
         assert_eq!(app.input(), "/", "dismissing is not deleting");
@@ -1588,7 +1515,6 @@ mod tests {
         let mut app = App::default();
         app.record_tool_invoked("c1".into(), "read".into(), None);
 
-        // Nothing selected: consumed, and no `o` is typed.
         assert!(key(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL));
         assert_eq!(app.input(), "", "the chord was typed into the composer");
         let JanKlodEntry::Tool(block) = &app.transcript[0] else {
@@ -1642,7 +1568,6 @@ mod tests {
         assert!(request_cancel(&mut app), "the first ask acts");
         assert_eq!(app.turn(), Turn::Cancelling);
 
-        // Cancelling keeps the partial answer.
         assert!(
             format!("{:?}", app.transcript).contains("half an answer"),
             "cancelling erased the answer that had already arrived"
@@ -1744,7 +1669,6 @@ mod signals {
                 "{set:?}: the two carets render alike with colour gone"
             );
         }
-        // The label and hint are text, so they survive mono; asserted in case they become styles.
         assert_ne!(composer_label(&idle), composer_label(&busy));
         assert_ne!(status_hint(&idle, false), status_hint(&busy, false));
     }
@@ -1900,7 +1824,6 @@ mod enter {
         assert_eq!(busy.turn(), Turn::Streaming);
         assert_eq!(enter_means(&busy), Enter::Steer);
 
-        // Blocked is checked before Streaming: a blocked turn still streams underneath.
         let mut blocked = App::default();
         blocked.begin_turn();
         blocked.ask(prompt());
@@ -1912,7 +1835,6 @@ mod enter {
             "a pending confirmation must take Enter ahead of steering"
         );
 
-        // Closed dialog: Enter must not answer blind.
         blocked.close_dialog();
         assert_eq!(blocked.turn(), Turn::Blocked, "still waiting");
         assert_eq!(
@@ -1959,7 +1881,7 @@ mod enter {
         let mut app = App::default();
         app.begin_turn();
         app.ask(prompt());
-        app.prompt_jump(1); // "yes" is the first option, as displayed
+        app.prompt_jump(1);
 
         assert_eq!(enter_means(&app), Enter::Answer);
 
@@ -1986,7 +1908,7 @@ mod enter {
             session: "the-turns-session".to_string(),
             ..prompt()
         });
-        app.prompt_jump(2); // "no", the default
+        app.prompt_jump(2);
 
         let recorder = Recorder::default();
         let (session, answer) = app.take_answer().expect("the default was selected");
@@ -2042,7 +1964,6 @@ mod enter {
             app.begin_turn();
 
             if opened_by_menu {
-                // Through `push_char`, which opens the menu; a direct insert would not.
                 "/cancel".chars().for_each(|c| app.push_char(c));
                 assert!(app.menu_accept(), "the menu did not take the command");
             } else {
@@ -2117,7 +2038,6 @@ mod dialogs {
         assert!(app.help_open());
         assert_eq!(app.input(), "", "the `?` must not have been typed");
 
-        // Typed mid-sentence, it is punctuation.
         let mut typing = App::default();
         "is this on".chars().for_each(|c| typing.push_char(c));
         super::edit_or_scroll(
@@ -2266,7 +2186,7 @@ mod dialogs {
         assert_eq!(*fake.list_calls.lock().expect("lock"), 1, "opened twice");
         assert!(app.sessions_open());
 
-        app.sessions_move(1); // "other"
+        app.sessions_move(1);
         let id = app
             .sessions_confirm()
             .expect("idle, so the switch is accepted");
@@ -2317,7 +2237,6 @@ mod dialogs {
     #[test]
     fn every_dialog_shares_one_frame_implementation() {
         let source = include_str!("tui.rs");
-        // Split so this test's own source does not match the needle.
         let definition = format!("fn {}render_modal(", "");
         assert_eq!(
             source.matches(&definition).count(),

@@ -30,13 +30,11 @@ const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
 /// The sidebar's CHANGED list reads this too.
 pub(crate) fn summary(tool: &ToolBlock) -> String {
     let Some(raw) = tool.arguments.as_deref() else {
-        // Absent means nothing arrived (older cores); rendering `{}` would claim otherwise.
         return "arguments not sent over this transport".to_string();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
         return String::new();
     };
-    // Precedence order, not JSON order: `path` is the noun when paired with `pattern`.
     for key in ["path", "file", "pattern", "query", "command"] {
         if let Some(found) = value.get(key).and_then(serde_json::Value::as_str) {
             return found.to_string();
@@ -48,12 +46,10 @@ pub(crate) fn summary(tool: &ToolBlock) -> String {
 /// Status glyph and colour.
 fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
     match &tool.status {
-        // First spinner frame; `block` is pure, has no tick (#160).
         ToolStatus::Running => (
             (*theme.spinner().first().unwrap_or(&"-")).to_string(),
             theme.secondary(),
         ),
-        // Failure is the core's flag (#162), never inferred from the content.
         ToolStatus::Done { failed: true, .. } => {
             (theme.glyph(Glyph::ToolFailed).to_string(), theme.removed())
         }
@@ -68,7 +64,6 @@ fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
 /// [`block`]'s message path: `wrap` collapses whitespace and would flatten the
 /// indents of pretty-printed arguments.
 fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> Vec<Line<'static>> {
-    // Selection swaps the glyph, not the colour, so it survives `Mode::Mono`.
     let (glyph, rail) = if selected {
         (
             theme.glyph(Glyph::Caret),
@@ -100,7 +95,6 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
         Span::styled(tool.name.clone(), Style::default().fg(theme.body())),
     ];
 
-    // Collapsed is one row. The summary is elided from the left, since paths end in the filename.
     let mut spent = gutter_width(theme)
         + crate::wrap::width(&open)
         + crate::wrap::width(&status)
@@ -128,7 +122,6 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
         return lines;
     }
 
-    // Indented on `code_surface`: under `Mode::Mono` the background alone is invisible.
     let surface = Style::default().fg(theme.body()).bg(theme.code_surface());
     if let Some(raw) = tool.arguments.as_deref() {
         lines.extend(
@@ -139,7 +132,6 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
     }
     if let ToolStatus::Done { content, failed } = &tool.status {
         let style = if *failed {
-            // A failure is read, not glanced at, so it gets the failure colour.
             Style::default()
                 .fg(theme.removed())
                 .bg(theme.code_surface())
@@ -147,9 +139,6 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
             surface
         };
         lines.push(Line::from(rule()));
-        // A diff renders as a diff even inside a failed result (#156), since a
-        // diff drawn entirely in the failure colour would say the opposite.
-        // Unindented, so the sign reaches column 0 where `Mode::Mono` can read it.
         let body =
             crate::diff::render(content.trim_end(), body_width, theme).unwrap_or_else(|| {
                 crate::markdown::verbatim(content.trim_end(), body_width, "  ", style)
@@ -204,7 +193,6 @@ fn prefix(rail: Span<'static>, row: Line<'static>) -> Line<'static> {
 #[must_use]
 pub fn block(entry: &Entry, selected: bool, width: usize, theme: Theme) -> Vec<Line<'static>> {
     let (who, text) = match entry {
-        // Messages have nothing to open, so the cursor only lands on tool blocks.
         Entry::Message { who, text } => (*who, text.clone()),
         Entry::Tool(tool) => return tool_block(tool, selected, width, theme),
     };
@@ -215,11 +203,9 @@ pub fn block(entry: &Entry, selected: bool, width: usize, theme: Theme) -> Vec<L
 
     let mut lines = vec![Line::from(vec![
         Span::styled(format!("{glyph} "), Style::default().fg(accent)),
-        // `muted` has no contrast floor on light terminals (#135): fine for a label, not for a message.
         Span::styled(label.to_string(), Style::default().fg(theme.muted())),
     ])];
 
-    // Only the assistant's text is Markdown (#149). User, error and status text is shown verbatim.
     let body: Vec<Line<'static>> = if who == Who::Klod {
         crate::markdown::render(&text, body_width, theme)
     } else {
@@ -266,7 +252,6 @@ pub fn transcript(
 pub fn span_of(entries: &[Entry], index: usize, width: usize, theme: Theme) -> (usize, usize) {
     let mut start = 0;
     for entry in entries.iter().take(index) {
-        // `+ 1` for the blank row `transcript` puts *between* blocks.
         start += block(entry, false, width, theme).len() + 1;
     }
     let height = entries
@@ -308,7 +293,6 @@ pub fn prompt_dialog(
     lines.push(Line::from(String::new()));
 
     if prompt.options.is_empty() {
-        // Free text: the default is what an empty submission sends.
         lines.push(Line::from(vec![
             Span::styled("> ", Style::default().fg(theme.focus())),
             Span::styled(input.to_string(), Style::default().fg(theme.body())),
@@ -344,7 +328,6 @@ pub fn prompt_dialog(
                 Span::styled(option.clone(), row_style),
             ];
             if is_default {
-                // A word and a glyph, not colour alone: colour is absent under `Mode::Mono`.
                 spans.push(Span::styled(
                     format!(" {} default", theme.glyph(Glyph::Warning)),
                     Style::default().fg(theme.warning()),
@@ -413,7 +396,6 @@ pub fn sessions_dialog(
                 ),
             ];
             if is_current {
-                // A word, not only colour, for the same `Mode::Mono` reason as the default label.
                 spans.push(Span::styled(
                     " (current)".to_string(),
                     Style::default().fg(theme.warning()),
@@ -641,7 +623,6 @@ mod tests {
                 "{who:?}: no label under Mono, so nothing identifies the speaker"
             );
         }
-        // Colour is not what tells the four labels apart.
         let labels: Vec<String> = ALL
             .into_iter()
             .map(|who| plain(&block(&entry(who, "x"), false, 40, theme)[0]))
@@ -757,7 +738,6 @@ mod tests {
     fn missing_arguments_say_so_instead_of_reading_as_none() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
         let head = plain(&block(&call("read", None, ToolStatus::Running), false, 80, theme)[0]);
-        // The user has to tell "nothing arrived" apart from "no arguments".
         assert!(
             head.contains("not sent"),
             "a user cannot tell missing from absent without the reason: {head:?}"
@@ -895,7 +875,6 @@ mod tests {
             "the result did not go through the diff renderer: {body:?}"
         );
 
-        // A failed diff keeps the diff rendering; the failure is still shown on the head row.
         let failed = opened(call(
             "git",
             Some("{}"),
@@ -1016,7 +995,6 @@ mod tests {
             "the default is not named in the row's text, only (perhaps) in \
              colour that Mode::Mono has already zeroed out: {default_row:?}"
         );
-        // And the other options do not carry that label.
         for other in ["always", "yes"] {
             let row = rendered
                 .iter()

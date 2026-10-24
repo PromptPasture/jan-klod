@@ -190,7 +190,6 @@ impl tool_bind::jan_klod::interfaces::host_storage::Host for TestHost {
 
 impl tool_bind::jan_klod::interfaces::host_secrets::Host for TestHost {
     fn get(&mut self, name: String) -> std::result::Result<String, tool_bind::jan_klod::interfaces::host_secrets::SecretsError> {
-        // The grant is the JSON boolean `true`, read back as the string "true".
         match self.section.get("secrets") {
             Some(s) => {
                 if s != "true" {

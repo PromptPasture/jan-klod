@@ -92,7 +92,6 @@ fn two_sessions_run_turns_at_the_same_time() {
         let fast = agents.of("fast");
         let at = Arc::clone(&fast_done);
         scope.spawn(move || {
-            // Start only once the slow turn is in flight (a fixed sleep was flaky, #315).
             slow_running
                 .recv_timeout(Duration::from_secs(60))
                 .expect("the slow turn starts");
@@ -127,7 +126,6 @@ fn one_agent_makes_the_same_two_turns_wait() {
     let factory = paced_factory(&calls);
     let (jobs, queued) = jk_host::session_thread::queue::<AgentSession>();
 
-    // Stamped inside the jobs, not by callers, which could be descheduled (#315).
     let slow_ended: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let fast_started: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let (started, slow_running) = std::sync::mpsc::channel();
@@ -145,8 +143,6 @@ fn one_agent_makes_the_same_two_turns_wait() {
         let fast = jobs.clone();
         let at = Arc::clone(&fast_started);
         scope.spawn(move || {
-            // Queue only once the slow turn runs, so the order is deterministic.
-            // Bounded, so a boot failure ends the test instead of hanging it.
             slow_running
                 .recv_timeout(Duration::from_secs(60))
                 .expect("the slow turn starts");
@@ -190,7 +186,6 @@ fn dropping_the_registry_stops_every_agent() {
 
     drop(agents);
 
-    // The handle outlived the registry; its loop did not.
     assert!(
         kept.run(|_: &mut AgentSession| ()).is_err(),
         "a queue still answers after its registry was dropped"
@@ -209,7 +204,6 @@ fn a_session_written_by_one_agent_is_visible_to_another() {
     std::fs::create_dir_all(&dir).expect("creates the temp dir");
     let _guard = common::TempDir(dir.clone());
     let config = dir.join("config.yaml");
-    // Deliberately no `storage:` block.
     std::fs::write(
         &config,
         "
@@ -234,7 +228,6 @@ extensions:
         })
         .expect("alpha's turn ran");
 
-    // The housekeeping agent is the one the REST surface reads through.
     let (transcript, listed) = agents
         .housekeeping()
         .run(|agent: &mut AgentSession| {

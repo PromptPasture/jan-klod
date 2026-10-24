@@ -188,7 +188,6 @@ pub fn decode_record(kind: &str, payload: &str) -> Result<Record, DecodeError> {
         "tool-result" => Ok(Record::Event(Event::ToolResult(ToolOutcome {
             tool_call_id: text(kind, &data, "id")?,
             content: text(kind, &data, "content")?,
-            // Rows written before #162 lack the field; absence means `false`.
             failed: data.get("failed").and_then(Value::as_bool).unwrap_or(false),
         }))),
         "warning" => Ok(Record::Event(Event::Warning(text(kind, &data, "message")?))),
@@ -248,7 +247,6 @@ impl<'a> PersistingSink<'a> {
 
 impl EventSink for PersistingSink<'_> {
     fn emit(&mut self, event: &Event) -> Flow {
-        // Logged before forwarding, so the record survives a `Stop` from the inner sink; the lock is released first.
         let (kind, payload) = encode(event);
         append_encoded(self.store, &self.session, &mut self.warned, kind, &payload);
         self.inner.emit(event)
@@ -421,11 +419,9 @@ pub fn verify_chain(store: &Store, session: &str) -> Result<ChainVerification, V
 pub fn migrate_transcripts(store: &Store) -> Result<u64, StoreError> {
     let mut migrated = 0;
     for session in store.list_namespaces()? {
-        // Interceptors share this database under `ext/<component>/…`; those are not conversations.
         if session.contains('/') || !store.session_events(&session)?.is_empty() {
             continue;
         }
-        // `turn-10` sorts before `turn-9` as text, so order by the number, not the key.
         let mut turns: Vec<(u64, crate::store::Entry)> = store
             .recent(&session, u32::MAX)?
             .into_iter()
@@ -443,7 +439,6 @@ pub fn migrate_transcripts(store: &Store) -> Result<u64, StoreError> {
             let Ok(turn) = serde_json::from_str::<Value>(&entry.value) else {
                 continue;
             };
-            // Date converted events at the turn's time, not the upgrade's.
             let ts = entry.created_at;
             if let Some(user) = turn.get("user").and_then(Value::as_str) {
                 store.append_event_at(

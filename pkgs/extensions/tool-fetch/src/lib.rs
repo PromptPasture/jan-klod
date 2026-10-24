@@ -7,7 +7,6 @@
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 const TIMEOUT_MS: u32 = 15_000;
 
-// Only the wasm32 glue calls this module outside tests; the allow covers native builds.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod fetch {
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -34,7 +33,6 @@ mod fetch {
         };
 
         let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-        // Host follows the last `@`, so `http://example.com@127.0.0.1/` is judged as 127.0.0.1.
         let hostport = authority.rsplit('@').next().unwrap_or("");
         let host = strip_port(hostport);
         if host.is_empty() {
@@ -77,7 +75,6 @@ mod fetch {
         if let Some(v6) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
             return classify_v6(v6);
         }
-        // Digits and dots only: an address, or an alternate encoding that is refused.
         if host.chars().all(|c| c.is_ascii_digit() || c == '.') {
             return classify_v4(host);
         }
@@ -87,7 +84,6 @@ mod fetch {
         {
             return Address::Unrecognised;
         }
-        // An all-numeric last label is read as an address by resolvers (`0x7f.0.0.1`), so judge it as one.
         if host
             .rsplit('.')
             .next()
@@ -121,12 +117,10 @@ mod fetch {
         addr.is_unspecified()
             || addr.is_loopback()
             || addr.is_private()
-            || addr.is_link_local() // cloud metadata
+            || addr.is_link_local()
             || addr.is_multicast()
             || addr.is_broadcast()
-            // CGNAT, 100.64/10: `is_shared` is unstable.
             || (addr.octets()[0] == 100 && (64..=127).contains(&addr.octets()[1]))
-            // 240/4 reserved, which `is_multicast` (224/4) stops short of.
             || addr.octets()[0] >= 240
     }
 
@@ -138,7 +132,6 @@ mod fetch {
         let Ok(parsed) = addr.parse::<Ipv6Addr>() else {
             return Address::Unrecognised;
         };
-        // IPv4-mapped addresses are judged by v4 rules, or `::ffff:127.0.0.1` passes as v6.
         if let Some(v4) = parsed.to_ipv4_mapped() {
             return if is_private_v4(v4) {
                 Address::NonPublic
@@ -162,8 +155,8 @@ mod fetch {
         addr.is_loopback()
             || addr.is_unspecified()
             || addr.is_multicast()
-            || (first & 0xfe00) == 0xfc00 // fc00::/7 unique-local
-            || (first & 0xffc0) == 0xfe80 // fe80::/10 link-local
+            || (first & 0xfe00) == 0xfc00
+            || (first & 0xffc0) == 0xfe80
     }
 
     /// Whether the host is a name that means this machine or a private scope.
@@ -174,10 +167,10 @@ mod fetch {
     /// Drop a `:port` suffix, leaving bracketed v6 literals intact.
     fn strip_port(hostport: &str) -> &str {
         if hostport.starts_with('[') {
-            return hostport.split(']').next().map_or(hostport, |h| {
-                // Re-attach the bracket so the v6 branch still matches.
-                &hostport[..=h.len()]
-            });
+            return hostport
+                .split(']')
+                .next()
+                .map_or(hostport, |h| &hostport[..=h.len()]);
         }
         hostport.split(':').next().unwrap_or(hostport)
     }
@@ -284,7 +277,6 @@ mod fetch {
 
         #[test]
         fn loopback_and_the_agents_own_surface_are_refused() {
-            // The agent's own REST surface is a prime target.
             for bad in [
                 "http://127.0.0.1:8787/sessions",
                 "http://localhost:8787/",
@@ -297,7 +289,6 @@ mod fetch {
 
         #[test]
         fn cloud_metadata_is_refused() {
-            // The single most valuable SSRF target: instance credentials.
             assert!(vet("http://169.254.169.254/latest/meta-data/", false).is_err());
             assert!(vet("http://metadata/computeMetadata/v1/", false).is_err());
             assert!(vet("http://metadata.google.internal/", false).is_err());
@@ -315,13 +306,11 @@ mod fetch {
             ] {
                 assert!(vet(bad, false).is_err(), "{bad} must be refused");
             }
-            // 172.32 is public — the /12 boundary must not over-block.
             assert!(vet("http://172.32.0.1/", false).is_ok());
         }
 
         #[test]
         fn credentials_in_the_url_cannot_disguise_the_host() {
-            // The real destination is after the LAST `@`.
             assert!(vet("http://example.com@127.0.0.1/", false).is_err());
             assert!(vet("http://a@b@169.254.169.254/", false).is_err());
         }
@@ -329,10 +318,10 @@ mod fetch {
         #[test]
         fn obfuscated_address_forms_are_refused_not_normalised() {
             for bad in [
-                "http://2130706433/", // integer form of 127.0.0.1
-                "http://0177.0.0.1/", // octal octet
-                "http://127.1/",      // short form
-                "http://0x7f.0.0.1/", // hex octet
+                "http://2130706433/",
+                "http://0177.0.0.1/",
+                "http://127.1/",
+                "http://0x7f.0.0.1/",
             ] {
                 let err = vet(bad, false).unwrap_err();
                 assert!(
@@ -346,7 +335,6 @@ mod fetch {
         fn allow_private_opens_the_intranet_but_never_the_scheme() {
             assert!(vet("http://192.168.1.10/wiki", true).is_ok());
             assert!(vet("http://localhost:8080/", true).is_ok());
-            // Scheme is not a privacy question: still refused.
             assert!(vet("file:///etc/passwd", true).is_err());
         }
 
@@ -376,12 +364,12 @@ mod fetch {
         #[test]
         fn every_alternate_encoding_of_loopback_is_refused() {
             for encoded in [
-                "0177.0.0.1", // octal
-                "0x7f.0.0.1", // hex
-                "2130706433", // integer
-                "127.1",      // short form
-                "010.0.0.1",  // leading zero
-                "127.0.0.01", // leading zero, last octet
+                "0177.0.0.1",
+                "0x7f.0.0.1",
+                "2130706433",
+                "127.1",
+                "010.0.0.1",
+                "127.0.0.01",
             ] {
                 assert_eq!(
                     classify_address(encoded),
@@ -389,7 +377,6 @@ mod fetch {
                     "{encoded} was not refused"
                 );
             }
-            // Canonical spelling still classifies: the refusal above is about the encoding.
             assert_eq!(classify_address("127.0.0.1"), Address::NonPublic);
         }
 
@@ -397,14 +384,14 @@ mod fetch {
         #[test]
         fn a_compressed_or_padded_v6_is_classified_by_value_not_by_spelling() {
             for spelled in [
-                "[::1]",                    // loopback, compressed
-                "[0:0:0:0:0:0:0:1]",        // loopback, written out
-                "[fe80::1]",                // link-local
-                "[fe80:0000:0000:0000::1]", // link-local, padded
-                "[febf::1]",                // link-local, top of the range
-                "[fc00::1]",                // unique-local
-                "[fd12:3456::1]",           // unique-local
-                "[::ffff:127.0.0.1]",       // v4-mapped loopback
+                "[::1]",
+                "[0:0:0:0:0:0:0:1]",
+                "[fe80::1]",
+                "[fe80:0000:0000:0000::1]",
+                "[febf::1]",
+                "[fc00::1]",
+                "[fd12:3456::1]",
+                "[::ffff:127.0.0.1]",
             ] {
                 assert_eq!(
                     classify_address(spelled),
@@ -423,7 +410,6 @@ mod fetch {
             assert_eq!(classify_address("100.64.0.1"), Address::NonPublic);
             assert_eq!(classify_address("100.127.255.255"), Address::NonPublic);
             assert_eq!(classify_address("240.0.0.1"), Address::NonPublic);
-            // Just outside CGNAT, so public.
             assert_eq!(classify_address("100.128.0.1"), Address::Public);
             assert_eq!(classify_address("100.63.255.255"), Address::Public);
         }
@@ -545,7 +531,6 @@ mod component {
                 .and_then(serde_json::Value::as_str)
                 .ok_or(ToolError::InvalidArguments)?;
 
-            // Refusals are results, so the model can retry with a public URL.
             let allow_private = ALLOW_PRIVATE.with(Cell::get);
             if let Err(reason) = fetch::vet(url, allow_private) {
                 return Ok(format!("REFUSED: {reason}"));
@@ -566,7 +551,6 @@ mod component {
                     let body = String::from_utf8_lossy(&response.body);
                     Ok(fetch::render(url, response.status, &body))
                 }
-                // Transport failures are results too, so the model can try another source.
                 Err(err) => Ok(format!("FAILED: {url} could not be fetched ({err:?})")),
             }
         }

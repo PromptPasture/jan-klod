@@ -2,7 +2,6 @@
 //! back its imports with [`TestHost`], and exercise its WIT interface. Tests
 //! skip when their component is not staged in `ext/` (`make harness` builds it).
 
-// Dominated by `bindgen!`-generated code, so it is exempt from the workspace lints.
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 use std::path::PathBuf;
@@ -132,7 +131,6 @@ impl provider_bind::jan_klod::interfaces::host_secrets::Host for TestHost {
     ) -> std::result::Result<String, provider_bind::jan_klod::interfaces::host_secrets::SecretsError>
     {
         use provider_bind::jan_klod::interfaces::host_secrets::SecretsError;
-        // Config values are strings, so the grant is compared against "true".
         match self.section.get("secrets") {
             Some(s) => {
                 if s != "true" {
@@ -320,7 +318,7 @@ fn provider_openai_complete_streams_text() -> Result<()> {
         .map_err(wasmtime::Error::msg)?;
 
     let request = CompletionRequest {
-        model: String::new(), // falls back to the configured model
+        model: String::new(),
         messages: vec![Message {
             role: Role::User,
             content: "ping".to_string(),
@@ -336,7 +334,6 @@ fn provider_openai_complete_streams_text() -> Result<()> {
         .call_complete(&mut store, &request)?
         .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))?;
 
-    // The canned body parses to exactly one text delta, closed by done("stop").
     let mut text = String::new();
     let mut done_reason = None;
     while let Some(chunk) = provider.call_next_chunk(&mut store, handle)? {
@@ -372,7 +369,6 @@ fn provider_openai_maps_auth_error() -> Result<()> {
         return Ok(());
     };
 
-    // The host reports 401 as client-error(401); the guest must map it to auth-failed.
     let host = TestHost::new(
         json!({ "base-url": "http://mock/v1", "model": "mock-1", "api-key": "bad" }),
         MockHttp {

@@ -49,7 +49,6 @@ pub struct Jobs<T> {
 }
 
 impl<T> Clone for Jobs<T> {
-    // Derived `Clone` would demand `T: Clone`; the handle holds a channel, never a `T`.
     fn clone(&self) -> Self {
         Self {
             hand: std::sync::Mutex::new(self.sender()),
@@ -90,12 +89,8 @@ impl<T> Jobs<T> {
     {
         let (answer, wait) = channel();
         let boxed: Job<T> = Box::new(move |owned| {
-            // Caught here, not around the loop, so the caller learns which happened. Unwind safety is asserted rather than required of
-            // every caller; `NoAnswer::Panicked` reports a possibly half-changed `owned`.
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || job(owned)));
-            // Handed back, not sent: the loop delivers it after its hook, so nothing a caller does next races this turn's work.
-            // A gone receiver is not an error; the work was done either way.
             Box::new(move || {
                 let _ = answer.send(outcome.map_err(|_| NoAnswer::Panicked));
             })
@@ -103,7 +98,6 @@ impl<T> Jobs<T> {
         self.sender()
             .send(Task::Work(boxed))
             .map_err(|_| NoAnswer::Stopped)?;
-        // A closed channel means the job never sent: the loop died before running it.
         wait.recv().unwrap_or(Err(NoAnswer::Stopped))
     }
 
@@ -146,7 +140,6 @@ where
         match task {
             Task::Work(job) => {
                 let deliver = job(owned);
-                // Hook first, answer second: callers must not act on the answer before the turn's work has finished.
                 after(owned);
                 deliver();
             }
@@ -170,7 +163,6 @@ mod tests {
                     owned.len()
                 })
                 .expect("the loop is running");
-            // Dropping the handle is what ends the loop below.
             drop(jobs);
             pushed
         });

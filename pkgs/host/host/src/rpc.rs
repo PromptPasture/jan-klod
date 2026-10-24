@@ -32,20 +32,17 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
     agent: &mut AgentSession,
 ) -> std::io::Result<()> {
     let (handover, incoming) = mpsc::channel();
-    // Reader thread hands lines over and holds no session (`AgentSession` is `!Send`), so mid-turn `turn/cancel` stays readable.
     std::thread::spawn(move || {
         for line in input.lines() {
             let handed = match line {
                 Ok(line) => handover.send(Incoming::Line(line)),
-                // Non-UTF-8 is the frame's problem, not the stream's
                 Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
                     handover.send(Incoming::NotUtf8)
                 }
-                // Pipe broke; receiver learns from channel closing
                 Err(_) => break,
             };
             if handed.is_err() {
-                break; // the loop below is gone
+                break;
             }
         }
     });
@@ -55,7 +52,6 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
         incoming: &incoming,
     };
     let mut negotiated = false;
-    // recv ends when reader thread drops its end (EOF)
     while let Ok(frame) = wire.incoming.recv() {
         let line = match frame {
             Incoming::Line(line) => line,
@@ -83,7 +79,6 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
             }
         }
     }
-    // Not joined: the reader may block on a read that never returns (refused handshake); the process exits anyway.
     Ok(())
 }
 
@@ -136,7 +131,6 @@ pub(crate) fn session_of(command: &Command) -> Option<&str> {
         | Command::TurnAnswer { session, .. }
         | Command::TurnCancel { session }
         | Command::TurnFollowUp { session, .. } => Some(session),
-        // Negotiation, creation, listing and surface invocation belong to no session: the store is shared, so any agent answers.
         Command::Hello { .. }
         | Command::SessionCreate
         | Command::SessionList
@@ -164,9 +158,7 @@ pub(crate) fn parse(line: &str) -> Result<jsonrpc::Request, jsonrpc::Response> {
             "a frame must be one JSON object on one line".to_owned(),
         ));
     };
-    // Happy path uses the contract type so the envelope follows `jk-protocol`; failures use the raw value only to explain why.
     match serde_json::from_str::<jsonrpc::Request>(line) {
-        // `Id::Null` exists for answering frames whose id could not be read; a client sending one is refused, since an uncorrelatable answer is worse than none.
         Ok(request) if request.id == jsonrpc::Id::Null => Err(refuse(
             jsonrpc::Id::Null,
             jsonrpc::INVALID_REQUEST,
@@ -198,7 +190,6 @@ fn diagnose(value: &serde_json::Value, err: &serde_json::Error) -> jsonrpc::Resp
             "a request is a JSON object".to_owned(),
         );
     };
-    // ID is read before method so its absence is reported as absence; reversed, a known method without an ID misreported `invalid params`.
     let id = match object.get("id") {
         None => {
             return refuse(
@@ -255,8 +246,6 @@ pub(crate) fn command<W: Write>(
         Command::Hello { version } => {
             if compatible(PROTOCOL_VERSION, &version) {
                 *negotiated = true;
-                // Sent only when something is contributed (absent and empty say the same). A write failure is not worth failing the handshake:
-                // clients that render none of it ignore the frame (`wit/client-surface.wit`).
                 let Notification::SurfaceContributions { extensions } =
                     contributions_notification(agent)
                 else {
@@ -279,7 +268,6 @@ pub(crate) fn command<W: Write>(
                 ))
             }
         }
-        // Everything past handshake requires handshake
         _ if !*negotiated => Served::Answer(refuse(
             id,
             jsonrpc::INVALID_REQUEST,
@@ -292,13 +280,10 @@ pub(crate) fn command<W: Write>(
         Command::SessionGet { session } => answer(id, session::session_payload(agent, &session)),
         Command::SessionFork { session, at_seq } => match session::fork(agent, &session, at_seq) {
             Forked::Created(payload) => answer(id, payload),
-            // Requested events don't exist—caller's arguments, not core failure
             Forked::Empty(message) => Served::Answer(refuse(id, jsonrpc::INVALID_PARAMS, message)),
             Forked::Failed(message) => Served::Answer(refuse(id, jsonrpc::INTERNAL_ERROR, message)),
         },
         Command::SessionMessage { session, message } => turn(&session, &message, id, agent, wire),
-        // These steer running turns (served in `turn` above). This thread
-        // reaching them means no turn exists—nothing to answer, cancel, steer.
         Command::TurnAnswer { .. } => Served::Answer(refuse(
             id,
             jsonrpc::INVALID_REQUEST,
@@ -328,8 +313,6 @@ pub(crate) fn command<W: Write>(
                 .collect();
             match agent.invoke_contribution(&extension, &name, &arguments) {
                 Ok(outcome) => {
-                    // The set moved, so every client's copy is stale: told before the answer so a re-rendering client has the new set when the
-                    // result arrives. Sent even when empty, since clients must hear that items went away.
                     if outcome.contributions_changed {
                         let declared = contributions_notification(agent);
                         let _ = write_notification(&mut *wire.writer.borrow_mut(), &declared);
@@ -343,7 +326,6 @@ pub(crate) fn command<W: Write>(
                         .unwrap_or_default(),
                     )
                 }
-                // A name nobody contributes is the caller's mistake; the other two are the extension's, and the codes say which.
                 Err(error @ jk_protocol::contributions::InvokeError::Unknown) => {
                     Served::Answer(refuse(id, jsonrpc::METHOD_NOT_FOUND, error.to_string()))
                 }
@@ -388,7 +370,6 @@ fn turn<W: Write>(
             id,
             serde_json::json!({ "answer": text, "agentic": agentic }),
         ),
-        // A failed turn is reported once, here, against the id that asked; the `error` notification exists for SSE, which has no id.
         RunResult::Failed(reason) => Served::Answer(refuse(id, jsonrpc::INTERNAL_ERROR, reason)),
     }
 }
@@ -414,10 +395,8 @@ struct RpcSink<'a, W: Write> {
 impl<W: Write> EventSink for RpcSink<'_, W> {
     fn emit(&mut self, event: &Event) -> Flow {
         if write_notification(&mut *self.writer.borrow_mut(), &notification_for(event)).is_err() {
-            // Nobody is reading, so there is nothing left to stream.
             return Flow::Stop;
         }
-        // Between two events is where a cancel is read; `Stop` is the same cancellation an SSE disconnect gets, with no conductor change.
         serve_queued(self.incoming, &self.state, &self.writer);
         if self.state.cancelled.get() {
             Flow::Stop
@@ -444,7 +423,6 @@ impl<W: Write> Driver for RpcDriver<'_, W> {
             default: prompt.default_answer.clone(),
         };
         if write_notification(&mut *self.writer.borrow_mut(), &question).is_err() {
-            // The client is gone; nobody can answer, so take the safe default.
             return prompt.default_answer.clone();
         }
         self.wait_for_answer()
@@ -452,8 +430,6 @@ impl<W: Write> Driver for RpcDriver<'_, W> {
     }
 
     fn follow_up(&mut self) -> Option<String> {
-        // The turn is about to end, so this is the last chance to notice a
-        // steering message that arrived while it was running.
         serve_queued(self.incoming, &self.state, &self.writer);
         self.state.follow_ups.borrow_mut().pop_front()
     }
@@ -464,7 +440,6 @@ impl<W: Write> RpcDriver<'_, W> {
     /// Unlike REST, no heartbeat probe is needed: the pipe closing closes the channel and `recv_timeout` reports `Disconnected`.
     fn wait_for_answer(&self) -> Option<String> {
         let deadline = Instant::now() + session::answer_timeout();
-        // Only while parked here is an answer something to take.
         self.state.asking.set(true);
         let answer = self.wait_until(deadline);
         self.state.asking.set(false);
@@ -480,12 +455,10 @@ impl<W: Write> RpcDriver<'_, W> {
                     if let Some(answer) = serve_frame(frame, &self.state, &self.writer) {
                         return Some(answer);
                     }
-                    // A cancel while parked: stop waiting and let the turn end at the next boundary with the prompt's default (a denial for the permission gate).
                     if self.state.cancelled.get() {
                         return None;
                     }
                 }
-                // Timed out, or the client went away mid-question.
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return None,
             }
         }
@@ -499,7 +472,6 @@ fn serve_queued<W: Write>(
     writer: &Rc<RefCell<W>>,
 ) {
     while let Ok(frame) = incoming.try_recv() {
-        // An answer when nothing asked is refused inside `serve_frame` and returns `None`, so nothing is stashed.
         drop(serve_frame(frame, state, writer));
     }
 }
@@ -545,7 +517,6 @@ fn serve_frame<W: Write>(
                         state.follow_ups.borrow_mut().push_back(message);
                         jsonrpc::Response::result(id, serde_json::json!({ "queued": true }))
                     }
-                    // Wrong session or not a mid-turn command: either way this turn is what is running.
                     _ => refuse(
                         id,
                         jsonrpc::INVALID_REQUEST,
@@ -746,7 +717,6 @@ mod tests {
 
     #[test]
     fn a_request_without_an_id_is_refused() {
-        // A frame with no id is a notification, and this contract has none: every command is answered, so accepting one would serve a command whose answer goes nowhere.
         let (code, id, _) =
             refusal(r#"{"jsonrpc":"2.0","method":"session/list"}"#).expect("refused");
         assert_eq!(code, jsonrpc::INVALID_REQUEST);

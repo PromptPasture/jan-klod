@@ -180,7 +180,6 @@ fn setup_configures_groups_per_strategy() {
         ]),
     };
 
-    // Stdin is not mocked, so only the group structure is checked here.
     assert_eq!(
         prompt_group.strategy,
         ConfigStrategy::Prompt(vec![
@@ -201,7 +200,4 @@ fn setup_configures_groups_per_strategy() {
 }
 
 #[test]
-fn setup_prompt_returns_default_on_empty_input() {
-    // Empty-input default is covered only implicitly by the integration test above:
-    // SetupDriver takes stdin directly, so there is no reader seam to unit-test it.
-}
+fn setup_prompt_returns_default_on_empty_input() {}

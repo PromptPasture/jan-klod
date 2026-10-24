@@ -2,16 +2,13 @@
 //!
 //! Classifies each prompt `simple` (answered inline via `Decision::Block`) or `agentic` (proceeds); unclassifiable prompts default to `agentic`.
 
-// Only the wasm32 `component` consumes the router; host builds see it as dead code.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod router;
 
-// Needs wasm32-only WIT bindings; native builds compile just `router` and its tests.
 #[cfg(target_arch = "wasm32")]
 mod component {
     use crate::router::{self, Intent};
 
-    // Lint exemptions cover only the generated binding output.
     #[allow(
         unsafe_code,
         missing_docs,
@@ -87,7 +84,6 @@ mod component {
             match llm_provider::next_chunk(handle) {
                 Some(CompletionChunk::TextDelta(delta)) => text.push_str(&delta),
                 Some(CompletionChunk::ToolCallRequest(_)) => {}
-                // Done or closed handle: stop.
                 Some(CompletionChunk::Done(_)) | None => break,
             }
         }
@@ -152,7 +148,6 @@ mod component {
         }
     }
 
-    // The `export!` macro emits unsafe ABI shims, so the lint exemptions are scoped to this module.
     #[allow(
         unsafe_code,
         missing_docs,

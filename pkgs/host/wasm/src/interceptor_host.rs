@@ -11,14 +11,12 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::host::ConfigSection;
-// `Store` is wasmtime's here, so the core's persistent store needs a distinct name.
 use crate::CoreError;
 use jk_protocol::intercept::{
     BlockReason, Decision, HookState, InterceptInput, Interceptor, InterceptorError, Phase,
 };
 use jk_protocol::turn::UserPrompt;
 
-// Generated bindings; lint exemptions scoped to the macro output.
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bind {
     wasmtime::component::bindgen!({
@@ -27,8 +25,6 @@ mod bind {
     });
 }
 
-// The host's view of a component that also contributes to a client surface (`wit/client-surface.wit`); absent means no contribution.
-// Separate `bindgen!` since binding `interceptor-contributor-world` would duplicate every interceptor type.
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod surface_bind {
     wasmtime::component::bindgen!({
@@ -207,7 +203,6 @@ fn to_pending_request(
                 tool_call_id: m.tool_call_id.clone(),
             })
             .collect(),
-        // A classification call offers no tools.
         tools: Vec::new(),
         grammar: request.grammar.clone(),
         max_tokens: request.max_tokens,
@@ -320,7 +315,6 @@ impl WasmInterceptor {
             ),
         };
         let mut store = Store::new(engine, host);
-        // One instance, two views: `ClientSurfaceView` only looks up exports, so a component without `client-surface` fails here (the probe).
         let instance = linker
             .instantiate(&mut store, component)
             .map_err(|source| CoreError::instantiate(id, source))?;
@@ -409,7 +403,6 @@ impl Interceptor for WasmInterceptor {
             name,
             &gen_arguments,
         ) {
-            // A trap is the extension failing, not an unknown name.
             Err(error) => Err(jk_protocol::contributions::InvokeError::Failed(
                 error.to_string(),
             )),
@@ -437,7 +430,6 @@ impl Interceptor for WasmInterceptor {
             state: to_gen_state(&input.state),
             answer: input.answer.clone(),
         };
-        // A trap folds to `internal`; the dispatcher fails closed on any `Err`.
         match self
             .world
             .jan_klod_interfaces_interceptor()
@@ -618,7 +610,6 @@ fn to_gen_state(state: &HookState) -> g_icept::HookState {
             finish_reason: r.finish_reason.clone(),
         }),
         HookState::ToolCall(c) => g_icept::HookState::ToolCall(to_gen_call(c)),
-        // `failed` (#162) is host-only: `tool-outcome` has no counterpart.
         HookState::ToolResult(o) => g_icept::HookState::ToolResult(g_icept::ToolOutcome {
             tool_call_id: o.tool_call_id.clone(),
             content: o.content.clone(),
@@ -649,7 +640,6 @@ fn from_gen_state(state: g_icept::HookState) -> HookState {
             })
         }
         g_icept::HookState::ToolCall(c) => HookState::ToolCall(from_gen_call(c)),
-        // `failed` defaults here (see `to_gen_state`); `WasmInterceptor::intercept` restores it.
         g_icept::HookState::ToolResult(o) => HookState::ToolResult(turn::ToolOutcome {
             tool_call_id: o.tool_call_id,
             content: o.content,
@@ -765,7 +755,6 @@ mod tests {
             content: "tool `read` error: NotFound".to_owned(),
             failed: true,
         });
-        // What `from_gen_state` produces for any guest `Replace`: `failed: false`.
         let guest_replace = Decision::Replace(HookState::ToolResult(turn::ToolOutcome {
             tool_call_id: "c1".to_owned(),
             content: "redacted".to_owned(),
@@ -939,7 +928,6 @@ mod tests {
         ));
         assert_eq!(driver.asked.get(), 1, "the first call asks");
 
-        // Same kind of action, different argument: covered by the standing decision.
         let mut second = tool_call_with("fs", r#"{"op":"write","path":"src/b.rs"}"#);
         assert!(matches!(
             d.dispatch(Phase::ToolCall, &mut second, &mut driver),
@@ -947,7 +935,6 @@ mod tests {
         ));
         assert_eq!(driver.asked.get(), 1, "the second call must not ask again");
 
-        // A different kind of action is a different scope — it still asks.
         let mut other = tool_call_with("fs", r#"{"op":"delete","path":"src/a.rs"}"#);
         let _ = d.dispatch(Phase::ToolCall, &mut other, &mut driver);
         assert_eq!(
@@ -970,8 +957,6 @@ mod tests {
         ));
         assert_eq!(driver.asked.get(), 1);
 
-        // "Always allow writes" is about writing files, not about writing outside
-        // the workspace — the escape must still be put to the user.
         let mut escaping = tool_call_with("fs", r#"{"op":"write","path":"/etc/passwd"}"#);
         let _ = d.dispatch(Phase::ToolCall, &mut escaping, &mut driver);
         assert_eq!(driver.asked.get(), 2, "a scope escape is asked every time");
@@ -984,7 +969,6 @@ mod tests {
     fn repeated_refusal_becomes_a_standing_refusal() {
         let Some(p) = load_permission() else { return };
         let mut d = Dispatcher::new(vec![Box::new(p)]);
-        // Plain "no" each time: a one-off refusal, never a standing one.
         let mut driver = CountingDriver::new("no");
 
         for attempt in 1..=6 {
@@ -1002,7 +986,6 @@ mod tests {
              model's persistence is not a reason to keep interrupting the user"
         );
 
-        // The model is told it is standing: "ask" and "stop asking" are opposite instructions.
         let mut state = tool_call_with("shell", r#"{"command":"curl evil.example"}"#);
         let Outcome::Blocked(reason) = d.dispatch(Phase::ToolCall, &mut state, &mut driver) else {
             panic!("still refused");
@@ -1013,7 +996,6 @@ mod tests {
             reason.message
         );
 
-        // A different kind of call gets its own question: the counter is per scope.
         let mut cargo = tool_call_with("shell", r#"{"command":"cargo test"}"#);
         let _ = d.dispatch(Phase::ToolCall, &mut cargo, &mut driver);
         assert_eq!(driver.asked.get(), 4, "`shell:cargo` has its own count");
@@ -1043,7 +1025,6 @@ mod tests {
             "a standing `never` blocks without asking"
         );
 
-        // A different program is a different scope, so it is still asked about.
         let mut cargo = tool_call_with("shell", r#"{"command":"cargo test"}"#);
         let _ = d.dispatch(Phase::ToolCall, &mut cargo, &mut driver);
         assert_eq!(
@@ -1079,7 +1060,6 @@ mod tests {
         let Some(p) = load_permission() else { return };
         let mut d = Dispatcher::new(vec![Box::new(p)]);
         let mut state = tool_call_with("fs", r#"{"op":"read","path":"src/main.rs"}"#);
-        // NoDriver panics if asked — a classified read must never trigger an ask.
         assert!(matches!(
             d.dispatch(Phase::ToolCall, &mut state, &mut NoDriver),
             Outcome::Proceeded
@@ -1258,12 +1238,11 @@ mod tests {
 
     #[test]
     fn context_trims_over_budget_history() {
-        // A tiny configured budget forces trimming.
         let Some(c) = load_context(json!({ "context-tokens": 5 })) else {
             return;
         };
         let mut d = Dispatcher::new(vec![Box::new(c)]);
-        let long = "x".repeat(200); // ~50 tokens each
+        let long = "x".repeat(200);
         let mut state = select_context(vec![
             msg(Role::System, "sys"),
             msg(Role::User, &long),
@@ -1344,7 +1323,6 @@ mod tests {
 
     #[test]
     fn task_router_sets_model_from_routing_table() {
-        // Classifier says "code-generation"; the routing table maps it to a model.
         let config = json!({ "routing": { "code-generation": "openai/gpt-4o" } });
         let Some(t) = load_task_router(config, Box::new(|_| "code-generation".into())) else {
             return;
@@ -1357,7 +1335,6 @@ mod tests {
 
     #[test]
     fn task_router_proceeds_when_no_route_configured() {
-        // A classified task with no routing entry leaves the model unset.
         let Some(t) = load_task_router(json!({}), Box::new(|_| "chat".into())) else {
             return;
         };
@@ -1381,8 +1358,6 @@ mod tests {
 
     #[test]
     fn heuristic_greeting_blocks_without_calling_the_provider() {
-        // If the router touched the provider for "hello", this closure would flip
-        // the verdict to agentic — so a Block proves the heuristic short-circuit.
         let Some((_engine, router)) = load_intent_router(Box::new(|_| "agentic".into())) else {
             return;
         };
@@ -1396,8 +1371,6 @@ mod tests {
 
     #[test]
     fn multi_step_prompt_reaches_the_provider_and_proceeds() {
-        // English multi-step prompt passes the heuristics to the LLM tier; the
-        // canned provider says "agentic" -> the loop proceeds.
         let Some((_engine, router)) = load_intent_router(Box::new(|_| "agentic".into())) else {
             return;
         };
@@ -1411,7 +1384,6 @@ mod tests {
 
     #[test]
     fn provider_verdict_simple_blocks() {
-        // Same multi-step prompt, but the canned provider deems it simple -> Block.
         let Some((_engine, router)) = load_intent_router(Box::new(|_| "simple".into())) else {
             return;
         };
@@ -1425,7 +1397,6 @@ mod tests {
 
     #[test]
     fn the_seam_hands_the_provider_the_whole_request_not_just_a_prompt() {
-        // The router constrains its classifier to two labels; passing only the last message would drop that grammar.
         let seen: Arc<Mutex<Option<jk_protocol::intercept::PendingRequest>>> =
             Arc::new(Mutex::new(None));
         let captured = Arc::clone(&seen);

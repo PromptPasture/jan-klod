@@ -66,7 +66,6 @@ mod component {
         use std::io::Read;
         let mut buf = String::new();
         match std::io::stdin().read_to_string(&mut buf) {
-            // An empty read is neither a refusal nor the terminal; the test feeds real bytes to tell.
             Ok(n) => format!("READ {n} bytes: {buf}"),
             Err(err) => format!("refused: {err}"),
         }
@@ -99,7 +98,6 @@ mod component {
     /// Try to read the host's command line, which names its config and bind address.
     fn try_args() -> String {
         let args: Vec<String> = std::env::args().collect();
-        // wasi always supplies argv[0], so the test is the host's real arguments appearing, not emptiness.
         format!("ARGS {args:?}")
     }
 
@@ -143,7 +141,6 @@ mod component {
                 .get("target")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
-            // Refusals are results, not traps: a trapped component tells the test nothing.
             Ok(match op {
                 "socket" => try_socket(target),
                 "stdin" => try_stdin(),

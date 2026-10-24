@@ -35,7 +35,6 @@ fn hunk_start(line: &str) -> Option<(usize, usize)> {
     let (old, new) = ranges.split_once(' ')?;
     let first = |side: &str, mark: char| -> Option<usize> {
         let digits = side.strip_prefix(mark)?;
-        // `,count` is optional: git omits it for a one-line range.
         digits
             .split_once(',')
             .map_or(digits, |(start, _)| start)
@@ -79,7 +78,6 @@ fn parse(text: &str) -> Option<Vec<Row<'_>>> {
             continue;
         }
         if is_file_header(line) {
-            // A header starts the next file, so the previous hunk's counters end here.
             counters = None;
             rows.push(Row::File(line));
             continue;
@@ -88,10 +86,7 @@ fn parse(text: &str) -> Option<Vec<Row<'_>>> {
             rows.push(Row::Note(line));
             continue;
         }
-        let Some((old, new)) = counters.as_mut() else {
-            // Outside a hunk, anything that is not a header is prose.
-            return None;
-        };
+        let (old, new) = counters.as_mut()?;
         let (sign, text) = match line.chars().next() {
             Some('+') => ('+', &line[1..]),
             Some('-') => ('-', &line[1..]),
@@ -100,7 +95,6 @@ fn parse(text: &str) -> Option<Vec<Row<'_>>> {
                 rows.push(Row::Note(line));
                 continue;
             }
-            // A context line whose trailing space was stripped (mail, paste, tool trim).
             None => (' ', ""),
             Some(_) => return None,
         };
@@ -123,7 +117,6 @@ fn parse(text: &str) -> Option<Vec<Row<'_>>> {
         });
     }
 
-    // Without a hunk, a diff view shows nothing that plain text does not.
     rows.iter()
         .any(|row| matches!(row, Row::Hunk(_)))
         .then_some(rows)
@@ -160,7 +153,6 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Option<Vec<Line<'static>>
     let rows = parse(text)?;
     let surface = theme.code_surface();
 
-    // One width for the whole diff, so the signs line up across hunks.
     let digits = rows
         .iter()
         .filter_map(|row| match row {
@@ -172,7 +164,6 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Option<Vec<Line<'static>>
     let mut lines = Vec::new();
     for row in rows {
         let (prefix, body, style) = match row {
-            // Statements about the diff, not lines of the file: no numbers, one style.
             Row::File(text) | Row::Hunk(text) | Row::Note(text) => (
                 String::new(),
                 text.to_string(),
@@ -195,7 +186,6 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Option<Vec<Line<'static>>
                     .bg(surface),
             ),
         };
-        // Continuations get blanks, not the sign: repeating it would claim a second change.
         let room = max.saturating_sub(width(&prefix)).max(1);
         for (i, part) in hard_wrap(&body, room).into_iter().enumerate() {
             let lead = if i == 0 {
@@ -258,7 +248,6 @@ index 1111111..2222222 100644
         let hunks = rendered.iter().filter(|r| r.starts_with("@@")).count();
         assert_eq!(hunks, 2, "both hunk headers: {rendered:?}");
 
-        // `+++`/`---` headers also start with a sign, so they are not counted here.
         let added: Vec<&String> = rendered
             .iter()
             .filter(|r| r.starts_with('+') && !r.starts_with("+++"))
@@ -305,7 +294,6 @@ index 1111111..2222222 100644
             body.iter().any(|r| r.starts_with("+    2 let a = 2;")),
             "an addition must number the new side only: {body:?}"
         );
-        // The second hunk reaches line 22, so the first hunk is padded to two digits too.
         assert!(
             body.iter().any(|r| r.starts_with("+   21 added")),
             "the second hunk is not numbered from its header: {body:?}"
@@ -332,17 +320,11 @@ index 1111111..2222222 100644
     #[test]
     fn anything_that_is_not_a_diff_is_refused_rather_than_guessed_at() {
         for content in [
-            // `tool-git`'s answer for no changes.
             "(no output)",
-            // `tool-edit`'s prose answer.
             "replace applied to src/main.rs (3 line(s)).",
-            // Signs but no hunk header.
             "--- a/x\n+++ b/x\n-gone\n+new",
-            // A hunk header that does not parse.
             "@@ not really @@\n-gone\n+new",
-            // Headers only, as git emits for a mode change: no hunk, so nothing a diff view adds.
             "diff --git a/x b/x\nold mode 100644\nnew mode 100755",
-            // Prose after a hunk: a lenient parser would render a log as a diff.
             "@@ -1,2 +1,2 @@\n context\nthen a sentence with no sign at all",
             "",
         ] {
@@ -368,7 +350,6 @@ index 1111111..2222222 100644
             "the part that arrived was not rendered: {rendered:?}"
         );
 
-        // The no-newline marker is a note, not a file line.
         let no_newline = "@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file";
         let rows = parse(no_newline).expect("a diff");
         assert_eq!(rows.len(), 4);

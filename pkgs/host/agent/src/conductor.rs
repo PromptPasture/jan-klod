@@ -58,7 +58,7 @@ pub enum RunResult {
 ///
 /// `on_effective_message` fires once with the message the model receives after
 /// `before-loop` rewrites (see [`build_initial_request`]).
-#[allow(clippy::too_many_arguments)] // A turn needs all of these; a struct would only hide them.
+#[allow(clippy::too_many_arguments)]
 pub fn run_turn(
     dispatcher: &mut Dispatcher,
     providers: &mut [Box<dyn Completer>],
@@ -72,7 +72,6 @@ pub fn run_turn(
     principal: Option<String>,
     on_effective_message: &mut dyn FnMut(&str),
 ) -> RunResult {
-    // Before any dispatch: session-scoped tool state needs to know its session.
     tools.bind_session(session);
 
     let (agentic, mut request) = build_initial_request(
@@ -94,7 +93,6 @@ pub fn run_turn(
         }
     }
 
-    // Every path below sets `final_text`.
     let mut final_text;
     let mut iterations = 0;
     loop {
@@ -111,7 +109,6 @@ pub fn run_turn(
             content: text.clone(),
             tool_call_id: None,
         });
-        // The delta is a preview; the terminal `Done` carries the authoritative text.
         let flow = if text.is_empty() {
             Flow::Continue
         } else {
@@ -120,7 +117,6 @@ pub fn run_turn(
         final_text = text;
 
         if flow == Flow::Stop {
-            // Cancelled mid-thought: record the turn as unfinished, not as an answer.
             final_text = note_incomplete(
                 &final_text,
                 "stopped before the turn finished — the client disconnected or cancelled",
@@ -193,7 +189,6 @@ fn build_initial_request(
         dispatcher.dispatch(Phase::BeforeLoop, &mut state, driver),
         Outcome::Proceeded
     );
-    // The model sees this, which differs from `user_message` after a `replace`.
     let effective_message = match &state {
         HookState::BeforeLoop(turn) => turn.user_message.clone(),
         _ => user_message.to_string(),
@@ -238,7 +233,6 @@ fn handle_no_tool_calls(
     let Some(follow_up) = driver.follow_up() else {
         return LoopStep::Break(final_text);
     };
-    // Optional model/context swap before the follow-up.
     let mut next_state = HookState::PrepareNextTurn(request.clone());
     let _ = dispatcher.dispatch(Phase::PrepareNextTurn, &mut next_state, driver);
     if let HookState::PrepareNextTurn(shaped) = next_state {
@@ -260,9 +254,7 @@ fn handle_no_tool_calls(
 fn after_tool_calls(pass: ToolPass, final_text: String, sink: &mut dyn EventSink) -> LoopStep {
     match pass {
         ToolPass::Continue => LoopStep::Continue,
-        // Decision: answer in hand is intended.
         ToolPass::Terminated => LoopStep::Break(final_text),
-        // Interruption: model mid-thought.
         ToolPass::Cancelled => LoopStep::Break(note_incomplete(
             &final_text,
             "stopped before the turn finished — the client disconnected or cancelled",
@@ -318,7 +310,6 @@ fn run_tool_calls(
 ) -> ToolPass {
     let mut stop = ToolPass::Continue;
     for call in calls {
-        // Block denies this call; the model is told and the loop continues.
         let mut call_state = HookState::ToolCall(call.clone());
         let invocation = match dispatcher.dispatch(Phase::ToolCall, &mut call_state, driver) {
             Outcome::Blocked(reason) => {
@@ -348,7 +339,6 @@ fn run_tool_calls(
             }
         };
 
-        // A block here terminates the loop.
         let mut result_state = HookState::ToolResult(ToolOutcome {
             tool_call_id: call.id.clone(),
             content: invocation.content,
@@ -358,12 +348,10 @@ fn run_tool_calls(
             dispatcher.dispatch(Phase::ToolResult, &mut result_state, driver),
             Outcome::Blocked(_)
         ) {
-            // Decision, not interruption: answer intended.
             stop = ToolPass::Terminated;
         }
         let outcome = match result_state {
             HookState::ToolResult(outcome) => outcome,
-            // An interceptor replaced the state with the wrong case; report failure, not a silent no-op.
             _ => ToolOutcome {
                 tool_call_id: call.id.clone(),
                 content: String::new(),
@@ -421,7 +409,6 @@ fn post_phase(
         Phase::Finalize => HookState::Finalize(FinalAnswer { text }),
         _ => return text,
     };
-    // Blocking has no meaning here; read back whatever state the phase left.
     let _ = dispatcher.dispatch(phase, &mut state, driver);
     match state {
         HookState::AfterResponse(r) => r.text,
@@ -464,7 +451,6 @@ fn complete_validated(
     for attempt in 0..=MAX_RETRIES {
         let completion = complete_with_fallback(providers, &attempt_request, sink)?;
         if completion.was_truncated() {
-            // Not an error, but a truncated answer presented as whole is wrong, so warn.
             sink.emit(&Event::Warning(
                 "the model stopped at its token limit — this answer is cut off".to_string(),
             ));
@@ -495,7 +481,6 @@ fn complete_validated(
             }
         }
     }
-    // Loop returns on last attempt; unreachable.
     Err("retry loop exited unexpectedly".to_string())
 }
 
@@ -782,7 +767,6 @@ mod tests {
     #[test]
     fn hitting_the_cycle_cap_is_reported_not_hidden() {
         let mut d = Dispatcher::new(vec![]);
-        // Model never stops asking for tools.
         let forever = Completion {
             text: String::new(),
             tool_calls: vec![ToolCall {
@@ -937,7 +921,6 @@ mod tests {
                 message: "stop".into(),
             }),
         )]);
-        // Provider keeps emitting tool calls; terminate stops it.
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
             id: "p".into(),
             replies: RefCell::new(VecDeque::from(vec![Ok(with_tools(
@@ -961,7 +944,6 @@ mod tests {
             &mut |_: &str| {},
         );
 
-        // Exactly text, no "stopped before" note: terminate is decision, not interruption.
         assert_eq!(
             out,
             RunResult::Answered {
@@ -974,7 +956,6 @@ mod tests {
     #[test]
     fn malformed_output_triggers_retry_with_correction() {
         let mut d = Dispatcher::new(vec![]);
-        // First completion has invalid JSON args; retry returns clean text.
         let mut providers = vec![scripted(
             "p",
             vec![
@@ -1008,7 +989,6 @@ mod tests {
     #[test]
     fn persistently_malformed_output_fails_after_retries() {
         let mut d = Dispatcher::new(vec![]);
-        // Single reply repeating: always malformed → give up after retries.
         let mut providers = vec![scripted(
             "p",
             vec![Ok(with_tools("", vec![bad_call("1", "x")]))],
@@ -1098,7 +1078,6 @@ mod tests {
             })),
         )]);
         let mut providers = vec![text_provider("p", Ok("secret"))];
-        // No before-loop interceptor → default Proceeded → agentic path.
         let out = run_turn(
             &mut d,
             &mut providers,
@@ -1209,7 +1188,6 @@ mod tests {
             &mut |_: &str| {},
         );
 
-        // First completion has no text (only tool call), so no leading delta.
         assert_eq!(
             sink.0,
             vec![
@@ -1244,7 +1222,6 @@ mod tests {
     #[test]
     fn a_follow_up_injects_another_cycle() {
         let mut d = Dispatcher::new(vec![]);
-        // The driver steers with a follow-up after the first text completion.
         let seen = Rc::new(RefCell::new(vec![]));
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
             id: "p".into(),
@@ -1287,7 +1264,6 @@ mod tests {
 
     #[test]
     fn sink_stop_cancels_the_react_loop() {
-        // Provider keeps emitting; sink stopping after first result must cancel at boundary.
         let mut d = Dispatcher::new(vec![]);
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
             id: "p".into(),
@@ -1328,7 +1304,6 @@ mod tests {
             "the loop stopped and emitted a terminal Done: {:?}",
             sink.events
         );
-        // Recorded as unfinished, not as real answer.
         let RunResult::Answered { text, .. } = out else {
             unreachable!()
         };
@@ -1383,7 +1358,6 @@ mod tests {
 
     #[test]
     fn a_truncated_answer_says_so_instead_of_just_stopping() {
-        // The text is real, but presenting it as finished would be wrong.
         let mut d = Dispatcher::new(vec![]);
         let mut providers = vec![truncated_provider()];
         let mut sink = RecordingSink::default();
@@ -1408,7 +1382,6 @@ mod tests {
             "the truncation is surfaced: {:?}",
             sink.0
         );
-        // Still an answer, not failure: partial text is best available.
         assert!(
             matches!(&out, RunResult::Answered { text, .. } if text.contains("first half")),
             "the partial text is still returned: {out:?}"
@@ -1443,8 +1416,6 @@ mod tests {
 
     #[test]
     fn both_spellings_of_the_limit_count_as_truncated() {
-        // `length` emitted by first-party guests (provider-anthropic maps `max_tokens`);
-        // raw spelling accepted too.
         for reason in TRUNCATED {
             let completion = Completion {
                 text: "x".into(),

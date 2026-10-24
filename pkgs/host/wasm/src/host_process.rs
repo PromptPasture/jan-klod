@@ -105,9 +105,7 @@ impl ProcessRunner {
             timeout,
             output_cap,
             env_passthrough: Vec::new(),
-            // Nothing confines a command until boot reports the mode as `Os`.
             confinement: None,
-            // Naming a command is a separate grant from enabling exec.
             long_lived: Vec::new(),
         }
     }
@@ -173,7 +171,6 @@ impl ProcessRunner {
             out.retain(|(name, _)| name != "TMPDIR");
             out.push(("TMPDIR".to_string(), scratch));
         }
-        // Deliberately set, not inherited: avoids ANSI escapes the model cannot use.
         out.push(("NO_COLOR".to_string(), "1".to_string()));
         out
     }
@@ -188,7 +185,6 @@ impl ProcessRunner {
             .root()
             .join(".jan-klod")
             .join("tmp");
-        // Best effort: no `TMPDIR` is what the command had before; refusing to run is worse.
         std::fs::create_dir_all(&root).ok()?;
         root.to_str().map(str::to_owned)
     }
@@ -213,7 +209,6 @@ impl ProcessRunner {
                 .backend
                 .confine(base, &confinement.policy)
                 .map_err(|err| {
-                    // `proc-error` has no room for a reason, so it goes to the host log. Denied, not run unconfined.
                     eprintln!(
                         "WARN [core] {} refused to confine `{command}` ({err:?}); the command \
                          is denied rather than run unconfined",
@@ -243,8 +238,6 @@ impl ProcessRunner {
         let Some(workspace) = &self.workspace else {
             return Err(ProcError::Denied);
         };
-        // Admit before anything starts: spawn-then-check leaves a window in a default-deny capability.
-        // `proc-error` has no payload, so the reason goes to the host log.
         let Some(grant) = self.long_lived_grant(name) else {
             eprintln!(
                 "WARN [core] host-process: no long-lived child named `{name}` — \
@@ -284,12 +277,11 @@ impl ProcessRunner {
             .spawn()
             .map_err(|_| ProcError::SpawnFailed)?;
 
-        // Feed stdin (if any) and close it so a reader doesn't hang.
         if let Some(mut handle) = child.stdin.take() {
             if let Some(input) = stdin {
                 let _ = handle.write_all(input.as_bytes());
             }
-        } // handle dropped here -> stdin closed
+        }
 
         let deadline = Instant::now() + self.timeout;
         let status = loop {
@@ -371,7 +363,6 @@ impl LiveChild {
                         unread.drain(..over);
                         if !dropped_any {
                             dropped_any = true;
-                            // Once per child: later lines repeat the first.
                             eprintln!(
                                 "WARN [core] host-process: `{child_name}` has \
                                  printed more than the {cap}-byte output cap \
@@ -385,11 +376,9 @@ impl LiveChild {
                 }
             });
         }
-        // Drain stderr: an unread pipe fills (~64 KiB) and blocks the child on write.
         let (tx_err, stderr) = std::sync::mpsc::channel();
         if let Some(mut err) = child.stderr.take() {
             std::thread::spawn(move || {
-                // Keep the last `cap` bytes: a process explains itself on the way out. Same cap as `exec`.
                 let mut tail: Vec<u8> = Vec::new();
                 let mut buf = [0_u8; 8192];
                 while let Ok(n) = err.read(&mut buf) {
@@ -437,12 +426,10 @@ impl LiveChild {
         let Ok(unread) = lock.lock() else {
             return String::new();
         };
-        // Wait only while nothing is buffered.
         let Ok((mut unread, _)) = arrived.wait_timeout_while(unread, timeout, |u| u.is_empty())
         else {
             return String::new();
         };
-        // Cap a single read at the operator's limit, as with `exec` output.
         let take = max_bytes.min(self.cap).min(unread.len());
         let taken: Vec<u8> = unread.drain(..take).collect();
         String::from_utf8_lossy(&taken).into_owned()
@@ -471,13 +458,11 @@ impl LiveChild {
     ///
     /// Built as lines so a test can read them (#133); capturing process stderr would need `dup2` and the workspace denies `unsafe`.
     fn death_report(&self, status: std::process::ExitStatus) -> Vec<String> {
-        // WARN even for a clean exit: something still expects a long-lived child.
         let mut lines = vec![format!(
             "WARN [core] host-process: long-lived child `{}` {}",
             self.name,
             describe_exit(status)
         )];
-        // Wait briefly: the child writes its complaint then exits, so bytes may still be in the pipe.
         let tail = self.stderr_tail();
         let tail = tail.trim();
         if !tail.is_empty() {
@@ -623,7 +608,6 @@ mod tests {
             children.spawn(&ungranted, "nothing-named-this"),
             Err(ProcError::Denied)
         );
-        // An unknown handle is refused the same way.
         assert_eq!(
             children.write_stdin(41, "x"),
             Err(ProcError::Denied),
@@ -671,18 +655,13 @@ mod tests {
     fn the_four_deaths_are_four_different_reports() {
         let (ws, _) = runner();
         let rows = [
-            // Wrapper rejected its arguments (#132).
             (
                 "bad-arguments",
                 "echo \"error: Unrecognized option: 'writable'\" >&2; exit 2",
                 "Unrecognized option",
             ),
-            // The command inside it does not exist. `sh` says so and exits 127.
             ("missing-command", "no-such-command-xyz", "127"),
-            // Parse failure: same exit code (2) as the row above, so stderr must tell them apart.
-            // Matched case-insensitively: bash and dash word it differently.
             ("syntax-error", "if", "syntax error"),
-            // Started, finished, and quit: not a failure, but gone.
             ("clean-exit", "exit 0", "code 0"),
         ];
 
@@ -701,7 +680,6 @@ mod tests {
             let mut child = runner.spawn_long_lived(name).expect("it starts");
             let status = child.child.wait().expect("it is reapable");
             let report = child.death_report(status).join("\n");
-            // Case-insensitive: capitalisation belongs to whichever `sh` the platform ships.
             assert!(
                 report.to_lowercase().contains(&marker.to_lowercase()),
                 "{name}: the log does not carry what makes this death that death \
@@ -720,7 +698,6 @@ mod tests {
             }
         }
 
-        // Compare the status, not the whole line (it carries the child's name).
         let status_of = |name: &str| {
             let report = &reports
                 .iter()
@@ -738,7 +715,6 @@ mod tests {
              deleting the assertion"
         );
 
-        // A silent exit is a different shape from one with a tail.
         let clean = &reports
             .iter()
             .find(|(name, _)| *name == "clean-exit")
@@ -761,7 +737,6 @@ mod tests {
             ProcessRunner::new(ws, Duration::from_secs(5), cap).with_long_lived(vec![LongLived {
                 name: "floods".to_string(),
                 command: "sh".to_string(),
-                // Name itself at the end so tail-not-head is checkable; hold the process open.
                 args: vec![
                     "-c".to_string(),
                     "i=0; while [ $i -lt 2000 ]; do echo padding-padding-padding; \
@@ -771,7 +746,6 @@ mod tests {
             }]);
 
         let mut floods = runner.spawn_long_lived("floods").expect("it starts");
-        // Nobody reads while it floods: ~54 KB against a 512-byte cap.
         std::thread::sleep(Duration::from_millis(400));
 
         let mut drained = String::new();
@@ -816,7 +790,6 @@ mod tests {
             LongLived {
                 name: "floods".to_string(),
                 command: "sh".to_string(),
-                // End with a line naming itself so tail-not-head is checkable.
                 args: vec![
                     "-c".to_string(),
                     "i=0; while [ $i -lt 400 ]; do echo padding-padding-padding >&2; \
@@ -867,7 +840,6 @@ mod tests {
     /// A command's `TMPDIR` is inside the workspace, not the host's (#212): a confined command can write there.
     #[test]
     fn a_commands_temp_directory_is_inside_the_workspace() {
-        // No sentinel `TMPDIR` before or after `runner()`: it builds the workspace under `env::temp_dir()`, and tests share the process env (#297).
         let (ws, runner) = runner();
         let exit = runner
             .exec(
@@ -943,7 +915,6 @@ mod tests {
             "PATH and HOME survive: {:?}",
             exit.stdout
         );
-        // A program found via PATH, which is the whole point of keeping it.
         let git = runner.exec("git", &["--version".into()], None, None);
         assert!(git.is_ok(), "a PATH lookup still resolves: {git:?}");
     }
@@ -961,7 +932,6 @@ mod tests {
     #[test]
     fn reports_a_nonzero_exit_code() {
         let (_ws, runner) = runner();
-        // `false` exits 1.
         let exit = runner.exec("false", &[], None, None).unwrap();
         assert_eq!(exit.code, 1);
     }

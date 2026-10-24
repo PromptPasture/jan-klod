@@ -105,9 +105,6 @@ fn booted_against(
     )
     .expect("writes the config");
 
-    // Use the real gateway as the sandbox wrapper, as `execution_config.rs` does.
-    // Landlock re-execs `current_exe()`, which under nextest is this test binary;
-    // it would exit before the handshake (#132, #124).
     let runtime = Runtime::boot(&config, common::repo_root().join("ext"))
         .expect("runtime boots")
         .with_sandbox_wrapper(env!("CARGO_BIN_EXE_jan-klod-gateway"));
@@ -130,7 +127,6 @@ fn a_stdio_server_named_in_config_lists_its_tools() {
     let Some((_dir, mut agent)) = booted("list") else {
         return;
     };
-    // First registry call: reaching it means the child started and the handshake completed.
     let metas = agent.all_metas_json().expect("metadata resolves");
     assert!(
         metas.to_string().contains("echo-fixture"),
@@ -144,7 +140,6 @@ fn a_tool_on_a_stdio_server_can_be_called() {
     if !common::guests_staged(&GUESTS) {
         return;
     }
-    // The tool's output is visible only in the next completion's request body.
     let completions = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(Mutex::new(String::new()));
     let (counter, recorded) = (Arc::clone(&completions), Arc::clone(&seen));
@@ -177,7 +172,6 @@ fn a_tool_on_a_stdio_server_can_be_called() {
     let Some((_dir, mut agent)) = booted_with("call", factory) else {
         return;
     };
-    // Tools are namespaced `server::tool`, so the model names `fixture::echo-fixture`.
     let metas = agent.all_metas_json().expect("metadata resolves");
     assert!(
         metas.to_string().contains("fixture::echo-fixture"),
@@ -249,8 +243,6 @@ fn a_malformed_reply_leaves_the_server_down_rather_than_breaking_the_turn() {
         return;
     };
     let metas = agent.all_metas_json().expect("metadata still resolves");
-    // Assert the child is alive, not absent: an absent child passed these tests
-    // while #132 had the sandbox wrapper killing it before it ran.
     assert!(
         fixture_running("malformed"),
         "the fixture must be running and merely unparseable"
@@ -259,7 +251,6 @@ fn a_malformed_reply_leaves_the_server_down_rather_than_breaking_the_turn() {
         !metas.to_string().contains("echo-fixture"),
         "a server that cannot be parsed offers no tools: {metas}"
     );
-    // A broken registry is a missing capability, not a broken agent.
     let answer = agent.run("s1", "hello");
     assert!(
         matches!(answer, jk_agent::conductor::RunResult::Answered { .. }),
@@ -283,7 +274,6 @@ fn a_silent_child_gives_up_instead_of_pinning_the_core() {
         return;
     };
     let metas = agent.all_metas_json().expect("metadata still resolves");
-    // Must be alive: an exited child would skip the give-up path under test.
     assert!(
         fixture_running("silent"),
         "the fixture must be alive and merely silent"

@@ -184,7 +184,6 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
     }
 
     let messages = last_messages(&seen);
-    // 20 replayed turns of Q+A, plus the new message.
     assert!(
         messages.len() <= 41,
         "replay is capped: {} messages",
@@ -260,7 +259,6 @@ fn the_model_is_told_what_it_is_before_anything_else() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Intent router sends prompt down agentic path (where this interceptor runs).
     agent.run("sys-1", "read src/main.rs and then add a test for it");
     assert_eq!(
         last_roles(&seen).first().map(String::as_str),
@@ -273,7 +271,6 @@ fn the_model_is_told_what_it_is_before_anything_else() {
         Some("you are a test agent")
     );
 
-    // Second turn must not duplicate the system message.
     agent.run("sys-1", "now also update the docs for it");
     let roles = last_roles(&seen);
     assert_eq!(
@@ -370,7 +367,6 @@ fn the_model_is_actually_told_which_tools_exist() {
         "the find tool is advertised: {names:?}"
     );
 
-    // Name alone isn't enough; model needs the argument schema.
     let find = tools
         .iter()
         .find(|t| t["function"]["name"] == "find")
@@ -411,7 +407,6 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     let _guard = common::TempDir(dir.clone());
     let config = write_config(&dir);
 
-    // Model ran out of room (like an endpoint reports).
     let http = || -> HttpFn {
         Box::new(move |_m, _u, _h, _b, _t| {
             let body = serde_json::json!({
@@ -439,7 +434,6 @@ fn a_truncated_answer_is_flagged_to_the_client() {
         "the client is told the answer is incomplete: {:?}",
         sink.0
     );
-    // Partial text is still the answer (cut-off reply better than no reply).
     assert!(
         matches!(&out, RunResult::Answered { text, .. } if text.contains("first half")),
         "the partial answer still comes back: {out:?}"
@@ -516,7 +510,6 @@ extensions:
         requests.contains("cargo nextest run"),
         "the project's own instructions reach the model: {requests}"
     );
-    // Labelled: standing prompt vs project request; AGENTS.md can't claim sandbox authority.
     assert!(
         requests.contains("from AGENTS.md"),
         "and are marked as the project's rather than the runtime's: {requests}"

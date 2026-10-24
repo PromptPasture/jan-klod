@@ -107,7 +107,6 @@ impl Store {
             detail: e.to_string(),
         })?;
 
-        // Older databases predate prev_digest.
         let store = Self { conn };
         store.ensure_prev_digest_column()?;
 
@@ -690,7 +689,6 @@ impl Store {
 
         for (i, (seq, _ts, kind, _payload, prev_digest)) in events.iter().enumerate() {
             if i == 0 {
-                // First event must have NULL prev_digest
                 if prev_digest.is_some() {
                     return Ok(ChainVerification {
                         session: session.to_string(),

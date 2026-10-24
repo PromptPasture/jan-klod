@@ -115,7 +115,6 @@ pub fn fetch_within(
     let mut forwarded = headers.to_vec();
 
     for _ in 0..=MAX_REDIRECTS {
-        // Every hop, including the first; the hop goes to what the check resolved (see [`exchange`]).
         let destination = policy.check(&target)?;
         let response = exchange(
             &method,
@@ -133,13 +132,11 @@ pub fn fetch_within(
             return Ok(response);
         };
 
-        // Resolve the redirect and strip what must not travel; the loop top decides if it is permitted.
         target = resolve(&target, &location)?;
         forwarded.retain(|(name, _)| {
             let name = name.to_ascii_lowercase();
             !STRIPPED_ON_REDIRECT.contains(&name.as_str())
         });
-        // 303 becomes GET (301/302 do in practice); 307/308 preserve the method.
         if matches!(response.status, 301..=303)
             && !method.eq_ignore_ascii_case("GET")
             && !method.eq_ignore_ascii_case("HEAD")
@@ -148,7 +145,6 @@ pub fn fetch_within(
             body = None;
         }
     }
-    // Stopping is the safe end: a chain that long is a mistake or probing.
     Err(WireError::Backend)
 }
 
@@ -191,7 +187,6 @@ impl Resolver for Pinned {
         _config: &ureq::config::Config,
         _timeout: ureq::unversioned::transport::NextTimeout,
     ) -> Result<ResolvedSocketAddrs, ureq::Error> {
-        // The URI is unused: consulting it is the second lookup.
         let mut addrs = self.empty();
         for addr in self.0.iter().take(MAX_PINNED_ADDRS) {
             addrs.push(*addr);
@@ -212,23 +207,16 @@ fn exchange(
     body: Option<&[u8]>,
     timeout: u32,
 ) -> Result<WireResponse, WireError> {
-    // One-shot agent per request. `http_status_as_error(false)` so 4xx/5xx keep their status.
-    // `max_redirects(0)` is a security setting: ureq would follow 10 redirects with egress policy
-    // consulted only on the first URL; at 0 the 3xx is returned for `fetch_within` to check per hop.
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_millis(u64::from(timeout))))
         .http_status_as_error(false)
         .max_redirects(0)
         .build();
 
-    // Pinning leaves `Host` and TLS alone (SNI and header come from the URI authority). The arms differ
-    // only in resolver. `Agent::with_parts` and `Resolver` are in `ureq::unversioned`: a breaking bump
-    // is a compile error, not a silent #108 reopening.
     let agent: ureq::Agent = match destination {
         crate::egress::Destination::Resolved(addrs) => {
             ureq::Agent::with_parts(config, DefaultConnector::default(), Pinned(addrs.clone()))
         }
-        // Nothing resolved, nothing to pin: an address literal has no lookup, a granted origin is trusted by name.
         crate::egress::Destination::AsNamed => config.into(),
     };
 
@@ -257,7 +245,6 @@ fn exchange(
         .read_to_vec()
         .map_err(|_| WireError::Backend)?;
 
-    // No status mapping: `fetch_within` must see a 3xx and applies `status_error` to the final response.
     Ok(WireResponse {
         status,
         headers,
@@ -283,7 +270,6 @@ mod tests {
 
     #[test]
     fn the_pinned_resolver_ignores_the_name_it_is_asked_about() {
-        // Whatever the URI says, the answer is the address the policy classified.
         let pinned = Pinned(vec!["93.184.216.34:443".parse().unwrap()]);
         let config = ureq::Agent::config_builder().build();
         let timeout = NextTimeout {

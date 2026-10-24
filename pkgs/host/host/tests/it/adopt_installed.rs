@@ -167,8 +167,6 @@ fn a_component_the_boot_path_would_refuse_is_refused_here_too() {
         ext.join("tool-hello.wasm"),
     )
     .expect("the component lands");
-    // Its manifest claims it needs nothing, which is a lie: `tool-hello`
-    // imports `host-log`.
     std::fs::write(
         ext.join("tool-hello.manifest.toml"),
         format!(

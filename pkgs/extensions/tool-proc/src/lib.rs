@@ -85,7 +85,6 @@ mod component {
 
     /// Start a granted child, or report the one already running.
     fn start(name: &str) -> String {
-        // Already running is not an error, and a second child under one name would orphan the first.
         if handle(name).is_some_and(host_process::is_running) {
             return serde_json::json!({ "name": name, "started": false, "running": true })
                 .to_string();
@@ -113,7 +112,6 @@ mod component {
             return not_started(name);
         };
         let out = host_process::read_stdout(child, READ_BYTES, READ_WAIT_MS).unwrap_or_default();
-        // Always both: an empty read does not mean the child has finished.
         serde_json::json!({
             "name": name,
             "output": out,
@@ -207,7 +205,6 @@ mod component {
             if op == "list" {
                 return Ok(list());
             }
-            // A missing name is a malformed call, not a refusal.
             let Some(name) = value.get("name").and_then(serde_json::Value::as_str) else {
                 return Err(ToolError::InvalidArguments);
             };

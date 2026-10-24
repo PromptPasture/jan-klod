@@ -134,7 +134,6 @@ fn a_prompt_streams_an_update_and_ends_the_turn() {
     );
     assert!(answer.get("error").is_none(), "{answer}");
 
-    // Updates must carry their session id; an editor with two sessions has no other way to route them.
     let updates = editor.notifications();
     assert!(!updates.is_empty(), "the turn streamed something");
     let chunk = updates
@@ -229,7 +228,6 @@ impl Answering {
 impl jk_host::acp::Asker for Answering {
     fn ask(&self, _session: &str, prompt: &jk_protocol::turn::UserPrompt) -> String {
         self.asked.borrow_mut().push(prompt.question.clone());
-        // A real editor picks an `optionId` from the prompt's own options.
         assert!(
             prompt.options.is_empty() || prompt.options.contains(&self.answer),
             "the answer must be one of the options offered: {:?}",

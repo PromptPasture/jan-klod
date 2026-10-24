@@ -46,7 +46,6 @@ fn a_database_from_before_the_log_is_readable_after_a_boot() {
     std::fs::write(&config, format!("\nstorage:\n  path: {}\n", db.display())).unwrap();
 
     let runtime = Runtime::boot(&config, dir.join("ext")).expect("runtime boots");
-    // Never called: no provider is enabled, but `build_agent` requires a factory.
     let factory = || -> HttpFn { Box::new(|_m, _u, _h, _b, _t| Err(WireError::ConnectionFailed)) };
     let agent = runtime.build_agent(&factory).expect("agent boots");
 
@@ -79,7 +78,6 @@ fn a_database_from_before_the_log_is_readable_after_a_boot() {
         log.iter().map(|r| r.ts).collect::<Vec<_>>()
     );
 
-    // Old rows are kept: deleting them would make the migration irreversible.
     assert!(
         store.get("history", "turn-1").is_ok(),
         "the transcript rows are not destroyed by the conversion"

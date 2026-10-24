@@ -49,7 +49,6 @@ fn host_process_is_default_deny_when_disabled() {
         return;
     };
 
-    // Disabled runner -> exec denied.
     let mut tool = ToolExtension::instantiate(
         &engine,
         "tool.proc-probe",
@@ -94,7 +93,6 @@ fn a_guest_run_command_does_not_receive_the_hosts_credentials() {
         !out.contains("must-not-leak"),
         "a credential reached the model through tool output:\n{out}"
     );
-    // An empty environment would pass for the wrong reason.
     assert!(out.contains("PATH="), "PATH is still provided: {out}");
 
     std::fs::remove_dir_all(&workspace_dir).ok();

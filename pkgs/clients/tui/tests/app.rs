@@ -86,7 +86,6 @@ fn an_unanswered_prompt_takes_the_prompts_own_default() {
         options: vec!["yes".into(), "no".into()],
         default: "no".into(),
     });
-    // Enter alone takes the safe default, which is already selected.
     assert_eq!(
         app.take_answer(),
         Some(("s1".to_string(), "no".to_string()))

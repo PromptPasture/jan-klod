@@ -37,7 +37,6 @@ extensions:
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Heuristic tier classifies a greeting `simple`, so the agentic loop is skipped.
     let greeting = agent.run("session-1", "hello");
     assert_eq!(
         greeting,
@@ -48,7 +47,6 @@ extensions:
         "a greeting short-circuits the agentic loop"
     );
 
-    // Falls through to the LLM classifier, which defaults to `agentic` in v1.
     let task = agent.run(
         "session-1",
         "Refactor the auth module and run the whole test suite",

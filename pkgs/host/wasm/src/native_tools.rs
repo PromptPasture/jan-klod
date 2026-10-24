@@ -162,9 +162,7 @@ impl NativeTools {
                     "version": entry.version,
                     "kind": entry.kind,
                     "description": entry.description,
-                    // What the entry asks of the host, shown before download.
                     "capabilities": entry.capabilities,
-                    // `signature` may be empty: an unsigned entry cannot be installed here, so surface that up front.
                     "signed": !entry.signature.is_empty(),
                 })
             })
@@ -197,8 +195,6 @@ impl NativeTools {
                 true,
             );
         }
-        // `reason` is required here (not on the local path): a remote name is a claim the operator
-        // cannot inspect, and the prompt is built from arguments so an absent reason would go unnoticed.
         let reason = call
             .get("reason")
             .and_then(serde_json::Value::as_str)
@@ -223,12 +219,10 @@ impl NativeTools {
             Err(err) => return (format!("refused: {err}"), true),
         };
         let checks = Checks {
-            // No digest of our own: `ext_index::install` refuses disagreement with the index's.
             sha256: None,
             trusted_keys: self.trusted_keys.clone(),
             allow_unsigned: false,
         };
-        // Reuse `ext_index::install` (name resolution, unknown-name and digest-mismatch refusals) rather than reimplementing.
         match self.with_client(|http| {
             crate::ext_index::install(dir, &entries, name, index, &checks, http)
         }) {
@@ -261,7 +255,6 @@ impl NativeTools {
         };
         let named = call.get("name").and_then(serde_json::Value::as_str);
         let path = call.get("path").and_then(serde_json::Value::as_str);
-        // Exactly one of name/path: picking silently turns a typo into an arbitrary fetch.
         let Some(source) = (match (named, path) {
             (Some(_), Some(_)) => {
                 return (
@@ -315,7 +308,6 @@ impl NativeTools {
 
 impl ToolInvoker for NativeTools {
     fn invoke(&mut self, call: &ToolCall) -> Option<ToolInvocation> {
-        // Absent, not refused, for names not ours: the fleet chains and claiming would shadow a guest tool.
         let (content, failed) = match call.name.as_str() {
             INSTALL => self.run_install(&call.arguments),
             SEARCH => self.run_search(&call.arguments),

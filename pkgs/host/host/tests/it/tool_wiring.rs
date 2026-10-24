@@ -138,7 +138,6 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
         "a refused edit leaves the file untouched"
     );
     eprintln!("PROMPT: {:?}", refused.asked);
-    // "approve tool `edit`" alone says nothing, so the file and change must appear.
     assert!(
         refused
             .asked
@@ -233,7 +232,6 @@ extensions:
                          "arguments":"{\"op\":\"view\",\"path\":\"main.rs\"}"}}]},
                         "finish_reason":"tool_calls"}]}),
                 1 => {
-                    // Pull real anchor from `view` (made-up one proves nothing).
                     let anchor = first_anchor(body.unwrap_or_default())
                         .expect("the view result carries an `anchor|lineno|text` line");
                     let args = format!(
@@ -273,7 +271,6 @@ extensions:
 /// Extract first `anchor` from `anchor|lineno|text` in request body.
 fn first_anchor(body: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(body);
-    // View output is JSON-encoded in the request; scan for `<hex>|<digits>|`.
     let bytes: Vec<char> = text.chars().collect();
     for (i, window) in bytes.windows(12).enumerate() {
         let candidate: String = window.iter().collect();
@@ -284,7 +281,6 @@ fn first_anchor(body: &[u8]) -> Option<String> {
             && anchor.chars().all(|c| c.is_ascii_hexdigit())
             && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
         {
-            // Accept only a whole token, not the tail of a longer hex run.
             let start = text[..].char_indices().nth(i).map(|(b, _)| b)?;
             let before = text[..start].chars().next_back();
             if before.is_some_and(|c| c.is_ascii_hexdigit()) {

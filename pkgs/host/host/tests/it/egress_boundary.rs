@@ -29,7 +29,6 @@ impl Sentinel {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
-        // Stays blocking: BSD `accept()` inherits `O_NONBLOCK` (#78). Drop unblocks it by connecting.
         let hits = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicU32::new(0));
         let faults = Arc::new(Mutex::new(Vec::new()));
@@ -40,35 +39,29 @@ impl Sentinel {
                 log.push(format!("{what}: {e:?}"));
             }
         };
-        thread::spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok((mut socket, _)) => {
-                        // Drop's wake-up connection carries no request.
-                        if stopped.load(Ordering::Relaxed) != 0 {
-                            break;
-                        }
-                        counted.fetch_add(1, Ordering::Relaxed);
-                        // Read the whole request before answering: answering early
-                        // leaves bytes unread, and the resulting RST drops the reply.
-                        if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
-                            fault("set_read_timeout", &e);
-                        }
-                        if let Err(e) = common::read_request(&mut socket) {
-                            fault("read_request", &e);
-                            continue;
-                        }
-                        if let Err(e) = socket.write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret",
-                        ) {
-                            fault("write_all", &e);
-                        }
-                    }
-                    // A listener that cannot accept serves nothing; stop rather than spin.
-                    Err(e) => {
-                        fault("accept", &e);
+        thread::spawn(move || loop {
+            match listener.accept() {
+                Ok((mut socket, _)) => {
+                    if stopped.load(Ordering::Relaxed) != 0 {
                         break;
                     }
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
+                        fault("set_read_timeout", &e);
+                    }
+                    if let Err(e) = common::read_request(&mut socket) {
+                        fault("read_request", &e);
+                        continue;
+                    }
+                    if let Err(e) = socket.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret",
+                    ) {
+                        fault("write_all", &e);
+                    }
+                }
+                Err(e) => {
+                    fault("accept", &e);
+                    break;
                 }
             }
         });
@@ -98,7 +91,6 @@ impl Sentinel {
 impl Drop for Sentinel {
     fn drop(&mut self) {
         self.stop.store(1, Ordering::Relaxed);
-        // Unblock the accept loop.
         let _ = TcpStream::connect(("127.0.0.1", self.port));
     }
 }
@@ -169,7 +161,6 @@ fn an_endpoint_named_in_config_is_reachable() {
     let _guard = common::TempDir(dir.clone());
 
     let sentinel = Sentinel::start();
-    // How operators name local Ollama or MCP servers.
     let allow = format!(
         "\nnetwork:\n  allow:\n    - http://127.0.0.1:{}\n",
         sentinel.port
@@ -181,7 +172,6 @@ fn an_endpoint_named_in_config_is_reachable() {
         request_through_the_host(&config, &url).is_ok(),
         "the named origin answers"
     );
-    // Check faults first: an unread request can still be counted (#83).
     sentinel.assert_no_faults();
     assert_eq!(sentinel.hits(), 1, "and the request actually arrived");
 }
@@ -249,7 +239,6 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
 /// Every host-http serving point must consult policy. Scans for the unbounded `http::fetch`, which the tests above would not catch.
 #[test]
 fn every_guest_facing_backend_goes_through_the_policy() {
-    // Scanned, not hard-coded, so new backends are covered.
     let core = common::repo_root().join("pkgs/host/wasm/src");
     let mut backends = Vec::new();
     for entry in std::fs::read_dir(&core)
@@ -261,7 +250,6 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             continue;
         }
         let text = std::fs::read_to_string(&path).expect("a jk-wasm source is readable");
-        // Host-side implementations of the guest's `host-http` import.
         if text.contains("_http::Host for") {
             backends.push((path, text));
         }
@@ -280,12 +268,10 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             .to_string_lossy()
             .into_owned();
         for (number, line) in text.lines().enumerate() {
-            // Code only — skip comments would flag ban prose.
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") {
                 continue;
             }
-            // `contains`, since call sites are often `let x = crate::http::fetch(`; the `(` excludes `fetch_within(`.
             assert!(
                 !line.contains("crate::http::fetch(") && !line.contains("jk_wasm::http::fetch("),
                 "{name}:{} calls the unbounded client. A guest's egress must go \
@@ -296,8 +282,6 @@ fn every_guest_facing_backend_goes_through_the_policy() {
         }
     }
 
-    // Also catches binaries handing guests the unbounded client (`Box::new(http::fetch)`).
-    // A missing file panics: a rename must not leave the check green with nothing scanned.
     for binary in ["pkgs/host/host/src/main.rs", "pkgs/clients/tui/src/main.rs"] {
         let path = common::repo_root().join(binary);
         let text = std::fs::read_to_string(&path)
@@ -361,14 +345,12 @@ fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
 
     let outcome = jk_wasm::http::fetch_within(&policy, "GET", &entry, &[], None, 2_000);
 
-    // Control: the permitted origin was reached, so zero hits on the forbidden one means something.
     assert_eq!(
         redirect_hits.load(Ordering::SeqCst),
         1,
         "the permitted origin was reached — otherwise this test proves nothing"
     );
 
-    // The refused hop surfaces as a policy refusal, not the 302.
     assert_eq!(
         outcome.err(),
         Some(jk_wasm::http::WireError::ConnectionFailed),
@@ -428,7 +410,6 @@ impl Hops {
 /// Redirects to permitted destinations are still followed; the #107 fix does not break all redirects.
 #[test]
 fn a_redirect_to_a_permitted_destination_is_followed() {
-    // Same origin: one grant covers both hops.
     let hops = Hops::start(302, "/landed".to_owned());
     let policy = jk_wasm::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{}", hops.port));

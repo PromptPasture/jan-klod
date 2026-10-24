@@ -1,7 +1,6 @@
 //! Test guest for `interceptor-persona`: checks persona injection at the select-model phase.
 //! Asserts the configured persona is injected when enabled, absent when disabled, and that only the configured one appears.
 
-// Pure logic: unit-tested natively; WASM glue compiles for wasm32 only.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod persona_verification {
     use serde_json::Value;
@@ -105,7 +104,6 @@ mod persona_verification {
                 .get(&default_name)
                 .cloned()
                 .unwrap_or_else(|| {
-                    // Unknown or absent name: the built-in default.
                     "You are helpful, concise, and focused on solving the user's problem."
                         .to_string()
                 });

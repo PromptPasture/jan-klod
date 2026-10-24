@@ -202,7 +202,6 @@ mod tests {
         pub struct TempDir(PathBuf);
         impl TempDir {
             pub fn new() -> Self {
-                // PID + counter for collision-free parallel test isolation.
                 let base = std::env::temp_dir().join(format!(
                     "jk-fs-{}-{}",
                     std::process::id(),

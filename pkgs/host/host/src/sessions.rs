@@ -44,7 +44,6 @@ impl Agents {
     #[must_use]
     /// Takes the `Runtime` by value because adoption mutates it; `build_agent` only borrows, so callers can build their own agent first.
     pub fn new(runtime: Runtime, factory: Factory) -> Arc<Self> {
-        // Cyclic so session threads reach their registry through a `Weak`.
         Arc::new_cyclic(|me| Self {
             runtime: Arc::new(std::sync::RwLock::new(runtime)),
             me: me.clone(),
@@ -75,10 +74,8 @@ impl Agents {
         let mut live = self.lock();
         match live.get(key) {
             Some(existing) if existing.built_at == now => return existing.jobs.clone(),
-            // Built before an adoption: replaced here so everyone gets the new component at their next turn, without a broadcast.
             Some(_) => {
                 if let Some(stale) = live.remove(key) {
-                    // Finishes what it has, then ends; holders of its queue are still served.
                     stale.jobs.stop();
                 }
             }
@@ -90,19 +87,16 @@ impl Agents {
         let registry = self.me.clone();
         let named = key.to_owned();
         let thread = std::thread::spawn(move || {
-            // Built on the thread that will own it: an `AgentSession` cannot be sent.
             let built = runtime
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .build_agent(&*factory);
             match built {
                 Ok(mut agent) => session_thread::serve_each(&mut agent, &queued, |agent| {
-                    // Between jobs, not inside one: what a turn installed becomes callable for every session (#231).
                     if let Some(registry) = registry.upgrade() {
                         registry.after_turn(&named, agent);
                     }
                 }),
-                // The queue outlives this thread briefly: callers get `NoAnswer::Stopped`, surfaced as a 503. Logged too, since a 503 with no log line is a mystery.
                 Err(err) => eprintln!("ERROR [host] session `{named}` has no agent: {err}"),
             }
         });
@@ -133,13 +127,11 @@ impl Agents {
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .adopt_installed(stem);
-            // Recorded on the installing session before that agent goes: the install promised "callable from the next turn" (#214).
             match &outcome {
                 Ok(id) => agent.record_load(session, stem, Ok(id.as_str())),
                 Err(err) => agent.record_load(session, stem, Err(&err.to_string())),
             }
         }
-        // Every agent built before now is out of date; none is stopped, and each session's next request builds a fresh one.
         self.generation
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
@@ -158,7 +150,6 @@ impl Drop for Agents {
         let live = std::mem::take(&mut *self.lock());
         let mut threads = Vec::with_capacity(live.len());
         for (_, Live { jobs, thread, .. }) in live {
-            // Told, not merely released: a caller holding a clone would keep the loop alive and hang the join below.
             jobs.stop();
             drop(jobs);
             threads.push(thread);

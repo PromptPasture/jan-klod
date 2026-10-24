@@ -2,7 +2,6 @@
 //! Injects the configured default persona at `select-model`, before `interceptor-context`
 //! measures the token budget. An unknown persona falls back to the built-in text with a warning.
 
-// Pure logic: unit-tested natively; CM glue compiles for wasm32 only.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod persona {
     use serde_json::Value;
@@ -66,7 +65,6 @@ mod persona {
             let default_text = personalities
                 .get(&default_name)
                 .cloned()
-                // Unknown or absent name: the built-in text serves.
                 .unwrap_or_else(|| DEFAULT_HELPFUL.to_string());
 
             let warning = if !personalities.contains_key(&default_name) && !personalities.is_empty()
@@ -240,7 +238,6 @@ mod component {
 
     impl Interceptor for Component {
         fn subscribed_phases() -> Vec<Phase> {
-            // Before `select-context`, so the budget counts these tokens.
             vec![Phase::SelectModel]
         }
 
@@ -254,7 +251,6 @@ mod component {
                 return Ok(Decision::Proceed);
             };
 
-            // Idempotent: skip when a persona message is already present.
             if request
                 .messages
                 .iter()
@@ -263,7 +259,6 @@ mod component {
                 return Ok(Decision::Proceed);
             }
 
-            // User role, not system: keeps it distinct from standing instructions.
             let persona_msg = Message {
                 role: Role::User,
                 content: format!("## Persona\n{}", config.default),

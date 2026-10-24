@@ -76,7 +76,7 @@ impl SetupDriver {
         let mut line = String::new();
         let result = stdin.lock().read_line(&mut line);
         match result {
-            Ok(0) | Err(_) => default.to_string(), // EOF or error: return default
+            Ok(0) | Err(_) => default.to_string(),
             Ok(_) => {
                 let trimmed = line.trim().to_string();
                 if trimmed.is_empty() {
@@ -107,7 +107,6 @@ pub fn apply_group_strategy(group: &Group) -> ConfigResult {
         ConfigStrategy::Manual => {
             println!("Group: {}", group.name);
             println!("  Add under extensions:");
-            // Simplified: does not yet know which keys each guest needs.
             for guest in &group.guests {
                 println!("    # Guest: {guest}");
             }
@@ -267,29 +266,25 @@ fn read_guests_file(path: &str) -> Result<Vec<String>, String> {
 
 fn check_guests(guests: &[String], ext_path: &Path) {
     for guest in guests {
-        // Guests are named like `provider-openai`, shipped as `provider-openai.wasm`.
         let wasm_pattern = format!("{guest}.wasm");
 
         let exact_path = ext_path.join(&wasm_pattern);
         if exact_path.exists() {
             println!("  ✓ {guest} in ext/");
-        } else {
-            // Wildcard match for versioned extensions.
-            if let Ok(entries) = fs::read_dir(ext_path) {
-                let found = entries.filter_map(std::result::Result::ok).any(|e| {
-                    let name = e.file_name();
-                    let name_str = name.to_string_lossy();
-                    name_str.starts_with(&format!("{guest}-")) && name_str.ends_with(".wasm")
-                });
+        } else if let Ok(entries) = fs::read_dir(ext_path) {
+            let found = entries.filter_map(std::result::Result::ok).any(|e| {
+                let name = e.file_name();
+                let name_str = name.to_string_lossy();
+                name_str.starts_with(&format!("{guest}-")) && name_str.ends_with(".wasm")
+            });
 
-                if found {
-                    println!("  ✓ {guest} in ext/");
-                } else {
-                    println!("  ✗ {guest} not found in ext/");
-                }
+            if found {
+                println!("  ✓ {guest} in ext/");
             } else {
                 println!("  ✗ {guest} not found in ext/");
             }
+        } else {
+            println!("  ✗ {guest} not found in ext/");
         }
     }
 }
@@ -359,7 +354,6 @@ fn check_sandbox_capability() {
 
 #[allow(dead_code)]
 fn is_landlock_available() -> bool {
-    // Heuristic; a full check would need ABI negotiation.
     std::fs::metadata("/proc/sys/kernel/landlock").is_ok()
 }
 

@@ -108,17 +108,14 @@ fn call_ask(agent: &mut AgentSession, params: &serde_json::Value) -> serde_json:
     else {
         return content("`ask` needs a `question` string", true);
     };
-    // A named session continues; an absent one gets this server's own, so consecutive calls share a transcript.
     let session = arguments
         .get("session")
         .and_then(serde_json::Value::as_str)
         .unwrap_or(DEFAULT_SESSION);
 
-    // `HeadlessDriver`, always: prompting would read a protocol frame as an answer.
     let mut driver = HeadlessDriver;
     match agent.run_with_driver(&mut driver, session, question) {
         jk_agent::conductor::RunResult::Answered { text, .. } => content(&text, false),
-        // Written for a person; it reaches a model, and an enum's Debug is no diagnosis.
         jk_agent::conductor::RunResult::Failed(message) => content(&message, true),
     }
 }
@@ -195,7 +192,6 @@ fn classify(line: &str) -> Asked {
     let frame: Frame = match serde_json::from_str(line) {
         Ok(frame) => frame,
         Err(err) => {
-            // No id could be read: the answer carries a null one, as the spec allows.
             return Asked::Answer(refuse(
                 jsonrpc::Id::Null,
                 jsonrpc::PARSE_ERROR,
@@ -204,7 +200,6 @@ fn classify(line: &str) -> Asked {
         }
     };
 
-    // A notification earns no answer, even a malformed one: there is nothing to correlate a complaint with.
     let Some(id) = frame.id else {
         return Asked::Silent;
     };
@@ -238,7 +233,6 @@ fn classify(line: &str) -> Asked {
                     params: frame.params,
                 }
             }
-            // An unknown tool is a protocol error (`tools/list` never offered it), unlike a tool that ran and failed (`isError`).
             Some(other) => refuse(
                 id,
                 jsonrpc::METHOD_NOT_FOUND,
@@ -273,7 +267,6 @@ fn initialized(params: &serde_json::Value) -> serde_json::Value {
             "name": SERVER_NAME,
             "version": env!("CARGO_PKG_VERSION"),
         },
-        // Not required by the spec; lets a client see its version was read rather than ignored.
         "instructions": format!(
             "jan-klod speaks MCP {MCP_VERSION}; the client asked for {asked}. \
              Tools: ask, session_list, session_get."

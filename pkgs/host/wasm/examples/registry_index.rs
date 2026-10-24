@@ -91,8 +91,6 @@ fn main() {
 
     let mut extensions = Vec::with_capacity(staged.len());
     for component in staged {
-        // Refuse a component whose manifest is absent or broken: every field comes from it, and a guessed
-        // entry is worse than a short index. `make ext` regenerates the manifest.
         let manifest = match component.declaration {
             Declaration::Present(manifest) => manifest,
             Declaration::Absent => fail(&format!(
@@ -111,7 +109,6 @@ fn main() {
             url: component_url(base_url, &manifest.name),
             sha256: hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes)),
             signature: signature_beside(&component.component),
-            // `try_from` not `as`: a wrapped size would be a silently wrong download size.
             size: u64::try_from(bytes.len())
                 .unwrap_or_else(|err| fail(&format!("{} is unmeasurable: {err}", manifest.name))),
             name: manifest.name,
@@ -130,7 +127,6 @@ fn main() {
     };
     let mut json = serde_json::to_string_pretty(&index)
         .unwrap_or_else(|err| fail(&format!("serializing the index: {err}")));
-    // Trailing newline so diffs read as lines.
     json.push('\n');
 
     let path = Path::new(out);
@@ -140,7 +136,6 @@ fn main() {
                 .unwrap_or_else(|err| fail(&format!("{}: {err}", parent.display())));
         }
     }
-    // Written once at the end so a refusal halfway leaves no truncated index.
     std::fs::write(path, &json).unwrap_or_else(|err| fail(&format!("{out}: {err}")));
 
     println!(

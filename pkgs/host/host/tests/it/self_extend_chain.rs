@@ -64,7 +64,6 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
                 .unwrap_or(false);
 
             if after_tool {
-                // The digest only appears once the shell has printed it.
                 if let Some(found) = sha256_in(&text) {
                     *script.digest.lock().expect("not poisoned") = Some(found);
                 }
@@ -234,7 +233,6 @@ fn chain_script(component: &std::path::Path) -> Arc<Script> {
                     "contents": manifest_toml()
                 })
             ),
-            // `sha256sum` on Linux, `shasum` on macOS; either output is enough.
             format!(
                 "shell|{}",
                 serde_json::json!({
@@ -242,7 +240,6 @@ fn chain_script(component: &std::path::Path) -> Arc<Script> {
                     "args": ["-c", "sha256sum tool-selfbuilt.wasm || shasum -a 256 tool-selfbuilt.wasm"]
                 })
             ),
-            // `{{sha256}}` is replaced with turn 4's printed digest.
             format!(
                 "ext-install|{}",
                 serde_json::json!({
@@ -273,7 +270,6 @@ fn an_agent_compiles_installs_and_calls_its_own_tool_in_one_session() {
         return;
     };
     let ext = guard.0.join("ext");
-    // Stem must be `<category>-<kind>`: adopt_installed reads the category from it.
     let component = ws.join("tool-selfbuilt.wasm");
 
     let script = chain_script(&component);
@@ -294,7 +290,6 @@ fn an_agent_compiles_installs_and_calls_its_own_tool_in_one_session() {
         agent.run("s1", turn);
     }
 
-    // Each link is checked where it happens, so a failure names the broken link.
     assert!(
         ws.join("target/wasm32-wasip2/debug/self_built.wasm")
             .exists(),
