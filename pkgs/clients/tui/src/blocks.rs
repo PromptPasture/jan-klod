@@ -1,58 +1,7 @@
-//! A message is a block, not a line (#147).
+//! Transcript and pane width to rendered lines, with no drawing: lines are data,
 //!
-//! Transcript + pane width → rendered lines (no drawing). Testable without a
-//! terminal; lines are data. Viewport scrolling is separate from rendering.
-//!
-//! # The layout
-//!
-//! Each entry is a gutter glyph column, a one-line role label, then the wrapped
-//! body — and one blank row between blocks, so a transcript reads as messages
-//! rather than as a wall.
-//!
-//! ```text
-//! ▍ you
-//! ▍ the message, wrapped to the pane and
-//! ▍ indented under its own gutter
-//!
-//! ▍ klod
-//! ▍ the answer
-//! ```
-//!
-//! # A tool call is a block too, and it is one row until it is not (#155)
-//!
-//! It has no role label. The row *is* the label: an open/closed marker, a
-//! status glyph, the tool's name, and what the call did — a path, not its JSON,
-//! because the collapsed form exists to be scanned down.
-//!
-//! ```text
-//! ▍ ▸ ✓ edit  pkgs/clients/tui/src/blocks.rs
-//! ▍ ▾ ✗ read  missing.txt
-//! ▍   {
-//! ▍     "path": "missing.txt"
-//! ▍   }
-//! ▍
-//! ▍   tool `read` error: NotFound
-//! ```
-//!
-//! **A failure opens itself.** Everything else stays shut, because a transcript
-//! of twelve successful reads is not improved by twelve screens of JSON, and
-//! the one block a user certainly wants to read is the one that went wrong —
-//! putting its reason behind a keystroke they may not know about is the wrong
-//! way round.
-//!
-//! Opening one by hand is `Ctrl+O`, acting on the block under the transcript
-//! cursor (`App::cursor`, moved with `Alt+Up`/`Alt+Down`). A selected block is
-//! marked by swapping its gutter glyph rather than its colour, which is the
-//! same rule as everything else here: the mark has to survive `Mode::Mono`.
-//!
-//! # Every distinction survives monochrome
-//!
-//! Under [`Mode::Mono`](crate::theme::Mode::Mono) every role resolves to
-//! `Color::Reset`, so colour carries nothing and the glyph plus the role label
-//! are the whole signal. That is not a degraded mode — the design treats colour
-//! as the *second* signal throughout — but it is a rule this module has to keep
-//! rather than inherit, which is why the tests assert the label and the glyph
-//! are present with the theme in `Mono`.
+//! so tests can assert on them. Under [`Mode::Mono`](crate::theme::Mode::Mono)
+//! the gutter glyph and role label carry every distinction, since colour is absent.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -67,9 +16,7 @@ fn gutter_width(theme: Theme) -> usize {
     crate::wrap::width(theme.glyph(Glyph::MessageGutter)) + 1
 }
 
-/// Role label and gutter colour.
-/// Error=`removed`, Status=`muted` (exact meanings). Speakers use border roles
-/// (#97: distinguish by gutter/indent not tint; accents spent on meanings).
+/// Role label and gutter colour. Speakers use border roles so accents stay meaningful (#97).
 const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
     match who {
         Who::You => ("you", theme.border_active()),
@@ -79,15 +26,11 @@ const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
     }
 }
 
-/// One-line summary: what the call did, not JSON.
-/// Path if named (what readers want for `edit`/`read`); else just the tool name.
-/// Collapsed form must be scannable. `pub(crate)`: sidebar CHANGED reads this.
+/// One-line summary of what the call did: its path if it has one, never raw JSON.
+/// The sidebar's CHANGED list reads this too.
 pub(crate) fn summary(tool: &ToolBlock) -> String {
     let Some(raw) = tool.arguments.as_deref() else {
-        // "No arguments" (present but empty) ≠ nothing arrived.
-        // Both surfaces send `arguments` since [#161]; older cores only reach here.
-        // Rendering `{}` would falsely claim `{}` was passed.
-        // [#161]: https://github.com/PromptPasture/jan-klod/issues/161
+        // Absent means nothing arrived (older cores); rendering `{}` would claim otherwise.
         return "arguments not sent over this transport".to_string();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
@@ -110,7 +53,7 @@ fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
             (*theme.spinner().first().unwrap_or(&"-")).to_string(),
             theme.secondary(),
         ),
-        // Core reports failure (#162), not inferred from content (reliable).
+        // Failure is the core's flag (#162), never inferred from the content.
         ToolStatus::Done { failed: true, .. } => {
             (theme.glyph(Glyph::ToolFailed).to_string(), theme.removed())
         }
@@ -121,12 +64,11 @@ fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
     }
 }
 
-/// Tool call: one scannable line, or line + work.
-/// Separate from [`block`]'s message path: `wrap` collapses whitespace,
-/// which would flatten indents in pretty-printed arguments below.
+/// One scannable line, or that line plus the expanded work. Not routed through
+/// [`block`]'s message path: `wrap` collapses whitespace and would flatten the
+/// indents of pretty-printed arguments.
 fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> Vec<Line<'static>> {
-    // Cursor is glyph, not colour: under `Mode::Mono`, colour glyphs and text glyphs
-    // are indistinguishable, so selection must use a different glyph (one cell wide).
+    // Selection swaps the glyph, not the colour, so it survives `Mode::Mono`.
     let (glyph, rail) = if selected {
         (
             theme.glyph(Glyph::Caret),
@@ -158,8 +100,7 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
         Span::styled(tool.name.clone(), Style::default().fg(theme.body())),
     ];
 
-    // Collapsed form is one row: name and status stay, summary is cut from left
-    // (paths end in filename, commands rarely start with useful binary names).
+    // Collapsed is one row. The summary is elided from the left, since paths end in the filename.
     let mut spent = gutter_width(theme)
         + crate::wrap::width(&open)
         + crate::wrap::width(&status)
@@ -187,8 +128,7 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
         return lines;
     }
 
-    // Indented and on `code_surface`: under `Mode::Mono`, background alone is invisible,
-    // so indent + monospace glyph distinguish code (see `markdown.rs` for fenced code).
+    // Indented on `code_surface`: under `Mode::Mono` the background alone is invisible.
     let surface = Style::default().fg(theme.body()).bg(theme.code_surface());
     if let Some(raw) = tool.arguments.as_deref() {
         lines.extend(
@@ -199,9 +139,7 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
     }
     if let ToolStatus::Done { content, failed } = &tool.status {
         let style = if *failed {
-            // The reason a failure opens itself is that it is *read*, not
-            // glanced at, so it gets the failure colour rather than the
-            // recessive one every other result has.
+            // A failure is read, not glanced at, so it gets the failure colour.
             Style::default()
                 .fg(theme.removed())
                 .bg(theme.code_surface())
@@ -209,16 +147,9 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
             surface
         };
         lines.push(Line::from(rule()));
-        // A diff renders as a diff, **including inside a failed result** (#156).
-        // The two claims collide — a failure is drawn in `removed()`, which is
-        // the role a `-` line wants — and the diff wins, because a diff whose
-        // every line is the removal colour says the opposite of what it is. The
-        // failure is already said twice on the head row, by glyph and by
-        // colour, and neither of those is what the reader is squinting at here.
-        //
-        // Not indented, unlike the arguments above: the sign has to reach
-        // column 0 of the body or `Mode::Mono` has nothing to read it by, and
-        // a diff needs no indent to be recognisable as one.
+        // A diff renders as a diff even inside a failed result (#156), since a
+        // diff drawn entirely in the failure colour would say the opposite.
+        // Unindented, so the sign reaches column 0 where `Mode::Mono` can read it.
         let body =
             crate::diff::render(content.trim_end(), body_width, theme).unwrap_or_else(|| {
                 crate::markdown::verbatim(content.trim_end(), body_width, "  ", style)
@@ -228,7 +159,7 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
     lines
 }
 
-/// Arguments pretty-printed (humans read them), no highlight (budget declined 4).
+/// Arguments pretty-printed for reading. No syntax highlighting.
 fn pretty(raw: &str) -> String {
     serde_json::from_str::<serde_json::Value>(raw)
         .as_ref()
@@ -238,8 +169,7 @@ fn pretty(raw: &str) -> String {
         )
 }
 
-/// Cut text to max cells from left, marked visible.
-/// Grapheme-by-grapheme: cuts inside clusters break glyphs, wide chars off-pane.
+/// Cut to `max` cells from the left behind `mark`, one grapheme at a time so no glyph is split.
 fn elide(text: &str, max: usize, mark: &str) -> String {
     if crate::wrap::width(text) <= max {
         return text.to_string();
@@ -270,13 +200,11 @@ fn prefix(rail: Span<'static>, row: Line<'static>) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Render one entry into lines/// Render one entry into lines, wrapped to `width` cells including the gutter.
+/// Render one entry into lines, wrapped to `width` cells including the gutter.
 #[must_use]
 pub fn block(entry: &Entry, selected: bool, width: usize, theme: Theme) -> Vec<Line<'static>> {
     let (who, text) = match entry {
-        // `selected` is not passed on here, and that is the model rather than an
-        // omission: the cursor only ever lands on a tool block, because a
-        // message has nothing to open.
+        // Messages have nothing to open, so the cursor only lands on tool blocks.
         Entry::Message { who, text } => (*who, text.clone()),
         Entry::Tool(tool) => return tool_block(tool, selected, width, theme),
     };
@@ -287,16 +215,11 @@ pub fn block(entry: &Entry, selected: bool, width: usize, theme: Theme) -> Vec<L
 
     let mut lines = vec![Line::from(vec![
         Span::styled(format!("{glyph} "), Style::default().fg(accent)),
-        // The label is `muted` and the body is `body`: `muted` has no contrast
-        // floor on a light terminal (#135), so it is fine for a one-word label
-        // and would not be for the message itself.
+        // `muted` has no contrast floor on light terminals (#135): fine for a label, not for a message.
         Span::styled(label.to_string(), Style::default().fg(theme.muted())),
     ])];
 
-    // Markdown for the assistant and nobody else (#149). A user's own message is
-    // shown as they typed it — rendering it would mean their backticks and
-    // asterisks disappearing from their own transcript — and an error or a
-    // status note is not a document.
+    // Only the assistant's text is Markdown (#149). User, error and status text is shown verbatim.
     let body: Vec<Line<'static>> = if who == Who::Klod {
         crate::markdown::render(&text, body_width, theme)
     } else {
@@ -317,10 +240,7 @@ pub fn block(entry: &Entry, selected: bool, width: usize, theme: Theme) -> Vec<L
     lines
 }
 
-/// Render a whole transcript, one blank row between blocks.
-///
-/// The blank row goes *between* rather than after, so the last block does not
-/// leave a trailing row the viewport would have to special-case.
+/// Render a whole transcript, with one blank row between blocks and none trailing.
 #[must_use]
 pub fn transcript(
     entries: &[Entry],
@@ -338,18 +258,10 @@ pub fn transcript(
     lines
 }
 
-/// Where entry `index` starts in what [`transcript`] renders, and how tall it
-/// is.
+/// Where entry `index` starts in [`transcript`]'s output, and how many rows it takes.
 ///
-/// The caller is the scroll: a cursor that moves to a block the pane is not
-/// showing has selected something the user cannot see, which is worse than no
-/// cursor at all. Measured by rendering, because the only honest answer to
-/// "how many rows is this" in a wrapping layout is to wrap it — and rendering
-/// here is a pure function, so this costs what a frame costs.
-///
-/// Measured **unselected**, and that is safe rather than approximate: the
-/// cursor swaps one one-cell glyph for another, so it cannot change where the
-/// body wraps.
+/// Measured unselected, which is exact: the cursor swaps one one-cell glyph for
+/// another, so it cannot change where the body wraps.
 #[must_use]
 pub fn span_of(entries: &[Entry], index: usize, width: usize, theme: Theme) -> (usize, usize) {
     let mut start = 0;
@@ -363,24 +275,15 @@ pub fn span_of(entries: &[Entry], index: usize, width: usize, theme: Theme) -> (
     (start, height)
 }
 
-/// The ask dialog's content, as lines (#103).
+/// The ask dialog's content, as lines (#103). A pure function of the model, so
+/// tests can assert on the rendered cells.
 ///
-/// A pure function of the model, the same pattern as [`transcript`], so the
-/// acceptance line "asserted on the rendered cells, not by inspection" has
-/// something to assert against without a terminal.
+/// `selected` and `queue_len` come from [`crate::app::App`], not `prompt`: a
+/// queued question does not know its position. `input` is shown only when
+/// `prompt.options` is empty (free text).
 ///
-/// `selected` and `queue_len` are not read off `prompt` because they are
-/// [`crate::app::App`]'s to track, not the prompt's own — a queued question
-/// does not know its position, and `App::prompt_selected` is what can change
-/// between two frames of the same prompt. `input` is the composer's text, used
-/// only when `prompt.options` is empty (the protocol's free-text convention);
-/// ignored otherwise, because a list prompt has no free-text answer to show.
-///
-/// **The default is marked in the text itself, not only in colour** — a
-/// ` default` label and [`Glyph::Warning`] both survive `Mode::Mono`, where
-/// every colour is [`ratatui::style::Color::Reset`]. So does the closing line:
-/// it names `default` in words, because "what silence means" has to be legible
-/// with no colour spent on it at all.
+/// The default is marked in text as well as colour (` default` and
+/// [`Glyph::Warning`]), since every colour is absent under `Mode::Mono`.
 #[must_use]
 pub fn prompt_dialog(
     prompt: &Prompt,
@@ -405,8 +308,7 @@ pub fn prompt_dialog(
     lines.push(Line::from(String::new()));
 
     if prompt.options.is_empty() {
-        // The protocol's free-text convention: a single-line input, with the
-        // default shown as what an empty submission sends.
+        // Free text: the default is what an empty submission sends.
         lines.push(Line::from(vec![
             Span::styled("> ", Style::default().fg(theme.focus())),
             Span::styled(input.to_string(), Style::default().fg(theme.body())),
@@ -442,9 +344,7 @@ pub fn prompt_dialog(
                 Span::styled(option.clone(), row_style),
             ];
             if is_default {
-                // Both a word and a glyph: colour alone is nothing under
-                // `Mode::Mono`, and the word alone is what a colour-blind
-                // reader still gets even where colour is drawn.
+                // A word and a glyph, not colour alone: colour is absent under `Mode::Mono`.
                 spans.push(Span::styled(
                     format!(" {} default", theme.glyph(Glyph::Warning)),
                     Style::default().fg(theme.warning()),
@@ -462,15 +362,8 @@ pub fn prompt_dialog(
     lines
 }
 
-/// The session switcher's content (#105).
-///
-/// The typed filter as a search line, then the matching entries — the current
-/// session marked, the highlighted one distinguished the same way
-/// [`prompt_dialog`]'s selected option is.
-///
-/// A pure function of what [`crate::app::App`] already computed
-/// (`entries`/`selected`), the same split every dialog here uses: the model
-/// decides *what* is shown, this decides how it reads.
+/// The session switcher's content (#105): the filter line, then the matching
+/// sessions, with the current and highlighted ones marked.
 #[must_use]
 pub fn sessions_dialog(
     query: &str,
@@ -520,9 +413,7 @@ pub fn sessions_dialog(
                 ),
             ];
             if is_current {
-                // A word, not only the marker's colour — `Mode::Mono` zeroes
-                // every colour, the same rule `prompt_dialog`'s default label
-                // follows.
+                // A word, not only colour, for the same `Mode::Mono` reason as the default label.
                 spans.push(Span::styled(
                     " (current)".to_string(),
                     Style::default().fg(theme.warning()),
@@ -550,12 +441,8 @@ pub fn sessions_dialog(
     lines
 }
 
-/// The help overlay's content (#105).
-///
-/// Every binding in [`crate::keymap::BINDINGS`], grouped by
-/// [`crate::keymap::Context`] — a binding added without updating this is
-/// impossible, because this reads the table rather than repeating it, the
-/// same guarantee [`crate::tui::status_hint`] already gives the status bar.
+/// The help overlay's content (#105): every binding in
+/// [`crate::keymap::BINDINGS`], grouped by [`crate::keymap::Context`].
 #[must_use]
 pub fn help_dialog(width: usize, theme: Theme) -> Vec<Line<'static>> {
     const GROUPS: [(keymap::Context, &str); 5] = [
@@ -597,19 +484,10 @@ pub fn help_dialog(width: usize, theme: Theme) -> Vec<Line<'static>> {
     lines
 }
 
-/// The quit confirm's content (#105).
+/// The quit confirm's content (#105): the session id, what a running turn means
+/// (worded differently for stdio and `--addr`), and the cancel/quit options.
 ///
-/// The session id and its resumability, what happens to a running turn
-/// (worded differently for stdio vs `--addr` — `turn_lost` is the caller's to
-/// know, see [`crate::transport::Transport::is_stdio`]), and a second warning
-/// once `escalate` asks the user to confirm again. Cancel/quit are the two
-/// options, marked the same way [`prompt_dialog`]'s default is.
-///
-/// Four `bool`s rather than an enum per axis: each is an independent fact
-/// about the model (is a turn running, would it be lost, has this been
-/// confirmed once, which option is highlighted) with no combination that is
-/// invalid, so a fifth type per axis would be ceremony over the four flags it
-/// replaced.
+/// Four `bool`s, not an enum per axis: each is independent and no combination is invalid.
 #[must_use]
 #[allow(clippy::fn_params_excessive_bools)]
 pub fn quit_dialog(
@@ -699,7 +577,6 @@ mod tests {
 
     const ALL: [Who; 4] = [Who::You, Who::Klod, Who::Error, Who::Status];
 
-    /// A result the core reported as succeeding.
     fn done(content: &str) -> ToolStatus {
         ToolStatus::Done {
             content: content.to_string(),
@@ -707,13 +584,7 @@ mod tests {
         }
     }
 
-    /// A result the core reported as failing.
-    ///
-    /// The content of these fixtures still reads like one of the sentences the
-    /// core writes, because that is what a real failure looks like — but since
-    /// #162 nothing reads it. `failed` is what decides, which is why
-    /// `what_the_content_looks_like_no_longer_decides_whether_a_call_failed`
-    /// pulls the two apart on purpose.
+    /// A failed result. Since #162 only the `failed` flag decides, never the content.
     fn failure(content: &str) -> ToolStatus {
         ToolStatus::Done {
             content: content.to_string(),
@@ -756,8 +627,7 @@ mod tests {
         }
     }
 
-    /// The rule the whole design rests on: with colour gone, the block is still
-    /// readable and still attributed.
+    /// With colour gone, the block is still readable and attributed.
     #[test]
     fn monochrome_keeps_the_glyph_and_the_label() {
         let theme = Theme::new(Mode::Mono, Depth::TrueColor, GlyphSet::Unicode);
@@ -771,8 +641,7 @@ mod tests {
                 "{who:?}: no label under Mono, so nothing identifies the speaker"
             );
         }
-        // And the four labels are still four different strings, so colour was
-        // never the thing telling them apart.
+        // Colour is not what tells the four labels apart.
         let labels: Vec<String> = ALL
             .into_iter()
             .map(|who| plain(&block(&entry(who, "x"), false, 40, theme)[0]))
@@ -849,7 +718,7 @@ mod tests {
         Entry::Tool(tool)
     }
 
-    /// Acceptance: the collapsed line names what the call *did*.
+    /// The collapsed line names what the call did, not its JSON.
     #[test]
     fn the_collapsed_line_names_the_path_and_never_the_json() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -875,7 +744,6 @@ mod tests {
             "no status glyph: {head:?}"
         );
 
-        // Nothing to name, so the line is just the call.
         let bare = call("list_sessions", Some("{}"), done("ok"));
         let bare = plain(&block(&bare, false, 80, theme)[0]);
         assert!(
@@ -884,25 +752,19 @@ mod tests {
         );
     }
 
-    /// #161: over REST the frame carries no arguments at all, and the line has
-    /// to say that rather than render an empty call.
+    /// Missing arguments must say so, not read as an empty call (#161).
     #[test]
     fn missing_arguments_say_so_instead_of_reading_as_none() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
         let head = plain(&block(&call("read", None, ToolStatus::Running), false, 80, theme)[0]);
-        // It used to assert the line carried the string `#161`. That was right
-        // while the gap was live and the number was the only place a user could
-        // read what had happened; now that both surfaces send `arguments`, an
-        // issue number on screen is a reference to a closed ticket. What has to
-        // survive is the distinction it existed for: nothing arrived, which is
-        // not the same as the call having taken no arguments.
+        // The user has to tell "nothing arrived" apart from "no arguments".
         assert!(
             head.contains("not sent"),
             "a user cannot tell missing from absent without the reason: {head:?}"
         );
     }
 
-    /// Acceptance: a failure opens itself, and the reason is in the block.
+    /// A failure opens itself, and its reason is in the block.
     #[test]
     fn a_failed_call_shows_its_reason_without_a_keystroke() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -923,20 +785,8 @@ mod tests {
         );
     }
 
-    /// What the `failed` flag bought, stated as the two cases it fixes (#162).
-    ///
-    /// This replaces `every_failure_the_core_writes_is_recognised`, which
-    /// pinned a list of six sentences `blocks::reads_as_failure` matched
-    /// against — `` tool `X` error: ``, `tool call denied:` and so on. That test
-    /// was honest about being a *convention*: the wording belonged to
-    /// `tool_host.rs` and `conductor.rs`, and rephrasing an error there would
-    /// have drawn a failure green with nothing failing anywhere.
-    ///
-    /// Both of its worries are now unreachable rather than guarded, so the
-    /// fixtures deliberately point the *opposite* way to the flag: content that
-    /// reads like a failure but succeeded, and content that reads like success
-    /// but failed. A prose matcher gets both of these wrong; reading the flag
-    /// cannot get either wrong.
+    /// The `failed` flag decides, never the wording (#162). The fixtures point
+    /// the opposite way to the content on purpose: a prose matcher gets both wrong.
     #[test]
     fn what_the_content_looks_like_no_longer_decides_whether_a_call_failed() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -957,9 +807,7 @@ mod tests {
         );
     }
 
-    /// The reason `tool_block` does not go through the message path: `wrap`
-    /// collapses whitespace, so the arguments would arrive with their structure
-    /// silently pressed flat.
+    /// Pretty-printed arguments keep their shape, which `wrap` would collapse.
     #[test]
     fn expanded_arguments_keep_their_shape_and_the_result_follows() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -992,11 +840,8 @@ mod tests {
         );
     }
 
-    /// Acceptance: with colour gone, done and failed are still two things.
-    ///
-    /// The whole reason status is a glyph rather than a tint — and a case the
-    /// *message* blocks' `Mono` test cannot cover, because a tool block has no
-    /// role label to fall back on. The row is the label.
+    /// With colour gone, done and failed still differ. A tool block has no role
+    /// label to fall back on, so the status glyph must carry the difference.
     #[test]
     fn monochrome_still_separates_a_done_call_from_a_failed_one() {
         for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
@@ -1022,7 +867,7 @@ mod tests {
         }
     }
 
-    /// The seam #156 replaces: a result that is a diff stops being plain text.
+    /// A result that is a diff renders as one, even when the call failed (#156).
     #[test]
     fn a_result_that_is_a_diff_renders_as_one_even_when_the_call_failed() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1050,9 +895,7 @@ mod tests {
             "the result did not go through the diff renderer: {body:?}"
         );
 
-        // The colliding case: a failed result is drawn in `removed()`, which is
-        // the role a `-` line wants. The diff wins, and the failure is still
-        // said on the head row.
+        // A failed diff keeps the diff rendering; the failure is still shown on the head row.
         let failed = opened(call(
             "git",
             Some("{}"),
@@ -1110,7 +953,6 @@ mod tests {
         assert_eq!(span_of(&entries, 9, 30, theme).1, 0, "no entry, no rows");
     }
 
-    /// The gutter and the indent are part of the row here too.
     #[test]
     fn an_expanded_block_stays_inside_the_pane() {
         for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
@@ -1140,8 +982,7 @@ mod tests {
         }
     }
 
-    /// Acceptance: the "what silence means" line is present and names the
-    /// default.
+    /// The closing line says what silence means and names the default.
     #[test]
     fn the_dialog_says_what_silence_means_and_names_the_default() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1158,9 +999,7 @@ mod tests {
         );
     }
 
-    /// Acceptance: rendered under monochrome, the default option is still
-    /// identifiable from the rendered spans' *text*, since every colour is
-    /// `Color::Reset` there.
+    /// Under `Mode::Mono` the default is named in the row's text, since every colour is reset.
     #[test]
     fn monochrome_still_marks_the_default_option_in_text() {
         let theme = Theme::new(Mode::Mono, Depth::TrueColor, GlyphSet::Unicode);
@@ -1190,8 +1029,7 @@ mod tests {
         }
     }
 
-    /// The initial selection renders distinctly from the other rows, so a
-    /// selection nobody can see is not a selection here either.
+    /// The selected row renders differently from the rest.
     #[test]
     fn the_selected_option_renders_differently_from_the_rest() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1208,8 +1046,7 @@ mod tests {
         );
     }
 
-    /// A free-text prompt (empty `options`) shows an input line rather than a
-    /// list, and still names the default as what an empty answer sends.
+    /// A free-text prompt shows an input line and names the default an empty answer sends.
     #[test]
     fn an_empty_options_list_renders_free_text_input() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1236,8 +1073,7 @@ mod tests {
         }
     }
 
-    /// The current session is marked in text, not only in colour — the same
-    /// rule `prompt_dialog`'s default label follows, for the same reason.
+    /// The current session is marked in text, not only colour (see `Mode::Mono`).
     #[test]
     fn the_current_session_is_marked_in_text_under_monochrome() {
         let theme = Theme::new(Mode::Mono, Depth::TrueColor, GlyphSet::Unicode);
@@ -1264,9 +1100,7 @@ mod tests {
         assert!(rendered.iter().any(|r| r.contains("no session matches")));
     }
 
-    /// Acceptance: the help overlay lists every binding, grouped by context —
-    /// so a binding added without updating the table (impossible, since this
-    /// reads it) or without a group heading fails here.
+    /// The help overlay lists every binding under its context heading.
     #[test]
     fn the_help_overlay_lists_every_binding_grouped_by_context() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1300,9 +1134,7 @@ mod tests {
         }
     }
 
-    /// The wording differs between the two transports — the fact
-    /// [`crate::transport::Transport::is_stdio`] exists to carry to this
-    /// function, since the model that renders it has no transport of its own.
+    /// stdio and `--addr` must word a lost turn differently.
     #[test]
     fn the_quit_dialog_wording_differs_between_stdio_and_addr() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);

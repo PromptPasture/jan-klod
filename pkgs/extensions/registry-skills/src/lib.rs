@@ -1,9 +1,5 @@
-//! `registry-skills` — discovers Markdown skill files from `.agents/skills/`
-//! (workspace level, user override) and `skills/` (distribution level, bundled fallback),
-//! with workspace taking precedence, exposes them as tools, and renders them on `invoke`.
-//!
-//! Each skill file needs YAML front matter (`--- ... ---`) with `name:` and optional `description:`.
-//! `invoke` returns the template with raw JSON arguments appended as context.
+//! `registry-skills`: exposes Markdown skills from `.agents/skills/` (workspace wins) and `skills/` (bundled).
+//! Skill files need YAML front matter with `name:` and an optional `description:`.
 
 #[allow(
     unsafe_code,
@@ -48,7 +44,6 @@ fn log(level: LogLevel, message: &str) {
 }
 
 /// Parse YAML front matter from `content`, returning `(front_matter, body)`.
-/// Front matter is between opening and closing `---` lines.
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     let rest = content.strip_prefix("---")?;
     // Allow `---\n` or `---\r\n`
@@ -78,18 +73,12 @@ fn yaml_str<'a>(front: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// Load all Markdown files with `name:` in front matter from both sources.
-///
-/// Skills are merged from two sources in priority order:
-/// 1. `.agents/skills/` (workspace level, user override) — checked first
-/// 2. `skills/` (distribution level, bundled fallback) — checked second
-///
-/// If a skill name exists in both, the workspace version wins.
+/// Workspace skills override distribution skills of the same name.
 fn load_skills() -> Vec<Skill> {
     use std::collections::HashMap;
 
     let mut skills_map: HashMap<String, Skill> = HashMap::new();
 
-    // Load from distribution-level skills/ first (lower priority)
     if let Ok(entries) = host_fs::list_dir("skills") {
         for entry in entries {
             if entry.is_dir {
@@ -124,7 +113,6 @@ fn load_skills() -> Vec<Skill> {
         }
     }
 
-    // Load from workspace-level .agents/skills/ second (higher priority, overrides)
     if let Ok(entries) = host_fs::list_dir(".agents/skills") {
         for entry in entries {
             if entry.is_dir {
@@ -159,7 +147,6 @@ fn load_skills() -> Vec<Skill> {
         }
     }
 
-    // Convert HashMap to Vec and return
     let mut skills: Vec<Skill> = skills_map.into_values().collect();
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     skills

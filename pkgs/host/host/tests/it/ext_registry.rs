@@ -1,17 +1,6 @@
-//! `ext search` and `ext install <name>` against a registry index.
-//!
-//! The parsing refusals — a missing field, an unknown `index-version`, a
-//! document that is not an index — are unit tests in `core::ext_index`, where
-//! they are cheaper. What cannot be tested there is anything needing a *real*
-//! component: that a name resolved through an index installs the same bytes a
-//! URL would, through the same verification, and that the command an operator
-//! actually types prints the capability line the index exists for.
-//!
-//! **Offline, and signed.** The index is a file on disk and the component is
-//! served by a canned `HttpFn`, so nothing here opens a socket. The fixture is
-//! signed by a test key rather than installed with `--allow-unsigned`: signed
-//! is the installer's default, so waiving it would test a path a real install
-//! does not take.
+//! `ext search` and `ext install <name>` against a registry index. Offline and
+//! signed: the index is a file and the component comes from a canned `HttpFn`.
+//! Parsing refusals are unit tests in `core::ext_index`.
 
 use std::path::Path;
 
@@ -20,14 +9,9 @@ use jk_wasm::ext_index::{self, IndexError};
 use crate::common;
 use crate::ext_install::{canned_files, names, published, scratch, Scratch};
 
-/// An index describing one published component, written to a file.
-///
-/// The digest is the served bytes' own, computed here, because this fixture
-/// stands in for a generated index — `registry_index` measures the file it
-/// publishes, and a fixture that stated a digest from somewhere else would be
-/// testing a broken index rather than a working one. The digest check itself is
-/// covered by `ext_install::a_correct_digest_installs_and_a_tampered_byte_is_refused`,
-/// which takes its expected value from the system's hasher.
+/// An index describing one published component, written to a file. The digest is
+/// computed from the served bytes, standing in for a generated index; the digest
+/// check itself is covered in `ext_install`.
 fn write_index(scratch: &Scratch, component: &[u8], signature: &str) -> String {
     use std::fmt::Write;
     let digest = <sha2::Sha256 as sha2::Digest>::digest(component);
@@ -60,12 +44,8 @@ fn write_index(scratch: &Scratch, component: &[u8], signature: &str) -> String {
     path.display().to_string()
 }
 
-/// The acceptance: a name resolved through a **local** index installs, with no
-/// network at all.
-///
-/// `registry.url` pointing at a path rather than a URL is not a test-only
-/// shortcut — it is the documented behaviour, and it is what an air-gapped
-/// operator with a mirrored index uses.
+/// A name resolved through a **local** index installs with no network. A path as
+/// `registry.url` is documented behaviour for air-gapped mirrors, not a test shortcut.
 #[test]
 fn a_name_from_a_local_index_installs_offline() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -78,8 +58,7 @@ fn a_name_from_a_local_index_installs_offline() {
     let source = write_index(&scratch, &component, &signature);
     let (http, asked) = canned_files(files);
 
-    // No `http` is passed for the index itself in any meaningful sense: the
-    // path branch never calls it, which the recorded URLs below prove.
+    // The path branch never calls `http` for the index; the recorded URLs prove it.
     let entries = ext_index::load(&source, &http).expect("a local index reads");
     assert_eq!(entries.len(), 1);
     assert_eq!(
@@ -109,11 +88,8 @@ fn a_name_from_a_local_index_installs_offline() {
     );
 }
 
-/// The index supplies the digest, and it is really checked.
-///
-/// Without this the previous test would pass on an installer that ignored
-/// `sha256` entirely — the signature alone would carry it. Serving different
-/// bytes than the index describes has to be refused as a mismatch.
+/// The index's digest is really checked: bytes it does not describe are refused as a mismatch.
+/// Otherwise the previous test would pass for an installer that ignored `sha256`.
 #[test]
 fn bytes_that_are_not_the_ones_the_index_describes_are_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -125,8 +101,7 @@ fn bytes_that_are_not_the_ones_the_index_describes_are_refused() {
     let signature = String::from_utf8(files[2].1.clone()).expect("a .minisig is text");
     let source = write_index(&scratch, &honest, &signature);
 
-    // The index is written from the honest bytes; the server then answers with
-    // a flipped one.
+    // The index describes the honest bytes; the server answers with a flipped one.
     let middle = files[0].1.len() / 2;
     files[0].1[middle] ^= 0xff;
     let (http, _) = canned_files(files);
@@ -144,9 +119,7 @@ fn bytes_that_are_not_the_ones_the_index_describes_are_refused() {
     assert_eq!(names(&scratch.ext), [] as [String; 0], "and nothing landed");
 }
 
-/// A digest on the command line and a digest in the index are two claims about
-/// one set of bytes. Disagreement stops the install rather than being resolved
-/// by precedence.
+/// A command-line digest that contradicts the index's stops the install; they are not resolved by precedence.
 #[test]
 fn a_digest_the_index_contradicts_is_refused_before_anything_is_fetched() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -170,11 +143,7 @@ fn a_digest_the_index_contradicts_is_refused_before_anything_is_fetched() {
     );
 }
 
-/// An unreachable index is a refusal naming the URL, not an empty result.
-///
-/// The distinction matters: an index that answers 404 and an index with nothing
-/// in it would otherwise both print "no results", and only one of them is
-/// something the operator can fix.
+/// An unreachable index is a refusal naming the URL, not an empty result: a 404 must not read as "no results".
 #[test]
 fn an_unreachable_index_says_so_rather_than_reading_as_empty() {
     let (http, _) = canned_files(vec![("nothing-served", Vec::new())]);
@@ -190,9 +159,8 @@ fn an_unreachable_index_says_so_rather_than_reading_as_empty() {
     );
 }
 
-/// A registry URL the egress policy refuses is refused **before a byte moves**,
-/// exactly as a component URL is. An index is a list of places to download
-/// executable code from, so it is not a lesser destination than the code.
+/// A registry URL the egress policy refuses is refused before a byte moves, as a
+/// component URL is: an index lists executable code to download.
 #[test]
 fn a_loopback_index_is_refused_before_it_is_requested() {
     let (http, asked) = canned_files(vec![("index.json", b"{}".to_vec())]);
@@ -235,14 +203,8 @@ fn a_malformed_local_index_names_the_file_and_the_problem() {
     );
 }
 
-// ---- The command an operator actually types ----
-
-/// Run `jan-klod-gateway ext <args…>` with `cwd` as its working directory.
-///
-/// The real binary, because the acceptance is about what `ext search` *prints*
-/// and that rendering lives in the gateway rather than in the core. A test that
-/// called the library would have proved the entries parse and nothing about the
-/// capability line reaching a terminal.
+/// Runs `jan-klod-gateway ext <args…>` in `cwd`. Uses the real binary because the
+/// capability line is rendered by the gateway, not the core.
 fn gateway(cwd: &Path, args: &[&str]) -> (bool, String, String) {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_jan-klod-gateway"))
         .arg("ext")
@@ -257,12 +219,7 @@ fn gateway(cwd: &Path, args: &[&str]) -> (bool, String, String) {
     )
 }
 
-/// A `config.yaml` naming nothing but the registry.
-///
-/// `Checks::from_config_path` and `url_from_config_path` both read one
-/// top-level key rather than resolving the whole document, which is what lets
-/// this be four lines instead of the shipped config — and what stops `ext
-/// search` demanding a provider's API key.
+/// A `config.yaml` naming only the registry. The readers take one top-level key, so `ext search` does not demand a provider's API key.
 fn config_naming(scratch: &Scratch, url: &str) -> std::path::PathBuf {
     let path = scratch.incoming.join("config.yaml");
     std::fs::write(
@@ -296,13 +253,12 @@ fn ext_search_prints_the_capabilities_of_every_hit() {
         "an entry nothing vouches for says so: {out}"
     );
 
-    // And `list --remote` is the same view with nothing filtered out.
+    // `list --remote` renders the same view.
     let (ok, listed, err) = gateway(&scratch.incoming, &["list", "--remote"]);
     assert!(ok, "ext list --remote failed: {err}");
     assert_eq!(listed, out, "one traversal, one rendering");
 
-    // A term that matches nothing is a success with an explanation, not a
-    // failure: the registry worked, the search did not find anything.
+    // No hits is a success with an explanation, not a failure.
     let (ok, empty, _) = gateway(&scratch.incoming, &["search", "nothing-like-this"]);
     assert!(ok, "a search with no hits is not a failure");
     assert!(
@@ -312,8 +268,7 @@ fn ext_search_prints_the_capabilities_of_every_hit() {
     );
 }
 
-/// A broken registry has to fail the command with something actionable — not a
-/// panic, and not silence.
+/// A broken registry fails the command with a message: no panic, no silence.
 #[test]
 fn a_broken_registry_fails_the_command_with_a_message() {
     let scratch = scratch("index-cli-broken");

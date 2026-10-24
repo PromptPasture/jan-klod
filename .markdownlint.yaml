@@ -1,27 +1,22 @@
 # Reference: https://github.com/DavidAnson/markdownlint/blob/main/schema/.markdownlint.yaml
 
-# Default state for all rules
 default: true
 
-# MD013/line-length : Line length : https://github.com/DavidAnson/markdownlint/blob/v0.40.0/doc/md013.md
+# https://github.com/DavidAnson/markdownlint/blob/v0.40.0/doc/md013.md
 MD013: false
 
-# MD024/no-duplicate-heading : Multiple headings with the same content : https://github.com/DavidAnson/markdownlint/blob/v0.40.0/doc/md024.md
+# https://github.com/DavidAnson/markdownlint/blob/v0.40.0/doc/md024.md
 MD024:
-  # Only check sibling headings
   siblings_only: true
 
-# MD025/single-title/single-h1 : Multiple top-level headings in the same document : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md025.md
+# https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md025.md
 MD025:
-  # RegExp for matching title in front matter
   front_matter_title: ""
-  # Heading level
   level: 1
 
-# MD040/fenced-code-language : Fenced code blocks should have a language specified : https://github.com/DavidAnson/markdownlint/blob/v0.40.0/doc/md040.md
+# https://github.com/DavidAnson/markdownlint/blob/v0.40.0/doc/md040.md
 MD040: false
 
-# MD060/table-column-style : Table column style : https://github.com/DavidAnson/markdownlint/blob/v0.40.0/doc/md060.md
-# Off: the house table style pads cells (`| a | b |`) but keeps the delimiter
-# row tight (`|---|---|`), and no MD060 style or option accepts that mix.
+# https://github.com/DavidAnson/markdownlint/blob/v0.40.0/doc/md060.md
+# Off: the house table style pads cells but keeps the delimiter row tight, which no MD060 option accepts.
 MD060: false

@@ -1,6 +1,5 @@
-//! Tool-fetch with canned HTTP (offline). Public URL fetched as text, SSRF guard
-//! refuses dangerous addresses before network. Verified by call counting, not
-//! just refusal message. Skips when guest not staged.
+//! Fetch reduces HTML to text over a canned client, and the SSRF guard refuses
+//! internal addresses before any request. Skips when the guest is not staged.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -117,7 +116,6 @@ fn blocked_addresses_never_reach_the_network() {
         );
     }
 
-    // No requests made (guard before client).
     assert_eq!(
         calls.load(Ordering::Relaxed),
         0,

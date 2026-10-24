@@ -1,18 +1,6 @@
-//! Outbound `agent-*` ACP delegation.
+//! Outbound `agent-*` ACP delegation: a `delegate` call is forwarded to a remote agent through an injected [`AgentTransport`].
 //!
-//! Model emits a `delegate` tool call (`{ "agent", "task", "context"? }`).
-//! [`AgentDelegate`] resolves the agent to its ACP endpoint and forwards to an
-//! injected [`AgentTransport`], returning the remote agent's answer.
-//! Wire format is transport-specific; the seam is unit-tested offline.
-//!
-//! Inbound delegation (core called *by* another ACP orchestrator) is just the
-//! host-side REST surface (`jk_host::serve`).
-//!
-//! # Not wired
-//!
-//! `Runtime::build_agent` never instantiates the `agent` category; `delegate`
-//! calls get "no tool named `delegate`". Kept unused but harmless; needs a
-//! transport and one line in `build_agent` to activate.
+//! Not wired: `Runtime::build_agent` never instantiates it, so `delegate` calls fail as unknown tools.
 
 use std::collections::HashMap;
 
@@ -23,8 +11,7 @@ use jk_protocol::turn::ToolCall;
 /// The tool name the model uses to delegate to another agent.
 pub const DELEGATE_TOOL: &str = "delegate";
 
-/// Carries a task to a remote agent's ACP endpoint and returns the answer.
-/// Injected for testability without a live agent; ACP-over-HTTP is one impl.
+/// Sends a task to a remote agent's ACP endpoint. Injected so tests need no live agent.
 pub trait AgentTransport {
     /// Delegate `task` (with optional JSON `context`) to the agent at `endpoint`.
     ///
@@ -35,8 +22,7 @@ pub trait AgentTransport {
         -> Result<String, String>;
 }
 
-/// [`ToolInvoker`] that services `delegate` calls by forwarding to a remote agent.
-/// Non-`delegate` calls return `None` (composable).
+/// [`ToolInvoker`] that services `delegate` calls. Other calls return `None`.
 pub struct AgentDelegate<T> {
     transport: T,
     /// Agent id → ACP endpoint (from `config.yaml`).
@@ -75,7 +61,7 @@ impl<T: AgentTransport> AgentDelegate<T> {
 impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
     fn invoke(&mut self, call: &ToolCall) -> Option<jk_protocol::intercept::ToolInvocation> {
         if call.name != DELEGATE_TOOL {
-            return None; // skip if not ours
+            return None;
         }
         let args: serde_json::Value = serde_json::from_str(&call.arguments).ok()?;
         let agent = args.get("agent").and_then(serde_json::Value::as_str)?;
@@ -106,7 +92,6 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    /// Transport that records calls and returns a canned answer.
     struct StubTransport {
         seen: RefCell<Vec<(String, String)>>,
         reply: Result<String, String>,

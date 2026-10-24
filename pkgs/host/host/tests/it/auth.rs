@@ -1,10 +1,5 @@
-//! The REST surface refuses unauthenticated callers when a token is set.
-//!
-//! Until now it refused nobody: `config.yaml` advertised an `api-key` that
-//! nothing read, so a surface was open to anyone who could reach it. This drives
-//! the real server and asserts on **status codes off the wire**.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! The REST surface refuses unauthenticated callers when a token is set,
+//! asserted on the status codes read off the wire.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -19,11 +14,8 @@ use std::collections::HashMap;
 
 const TOKEN: &str = "s3cret-token";
 
-/// Keep a lost answer loud: the confirmation wait defaults to three minutes,
-/// and a lost answer falls back to a denial-timeout, so the test can pass either way.
+/// Shortens the confirmation wait, so a lost answer fails fast instead of timing out into a denial.
 fn short_answer_timeout() {
-    // Set before any server thread starts, and every test in this binary wants
-    // the same value.
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "5");
 }
 
@@ -49,14 +41,12 @@ extensions:
 /// the status line plus body.
 fn request(port: u16, target: &str, auth: Option<&str>) -> String {
     let header = auth.map_or_else(String::new, |t| format!("Authorization: Bearer {t}\r\n"));
-    // The answer route takes a different body — a 400 here reads to the waiting
-    // driver as "still no answer" and the test would stall for the full timeout.
+    // A 400 on the answer route reads as "no answer yet" and stalls until timeout.
     let body = if target.ends_with("/answer") {
         r#"{"answer":"yes"}"#
     } else {
         r#"{"message":"hello"}"#
     };
-    // Use GET for open paths and /health, POST for everything else
     let raw = if matches!(target, "/health" | "/" | "/app.js") {
         format!("GET {target} HTTP/1.1\r\nHost: localhost\r\n{header}Connection: close\r\n\r\n")
     } else {
@@ -67,8 +57,7 @@ fn request(port: u16, target: &str, auth: Option<&str>) -> String {
         )
     };
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
-    // A lost response must fail the test, not hang it: this is a raw socket, and
-    // `read_to_string` otherwise waits for the server to close forever (#286).
+    // Bounded read: a lost response would otherwise hang the test forever (#286).
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(60)))
         .unwrap();
@@ -90,8 +79,6 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // The server side runs on this thread (the session is !Send), so the client
-    // has to be the one that moves.
     let ext_dir = common::repo_root().join("ext");
     let config = write_config(&dir);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
@@ -99,9 +86,7 @@ fn without_a_token_a_turn_is_refused_and_never_reaches_the_agent() {
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
 
-    // One surface for all four requests: a `serve_once_authed` per request
-    // races, because a surface that is stopping can still accept the next
-    // connection and then drop it unanswered (#246).
+    // One surface for all four requests: per-request serve_once_authed races (#246).
     let (none, wrong, right, health) = surface.serve_while(
         &agents,
         {
@@ -157,8 +142,7 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
         .expect("serves");
     let response = client.join().expect("client thread");
 
-    // Requiring a secret to talk to your own loopback is friction without a
-    // threat, so the default stays open.
+    // Open by default: a secret on loopback adds friction without a threat.
     assert!(
         response.contains("200 OK"),
         "no token configured means no gate: {response}"
@@ -166,16 +150,9 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     assert!(response.contains("pong"), "and the turn runs: {response}");
 }
 
-/// The one endpoint that must never be open: while a turn is parked on a
-/// confirmation, the waiting driver serves the socket itself, bypassing the
+/// Drives one confirmation: an outsider tries to answer, then the client answers.
+/// While parked, the waiting driver serves the socket itself and bypasses the
 /// router, so it needs its own token check.
-/// Drive one confirmation: open the stream, let an outsider try to answer,
-/// then answer properly. Returns the outsider's reply, the real one, and
-/// the stream text.
-///
-/// The assertions stayed in the test; this is the plumbing. A surface that
-/// serves while a closure runs (#224) puts the client's whole conversation
-/// in the test body, and this is what takes it back out.
 fn drive_confirmation(port: u16) -> (String, String, String) {
     use std::io::{BufRead, BufReader};
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
@@ -197,10 +174,8 @@ fn drive_confirmation(port: u16) -> (String, String, String) {
         collected.push_str(&line);
         collected.push('\n');
         if line.starts_with("event: prompt") && refused.is_empty() {
-            // Outsider tries first…
             refused = request(port, "/session/p/answer", None);
-            // …then the legitimate client answers. Keep the reply to confirm
-            // it wasn't lost to the timeout.
+            // Kept so the test can tell acceptance from a timeout denial.
             accepted = request(port, "/session/p/answer", Some(TOKEN));
         }
     }
@@ -288,13 +263,10 @@ extensions:
         !refused.contains("accepted"),
         "and must not be accepted: {refused}"
     );
-    // The turn still completed — refusing the outsider did not consume the wait.
     assert!(
         stream_text.contains("event: done"),
         "the legitimate answer still landed: {stream_text}"
     );
-    // And it completed *because it was answered*, not because the wait expired
-    // into the same denial these assertions would otherwise also satisfy.
     assert!(
         accepted.contains("200 OK") && accepted.contains("accepted"),
         "the authenticated answer was accepted rather than lost to the timeout: {accepted}"
@@ -353,19 +325,14 @@ fn principal_resolves_from_credentials_in_the_guard() {
         )
     });
 
-    // No token -> 401
     assert!(
         no_token.contains("401"),
         "no token should be refused: {no_token}"
     );
-
-    // Wrong token -> 401
     assert!(
         wrong_token.contains("401"),
         "wrong token should be refused: {wrong_token}"
     );
-
-    // Correct token -> 200
     assert!(
         op_token.contains("200 OK"),
         "operator token should be accepted: {op_token}"
@@ -374,8 +341,6 @@ fn principal_resolves_from_credentials_in_the_guard() {
         op_token.contains("pong"),
         "and should reach the agent: {op_token}"
     );
-
-    // Another principal's token -> 200
     assert!(
         admin_token.contains("200 OK"),
         "admin token should be accepted: {admin_token}"
@@ -385,7 +350,6 @@ fn principal_resolves_from_credentials_in_the_guard() {
         "and should reach the agent: {admin_token}"
     );
 
-    // /health stays open without credentials
     assert!(
         health_no_auth.contains("200 OK"),
         "/health should be open without token: {health_no_auth}"
@@ -394,16 +358,12 @@ fn principal_resolves_from_credentials_in_the_guard() {
         !health_no_auth.contains("401"),
         "/health should not be refused: {health_no_auth}"
     );
-
-    // /health stays open even with credentials
     assert!(
         health_with_auth.contains("200 OK"),
         "/health should be open with token: {health_with_auth}"
     );
 
-    // `/` and `/app.js` served the removed web client and were exempt from
-    // the token (#318). With the client gone, `/health` is the only open path,
-    // so these are refused like any other route rather than falling through.
+    // `/` and `/app.js` were exempt when the web client existed (#318); now refused.
     assert!(
         index_no_auth.contains("401"),
         "/ is no longer exempt from the token: {index_no_auth}"

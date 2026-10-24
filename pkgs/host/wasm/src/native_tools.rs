@@ -1,37 +1,8 @@
-//! Tools the host implements itself, rather than loading as components.
+//! Tools the host implements itself rather than as components: install (#213) and `ext-search`.
 //!
-//! **There is one, and it exists because the alternatives were worse.**
-//! Every other tool in this runtime is a WebAssembly component, and that is
-//! a property worth keeping on purpose. Installing an extension cannot be
-//! one: a guest that installs needs write access to `ext/`, which is the
-//! directory the whole trust boundary is built on, and handing any guest
-//! that capability would undo the thing installation is meant to protect
-//! (#213).
-//!
-//! So the host does it, and no guest holds the capability because no guest
-//! is involved. The cost is this module — the first tool that is not a
-//! component — and it is named in `docs/concepts/architecture.md` rather
-//! than left for someone to discover.
-//!
-//! # Default-deny, like everything else
-//!
-//! Absent configuration, [`NativeTools::disabled`] answers nothing and
-//! advertises nothing: a deployment that did not ask for an install tool
-//! does not have one, and the model is not told it exists. `registry:
-//! install-tool: true` turns it on.
-//!
-//! # What still gates it when it is on
-//!
-//! Two things, both already here rather than invented for this:
-//!
-//! * **The operator confirms.** `interceptor-permission` confirms any call
-//!   not on its read-only allowlist, and this is not on it. The approval an
-//!   install needs is the approval path the operator already knows, so this
-//!   module adds no second prompt.
-//! * **Self-authored is not a trust exemption.** The call goes to
-//!   [`crate::ext::install`] with the same [`Checks`] the CLI builds, so an
-//!   unsigned artefact still needs its digest and a signed one is still
-//!   verified against `registry.trusted-keys`.
+//! Installing needs write access to `ext/`, the trust boundary, so no guest may hold it. Default-deny:
+//! [`NativeTools::disabled`] advertises nothing; `registry: install-tool: true` enables it. Still gated
+//! by `interceptor-permission` confirmation and by [`crate::ext::install`] with the CLI's [`Checks`].
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -76,24 +47,14 @@ const SCHEMA: &str = r#"{"type":"object","properties":{
 pub struct NativeTools {
     /// Where components are installed, and `None` when this is off.
     ext_dir: Option<PathBuf>,
-    /// Minisign keys from `registry.trusted-keys`. Empty means nothing is
-    /// trusted, which is default-deny rather than "skip the check".
+    /// Minisign keys from `registry.trusted-keys`; empty trusts nothing.
     trusted_keys: Vec<String>,
-    /// How registry fetches are made. `None` uses
-    /// [`crate::ext::policy_bound_http`], which is production; a test
-    /// injects a canned client so the registry path can be exercised
-    /// without opening a socket, the way `ext_registry.rs` already does.
+    /// Registry fetch client; `None` is the policy-bound production client, tests inject a canned one.
     http: Option<crate::route::HttpFn>,
-    /// Where the registry index lives, from `registry.url`. `None` when the
-    /// deployment configured none, which makes `ext-search` say so rather
-    /// than search nothing and report no matches.
+    /// Registry index location (`registry.url`); `None` makes `ext-search` say so, not report no matches.
     index_source: Option<String>,
-    /// Stems installed during this session, waiting to be adopted (#214).
-    ///
-    /// Shared rather than returned, because an install happens *inside* a
-    /// turn — the tool is dispatched from within the fleet and cannot reach
-    /// the `Runtime` that would load it. So it leaves a note, and whoever
-    /// drives turns reads it between them.
+    /// Stems installed this session awaiting adoption (#214); shared because the tool runs inside a
+    /// turn and cannot reach the `Runtime` that loads it.
     installed: Arc<Mutex<Vec<String>>>,
 }
 
@@ -126,19 +87,14 @@ impl NativeTools {
         }
     }
 
-    /// Fetch registry artefacts with `http` instead of the policy-bound
-    /// client. Test seam only — production has no caller.
+    /// Fetch registry artefacts with `http` instead of the policy-bound client. Test seam only.
     #[must_use]
     pub fn with_http(mut self, http: crate::route::HttpFn) -> Self {
         self.http = Some(http);
         self
     }
 
-    /// Run `f` with the client registry fetches go through.
-    ///
-    /// Lent rather than returned: `HttpFn` is a boxed closure and is not
-    /// `Clone`, and both `ext_index::load` and `ext::install_from_url` take
-    /// it by reference anyway.
+    /// Run `f` with the client registry fetches go through (lent: `HttpFn` is not `Clone`).
     fn with_client<T>(&self, f: impl FnOnce(&crate::route::HttpFn) -> T) -> T {
         match &self.http {
             Some(http) => f(http),
@@ -146,12 +102,7 @@ impl NativeTools {
         }
     }
 
-    /// Take the stems installed since this was last asked.
-    ///
-    /// Draining rather than reading: adoption happens once per install, and
-    /// a list that kept its entries would have the caller adopt the same
-    /// component on every turn thereafter — which `adopt_installed` refuses,
-    /// loudly, for the rest of the session.
+    /// Take the stems installed since last asked; draining so the same component is not re-adopted every turn.
     #[must_use]
     pub fn take_installed(&self) -> Vec<String> {
         self.installed
@@ -182,15 +133,8 @@ impl NativeTools {
 
     /// Search the configured registry index.
     ///
-    /// # Not on the read-only allowlist, deliberately
-    ///
-    /// Reading is not an action, so this looks like an obvious candidate for
-    /// `interceptor-permission`'s `safe-calls`. It is not one: the index is
-    /// usually remote, and that list says of `fetch` that "it's egress, and
-    /// a coding agent reaching the network is worth one question". A search
-    /// is the same egress wearing a read-only label, so it is confirmed like
-    /// any other call. Cheaper to ask once than to find out later that the
-    /// allowlist quietly grew a network hole.
+    /// Not on `interceptor-permission`'s `safe-calls`: the index is usually remote, so this is egress
+    /// and is confirmed like any other call.
     fn run_search(&self, arguments: &str) -> (String, bool) {
         let Some(source) = self.index_source.as_deref() else {
             return (
@@ -218,14 +162,9 @@ impl NativeTools {
                     "version": entry.version,
                     "kind": entry.kind,
                     "description": entry.description,
-                    // The line the index format exists for: what it asks of
-                    // the host, before anybody downloads it.
+                    // What the entry asks of the host, shown before download.
                     "capabilities": entry.capabilities,
-                    // An index entry is *not* necessarily signed — `signature`
-                    // is empty when nothing vouches for the bytes. Surfaced
-                    // because an unsigned entry cannot be installed through
-                    // this tool at all, and a model that proposed one would
-                    // be refused for a reason it could have seen here.
+                    // `signature` may be empty: an unsigned entry cannot be installed here, so surface that up front.
                     "signed": !entry.signature.is_empty(),
                 })
             })
@@ -238,19 +177,8 @@ impl NativeTools {
 
     /// Install a component the registry lists, by name.
     ///
-    /// # No waiver, and what that means
-    ///
-    /// An index entry is **not** necessarily signed — `Entry::signature` is
-    /// empty when nothing vouches for the bytes. This path passes
-    /// `allow_unsigned: false` always, so such an entry is refused rather
-    /// than installed on the strength of a digest the same index supplied.
-    /// A digest from the party serving the artefact answers "did I get what
-    /// you sent", not "should I trust the sender".
-    ///
-    /// So the model has no escape here, by construction: the flag is not
-    /// read on this path, and passing it is an error rather than a no-op —
-    /// a silently ignored waiver would read, to whoever wrote the call, as
-    /// a waiver that worked.
+    /// Always `allow_unsigned: false`: a digest from the party serving the artefact does not establish
+    /// trust in it. Passing the flag is an error, not a no-op, so a waiver never silently appears to work.
     fn install_from_index(
         &self,
         dir: &Path,
@@ -269,15 +197,8 @@ impl NativeTools {
                 true,
             );
         }
-        // A `reason` is required here and not on the local path, and the
-        // asymmetry is deliberate: a path at least names a file the operator
-        // can open and read before answering. A registry name is a claim
-        // about something remote, and an approval prompt that cannot say
-        // *why* is one that gets accepted blindly.
-        //
-        // It is enforced rather than encouraged, because the prompt is built
-        // from the arguments — an absent reason is silently no reason, and
-        // the operator would never know one was expected.
+        // `reason` is required here (not on the local path): a remote name is a claim the operator
+        // cannot inspect, and the prompt is built from arguments so an absent reason would go unnoticed.
         let reason = call
             .get("reason")
             .and_then(serde_json::Value::as_str)
@@ -302,18 +223,12 @@ impl NativeTools {
             Err(err) => return (format!("refused: {err}"), true),
         };
         let checks = Checks {
-            // No digest of our own: the index carries one and
-            // `ext_index::install` refuses a disagreement rather than
-            // preferring either. Supplying one here would be inventing a
-            // second opinion the model has no way to hold.
+            // No digest of our own: `ext_index::install` refuses disagreement with the index's.
             sha256: None,
             trusted_keys: self.trusted_keys.clone(),
             allow_unsigned: false,
         };
-        // `ext_index::install`, not a hand-rolled find-and-fetch: it already
-        // resolves the name, refuses an unknown one naming the index it
-        // searched, and refuses a digest that disagrees with the entry.
-        // Reimplementing it here is how those refusals quietly diverge.
+        // Reuse `ext_index::install` (name resolution, unknown-name and digest-mismatch refusals) rather than reimplementing.
         match self.with_client(|http| {
             crate::ext_index::install(dir, &entries, name, index, &checks, http)
         }) {
@@ -335,10 +250,7 @@ impl NativeTools {
 
     /// Run the install, or say why not.
     ///
-    /// Errors are returned as the tool's textual result rather than as a
-    /// failure: a model that is told "the digest is required when unsigned"
-    /// can supply one, where a model told "tool failed" retries the same
-    /// call. `ExtError`'s variants are distinct for exactly this reason.
+    /// Errors are returned as the tool's text so the model can act on them (e.g. supply a digest) instead of retrying.
     fn run_install(&self, arguments: &str) -> (String, bool) {
         let Some(dir) = self.ext_dir.as_deref() else {
             return ("refused: the install tool is not enabled".to_string(), true);
@@ -349,9 +261,7 @@ impl NativeTools {
         };
         let named = call.get("name").and_then(serde_json::Value::as_str);
         let path = call.get("path").and_then(serde_json::Value::as_str);
-        // Exactly one. A call carrying both is two different requests, and
-        // picking one silently is how a typo in `name` becomes an arbitrary
-        // fetch from whatever `path` happened to say.
+        // Exactly one of name/path: picking silently turns a typo into an arbitrary fetch.
         let Some(source) = (match (named, path) {
             (Some(_), Some(_)) => {
                 return (
@@ -405,9 +315,7 @@ impl NativeTools {
 
 impl ToolInvoker for NativeTools {
     fn invoke(&mut self, call: &ToolCall) -> Option<ToolInvocation> {
-        // Absent rather than refused when the name is not ours: the fleet
-        // chains, and claiming a call we do not serve would stop a guest
-        // tool of the same name from ever being reached.
+        // Absent, not refused, for names not ours: the fleet chains and claiming would shadow a guest tool.
         let (content, failed) = match call.name.as_str() {
             INSTALL => self.run_install(&call.arguments),
             SEARCH => self.run_search(&call.arguments),
@@ -431,8 +339,7 @@ mod tests {
         }
     }
 
-    /// Off by default, and *absent* rather than refusing — a deployment that
-    /// did not ask for an install tool does not have one.
+    /// Off by default and absent rather than refusing.
     #[test]
     fn disabled_advertises_nothing() {
         assert_eq!(
@@ -441,8 +348,7 @@ mod tests {
         );
     }
 
-    /// A call that is not ours is `None`, not a refusal. Claiming it would
-    /// stop the fleet's next link from ever seeing it.
+    /// A call that is not ours is `None`, so the fleet's next link sees it.
     #[test]
     fn another_tools_call_is_passed_on_rather_than_claimed() {
         let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
@@ -451,8 +357,7 @@ mod tests {
         assert!(tools.invoke(&other).is_none());
     }
 
-    /// The one refusal this module owns rather than delegates: the tool is
-    /// wired but off, so a call must say so rather than install anything.
+    /// The one refusal this module owns: the tool is wired but off.
     #[test]
     fn a_call_while_disabled_installs_nothing_and_says_so() {
         let mut tools = NativeTools::disabled();
@@ -462,13 +367,8 @@ mod tests {
         assert!(out.content.starts_with("refused"), "{}", out.content);
     }
 
-    /// The name a model gives what it built is checked, and the refusal
-    /// tells it what the names may be (#222).
-    ///
-    /// Reaches the model as text rather than as a failed call with no
-    /// reason, which is the difference between "rename it" and "give up".
-    /// The component is empty on purpose: the stem is read before a byte of
-    /// it is, so this refuses for the name and not for the contents.
+    /// A bad name is refused with text listing what names may be (#222); the component is empty
+    /// because the stem is read before its bytes.
     #[test]
     fn a_stem_naming_no_category_is_refused_through_the_tool() {
         let dir = std::env::temp_dir().join(format!("jk-native-cat-{}", std::process::id()));
@@ -493,9 +393,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Self-authored is not a trust exemption: the refusal comes from
-    /// `ext::install`, unchanged, and reaches the model as text it can act
-    /// on rather than an opaque failure.
+    /// Self-authored is not a trust exemption: `ext::install`'s refusal reaches the model as text.
     #[test]
     fn unsigned_without_a_digest_is_refused_through_the_tool() {
         let dir = std::env::temp_dir().join(format!("jk-native-{}", std::process::id()));
@@ -525,9 +423,7 @@ mod tests {
         assert_eq!(names, vec!["ext-install", "ext-search"]);
     }
 
-    /// Searching with no registry configured says so, rather than reporting
-    /// no matches — "nothing found" and "nowhere to look" are different
-    /// facts and a model cannot act on the wrong one.
+    /// Searching with no registry configured says so rather than reporting no matches.
     #[test]
     fn searching_with_no_registry_configured_says_so() {
         let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
@@ -543,9 +439,6 @@ mod tests {
     }
 
     /// The waiver is refused on the registry path, not ignored.
-    ///
-    /// Silently ignoring it would read, to whoever wrote the call, as a
-    /// waiver that worked — and the next thing they write will rely on it.
     #[test]
     fn allow_unsigned_is_refused_for_a_registry_install() {
         let mut tools = NativeTools::installing_into(
@@ -564,8 +457,7 @@ mod tests {
         );
     }
 
-    /// `name` and `path` are two different requests, so both together is an
-    /// error rather than a preference.
+    /// `name` and `path` together is an error, not a preference.
     #[test]
     fn naming_both_a_registry_component_and_a_path_is_refused() {
         let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
@@ -576,8 +468,7 @@ mod tests {
         assert!(out.content.contains("not both"), "{}", out.content);
     }
 
-    /// Neither is also an error, and it names both ways in rather than
-    /// only the one it happened to check first.
+    /// Neither is also an error, naming both ways in.
     #[test]
     fn naming_neither_says_what_is_missing() {
         let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);

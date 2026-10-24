@@ -1,49 +1,6 @@
-//! One versioned wire contract shared by every client.
-//!
-//! Today a client is whatever `jk_host::serve` happens to serve — REST
-//! routes plus an SSE stream — so each new client (TUI, web, editor) reads the
-//! route table and drifts from the others. This crate makes that surface a
-//! contract of the same rank as the WIT package: named commands, named
-//! notifications, and a version that says when either changed.
-//!
-//! Two things are deliberately *not* here:
-//!
-//! * **No I/O.** No sockets, no pipes, no read loop. A [`Command`] carries the
-//!   `method`/`params` pair; [`jsonrpc`] wraps it in the frame both transports
-//!   send. This is a correction: this crate first excluded framing too, but
-//!   that holds for one transport and fails for two parties — see the
-//!   [`jsonrpc`] module documentation for why.
-//! * **No policy.** These are the shapes of what clients say and what the core
-//!   reports back; whether a command is *allowed* is the core's and its
-//!   interceptors' business.
-//!
-//! REST + SSE do not go away — they become one projection of this contract.
-//!
-//! # And the turn vocabulary
-//!
-//! [`turn`] holds the types a turn is made of — [`Event`](turn::Event),
-//! [`Message`](turn::Message), [`ToolCall`](turn::ToolCall) and the rest. They
-//! are not wire shapes, so they sit in a module of their own rather than the
-//! crate root, but they belong in this crate: the log and the wire are two
-//! projections of one turn, and every crate above this one needs the same
-//! words for it (#180).
-//!
-//! [`intercept`] and [`contributions`] follow for the same reason: the
-//! interceptor contract and the plain shapes of what an extension contributes
-//! to a client. The wasm adapters implement those traits and the loop consumes
-//! them; in separate crates, the contract has to sit below both (#181). The
-//! [`contributions`] types are not the root's wire shapes of the same names —
-//! a surface maps one to the other.
-//!
-//! # Versioning
-//!
-//! [`PROTOCOL_VERSION`] is semver. Removing a command, renaming one, or
-//! removing a field from one bumps **major**; adding a command, or adding an
-//! optional field, bumps **minor**. A client sends the version it was built
-//! against in [`Command::Hello`] and the core answers with [`HelloResult`], so
-//! a mismatch is caught at connect rather than mid-turn. [`compatible`] is what
-//! decides — and while this version is `0.x`, a differing **minor** is a
-//! refusal too.
+//! Versioned wire contract shared by every client: named commands and notifications.
+//! No I/O and no policy; [`jsonrpc`] frames a [`Command`], the core and its interceptors decide what is allowed.
+//! [`turn`], [`intercept`] and [`contributions`] sit here so every crate above shares one vocabulary.
 
 pub mod contributions;
 pub mod intercept;
@@ -54,21 +11,15 @@ use serde::{Deserialize, Serialize};
 
 /// The protocol version this build speaks, as semver.
 ///
-/// See the crate documentation for what a change to each field means.
+/// Removing or renaming a command, or removing a field, bumps major; adding a
+/// command or an optional field bumps minor. See [`compatible`].
 pub const PROTOCOL_VERSION: &str = "0.2.0";
 
 /// Every `method` a [`Command`] can carry.
 ///
-/// A transport needs this to distinguish failures; a client dispatcher can use
-/// it too. When `{"method":"session/get"}` arrives without its `params`,
-/// deserializing [`Command`] fails; so does `{"method":"session/destroy"}`.
-/// One is JSON-RPC's `invalid params` and the other `method not found`, and
-/// serde reports both as one error — the method name is what distinguishes them.
-///
-/// This is hand-written and easily falls out of sync with the enum beside it.
-/// `wire.rs` compares it against the exhaustive `match` over [`Command`] in
-/// both directions, so a command added without a line here fails the tests
-/// rather than lying as `method not found`.
+/// Lets a transport tell `invalid params` (known method, bad params) from
+/// `method not found`, which serde reports as one error. `wire.rs` checks this
+/// against the exhaustive `match` over [`Command`] in both directions.
 pub const COMMAND_METHODS: &[&str] = &[
     "protocol/hello",
     "session/create",
@@ -84,18 +35,11 @@ pub const COMMAND_METHODS: &[&str] = &[
 
 /// Whether a client built against `client` can talk to a core speaking `core`.
 ///
-/// Same major, and — while major is `0` — the same minor too. The second
-/// clause decides today: since [`PROTOCOL_VERSION`] is `0.2.0`, a major-only
-/// check would accept a `0.9` client on a `0.2` core. A malformed version is
-/// incompatible; guessing at one makes the check decoration rather than truth.
+/// Same major, and while major is `0` the same minor too. A malformed version is
+/// incompatible.
 ///
-/// # This rule is deliberately duplicated
-///
-/// `jk_wasm::manifest::api_compatible` applies the same test to the WIT
-/// `jan-klod:interfaces` version, and this is not a copy to deduplicate. The
-/// two version *lines* are independent — a WIT change need not touch a command,
-/// and vice versa — so sharing one predicate would drag one to decisions it did
-/// not make. What is shared is the reasoning, written in
+/// Deliberately duplicated in `jk_wasm::manifest::api_compatible`: the WIT and
+/// protocol version lines are independent. See
 /// [Contracts](../../../../../docs/concepts/contracts.md).
 #[must_use]
 pub fn compatible(core: &str, client: &str) -> bool {
@@ -115,16 +59,8 @@ pub fn compatible(core: &str, client: &str) -> bool {
 
 /// A command a client sends to the core.
 ///
-/// Adjacently tagged, so a value serializes to exactly the `method` and
-/// `params` members of a JSON-RPC request. This is not stylistic:
-/// [`jsonrpc::Request`] flattens a command into the frame, and
-/// `#[serde(flatten)]` only works over a value serializing as a map, which
-/// adjacent tagging produces — internal or external tagging would not.
-///
-/// Each variant names the surface it comes from. `session/*` and `turn/answer`
-/// are the routes `jk_host::serve` serves today; `turn/cancel` and
-/// `turn/follow-up` are new, because over REST the only way to stop a turn is
-/// to drop the SSE connection and there is no way at all to steer one.
+/// Adjacently tagged so it serializes to the `method`/`params` members of a
+/// JSON-RPC request; [`jsonrpc::Request`] flattens it, which needs a map.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params")]
 pub enum Command {
@@ -150,10 +86,7 @@ pub enum Command {
     /// `session/fork` — start a new session from a prefix of this one
     /// (`POST /session/:id/fork`).
     ///
-    /// Declared here before any transport carried it, because the schema is
-    /// what non-Rust clients generate from and a route that exists but is
-    /// absent from the contract is how the two drift. Slice 13b's stdio
-    /// transport now serves it.
+    /// Declared before any transport carried it, so non-Rust clients can generate from the schema.
     #[serde(rename = "session/fork")]
     SessionFork {
         /// The session to fork from.
@@ -198,40 +131,26 @@ pub enum Command {
     /// `surface/invoke` — run a command or form an extension contributed
     /// (`wit/client-surface.wit`).
     ///
-    /// Not a session command: a contribution belongs to an extension, and a
-    /// user invoking one is not taking a turn. The host routes it to the
-    /// declaring component and answers with [`SurfaceInvokeResult`].
+    /// Not a session command: the host routes it to the declaring extension
+    /// and answers with [`SurfaceInvokeResult`].
     #[serde(rename = "surface/invoke")]
     SurfaceInvoke {
-        /// The extension that declared it, as `Contributions::extension`.
-        /// Two extensions may contribute the same `name`, so the pair is what
-        /// identifies a contribution.
+        /// The extension that declared it, as `Contributions::extension`; with
+        /// `name` it identifies a contribution.
         extension: String,
         /// The contributed `name`.
         name: String,
-        /// Whatever the client gathered. An argument the contribution did not
-        /// declare is the extension's to refuse.
+        /// Whatever the client gathered; the extension refuses undeclared ones.
         arguments: Vec<ArgumentValue>,
     },
 }
 
 /// Every `event:` kind the SSE projection can emit, sorted.
 ///
-/// Here rather than in the core because **a client cannot see the core**: this
-/// crate is the only thing `jk-agent` and a UI both depend on, which is
-/// what lets the producer and the consumer be checked against one list instead
-/// of against each other's prose. Without that, a client can simply not know a
-/// frame — #81, where every tool result in a healthy turn reached the user as
-/// an error because `parse_frame` had never heard of `tool-result`.
-///
-/// Two tests hold the ends, and neither crate needs to see the other:
-/// `pkgs/host/core/tests/protocol_events.rs` proves this is exactly what
-/// `serve::sse_frame`, `prompt_frame` and `error_frame` produce across every
-/// `turn::Event`, and `ui/tests/parse_frame.rs` proves a client has an
-/// answer for each. Adding a frame to the core fails the first; shipping a
-/// client that ignores it fails the second.
-///
-/// These are **not** the [`Notification`] method names — see that type's docs.
+/// Lives here so producer and consumer are checked against one list:
+/// `pkgs/host/core/tests/protocol_events.rs` checks the core emits exactly
+/// these, and `ui/tests/parse_frame.rs` checks a client handles each (#81).
+/// Not the [`Notification`] method names.
 pub const SSE_FRAME_KINDS: [&str; 7] = [
     "delta",
     "done",
@@ -244,31 +163,15 @@ pub const SSE_FRAME_KINDS: [&str; 7] = [
 
 /// Something the core reports to a client, unprompted.
 ///
-/// Tagged like [`Command`], so a transport wraps both the same way — a
-/// notification is a JSON-RPC request with no `id`, the signal for
-/// "no reply expected".
+/// Tagged like [`Command`]; a transport sends it as a JSON-RPC request with no `id`.
 ///
-/// The first five mirror [`turn::Event`]. The rest are not
-/// events: `Ask` is the pending prompt an interceptor blocks a turn on,
-/// answered by [`Command::TurnAnswer`]; `Error` is a turn that failed or a
-/// command that could not be served; `SessionUpdated` reports a session whose
-/// transcript moved, so a client listing sessions need not poll.
+/// The first five mirror [`turn::Event`]. `Ask` is the pending prompt answered by
+/// [`Command::TurnAnswer`]; `Error` is a failed turn or unservable command;
+/// `SessionUpdated` saves a client from polling.
 ///
-/// # These are not the SSE event names
-///
-/// The SSE projection in `jk_host::serve` predates this contract and
-/// keeps its own names: `delta` for `text-delta`, `tool` for `tool-invoked`,
-/// and `prompt` for `ask`. `tool-result`, `warning`, `done` and `error` match.
-/// Do not "fix" either side to agree with the other — the projection is allowed
-/// its own spelling, and the compatibility test is what holds them together.
-///
-/// The `tool` frame used to be a strict subset of `ToolInvoked` — it carried
-/// only `id` and `name`, dropping the call's `arguments` — so a REST+SSE
-/// client could not render what stdio could. Fixed by #161: the frame now
-/// carries every field the notification does.
-///
-/// Those names are [`SSE_FRAME_KINDS`], so the paragraph above is prose beside
-/// the data rather than a second copy of it.
+/// The SSE projection keeps its own names: `delta` for `text-delta`, `tool` for
+/// `tool-invoked`, `prompt` for `ask`; the rest match (see [`SSE_FRAME_KINDS`]).
+/// Do not align either side; a compatibility test holds them together.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params")]
 pub enum Notification {
@@ -297,11 +200,8 @@ pub enum Notification {
         id: String,
         /// Result content.
         content: String,
-        /// Whether the call failed — a permission denial, a trap, an error the
-        /// tool itself reported, or no tool by that name. Until #162 nothing on
-        /// the wire said this; a client could only guess by matching the
-        /// sentences the core happens to write into `content`, which coupled a
-        /// client to wording it does not own.
+        /// Whether the call failed: a permission denial, a trap, a tool-reported
+        /// error, or no such tool.
         failed: bool,
     },
     /// `warning` — a non-fatal notice, e.g. a provider fallback.
@@ -322,9 +222,7 @@ pub enum Notification {
     /// [`Command::TurnAnswer`]; leaving it unanswered takes `default`.
     #[serde(rename = "ask")]
     Ask {
-        /// Which session is blocked. The SSE `prompt` frame carries this too:
-        /// the client answers over a separate request, so the answer has to say
-        /// what it is answering.
+        /// Which session is blocked; the answer is a separate request, so it must name it.
         session: String,
         /// The question to surface.
         question: String,
@@ -335,42 +233,26 @@ pub enum Notification {
     },
     /// `error` — a command this surface could not serve, or a turn that failed.
     ///
-    /// One notification for both, because the SSE `error` frame it has to stay
-    /// compatible with does not distinguish them either. **Slice 13b settled
-    /// how a transport uses it:** where there is an id to answer, the failure
-    /// is answered against it with a [`jsonrpc::Response::error`] and this
-    /// notification is not sent — a client waiting on an id has to be released,
-    /// and reporting the same failure twice invites a client to show it twice.
-    /// So over stdio a failed *turn* is the error response to its own
-    /// `session/message`. This notification is for a surface with no id to
-    /// answer, which is what SSE is.
+    /// Where there is an id to answer, a transport sends a
+    /// [`jsonrpc::Response::error`] instead and not this, so a failure is not
+    /// reported twice. This is for surfaces with no id, such as SSE.
     #[serde(rename = "error")]
     Error {
         /// What went wrong, as the user should see it.
         message: String,
     },
     /// `surface/contributions` — what every enabled extension contributes to
-    /// the user interface (`wit/client-surface.wit`).
-    ///
-    /// Sent **at connect**, so a client that just attached can render without
-    /// asking, and **again whenever the set changes** — an extension enabled,
-    /// disabled, or one whose `surface/invoke` reported a change. One
-    /// notification rather than two: a client needs the whole set on both
-    /// occasions, and a delta would be a second shape to get right for no gain.
-    ///
-    /// A client that ignores this runs turns exactly as before. Contributions
-    /// are additive, and no extension may assume one was rendered.
+    /// Sent at connect and again whenever the set changes. One notification, not
+    /// a delta, since a client needs the whole set both times. Clients may ignore it.
     #[serde(rename = "surface/contributions")]
     SurfaceContributions {
-        /// One entry per contributing extension, in load order. Empty is
-        /// normal: nothing contributes until something does.
+        /// One entry per contributing extension, in load order; may be empty.
         extensions: Vec<Contributions>,
     },
     /// `session/updated` — this session's transcript changed.
     #[serde(rename = "session/updated")]
     SessionUpdated {
-        /// Session id. Named for the field the commands use; the REST list
-        /// projection spells the same value `id`.
+        /// Session id; the REST list projection spells it `id`.
         session: String,
         /// First 80 characters of the session's first user message.
         preview: String,
@@ -396,25 +278,13 @@ impl Default for HelloResult {
 
 /// One message of a session's transcript, as [`Command::SessionGet`] returns it.
 ///
-/// # Why the read shape is declared here at all
-///
-/// It was not; see [#106](https://github.com/PromptPasture/jan-klod/issues/106).
-/// `session/fork` takes an event seq but `session/get` returned only
-/// `{role, content}` — so the command reading a session never said where in
-/// the log anything sat, and a client could fork only at a number with no way
-/// to obtain it. Commands are declared in this crate ahead of any transport,
-/// *because non-Rust clients generate from the schema*; their result was left
-/// as untyped JSON in `session::session_payload`, reaching neither schema nor
-/// generated clients.
+/// Declared here so non-Rust clients can generate it and learn the seq to fork at (#106).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptMessage {
-    /// The log position this message was projected from, and what
-    /// [`Command::SessionFork`] takes as `at_seq` — inclusive, so forking here
-    /// yields a session whose transcript ends with this message.
+    /// The log position this was projected from; what [`Command::SessionFork`]
+    /// takes as `at_seq`, inclusive.
     ///
-    /// **Sparse.** Events that project to no message — an ask, an answer, a
-    /// text delta — still consume a seq, so this is a position in the log and
-    /// not an index into the list.
+    /// Sparse: events that project to no message still consume a seq.
     pub seq: u64,
     /// `system`, `user`, `assistant` or `tool`.
     pub role: String,
@@ -434,19 +304,10 @@ pub struct SessionGetResult {
     pub messages: Vec<TranscriptMessage>,
 }
 
-// ─── Client surface ──────────────────────────────────────────────────────────
+// Wire half of `wit/client-surface.wit`, mirroring it deliberately.
 //
-// The wire half of `wit/client-surface.wit`: an extension declares what it
-// offers, the host collects the declarations, and this carries them to every
-// client. The shapes mirror the WIT rather than improving on it — two
-// vocabularies for one contract is how a guest author and a client author stop
-// agreeing.
-//
-// **Every string here is data.** A contributed `title` can carry whatever an
-// MCP server wrote in a tool description, so a renderer escapes it: no terminal
-// escape sequences, no markup, no length a layout cannot survive. The rule is
-// in the WIT doc and repeated here because a client author may never read the
-// WIT.
+// Every string here is data: a contributed `title` can carry arbitrary MCP text,
+// so a renderer must escape it (no terminal escapes, markup or unbounded length).
 
 /// One argument a contributed command takes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

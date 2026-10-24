@@ -1,13 +1,6 @@
-//! The ACP port, driven as an editor drives it.
-//!
-//! `core::acp`'s own tests cover the frame rules — the handshake, the ordering
-//! MUST, every refusal — without a runtime. What only this module can show is a
-//! prompt that runs a **real turn**, streams `session/update` notifications,
-//! and then answers with a stop reason.
-//!
-//! The frames are fed one at a time (not as a script) because the **agent**
-//! mints the session id: `session/new` must be read before `session/prompt`
-//! can name it.
+//! The ACP port driven as an editor drives it: real turns that stream
+//! `session/update` and end with a stop reason. Frames are fed one at a time
+//! because the agent mints the session id.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -61,10 +54,7 @@ impl Editor {
         }
     }
 
-    /// Send one frame and return the response it earned, if any.
-    ///
-    /// `NoAsker` — never answers a permission request, so every prompt takes
-    /// its default. Tests that *do* answer supply their own.
+    /// Sends one frame. `NoAsker` never answers permission requests, so prompts take their default.
     fn send(
         &mut self,
         agent: &mut jk_agent::AgentSession,
@@ -144,9 +134,7 @@ fn a_prompt_streams_an_update_and_ends_the_turn() {
     );
     assert!(answer.get("error").is_none(), "{answer}");
 
-    // The streamed half. Only `session/update` reaches the pipe during a turn,
-    // and it must carry the session it belongs to — an editor with two sessions
-    // open has no other way to route it.
+    // Updates must carry their session id; an editor with two sessions has no other way to route them.
     let updates = editor.notifications();
     assert!(!updates.is_empty(), "the turn streamed something");
     let chunk = updates
@@ -168,11 +156,7 @@ fn a_prompt_streams_an_update_and_ends_the_turn() {
     );
 }
 
-/// A prompt naming a session this connection never created is refused.
-///
-/// Worth its own test because the alternative — running a turn on an id the
-/// agent never minted — would silently create one, and then an editor's typo
-/// becomes a new conversation rather than an error.
+/// A prompt naming an unminted session is refused, not turned into a new conversation.
 #[test]
 fn a_prompt_for_an_unknown_session_is_refused() {
     let Some((_dir, mut agent)) = booted("unknown", "unused") else {
@@ -196,11 +180,7 @@ fn a_prompt_for_an_unknown_session_is_refused() {
     );
 }
 
-/// A prompt carrying no text is refused rather than running an empty turn.
-///
-/// `initialize` declares `image`, `audio` and `embeddedContext` all false, so a
-/// client sending only those was told not to — and an empty turn would burn a
-/// provider call to answer nothing.
+/// A prompt with no text is refused; `initialize` declared the other content types unsupported.
 #[test]
 fn a_prompt_with_no_text_content_is_refused() {
     let Some((_dir, mut agent)) = booted("empty", "unused") else {
@@ -226,15 +206,11 @@ fn a_prompt_with_no_text_content_is_refused() {
     );
 }
 
-// ---- The agent→client direction (#57 box 3) ----
-
 /// An editor that answers every permission request with `answer`, recording
 /// what it was asked.
 struct Answering {
     answer: String,
-    /// `RefCell` because `Asker::ask` takes `&self` — the streaming sink and
-    /// the permission driver both hold this during one turn, and Rust will not
-    /// lend it mutably twice.
+    /// `RefCell` because `Asker::ask` takes `&self`.
     asked: RefCell<Vec<String>>,
     /// What `cancelled()` reports, so a test can cancel a turn.
     cancel: bool,
@@ -341,9 +317,7 @@ extensions:
 
 /// An editor that grants permission gets the write.
 ///
-/// The assertion is the **file**, not turn continuation — "the editor was
-/// asked" only proves a question was posed. Only the file proves the answer
-/// was honoured.
+/// Asserts the **file**: being asked only proves a question was posed.
 #[test]
 fn an_editor_that_grants_permission_gets_the_write() {
     let Some((_dir, mut agent, target)) = booted_writing("grant") else {
@@ -383,11 +357,7 @@ fn an_editor_that_grants_permission_gets_the_write() {
     );
 }
 
-/// The same turn, refused: the editor is asked, says no, nothing written.
-///
-/// The pair proves the *answer* decides — not that the tool never ran. One
-/// test showing the file present and another absent (from the same script)
-/// proves this.
+/// The same turn, refused: the answer, not the tool, decides whether the write happens.
 #[test]
 fn an_editor_that_refuses_permission_prevents_the_write() {
     let Some((_dir, mut agent, target)) = booted_writing("refuse") else {
@@ -420,13 +390,7 @@ fn an_editor_that_refuses_permission_prevents_the_write() {
     );
 }
 
-// ---- Cancel, and the editor that vanishes (#57 box 4) ----
-
-/// A cancelled turn is **answered** `cancelled`, not left hanging.
-///
-/// The spec requires `cancelled` "even if the cancellation causes exceptions
-/// in underlying operations". An editor waiting on a reply that never comes
-/// is hung. The obligation is to answer with the reason, not `end_turn`.
+/// A cancelled turn is answered `cancelled`, not left hanging.
 #[test]
 fn a_cancelled_turn_is_answered_cancelled() {
     let Some((_dir, mut agent, target)) = booted_writing("cancel") else {
@@ -435,7 +399,6 @@ fn a_cancelled_turn_is_answered_cancelled() {
     let mut editor = Editor::new();
     let session = editor.opened(&mut agent);
 
-    // An editor that cancels: refuses permission *and* reports cancellation.
     let cancelling = Answering {
         answer: "no".to_owned(),
         asked: RefCell::new(Vec::new()),
@@ -467,10 +430,7 @@ fn a_cancelled_turn_is_answered_cancelled() {
     );
 }
 
-/// Uncancelled, it answers `end_turn` — so cancellation drives the result, not
-/// the refusal that accompanies it.
-///
-/// Without this, `stopReason: cancelled` could come from the refusal.
+/// Uncancelled, the same refusal ends the turn with `end_turn`, so `cancelled` must come from cancellation.
 #[test]
 fn a_refusal_without_a_cancel_still_ends_the_turn() {
     let Some((_dir, mut agent, _target)) = booted_writing("nocancel") else {

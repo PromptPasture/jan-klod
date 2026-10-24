@@ -1,16 +1,8 @@
-//! Default `select-tools` interceptor.
+//! Default `select-tools` interceptor: cuts the advertised tools to the ones this turn needs.
 //!
-//! Fills `pending-request.tools` from `host-config` (`tools` JSON array),
-//! then cuts it to the tools this turn looks like it needs (#219) —
-//! `max-tools`, `min-tools`, and everything the conversation names.
-//! Unbounded by default, so an operator who configures nothing keeps the
-//! whole fleet.
-//!
-//! Component-Model glue only; compiles for `wasm32`; empty on host. The
-//! rules live in [`rank`], which is neither.
+//! Unbounded by default. Component-Model glue only; the rules live in [`rank`].
 
-/// Ranking tool descriptions against what the user asked, pure and
-/// host-testable.
+/// Ranking of tool descriptions against the user's request.
 pub mod rank;
 
 #[cfg(target_arch = "wasm32")]
@@ -42,23 +34,15 @@ mod component {
 
     use crate::rank::{select, Cut, Doc};
 
-    /// `max-tools` when unset: no bound, so the fleet is advertised whole.
-    ///
-    /// Hiding a tool is lossy and unrecoverable — the model cannot ask for
-    /// one back (#217) — so an operator opts in, the way `execution` and
-    /// `persist` are opted into. The right number is a property of the fleet
-    /// and the model, which this code cannot see.
+    /// `max-tools` when unset: no bound. Hiding a tool is lossy and unrecoverable, so operators opt in.
     pub const DEFAULT_MAX_TOOLS: usize = 0;
-    /// `min-tools` when unset: what a bounded fleet still advertises when
-    /// the ranking is thin, so a bad match costs context rather than the
-    /// task.
+    /// `min-tools` when unset: the floor a bounded fleet still advertises.
     pub const DEFAULT_MIN_TOOLS: usize = 3;
 
     fn log(level: LogLevel, message: &str) {
         host_log::log(level, "interceptor-tool-selector", message, &[]);
     }
 
-    /// A numeric config key, or its default.
     fn number(key: &str, fallback: usize) -> usize {
         host_config::get(key)
             .ok()
@@ -66,7 +50,6 @@ mod component {
             .unwrap_or(fallback)
     }
 
-    /// The text of this request's messages whose role `wanted` accepts.
     fn joined(request: &PendingRequest, wanted: impl Fn(&Role) -> bool) -> String {
         request
             .messages
@@ -77,7 +60,7 @@ mod component {
             .join("\n")
     }
 
-    /// Advertised tool set from `tools` config key.
+    /// Tools from the `tools` config key; empty when absent or malformed.
     fn advertised_tools() -> Vec<ToolDefinition> {
         let Ok(raw) = host_config::get("tools") else {
             return Vec::new();
@@ -146,10 +129,7 @@ mod component {
                 .iter()
                 .map(|tool| Doc::new(&tool.name, &tool.description))
                 .collect();
-            // What the *user* asked ranks the fleet; the whole conversation
-            // decides what is in mid-use. A tool result quoting a filename
-            // should not make `tool-fs` look relevant to the next step, but
-            // an assistant turn calling it must keep it advertised.
+            // Only the user's text ranks the fleet; a tool named anywhere in the conversation stays.
             let asked = joined(&request, |role| matches!(role, Role::User));
             let conversation = joined(&request, |_| true);
             let keep = select(

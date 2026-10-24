@@ -1,34 +1,21 @@
 //! `tool-git` — **read-only** repository inspection through `host-process`.
 //!
-//! Exposes `git` tool with ops:
-//! - `status` → porcelain status + branch
-//! - `diff` → working or staged diff
-//! - `log` → one-line history
-//! - `show` → one commit
-//! - `branch` → local branches
-//!
-//! Closed op set prevents arbitrary command execution. Only git runs; only the
-//! five read-only ops are reachable. No `commit`, `checkout`, `reset`, `push`.
-//!
-//! Reading a repo is not side-effect-free: Git's config can run code (fsmonitor,
-//! hooksPath, diff/textconv drivers). Every invocation disables these paths (HARDENING)
-//! so untrusted repos stay safe. Argv construction is pure Rust (unit-tested);
-//! glue for wasm32 only.
+//! Only `status`, `diff`, `log`, `show` and `branch` are reachable; no write subcommand can be expressed.
+//! Each invocation disables repo-supplied code paths (fsmonitor, hooksPath, textconv drivers): repo config can run code.
 
-/// Largest `log` page. Past this the answer is not history, it is a data dump.
+/// Largest `log` page; past this the caller should narrow the query.
 const MAX_COUNT: u64 = 200;
 /// Default `log` page.
 const DEFAULT_COUNT: u64 = 20;
-/// Longest accepted `rev`/`path` argument — a bound on argv, not on taste.
+/// Longest accepted `rev` or `path`, bounding argv.
 const MAX_ARG_LEN: usize = 200;
 
-// Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
+// Only the wasm32 glue calls this module outside tests; the allow covers native builds.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod git {
     use crate::{DEFAULT_COUNT, MAX_ARG_LEN, MAX_COUNT};
 
-    /// Flags prepended to every invocation, disabling hooks that let a checkout run code.
-    /// Covers: fsmonitor, hooksPath, ext transports, pager, textconv/diff drivers.
+    /// Flags prepended to every invocation, disabling config that lets a repo run code.
     pub const HARDENING: [&str; 8] = [
         "--no-pager",
         "-c",
@@ -115,14 +102,7 @@ mod git {
         Ok(())
     }
 
-    /// Reject arguments that git would read as options, plus anything outside the
-    /// characters revisions and paths are actually made of.
-    ///
-    /// A leading `-` is the whole risk: `rev` and `path` are the only
-    /// caller-supplied argv entries, and `--upload-pack=…`-style options are how
-    /// a value becomes a command. The charset check also excludes shell
-    /// metacharacters, defence-in-depth even though `host-process` never
-    /// involves a shell.
+    /// Rejects a leading `-` (git would read it as an option) and characters revisions do not use.
     fn validate(value: &str, what: &str) -> Result<String, String> {
         if value.is_empty() || value.len() > MAX_ARG_LEN {
             return Err(format!("{what} must be 1..={MAX_ARG_LEN} characters"));
@@ -142,10 +122,7 @@ mod git {
     }
 
     /// Format a finished run for the model.
-    ///
-    /// A non-zero exit is information (not a repository, unknown revision), so
-    /// it comes back as a readable result rather than an opaque tool error the
-    /// model cannot act on.
+    /// A non-zero exit comes back as a readable result, not a tool error the model cannot act on.
     pub fn render(code: i32, stdout: &str, stderr: &str) -> String {
         let body = if stdout.trim().is_empty() && code == 0 {
             "(no output)".to_string()
@@ -459,8 +436,7 @@ mod component {
                 count: value.get("count").and_then(serde_json::Value::as_u64),
             };
 
-            // A refused argument is a recoverable, self-correctable answer — the
-            // model is told what is wrong, not just that something was.
+            // Refusals are results, not tool errors, so the model can correct the argument.
             let args = match git::argv(&request) {
                 Ok(args) => args,
                 Err(message) => return Ok(format!("REFUSED: {message}")),

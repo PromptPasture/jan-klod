@@ -1,13 +1,6 @@
-//! `ext-search` and `ext-install <name>` as the *model* reaches them (#218).
-//!
-//! `ext_registry.rs` covers the same registry through `ext_index`, which is
-//! the operator's path (`jan-klod-gateway ext search` / `ext install`).
-//! These cover the host-implemented tools over it: what a model is shown,
-//! and what it is refused.
-//!
-//! No socket is opened. The index is a local path — which is not a
-//! test-only shortcut but what an air-gapped operator with a mirrored index
-//! uses — and the component is served by a canned client.
+//! `ext-search` and `ext-install <name>` as the model reaches them (#218). The
+//! operator path is in `ext_registry.rs`. Uses a local index and a canned client,
+//! so no socket is opened.
 
 use std::fmt::Write as _;
 
@@ -75,8 +68,7 @@ fn fixture(tag: &str) -> Option<(Scratch, NativeTools)> {
     Some((scratch, tools))
 }
 
-/// What a model is shown: the capability line, and whether anything vouches
-/// for the bytes.
+/// The model is shown the capability line and whether the entry is signed.
 #[test]
 fn search_shows_capabilities_and_whether_it_is_signed() {
     let Some((_scratch, mut tools)) = fixture("search") else {
@@ -100,7 +92,7 @@ fn search_shows_capabilities_and_whether_it_is_signed() {
     );
 }
 
-/// The acceptance: a name from the index installs, and lands for adoption.
+/// A name from the index installs and is queued for adoption.
 #[test]
 fn a_named_component_installs_and_is_queued_for_the_next_turn() {
     let Some((scratch, mut tools)) = fixture("install") else {
@@ -124,11 +116,7 @@ fn a_named_component_installs_and_is_queued_for_the_next_turn() {
     );
 }
 
-/// No reason, no install.
-///
-/// The prompt an operator answers is built from these arguments, so an
-/// absent reason is silently no reason — and they would never know one was
-/// expected. Enforced rather than encouraged for that reason.
+/// A missing `reason` is refused, since the operator's prompt is built from it.
 #[test]
 fn a_registry_install_without_a_reason_is_refused() {
     let Some((scratch, mut tools)) = fixture("reason") else {
@@ -149,12 +137,8 @@ fn a_registry_install_without_a_reason_is_refused() {
     );
 }
 
-/// A name the index does not list is refused, and says which index was
-/// searched.
-///
-/// "Not found" from an index that turned out to be the wrong one is a
-/// different problem from a name that does not exist, and the model cannot
-/// see the difference unless the refusal says.
+/// An unlisted name is refused, and the refusal names the index searched, so a
+/// wrong index is not mistaken for a missing name.
 #[test]
 fn a_name_the_index_does_not_list_is_refused() {
     let Some((scratch, mut tools)) = fixture("unknown") else {

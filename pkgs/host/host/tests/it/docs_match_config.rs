@@ -1,17 +1,11 @@
-//! Docs can drift from the shipped config with no compiler to catch it. These
-//! tests read the shipped config and the docs and verify they agree.
-//!
-//! No guests staged needed: they only compare files in the repository.
+//! Docs can drift from the shipped config with no compiler to catch it; these tests compare the two.
+//! Needs no staged guests: it only reads repository files.
 
 use std::collections::BTreeSet;
 
 use crate::common;
 
-/// Every config this repository ships: the root one, and one per distribution.
-///
-/// Returned as `(label, contents)` so a failure names which config is wrong.
-/// Distributions are read from disk, so a fourth one is covered the day it is
-/// added rather than when someone remembers this file exists.
+/// Every shipped config (root and per distribution) as `(label, contents)`, so a failure names the config.
 fn shipped_configs() -> Vec<(String, String)> {
     let root = common::repo_root();
     let mut out = vec![(
@@ -26,7 +20,6 @@ fn shipped_configs() -> Vec<(String, String)> {
         .filter(|e| e.path().join("config.yaml").is_file())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    // Sorted so a failure reads the same way twice.
     names.sort();
     for name in names {
         let path = dists.join(&name).join("config.yaml");
@@ -130,11 +123,7 @@ fn assert_names_a_required_key(doc: &str) {
         !exported.is_empty(),
         "{doc} tells the reader to export something (it is the getting-started path)"
     );
-    // **Per config, not pooled.** Pooling the keys would let this page name one
-    // provider's variable, pass, and still strand everyone who installed a
-    // distribution needing a different one — green exactly when the page had
-    // become wrong for a third of readers (#114, and #63's third Acceptance
-    // line asks for "all three configs").
+    // Checked per config, not pooled: pooling would let one provider's key satisfy every config (#114, #63).
     for (label, config) in shipped_configs() {
         let required = required_key_vars_in(&config);
         if required.is_empty() {
@@ -169,9 +158,7 @@ fn the_installer_names_the_key_the_shipped_config_needs() {
     assert_names_a_required_key("scripts/install.sh");
 }
 
-/// The asset name the installer builds must be one the release workflow
-/// publishes. `aarch64` (Linux) vs `arm64` (macOS) is easy to normalize wrong and
-/// silently 404 for Apple Silicon users — compared as sets to catch that.
+/// The installer's arch names must match what the release publishes; `aarch64` vs `arm64` is an easy 404.
 #[test]
 fn the_installer_asks_for_arch_names_the_release_actually_builds() {
     let workflow =
@@ -198,14 +185,7 @@ fn the_installer_asks_for_arch_names_the_release_actually_builds() {
     }
 }
 
-/// The distributions the installer offers, the release builds, and the
-/// repository defines are one set — checked, not trusted.
-///
-/// Three places name them and none can see the others:
-/// `scripts/distributions/` (definitions), `scripts/install.sh` (request),
-/// `.github/workflows/release.yml` (published). A disagreement is a **404 at the
-/// user** — the installer asking for an archive no job built. Compared as sets
-/// so the failure names which side is missing what.
+/// Distributions defined, offered by the installer, and built by the release must be one set; a mismatch is a 404 for the user.
 #[test]
 fn the_installer_offers_the_distributions_the_release_builds() {
     let root = common::repo_root();
@@ -260,11 +240,7 @@ fn the_installer_offers_the_distributions_the_release_builds() {
     );
 }
 
-/// Every key in the shipped config must have code that reads it.
-///
-/// Manual audits have missed dead blocks and unwired categories before. This
-/// enumerates known-consumed keys as a whitelist — adding a category or key now
-/// fails until someone wires it or deletes it.
+/// Every key in the shipped config must be read by code. The whitelist makes a new key fail until it is wired or removed.
 #[test]
 fn every_config_key_is_one_the_runtime_reads() {
     // `extensions.<category>` values the runtime instantiates.
@@ -272,9 +248,7 @@ fn every_config_key_is_one_the_runtime_reads() {
     //   interceptor — build_agent, pass 2
     //   registry    — build_agent, pass 1 (skills / mcp)
     //   tool        — build_agent, pass 1
-    // The runtime's own list, not a copy of it: this was the only
-    // enumeration in the tree until #222, and a component could be filed
-    // under a category nothing dispatches because nothing built against it.
+    // The runtime's own list, not a copy (#222: a category nothing dispatches once slipped through).
     const CONSUMED_CATEGORIES: [&str; 4] = jk_wasm::CATEGORIES;
     // Top-level keys, and what reads each.
     //   extensions — Config::from_path
@@ -319,8 +293,7 @@ fn every_config_key_is_one_the_runtime_reads() {
             continue;
         }
         let indent = line.len() - line.trim_start().len();
-        // `key:` and `key: value` both count — matching only bare `key:` would
-        // miss scalars like `workspace: /path`.
+        // Matches `key:` and `key: value`; bare-key matching would miss scalars.
         let Some((key, _)) = line.trim().split_once(':') else {
             continue;
         };
@@ -367,11 +340,7 @@ fn every_config_key_is_one_the_runtime_reads() {
     }
 }
 
-/// No test may skip except through the shared policy.
-///
-/// A skipped test reports as passing, which is fine when `JK_REQUIRE_GUESTS`
-/// can turn the skip into a failure, and corrosive otherwise. Enforced
-/// mechanically.
+/// No test may skip except through the shared policy, so `JK_REQUIRE_GUESTS` can turn skips into failures.
 #[test]
 fn every_test_that_skips_does_so_through_the_shared_policy() {
     let tests = common::repo_root().join("pkgs/host/host/tests");
@@ -414,12 +383,10 @@ fn every_test_that_skips_does_so_through_the_shared_policy() {
     );
 }
 
-/// The parser has to actually distinguish enabled from disabled, or the checks
-/// above pass for the wrong reason.
+/// The parser must distinguish enabled from disabled, or the checks above pass for the wrong reason.
 #[test]
 fn only_enabled_providers_count_as_required() {
-    // The root config specifically: it is the one with a disabled provider in
-    // it, which is what makes this test able to tell the two apart.
+    // The root config has a disabled provider, which lets this tell the two apart.
     let root = std::fs::read_to_string(common::repo_root().join("config.yaml"))
         .expect("the shipped config.yaml is readable");
     let required = required_key_vars_in(&root);
@@ -437,19 +404,14 @@ fn only_enabled_providers_count_as_required() {
     );
 }
 
-/// Every test the security model cites exists, and has that name.
-///
-/// `docs/concepts/security-model.md` ends each row with a test citation. A broken
-/// citation reads as assurance and delivers none, so renaming a test breaks
-/// this until the page is updated.
+/// Every test cited by `docs/concepts/security-model.md` exists under that name. A renamed test breaks this until the page is updated.
 #[test]
 fn the_security_model_cites_tests_that_exist() {
     let root = common::repo_root();
     let page = root.join("docs/concepts/security-model.md");
     let text = std::fs::read_to_string(&page).expect("the security model page is readable");
 
-    // Citations are `<path>::<test name>`; a second test on the same file may
-    // appear as a bare `::<name>`, which must inherit the previous path.
+    // A bare `::<name>` citation inherits the previous path.
     let mut checked = 0;
     let mut last_path: Option<String> = None;
     for token in text.split('`') {
@@ -471,9 +433,7 @@ fn the_security_model_cites_tests_that_exist() {
             continue;
         };
         let path = path.as_str();
-        // Paths are relative to a workspace root; try each, then the repository
-        // root itself. The last is what lets a third workspace be cited without
-        // a fourth entry here every time one is added.
+        // Relative to a workspace root, falling back to the repository root.
         let candidates = [
             root.join("pkgs/host").join(path),
             root.join("pkgs/extensions").join(path),
@@ -486,8 +446,7 @@ fn the_security_model_cites_tests_that_exist() {
             )
         });
         let source = std::fs::read_to_string(found).expect("the cited file is readable");
-        // `::a_name` for a second citation on one path also parses; take the
-        // leading identifier.
+        // Take the leading identifier, so `::a_name` suffixes parse.
         let name = name
             .split(|c: char| !(c.is_alphanumeric() || c == '_'))
             .next()
@@ -507,16 +466,8 @@ fn the_security_model_cites_tests_that_exist() {
     );
 }
 
-/// Every wire command in `jk_protocol::COMMAND_METHODS` has a row in the
-/// **Commands** table in `docs/concepts/contracts.md`.
-///
-/// That table is hand-maintained prose — exactly how `session/fork` went missing
-/// from it while the schema and wire tests both had all nine commands.
-/// `pkgs/host/protocol/tests/wire.rs` already checks it both ways against the exhaustive
-/// `match` in `expected_method`, so it is as authoritative as the `Command` enum,
-/// and a command missing from it fails there before this test ever runs. Modelled on
-/// `the_security_model_cites_tests_that_exist`: both defend a table ending in a
-/// citation no compiler checks.
+/// Every wire command in `jk_protocol::COMMAND_METHODS` has a row in the Commands table in `docs/concepts/contracts.md`.
+/// `pkgs/host/protocol/tests/wire.rs` checks the code side; this guards the hand-written table.
 #[test]
 fn the_commands_table_lists_every_wire_command() {
     let root = common::repo_root();
@@ -538,18 +489,11 @@ fn the_commands_table_lists_every_wire_command() {
     );
 }
 
-/// Every instance the shipped config declares resolves to a component that
-/// exists. An *unenabled* block's component reference is otherwise untested, so
-/// stale references can sit unnoticed until someone flips `enabled: true`.
-///
-/// Uses the real parser (`jk_config`), not hand-rolled YAML — a previous
-/// scan matching only explicit `type:` lines missed every block relying on the
-/// default-name derivation.
+/// Every declared instance, including unenabled ones, resolves to an existing component. Uses the real parser, not hand-rolled YAML.
 #[test]
 fn every_declared_instance_resolves_to_a_component() {
     let root = common::repo_root();
-    // Enabled instances expand their `${VAR}`, so parsing needs the env var set;
-    // its value is irrelevant here.
+    // Parsing expands enabled instances' `${VAR}`; the value does not matter.
     std::env::set_var("OPENAI_API_KEY", "placeholder-for-parsing");
     let config =
         jk_config::Config::from_path(root.join("config.yaml")).expect("the shipped config parses");
@@ -575,10 +519,7 @@ fn every_declared_instance_resolves_to_a_component() {
     );
 }
 
-/// Every page these checks cover: the wiki (`docs/`, `docs/concepts`,
-/// `docs/guides`) and each package's own `docs/` — package-specific pages live
-/// beside their package since Phase 32, and moving a page must not move it out
-/// of the check. The changelog records history and is excluded.
+/// Doc pages covered by these checks: `docs/` and each package's `docs/`, excluding the changelog.
 fn doc_pages(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut dirs: Vec<std::path::PathBuf> = ["docs", "docs/concepts", "docs/guides"]
         .iter()
@@ -608,11 +549,7 @@ fn doc_pages(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     pages
 }
 
-/// Every command the docs tell a user to run exists. A missing command sends a
-/// reader into the boot plan with no way to check first.
-///
-/// The changelog is excluded: it records history, including commands later
-/// renamed or removed, and rewriting it to satisfy this check would be wrong.
+/// Every command the docs tell a user to run exists. The changelog is excluded because it records history.
 #[test]
 fn every_documented_command_exists() {
     let root = common::repo_root();
@@ -676,11 +613,7 @@ fn every_documented_command_exists() {
     );
 }
 
-/// No shell block tells a reader to run `serve`/`verify`/`telegram` with
-/// positional paths. Naming `config.yaml`/`ext` explicitly overrides the
-/// resolution that finds them beside the installed binary, so a command that
-/// works in a checkout fails for everyone who installed it. Only fenced shell
-/// blocks are checked.
+/// No shell block passes positional paths to `serve`/`verify`/`telegram`; that overrides the lookup beside the installed binary.
 #[test]
 fn no_shell_block_recommends_positional_serve_paths() {
     let root = common::repo_root();
@@ -706,8 +639,7 @@ fn no_shell_block_recommends_positional_serve_paths() {
             if !in_shell {
                 continue;
             }
-            // Every subcommand that accepts `[config] [ext]` positionally, not just
-            // `serve` — the same footgun applies to all of them.
+            // Every subcommand that takes `[config] [ext]` positionally has the same footgun.
             for sub in ["serve", "verify", "telegram"] {
                 let Some(rest) = trimmed.split_once(&format!("jan-klod-gateway {sub}")) else {
                     continue;
@@ -726,14 +658,7 @@ fn no_shell_block_recommends_positional_serve_paths() {
     }
 }
 
-/// Where the release publishes the registry, against where `config.yaml` says
-/// it is (#139).
-///
-/// `release.yml` generates the index with `REGISTRY_URL=<site>/ext` and copies it
-/// to `_site/index.json` with components at `_site/ext/`. Only a comment tied
-/// those three to `registry.url` — a prose rule gets out of step in the one file
-/// nobody re-reads. An index at the wrong path or naming broken URLs is a broken
-/// registry, yet every test in this repository would otherwise pass.
+/// The release publishes the registry where `config.yaml`'s `registry.url` says it is (#139).
 #[test]
 fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
     let root = common::repo_root();
@@ -741,7 +666,7 @@ fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
     let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
         .expect("release.yml is readable");
 
-    // `registry.url` names the index itself; its parent is the site root.
+    // `registry.url` names the index; its parent is the site root.
     let url = config
         .lines()
         .map(str::trim)
@@ -783,14 +708,7 @@ fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
     );
 }
 
-/// Every tool pin in a workflow matches `versions.mk` (#131, #166).
-///
-/// Comments across workflows say "keep in step". None were checked — exactly the
-/// rule broken in files nobody re-read: #166 found `release.yml` installing `wkg`
-/// unpinned while every other leg installed v0.15.1 that produced `wit/wkg.lock`.
-/// Checked in the direction that goes wrong: a workflow naming a **different**
-/// version. A tool a workflow omits is not a failure — `govulncheck` via `make`
-/// has no twin to keep.
+/// Every tool pin in a workflow matches `versions.mk` (#131, #166). Only a different version fails; an omitted tool does not.
 #[test]
 fn every_tool_a_workflow_pins_matches_versions_mk() {
     let root = common::repo_root();
@@ -805,8 +723,7 @@ fn every_tool_a_workflow_pins_matches_versions_mk() {
             .to_owned()
     };
 
-    // How each pin is spelled where a workflow installs it. `wkg` ships as a
-    // bare binary from a GitHub release, so it is a `tag:` rather than `tool@`.
+    // `wkg` ships as a bare binary, so it is matched by `tag:` rather than `tool@`.
     let expected = [
         ("cargo-deny@", pin("CARGO_DENY_VERSION")),
         ("cargo-audit@", pin("CARGO_AUDIT_VERSION")),
@@ -823,8 +740,7 @@ fn every_tool_a_workflow_pins_matches_versions_mk() {
             continue;
         };
         for (line_no, line) in text.lines().enumerate() {
-            // A comment explaining a pin may legitimately name an old version as
-            // history. Only what is actually installed counts.
+            // Comments may name old versions as history; only installed versions count.
             if line.trim_start().starts_with('#') {
                 continue;
             }

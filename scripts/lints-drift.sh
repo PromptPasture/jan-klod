@@ -1,13 +1,7 @@
 #!/bin/sh
-# Drift check for the [workspace.lints] blocks.
-#
-# Cargo cannot inherit lints across workspaces, and this repository has two
-# (the host, the guests), each declaring the same policy. Nothing
-# else keeps them equal, so a lint tightened in one and forgotten in the others
-# makes "one policy for every package" a claim the tree does not back.
-#
-# Finds the manifests by content, not by path, so it survives package moves.
-# Compares the declared lints only: comments and alignment may differ per file.
+# Drift check for the [workspace.lints] blocks. Cargo cannot inherit lints across
+# workspaces, so each workspace declares the same policy and this keeps them equal.
+# Manifests are found by content, not path. Only lint entries are compared.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

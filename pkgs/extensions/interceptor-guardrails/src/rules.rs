@@ -1,24 +1,6 @@
-//! Guardrail rules — pure Rust, unit-tested natively.
-//!
-//! A rule is **data**: a pattern, where it applies, and what to do when it
-//! matches. Nothing here executes anything the operator wrote; the only thing
-//! read from `config.yaml` is text, and the only thing done with it is matching.
-//!
-//! ## Why the engine matters
-//!
-//! Matching runs on the path of every tool call, so a pattern that can be made
-//! to backtrack is a denial-of-service surface sitting on the hot path — the
-//! opposite of the point. The `regex` crate matches in linear time and cannot
-//! backtrack, which is what rules out lookaround and backreferences. That limit
-//! is the guarantee, not a shortcoming to work around.
-//!
-//! ## A malformed rule is an error, not an absence
-//!
-//! An unparseable pattern makes the whole rule set invalid. The component then
-//! returns `interceptor-error::internal`, and host policy takes it from there:
-//! **fail closed at `tool-call`**, log and proceed elsewhere (`wit/interceptor.wit`).
-//! Skipping the bad rule and carrying on would turn an operator's typo into a
-//! silently missing guardrail, which is the failure nobody notices.
+//! Guardrail rules: pure Rust, unit-tested natively. Rules are data, never code.
+//! Matching runs on every tool call, so the `regex` crate is used: linear time, no backtracking, hence no lookaround or backreferences.
+//! A malformed rule invalidates the whole set (never skipped), so a typo cannot silently drop a guardrail.
 
 use regex::Regex;
 
@@ -32,9 +14,7 @@ pub enum Act {
 }
 
 impl Act {
-    /// Parse the `decision` key. Absent means [`Act::Block`]: a rule an operator
-    /// bothered to write is a rule they want enforced, and a typo'd decision
-    /// must not quietly downgrade to the weaker one.
+    /// Parse `decision`. Absent means [`Act::Block`]; a typo is an error, never a downgrade.
     fn parse(raw: Option<&str>) -> Result<Self, RuleError> {
         match raw {
             None | Some("block") => Ok(Self::Block),
@@ -104,9 +84,7 @@ pub enum TextAct {
 }
 
 impl TextAct {
-    /// Parse the `decision` key of a text rule. Absent means [`TextAct::Replace`]
-    /// — a redaction list is for redacting, and the loud option should be the
-    /// one an operator has to write down.
+    /// Parse a text rule's `decision`. Absent means [`TextAct::Replace`]; blocking must be written down.
     fn parse(raw: Option<&str>) -> Result<Self, RuleError> {
         match raw {
             None | Some("replace") => Ok(Self::Replace),
@@ -119,8 +97,7 @@ impl TextAct {
 /// What the operator's replacement text is when they name none.
 const DEFAULT_REPLACEMENT: &str = "[redacted]";
 
-/// One rule over text — model output, the final answer, or a message on its
-/// way to the provider.
+/// One rule over text: model output, the final answer, or a message to the provider.
 #[derive(Debug)]
 pub struct TextRule {
     pattern: Regex,
@@ -140,8 +117,7 @@ pub enum TextVerdict {
     Blocked(String),
 }
 
-/// The configured rule set. Empty is the normal state: a guardrail nobody
-/// configured must not change what the loop does.
+/// The configured rule set. Empty (the default) changes nothing.
 #[derive(Debug, Default)]
 pub struct Rules {
     deny_tool_arguments: Vec<DenyRule>,
@@ -149,8 +125,7 @@ pub struct Rules {
 }
 
 impl Rules {
-    /// Build the rule set from this extension's `config.yaml` section, as the
-    /// JSON object `host-config::all` returns.
+    /// Build from this extension's `config.yaml` section (the JSON object `host-config::all` returns).
     ///
     /// Recognised keys, both optional:
     ///
@@ -170,8 +145,7 @@ impl Rules {
     /// A section that is absent, null, or carries no rules yields an empty set.
     ///
     /// # Errors
-    /// Returns the first malformed rule. One bad rule invalidates the set —
-    /// see the module doc for why.
+    /// Returns the first malformed rule; one bad rule invalidates the whole set.
     pub fn from_config(section: &serde_json::Value) -> Result<Self, RuleError> {
         Ok(Self {
             deny_tool_arguments: Self::tool_rules(section)?,
@@ -225,10 +199,7 @@ impl Rules {
         Ok(rules)
     }
 
-    /// The first rule that fires against this call's arguments, if any.
-    ///
-    /// First rather than most severe: rules are ordered by the operator, and an
-    /// order they wrote is more predictable than a precedence we invent.
+    /// The first rule that fires against this call's arguments, in operator order (not most severe).
     #[must_use]
     pub fn review_tool_call(&self, tool: &str, arguments: &str) -> Option<Verdict> {
         self.deny_tool_arguments
@@ -245,10 +216,8 @@ impl Rules {
 
     /// Apply the `redact` rules to one piece of text.
     ///
-    /// `None` means no rule touched it, which is the answer that leaves the
-    /// turn exactly as it was. A blocking rule wins over redaction and is
-    /// checked first: once an operator has said this text may not pass, a
-    /// partial rewrite of it is not the outcome they asked for.
+    /// `None` when no rule touched the text.
+    /// A blocking rule is checked first and wins: a partial rewrite of blocked text is not the outcome asked for.
     #[must_use]
     pub fn review_text(&self, text: &str) -> Option<TextVerdict> {
         if let Some(refusal) = self
@@ -273,8 +242,7 @@ impl Rules {
     }
 }
 
-/// The `pattern` key of a rule, compiled. Returns both so the caller can use
-/// the source text in a default reason.
+/// Compile a rule's `pattern`; also returns the source text for the default reason.
 fn compile(rule: &serde_json::Value) -> Result<(&str, Regex), RuleError> {
     let pattern = rule
         .get("pattern")
@@ -284,8 +252,7 @@ fn compile(rule: &serde_json::Value) -> Result<(&str, Regex), RuleError> {
     Ok((pattern, compiled))
 }
 
-/// The rule's `reason`, or one naming the pattern — so a rule written without
-/// a reason still tells the user what fired.
+/// The rule's `reason`, or a default naming the pattern.
 fn reason_of(rule: &serde_json::Value, pattern: &str) -> String {
     rule.get("reason")
         .and_then(serde_json::Value::as_str)
@@ -331,8 +298,7 @@ mod tests {
         assert_eq!(verdict.reason, "recursive delete");
     }
 
-    /// A rule naming a tool must not fire for a different one — otherwise
-    /// scoping a rule to `shell` would quietly gate every tool in the fleet.
+    /// A rule scoped to one tool must not gate other tools.
     #[test]
     fn a_rule_scoped_to_one_tool_ignores_the_others() {
         let rules = Rules::from_config(&config(
@@ -355,8 +321,7 @@ mod tests {
         assert_eq!(verdict.act, Act::Ask);
     }
 
-    /// The default reason names the pattern, so a rule written without one
-    /// still tells the user what fired rather than refusing anonymously.
+    /// A rule without a reason still names its pattern.
     #[test]
     fn a_rule_without_a_reason_still_explains_itself() {
         let rules = Rules::from_config(&config(r#"{"deny-tool-arguments":[{"pattern":"token"}]}"#))
@@ -438,8 +403,7 @@ mod tests {
         assert_eq!(text, "A met B");
     }
 
-    /// Once an operator has said this text may not pass, handing back a
-    /// partially rewritten version of it is not what they asked for.
+    /// A blocking rule yields no partial rewrite.
     #[test]
     fn a_blocking_rule_wins_over_redaction_whatever_the_order() {
         let both = r#"{"redact":[{"pattern":"name","with":"X"},
@@ -469,8 +433,7 @@ mod tests {
         assert!(rules.review_text("secret").is_none());
     }
 
-    /// Backreferences are the other thing the engine's linear-time guarantee
-    /// costs, and the README says so — so the claim gets a test.
+    /// Backreferences are rejected, as the README promises.
     #[test]
     fn a_backreference_is_refused_like_lookaround() {
         let error = Rules::from_config(&config(r#"{"redact":[{"pattern":"(a)\\1"}]}"#))
@@ -478,8 +441,7 @@ mod tests {
         assert!(matches!(error, RuleError::Pattern(_)), "{error:?}");
     }
 
-    /// Case-insensitive matching via an inline flag is the one piece of syntax
-    /// the README promises by name.
+    /// Inline `(?i)` works, as the README promises.
     #[test]
     fn an_inline_flag_works() {
         let rules =
@@ -487,8 +449,7 @@ mod tests {
         assert!(rules.review_text("SECRET").is_some());
     }
 
-    /// Lookaround is not supported by the engine, and a pattern that uses it is
-    /// a configuration error rather than a rule that silently never fires.
+    /// Lookaround is a configuration error, not a rule that silently never fires.
     #[test]
     fn lookaround_is_refused_by_the_engine_not_ignored() {
         let error = Rules::from_config(&config(

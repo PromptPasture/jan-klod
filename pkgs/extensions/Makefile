@@ -1,57 +1,36 @@
-# Builds the first-party guest extensions to Component-Model components and stages
-# the Rust ones in <repo>/ext. Works standalone (`make -C pkgs/extensions ...`) or
-# via the root Makefile. Repo-root artifacts (wit/, ext/) resolve against ROOT so
-# the launch directory does not matter.
-#
-# The Rust guests share one Cargo workspace (this directory's Cargo.toml), so all
-# builds/tests below run with `-p <guest>` from here rather than `cd`-ing into
-# each guest — the workspace target dir and Cargo.lock are shared, not per-guest.
+# Builds the guest components and stages the Rust ones in <repo>/ext. Runs standalone or via the root Makefile.
+# Rust guests share one Cargo workspace and Cargo.lock: build them with `-p <guest>` from here.
 ROOT := $(abspath $(CURDIR)/../..)
 EXT_DIR := $(ROOT)/ext
 WIT_DIR := $(ROOT)/wit
 
-# Pinned tool versions, shared with the root Makefile, which includes the same
-# file. Via $(ROOT) rather than a relative path so `make -f pkgs/extensions/...`
-# from elsewhere resolves it too — CI invokes this makefile directly.
+# Pinned tool versions. Included via $(ROOT) because CI invokes this makefile directly.
 include $(ROOT)/versions.mk
 
-# Rust guests, by directory name (= staged ext/<name>.wasm). Add a guest here and
-# it gets `make <name>` + a slot in `all`/`clean` for free.
-# The cargo artifact swaps '-' for '_' (e.g. tool-fs -> tool_fs.wasm).
+# Rust guests by directory name, staged as ext/<name>.wasm. Adding one here gives it `make <name>`
+# and a slot in all/clean. Cargo artifacts swap '-' for '_' (tool-fs -> tool_fs.wasm).
 GUESTS := host-secrets-probe interceptor-context interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-persona interceptor-principal-probe interceptor-system interceptor-task-router interceptor-tool-selector provider-anthropic provider-openai registry-mcp registry-skills tool-ask-probe tool-edit tool-escape-probe tool-fetch tool-find tool-fs tool-git tool-hello tool-memory tool-plan tool-proc tool-proc-probe tool-shell tool-web-search
 
-# Shared cargo-deny policy (repo root) — the same file the host workspace uses.
+# Repo-root deny.toml, shared with the host workspace.
 DENY_CONFIG := $(ROOT)/deny.toml
 
-# Go modules under pkgs/extensions, discovered by mask (currently only the Slice 1a
-# canary). Globbed so a new Go guest is gated without editing this Makefile.
+# Go modules: any */go.mod, so a new Go guest is gated without editing this file.
 GO_MODULES := $(wildcard */go.mod)
 
-# Shared pure-Rust libraries: workspace members that are NOT components, so they
-# are tested but never built to wasm or staged in ext/.
+# Pure-Rust libraries: tested, never built to wasm or staged.
 LIBS := guest-fs
 
-# Guests with native (host-target) unit tests. Their WIT/component code is gated
-# behind `#[cfg(target_arch = "wasm32")]`, so a host `cargo test` compiles only
-# the pure logic modules (e.g. the intent router) + their `#[cfg(test)]` tests —
-# no wasm target required. Add a guest here once it carries such tests.
+# Guests with host-target unit tests. Their wasm32 glue is cfg-gated, so a native `cargo test`
+# covers only the pure logic. Add a guest here once it has such tests.
 TESTABLE_GUESTS := interceptor-context interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-system interceptor-task-router interceptor-tool-selector test-interceptor-persona tool-edit tool-fetch tool-find tool-fs tool-git tool-memory tool-plan tool-shell tool-web-search
 
 .PHONY: all stage manifests clean test clippy audit deny go-supply-chain spike-deps spike-guest ts-guest py-guest $(GUESTS)
 
-# Build every Rust guest in one cargo invocation, not 13 serial `make` recipes —
-# cargo's own scheduler compiles independent guests in parallel across cores. The
-# polyglot TinyGo spike stays opt-in: `make spike-guest`.
-#
-# `ts-guest` is here rather than opt-in because it skips itself when `jco` is
-# absent, which is every machine that has not asked for it. On one that has,
-# the gate then runs a turn through it — a polyglot claim nothing exercises is
-# the failure #130 named, and opting in should mean "and it is tested", not
-# "and there is a target you could run".
+# One cargo invocation for all Rust guests, so cargo parallelises them. The TinyGo spike stays opt-in.
+# ts-guest is not opt-in: it skips without jco, so opting in would leave it untested (#130).
 all: manifests ts-guest py-guest
 
-# Staged components, then their manifests. `manifests` depends on this same
-# recipe's output, so it is ordered after it rather than beside it.
+# Staged components, then manifests, which depend on this recipe's output.
 stage:
 	cargo build --release --target wasm32-wasip2 $(addprefix -p ,$(GUESTS))
 	mkdir -p $(EXT_DIR)
@@ -59,20 +38,13 @@ stage:
 		cp target/wasm32-wasip2/release/$$(echo $$g | tr - _).wasm $(EXT_DIR)/$$g.wasm; \
 	done
 
-# One manifest per staged component, declaring what it needs.
-#
-# Generated, not committed, and `ext/` is why: `git ls-files ext/` is empty and
-# `ext/*.wasm` is gitignored, so the directory is build output. A committed
-# manifest there would describe a component the repository does not contain —
-# after a bare clone it would be a declaration about a missing file. So it is
-# built beside the thing it describes and removed by `clean` with it.
+# Generated, not committed: ext/ is gitignored build output, and a committed manifest would describe
+# a component the repo does not contain. Built beside the component; `clean` removes both.
 manifests: stage
 	sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(ROOT)/wit $(GUESTS)
 	sh $(ROOT)/scripts/manifests-verify.sh $(EXT_DIR) $(GUESTS)
 
-# Run the guests' native unit tests (host target, no wasm). Skips guests without
-# host-testable modules by only iterating TESTABLE_GUESTS; LIBS are pure Rust and
-# always testable.
+# Native unit tests (host target, no wasm). Only LIBS and TESTABLE_GUESTS are iterated.
 test:
 	@for g in $(LIBS) $(TESTABLE_GUESTS); do echo "== test $$g =="; cargo test -p $$g || exit 1; done
 	@echo "== manifest guards =="
@@ -80,31 +52,17 @@ test:
 	@echo "== ext-new template =="
 	sh $(ROOT)/scripts/ext-new-selftest.sh
 
-# The TypeScript guest (#187). Built only where the toolchain is, and silent
-# about it otherwise — the same shape `check-spike-deps` uses for TinyGo, and
-# for the same reason: a build that quietly produced nothing would look exactly
-# like one that worked.
-#
-# Two tools. `esbuild` is pinned in this directory's `package.json` (one
-# lockfile for every TS guest; `npm ci` here installs it); `jco` is expected
-# on PATH rather than vendored, because 326 MB of `node_modules` per clone is
-# not a cost this repository imposes by default.
-#
-# `--disable http --disable fetch-event` is not a size optimisation. Without
-# it StarlingMonkey provides `fetch`, so the component imports `wasi:http`,
-# and the host refuses to instantiate it — deliberately: a guest reaches the
-# network through `host-http`, where the egress policy is, and a linker that
-# also offered `wasi:http` would hand every guest a way around it.
-# The TypeScript list, written to by `scripts/ext-new.sh` the way `GUESTS`
-# above is. The world each one binds comes from its name prefix, the same rule
-# the Rust kinds follow, so a new guest needs no second edit here.
+# TypeScript guest (#187). Skips with a message when jco or esbuild is missing, never silently.
+# esbuild is pinned in package.json. jco is expected on PATH: vendoring it would add 326 MB of node_modules.
+# `--disable http --disable fetch-event` is required: otherwise the component imports wasi:http,
+# which the host refuses. Guests reach the network only through host-http, where the egress policy is.
+# TS_GUESTS is written by scripts/ext-new.sh, like GUESTS; the world comes from the name prefix.
 TS_GUESTS := tool-hello-ts
 ESBUILD := $(CURDIR)/node_modules/.bin/esbuild
 
 .PHONY: ts-guest
-# One shell block, not four recipe lines: a guard that `exit 0`s only ends its
-# own line, and make would run the build anyway — which is how a skip becomes
-# a failure two lines later.
+# One shell block, not separate recipe lines: a guard's exit 0 would only end its own line,
+# and make would run the build anyway.
 ts-guest:
 	@if ! command -v jco >/dev/null 2>&1; then \
 	  echo "skipping $(TS_GUESTS): jco is not on PATH"; \
@@ -131,27 +89,13 @@ ts-guest:
 	  done; \
 	fi
 
-# The Python guest (#188), same shape as `ts-guest` above and skipped the same
-# way. One tool, not two: `componentize-py` generates its own bindings, so
-# there is no bundler step.
-#
-# Expected on PATH rather than vendored, like `jco` — but it is 50 MB against
-# jco's 326 MB, small enough that `make setup` is arguable and large enough
-# that it is still not there by default.
-#
-# Two differences from the TypeScript path, both worth knowing before editing:
-#
-#   * `bindings` first, then `componentize`. The generated `wit_world` package
-#     is build output beside the guest, regenerated every run so it cannot go
-#     stale against `wit/`. It is removed first because `componentize-py
-#     bindings` refuses to overwrite and fails with a bare `AssertionError:
-#     File exists`, which makes the second build of any day the broken one.
-#   * There is no `--disable` flag to reach for. CPython's standard library
-#     imports `wasi:filesystem`, `wasi:sockets` and `wasi:cli` to initialise,
-#     and componentize-py offers no way to drop them. They are inert, and
-#     tested to be: `docs/concepts/security-model.md` has a row per refusal
-#     naming the `sandbox_boundary.rs` case that proves it, because
-#     `tool-escape-probe` reaches for the same doors on purpose.
+# Python guest (#188), shaped like ts-guest. componentize-py generates its own bindings, so there is
+# no bundler step. Expected on PATH, not vendored, like jco.
+# Differs from the TypeScript path in two ways:
+#   * `bindings` runs before `componentize`, and the generated wit_world is removed first:
+#     `bindings` refuses to overwrite it and fails with 'File exists' on the second build.
+#   * No `--disable` flags exist: CPython initialises wasi:filesystem, wasi:sockets and wasi:cli.
+#     They are inert, and sandbox_boundary.rs tests each refusal (see docs/concepts/security-model.md).
 PY_GUESTS := tool-hello-py
 
 .PHONY: py-guest
@@ -176,47 +120,30 @@ py-guest:
 	  done; \
 	fi
 
-# Lint every guest, twice, because each run sees a different half of one.
-#
-# The native run lints the pure logic — the same half `test` above covers,
-# since the Component-Model glue is behind `#[cfg(target_arch = "wasm32")]`.
-# The wasm run is the only thing that ever looks at that glue. Skipping either
-# leaves a policy that reads as enforced and is not: `[workspace.lints]` in
-# this directory's Cargo.toml declares the same strict set as the host
-# workspace, and until this target existed nothing ran it (#205). The guest
-# written *after* that policy still arrived with two findings.
+# Lint twice: the native run sees the pure logic, and only the wasm run sees the cfg-gated
+# Component glue. [workspace.lints] only means something if both run (#205).
 clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo clippy --workspace --target wasm32-wasip2 -- -D warnings
 
-# Build a single guest and stage it in ext/ (`make tool-fs`, e.g., for
-# targeted dev iteration — `all` above builds every guest at once). Rust guests
-# need no cargo-component — the wasm32-wasip2 target emits a component directly
-# and the `wit-bindgen` crate generates the bindings. Requires rustup (`rustup
-# target add wasm32-wasip2`).
+# Build and stage one guest for dev iteration, e.g. `make tool-fs`. Needs `rustup target add wasm32-wasip2`.
 $(GUESTS):
 	cargo build --release --target wasm32-wasip2 -p $@
 	mkdir -p $(EXT_DIR)
 	cp target/wasm32-wasip2/release/$(subst -,_,$@).wasm $(EXT_DIR)/$@.wasm
-	# Its manifest too. Rebuilding one guest and leaving the old manifest
-	# beside it is the only way a staged manifest can describe something the
-	# component no longer is, and the next slice will believe it.
+	# Regenerate the manifest too: a stale one beside a rebuilt component would go unnoticed.
 	sh $(ROOT)/scripts/manifests.sh $(CURDIR) $(EXT_DIR) $(ROOT)/wit $@
 
 
-# Supply-chain gates for the Rust guests (Slice 1b gate). One shared Cargo.lock
-# for the whole workspace, so a single invocation covers every guest's resolved
-# dependency graph — no need to loop per guest.
+# Supply-chain gates for the Rust guests. One Cargo.lock covers the workspace, so one invocation suffices.
 audit:
 	cargo audit
 
 deny:
 	cargo deny -L error --manifest-path Cargo.toml --config $(DENY_CONFIG) check
 
-# Supply-chain gate for every Go module under pkgs/extensions (currently only the
-# TinyGo Slice 1a canary): verified module sums + a govulncheck scan. GOFLAGS pins
-# -mod=readonly so a scan can never silently mutate go.mod/go.sum, and
-# GOVULNCHECK_VERSION pins the scanner for the reason versions.mk records (#131).
+# Go modules: verified sums plus a govulncheck scan. -mod=readonly stops the scan rewriting go.mod or go.sum.
+# The scanner version is pinned in versions.mk (#131).
 go-supply-chain: export GOFLAGS = -mod=readonly
 go-supply-chain:
 	@for mod in $(GO_MODULES); do dir=$$(dirname $$mod); echo "== go supply-chain $$dir =="; \
@@ -226,31 +153,19 @@ go-supply-chain:
 spike-deps:
 	cd $(WIT_DIR) && wkg wit fetch --wit-dir spike
 
-# The TinyGo spike is the Slice 1a gate canary — a one-off, not a real guest, so it
-# stays separate from GUESTS and out of `all`.
-#
-# Its spike.wasm is committed (the one exception to the ignored guest components,
-# see .gitignore), so that the test asserting the polyglot claim needs neither a
-# TinyGo install nor a prior build. That makes the build flags part of what lands
-# in git: -no-debug -opt=z takes it from 562 KB to 75 KB, smaller than the mean
-# Rust guest instead of 4x it, and cuts the host's Cranelift compile of it. The
-# trade is the DWARF a guest panic would use — acceptable for a canary whose only
-# assertion is one successful call across the boundary. Rebuild with `make
-# spike-guest` and commit the result.
+# TinyGo spike: the Slice 1a gate canary, not a real guest. Kept out of GUESTS and `all`.
+# spike.wasm is a committed fixture (see .gitignore), so the polyglot test needs no TinyGo. Rebuild with
+# `make spike-guest` and commit. -no-debug -opt=z cuts it from 562 KB to 75 KB, at the cost of panic DWARF.
 SPIKE_DIR := spike
 SPIKE_WIT := $(WIT_DIR)/spike
-# Overridable output path, so the drift test in polyglot.rs can rebuild through
-# this one recipe instead of duplicating the tinygo invocation, and write to a
-# temp dir rather than over the committed fixture. Relative paths resolve inside
-# $(SPIKE_DIR); pass an absolute one from anywhere else.
+# Overridable so the polyglot drift test can rebuild into a temp dir, not over the committed fixture.
+# Relative paths resolve inside $(SPIKE_DIR).
 SPIKE_WASM ?= spike.wasm
 spike-guest: spike-deps
 	cd $(SPIKE_DIR) && tinygo build -target=wasip2 -no-debug -opt=z \
 		-wit-package $(SPIKE_WIT) -wit-world spike -o $(SPIKE_WASM) .
 
-# spike.wasm is deliberately absent here: it is a committed fixture, not a build
-# output, and `clean` deleting it is what made the polyglot test depend on whether
-# its sibling had run first.
+# spike.wasm is not removed: it is a committed fixture, and deleting it made the polyglot test depend on run order.
 clean:
 	rm -rf target \
 		$(addprefix $(EXT_DIR)/,$(addsuffix .wasm,$(GUESTS))) \

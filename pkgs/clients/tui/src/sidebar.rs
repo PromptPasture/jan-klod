@@ -1,16 +1,8 @@
-//! The sidebar (#104): a projection, never a driver.
+//! The sidebar: a projection, never a driver.
 //!
-//! [`view`] takes `&App` plus the connection facts known once at start-up
-//! ([`SessionInfo`]) and returns lines to draw — nothing here polls, nothing
-//! here sends anything to anywhere. Every value in SESSION, THIS TURN and
-//! CHANGED comes from a notification the model has already recorded; the
-//! sidebar reads it back rather than asking again.
-//!
-//! `the_sidebar_only_ever_reads` (in `tests/sidebar_projection.rs`) is the
-//! acceptance for that: a grep over this file's own source refusing the two
-//! words that would mean it had grown a way to drive anything. That test
-//! lives outside this module rather than inside it, so the grep never has to
-//! read its own assertion text back and trip on the words it is checking for.
+//! [`view`] returns lines to draw from the model. It polls nothing and sends
+//! nothing. `tests/sidebar_projection.rs` greps this source for the words that
+//! would mean it had grown a way to drive anything.
 
 use std::path::Path;
 
@@ -22,23 +14,18 @@ use crate::blocks;
 use crate::diff;
 use crate::theme::{Glyph, Theme};
 
-/// Connection facts, fixed for the run.
-///
-/// Passed in rather than read from the model — the client learned them at
-/// start-up (the session id it opened, how it reached the core, where it ran),
-/// and the sidebar only ever displays them.
+/// Connection facts fixed at start-up. Passed in, since the sidebar only displays them.
 #[derive(Debug, Clone, Copy)]
 pub struct SessionInfo<'a> {
     /// The session id.
     pub id: &'a str,
-    /// How the client reached the core, already resolved to a string by the
-    /// caller — `describe()`'s own words.
+    /// How the client reached the core, in `describe()`'s words.
     pub via: &'a str,
     /// Where the client was started, for the working-directory row.
     pub cwd: &'a Path,
 }
 
-/// The sidebar's three sections, as lines ready to draw at `width` cells.
+/// The sidebar's sections as lines to draw at `width` cells.
 #[must_use]
 pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -77,20 +64,15 @@ pub fn view(app: &App, session: SessionInfo<'_>, width: usize, theme: Theme) -> 
         }
     }
 
-    // Only when something contributes: an empty section would teach a reader
-    // to expect one, and every session without extensions would carry a row
-    // saying so. `THIS TURN` shows "(nothing yet)" because a turn always
-    // exists; an extension that contributes nothing has nothing to report.
+    // Shown only when something contributes; an empty section would teach readers to expect one.
     let contributed = app.contributed_status();
     if !contributed.is_empty() {
         lines.push(Line::default());
         heading(&mut lines, "EXTENSIONS", width, theme);
         for item in contributed {
-            // Cut to the pane here, where the cell is known. The text was
-            // already made inert when it arrived; this only fits it.
+            // Already made inert on arrival; `row` only fits it to the pane.
             row(
                 &mut lines,
-                // `row` cuts and marks this like every other line now (#206).
                 &format!("{} {}", item.extension, item.text),
                 width,
                 theme,
@@ -130,25 +112,14 @@ fn row(lines: &mut Vec<Line<'static>>, text: &str, width: usize, theme: Theme) {
     )));
 }
 
-/// Every line this widget emits, cut to the pane and marked when cut.
+/// Cuts every line to the pane and marks the cut. Kept in one place so later sections inherit it (#206).
 ///
-/// **In one place on purpose.** Before this, `cwd` cut itself and every other
-/// row was handed to `ratatui` whole and clipped at the frame with no marker,
-/// so a shortened value read as the whole value (#206). Putting the cut in
-/// the two functions every line goes through fixes the rows that exist and
-/// the rows a later section adds — which is how this arrived: the EXTENSIONS
-/// section came with #190 and brought the bug with it.
-///
-/// `cwd` is unaffected: it pre-cuts from the left into `width - "cwd   "`, so
-/// the finished line is already exactly `width` and this is a no-op on it.
-/// A path's leaf is the readable part, which is why that one cut runs the
-/// other way.
+/// `cwd` pre-cuts from the left, so this is a no-op on it.
 fn cut(text: &str, width: usize, theme: Theme) -> String {
     crate::untrusted::inert_within(text, width, theme.glyph(Glyph::Elided))
 }
 
-/// Truncated from left: the readable part (the leaf) stays visible, not the
-/// root of a long path.
+/// Cuts from the left, so the leaf of a long path stays visible.
 fn truncate_from_left(theme: Theme, text: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
@@ -169,9 +140,7 @@ fn truncate_from_left(theme: Theme, text: &str, max: usize) -> String {
     format!("{mark}{kept}")
 }
 
-/// The tool calls belonging to the turn in progress — every [`Entry::Tool`]
-/// after the most recent [`Who::You`] line, in call order. Cleared when
-/// a new turn's message is recorded, since counting resumes after it.
+/// The tool calls after the latest [`Who::You`] message, in call order.
 fn this_turn_tools(app: &App) -> Vec<&ToolBlock> {
     let start = app
         .transcript
@@ -197,19 +166,9 @@ fn tool_glyph(tool: &ToolBlock, theme: Theme) -> &'static str {
     }
 }
 
-/// Files this session's tool calls touched, oldest first, deduplicated by
-/// path (a later call against the same path replaces its counts rather than
-/// adding a second row).
+/// Files this session's tool calls touched, oldest first, one row per path.
 ///
-/// `None` where [`diff::counts`] could not parse the result as a diff — the
-/// row then shows the path alone. **Never `+0 -0`**: that would be a claim
-/// this client cannot back up, since a result that is not a diff is not
-/// evidence that nothing changed.
-///
-/// Reads [`ToolBlock`] directly rather than a second, redrawn "changed files"
-/// field on [`App`] — #104 asks for CHANGED to come from "the same model, not
-/// recomputed", and a duplicate list is exactly the second source of truth
-/// that would stop meaning that.
+/// Counts are `None` when the result is not a diff. Never `+0 -0`: a non-diff is not evidence that nothing changed.
 fn changed_files(app: &App) -> Vec<(String, Option<(usize, usize)>)> {
     let mut ordered: Vec<(String, Option<(usize, usize)>)> = Vec::new();
     for entry in &app.transcript {
@@ -289,8 +248,7 @@ mod tests {
         );
     }
 
-    /// An empty section would teach a reader to expect one, so every session
-    /// without extensions would carry a row saying there are none.
+    /// An empty section would teach readers to expect one.
     #[test]
     fn no_contributions_means_no_section_at_all() {
         let app = App::default();
@@ -299,8 +257,7 @@ mod tests {
         assert!(!text.contains("EXTENSIONS"), "{text}");
     }
 
-    /// The second half of the escaping rule: cleaned at the door, and still
-    /// inert after a frame has laid it out.
+    /// Cleaned on arrival, and still inert once drawn.
     #[test]
     fn a_hostile_status_item_is_inert_in_the_rendered_line() {
         let mut app = App::default();
@@ -310,12 +267,7 @@ mod tests {
         assert!(!text.contains('\u{1b}'), "{text:?}");
     }
 
-    /// A long claim cannot push the pane wider; it is cut to the cell, and
-    /// says it was cut rather than reading as a shorter claim.
-    ///
-    /// Only the contributed rows are checked. The fixed rows above them —
-    /// `id`, `via` — are the client's own words and are left to the frame's
-    /// clipping, which is a pre-existing choice this slice does not change.
+    /// A long claim is cut to the pane and marked as cut. Only contributed rows are checked.
     #[test]
     fn a_long_status_item_is_cut_to_the_pane() {
         let mut app = App::default();
@@ -345,9 +297,7 @@ mod tests {
         );
     }
 
-    /// Acceptance: CHANGED shows a path with no counts when the result could
-    /// not be parsed as a diff — never `+0 -0`, which would be a claim this
-    /// client cannot back up.
+    /// A non-diff result shows a bare path, never a guessed `+0 -0`.
     #[test]
     fn changed_shows_a_bare_path_rather_than_guessing_zero_counts() {
         let mut app = App::default();
@@ -369,24 +319,13 @@ mod tests {
         assert!(!text.contains('+'), "a count was invented: {text:?}");
     }
 
-    /// Every line, not just the contributed one (#206).
-    ///
-    /// This is the assertion that found the bug and could not be made: when
-    /// the EXTENSIONS section arrived it was narrowed to contributed rows,
-    /// because `via jan-klod-gateway over stdio` is 33 cells and failed it at
-    /// 20. Every row is cut now, so it can say what it meant to.
-    ///
-    /// Both glyph sets, because the marker's width differs between them —
-    /// `…` is one cell and `...` is three, and the budget has to come out of
-    /// the pane either way. A version of this that tested only Unicode would
-    /// pass while the ASCII theme overflowed by two columns.
+    /// Every line fits the pane, in both glyph sets: the marker width differs between them (#206).
     #[test]
     fn every_line_fits_the_pane_it_was_given() {
         for glyphs in [GlyphSet::Unicode, GlyphSet::Ascii] {
             let theme = Theme::new(Mode::Dark, Depth::TrueColor, glyphs);
             let mut app = App::default();
-            // One of each kind of row that can be long: a contributed item, a
-            // tool call, and a changed path.
+            // One long row of each kind.
             app.set_contributions(&reporting(&"wide".repeat(40)));
             app.record_tool_invoked(
                 "c1".into(),
@@ -418,7 +357,7 @@ mod tests {
         }
     }
 
-    /// A parsed diff's counts do show, and by the same path `blocks` uses.
+    /// A parsed diff's counts are shown.
     #[test]
     fn changed_shows_real_counts_when_the_result_parses_as_a_diff() {
         let mut app = App::default();
@@ -456,8 +395,7 @@ mod tests {
         "second".chars().for_each(|c| app.push_char(c));
         app.take_submission();
         let cleared = plain(&view(&app, info(&cwd), 28, theme()));
-        // `state ready` contains the substring "read", so this checks the
-        // THIS TURN section on its own rather than the whole rendering.
+        // `state ready` contains "read", so only the THIS TURN section is checked.
         let this_turn = cleared
             .split("THIS TURN")
             .nth(1)

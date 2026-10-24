@@ -1,47 +1,15 @@
-# jan-klod — self-extend distribution.
-#
-# The coding distribution, plus the one thing it withholds: a shell, so the
-# agent can compile. Everything else here is `coding`'s, for `coding`'s
-# reasons.
+# jan-klod — self-extend distribution: `coding`, plus a shell so the agent can compile.
 #
 # Export OPENAI_API_KEY before starting.
 #
-# --- What this distribution does NOT do --------------------------------------
+# Does not widen the sandbox. Commands may write only under the workspace (`writable: ["."]`). The host grants
+# `/dev/null` and a `TMPDIR` inside the workspace to every command, so a `cargo build` needs no extra grant.
 #
-# It does not widen the sandbox. That is worth stating first, because it is
-# the thing a "distribution where the agent can compile" is expected to do and
-# the reason this one can skip it (#192).
+# Dependencies are vendored: `cargo vendor` into the workspace, and builds run `--offline`. The network stays denied,
+# because a build that can reach the network could exfiltrate. Measured: 47 crates, 34 MB for a guest workspace.
 #
-# A confined command may write only under the workspace, and that is still
-# true here: `writable: ["."]` and nothing else. What a `cargo build` also
-# needs — `/dev/null` and a writable `TMPDIR` — the host now provides to every
-# command, not to this distribution: `/dev/null` is granted in both sandbox
-# backends, and `TMPDIR` is pointed at `<workspace>/.jan-klod/tmp`, which is
-# inside the jail already (#212). So there is no toolchain path granted here,
-# no build cache granted here, and no `writable` entry outside the workspace.
-#
-# Measured, not assumed: `cargo build --target wasm32-wasip2` completes under
-# a Seatbelt profile whose only write grants are the workspace and
-# `/dev/null`.
-#
-# --- Dependencies, and why `network: false` is honest -------------------------
-#
-# A cargo build fetches crates, and this distribution denies the network. The
-# answer is **vendored dependencies**: `cargo vendor` into the workspace, and
-# a build runs `--offline` against them. Measured on the guest workspace in
-# this repository: 47 crates, 34 MB. For scale, one guest's target directory
-# reaches ~126 MB, so the vendored source is the smaller half of what a
-# compiling workspace costs.
-#
-# The alternative — a named egress allowance for a registry — was not taken.
-# `require: true` below says "no command at all in preference to an
-# unconfined one", and a build that can reach the network is a build that can
-# exfiltrate; vendoring keeps both claims true at once.
-#
-# Verified offline end to end: with a cold `CARGO_HOME` and vendored sources,
-# a wasm guest builds under the jail with no network.
+# Verified offline end to end: with a cold `CARGO_HOME` and vendored sources, a wasm guest builds under the jail.
 
-# --- providers -------------------------------------------------------------
 extensions:
   provider:
     openai:
@@ -55,7 +23,6 @@ extensions:
       api-key: ${ANTHROPIC_API_KEY}
       model: claude-sonnet-4-6
 
-  # --- the turn's shaping phases -------------------------------------------
   interceptor:
     intent-router:
       enabled: true
@@ -69,21 +36,12 @@ extensions:
       enabled: true
     permission:
       enabled: true
-    # Content policy. `permission` above asks whether an action may happen;
-    # this looks at what the text says. Keys and the full rule reference:
-    # pkgs/host/config/docs/configuration.md#guardrails.
+    # Content policy: looks at what the text says. `permission` above asks whether an action may happen.
+    # Keys and the full rule reference: pkgs/host/config/docs/configuration.md#guardrails.
     guardrails:
       enabled: true
-      # Unlike `coding`, this distribution has a shell, so a
-      # `deny-tool-arguments` rule has something to refuse. `coding`'s config
-      # says a rule with no reachable target is a demonstration rather than a
-      # guardrail, and that deployments turning commands on should add one.
-      # This is that one.
-      #
-      # It is not the security boundary — the sandbox is, and it holds whether
-      # or not this matches. This refuses the shapes that are never a build
-      # step, so an operator reading a transcript sees a refusal rather than a
-      # confined disaster.
+      # `shell` is enabled here, so `deny-tool-arguments` has something to refuse. These shapes are never a build step.
+      # The sandbox is the security boundary; these rules make refusals visible in the transcript.
       deny-tool-arguments:
         - pattern: "rm +-[a-zA-Z]*r[a-zA-Z]* +/"
           tool: shell
@@ -99,12 +57,10 @@ extensions:
           with: "[redacted github token]"
           reason: "a GitHub token, and this distribution ships git tooling"
 
-  # --- skills ---------------------------------------------------------------
   registry:
     skills:
       enabled: true
 
-  # --- file, git and command tools ------------------------------------------
   tool:
     fs:
       enabled: true
@@ -114,8 +70,7 @@ extensions:
       enabled: true
     git:
       enabled: true
-    # The difference from `coding`. Every command it runs is confined by
-    # `execution.sandbox` below and gated by `interceptor-permission` above.
+    # The one tool `coding` withholds. Confined by `execution.sandbox` below and gated by `interceptor.permission`.
     shell:
       enabled: true
 
@@ -123,35 +78,21 @@ storage:
   path: ./jan-klod.db
 
 registry:
-  # Nothing is trusted, so the *registry* half of `ext-install` refuses every
-  # name: an entry has to be vouched for by a key listed here, and none is.
+  # No keys are trusted, so registry installs refuse every name.
   trusted-keys: []
-  # The local half is what this distribution is for (#221). An agent that just
-  # compiled a component installs it by `path`, which needs `allow-unsigned`
-  # and the component's `sha256` — self-authored is not a trust exemption
-  # (#213). Without this key the tool does not exist at all, and the
-  # compile → install → load → call chain has no install step.
-  #
-  # It is not a wider grant than it looks: a component still needs a manifest
-  # beside it declaring what it imports, the host still cross-checks that
-  # against the artefact, and the operator still answers the install prompt.
+  # Lets the agent install a component it just compiled, by path. Needs `allow-unsigned` and the component's `sha256`;
+  # self-authored is not a trust exemption. The component still needs a manifest declaring its imports.
   install-tool: true
 
-# Commands are ON here, which is the point of this distribution, and confined.
-# Read docs/concepts/security-model.md's "Command effects" row before changing
-# any of this.
+# Commands are on here, and confined. Read docs/concepts/security-model.md's "Command effects" row before changing this block.
 execution:
   enabled: true
-  # A build is slower than a grep. The default 30s kills a cold `cargo build`
-  # partway and reports a timeout, which reads like a hung command.
+  # A cold `cargo build` outruns the 30s default and reads like a hang.
   timeout-secs: 600
   output-cap: 262144
   sandbox:
     mode: os
-    # The workspace, and nothing else. See the header.
     writable: ["."]
     network: false
-    # No command at all, in preference to an unconfined one. This distribution
-    # exists to run a compiler on a model's behalf; on a platform with no
-    # sandbox backend that is not a degraded mode, it is a different product.
+    # Confined or not at all: on a platform with no sandbox backend, nothing runs.
     require: true

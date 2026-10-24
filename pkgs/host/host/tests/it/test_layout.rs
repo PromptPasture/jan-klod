@@ -1,6 +1,4 @@
-//! Tests must belong to buildable crates. `tests/` beside a **virtual**
-//! manifest gets silently skipped by cargo (no compilation = green test).
-//! Walks all `tests/` dirs and flags those beside virtual manifests.
+//! Flags `tests/` dirs beside a virtual manifest, which cargo would silently skip.
 
 use std::path::{Path, PathBuf};
 
@@ -53,7 +51,6 @@ fn every_tests_directory_belongs_to_a_crate_cargo_builds() {
         let Some(parent) = dir.parent() else { continue };
         // Beside package manifest (cargo builds) or no manifest (fixture).
         if is_package(parent) == Some(false) {
-            // tests/ beside virtual manifest: cargo builds nothing.
             orphans.push(dir.clone());
         }
     }

@@ -1,11 +1,5 @@
-//! Contributions over REST, which is how a browser can see them at all.
-//!
-//! The stdio transport pushes the set at its handshake and again when it
-//! changes, because that connection stays open. A browser has neither: it
-//! asks (`GET /contributions`) and, when it invokes one, is told in the answer
-//! whether the set moved. These two turns are that difference, tested.
-//!
-//! Skips if guests are not staged in `ext/`; build with `make ext`.
+//! Contributions over REST: unlike stdio, a browser must poll `GET /contributions`
+//! and learns from an invoke's answer whether the set changed.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -130,8 +124,7 @@ fn a_browser_can_invoke_one_and_is_told_whether_the_set_moved() {
     );
 }
 
-/// A name nobody contributes is the caller's mistake, and says so in the
-/// status code rather than answering with an empty success.
+/// A name nobody contributes is refused with an error status, not an empty success.
 #[test]
 fn invoking_something_nobody_contributes_is_a_404() {
     let Some((_dir, agents, surface, port)) = booted("unknown") else {

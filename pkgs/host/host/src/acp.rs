@@ -1,11 +1,5 @@
-//! ACP: Agent Client Protocol for editor↔agent (Zed's standard).
-//! Version is integer (not date); bidirectional (agent requests client).
-//! Sessions require `initialize` first.
-//!
-//! # Credentials
-//!
-//! This transport carries no credential; the operator spawning the process is the principal.
-//! Authentication and authorization happen at the HTTP boundary (serve.rs), not on stdio.
+//! ACP: Agent Client Protocol (Zed): integer version, bidirectional, `initialize` first.
+//! No credential on stdio (the spawning operator is the principal); auth happens at the HTTP boundary (serve.rs).
 
 use std::cell::RefCell;
 use std::io::{BufRead, Write};
@@ -39,9 +33,7 @@ struct Frame {
     params: serde_json::Value,
 }
 
-/// Connection state (handshake, session ids). Unlike `mcp`'s stateless
-/// `classify`, this tracks initialization and minted sessions. No runtime
-/// needed; rules testable without booting one.
+/// Connection state (handshake, minted session ids), unlike `mcp`'s stateless `classify`; still testable without a runtime.
 #[derive(Debug, Default)]
 pub struct Connection {
     /// Whether `initialize` has been answered.
@@ -50,17 +42,10 @@ pub struct Connection {
     sessions: Vec<String>,
 }
 
-/// Agent→editor question interface (seam for testability).
-///
-/// Hard part of `session/request_permission` is bidirectional blocking: agent
-/// writes and reads on the same pipe. [`serve`] needs it; tests need scripted
-/// answers. Splitting them keeps protocol shape testable without threads.
+/// Agent→editor question interface, a seam so tests can script answers: `session/request_permission` blocks bidirectionally on one pipe.
 pub trait Asker {
-    /// Put `prompt` to the editor and return the answer.
-    /// Default answer is always safe (headless refusal).
-    ///
-    /// Uses `&self` with interior mutability: streaming sink and permission
-    /// driver both need this during one turn (can't lend mutably twice).
+    /// Put `prompt` to the editor and return the answer; the default is always safe (headless refusal).
+    /// `&self` with interior mutability: the streaming sink and permission driver both need it in one turn.
     fn ask(&self, session: &str, prompt: &UserPrompt) -> String;
 
     /// Whether the client cancelled (sticky once true).
@@ -97,20 +82,11 @@ fn is_cancel(line: &str) -> bool {
 }
 
 /// The `options` array for a permission request, built from the prompt's own.
-///
-/// The `optionId` **is** the interceptor's option text, so nothing translates
-/// between two vocabularies: whatever the editor picks is already one of the
-/// answers the gate offered. A translation table here would be a second place
-/// for the permission model to drift from itself.
-///
-/// `kind` is ACP's hint for how to render a choice, so an affirmative is
-/// `allow_once` and everything else `reject_once`. Getting it wrong is
-/// cosmetic; getting `optionId` wrong would answer a different question.
+/// `optionId` **is** the interceptor's option text, so nothing translates between vocabularies and the permission model cannot drift.
+/// `kind` is a rendering hint: affirmative is `allow_once`, everything else `reject_once`.
 fn permission_options(prompt: &UserPrompt) -> serde_json::Value {
     let offered: Vec<&str> = if prompt.options.is_empty() {
-        // A free-text prompt still has to be answerable, and an editor cannot
-        // type into a permission dialog — so it is offered the default and a
-        // refusal, which is the honest pair.
+        // A free-text prompt must still be answerable and an editor cannot type into a permission dialog: offer the default and a refusal.
         vec![prompt.default_answer.as_str()]
     } else {
         prompt.options.iter().map(String::as_str).collect()
@@ -130,9 +106,8 @@ fn permission_options(prompt: &UserPrompt) -> serde_json::Value {
     )
 }
 
-/// [`Asker`] for [`serve`]: write request, block on answer (agent→client).
-/// Only place core originates JSON-RPC and waits. Works because reader thread
-/// holds the pipe while the turn runs.
+/// [`Asker`] for [`serve`]: write request, block on answer. The only place core originates JSON-RPC and waits;
+/// works because the reader thread holds the pipe while the turn runs.
 struct PipeAsker<'a, W: Write> {
     writer: Rc<RefCell<W>>,
     incoming: &'a Receiver<String>,
@@ -228,8 +203,7 @@ enum Routed {
 /// Serve ACP on `input`/`output` until client hangs up.
 ///
 /// # Errors
-/// I/O failure on `output`. Malformed frames answered, not returned (one bad
-/// line doesn't hang up an editor).
+/// I/O failure on `output`; malformed frames are answered, not returned.
 pub fn serve<R: BufRead + Send + 'static, W: Write>(
     input: R,
     output: W,
@@ -238,9 +212,8 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
     // Writer shared: turn streams `session/update` while running.
     let writer = Rc::new(RefCell::new(output));
 
-    // Reader thread: hands lines over. Holds no session (`AgentSession` is `!Send`).
-    // Division makes editor's answer readable: while turn runs, this thread
-    // holds the pipe (same pattern as `rpc`).
+    // Reader thread: hands lines over and holds no session (`AgentSession` is `!Send`), so the editor's answer
+    // is readable while a turn runs (same pattern as `rpc`).
     let (handover, incoming) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         for line in input.lines() {
@@ -285,8 +258,7 @@ struct AcpSink<'a, W: Write, A: Asker> {
 
 impl<W: Write, A: Asker> EventSink for AcpSink<'_, W, A> {
     fn emit(&mut self, event: &Event) -> Flow {
-        // Only assistant text → ACP update today. Tool calls have `sessionUpdate`
-        // kinds in the spec; inventing shapes here breaks clients.
+        // Only assistant text maps to an ACP update today; inventing tool-call shapes breaks clients.
         let Event::TextDelta(text) = event else {
             return Flow::Continue;
         };
@@ -327,9 +299,7 @@ impl Connection {
         Self::default()
     }
 
-    /// Line to response or `None` for notifications.
-    /// Public so callers can drive ACP without owning the read loop.
-    /// Tests must read session ids from `session/new` (agent-minted).
+    /// Line to response, or `None` for notifications. Public so callers can drive ACP without the read loop.
     pub fn answer<W: Write, A: Asker>(
         &mut self,
         line: &str,
@@ -349,8 +319,7 @@ impl Connection {
         }
     }
 
-    /// Frame routing (session-independent). Handshake, ordering MUST, refusals
-    /// (testable without runtime, like `mcp::classify` and `rpc::parse`).
+    /// Frame routing, session-independent; testable without a runtime like `mcp::classify`.
     fn route(&mut self, line: &str) -> Routed {
         let frame: Frame = match serde_json::from_str(line) {
             Ok(frame) => frame,
@@ -412,8 +381,7 @@ impl Connection {
         })
     }
 
-    /// `initialize` result (all capabilities false/empty: honest today, and
-    /// capability lists are what clients trust).
+    /// `initialize` result: all capabilities false/empty, which is honest and what clients trust.
     fn initialized(params: &serde_json::Value) -> serde_json::Value {
         let asked = params
             .get("protocolVersion")
@@ -444,18 +412,8 @@ impl Connection {
     /// Mint a session id.
     ///
     /// # `cwd` is recorded and **not** honoured, deliberately
-    ///
-    /// ACP's `session/new` carries the editor's working directory. Letting it
-    /// retarget the workspace would mean a client choosing what the file tools
-    /// may reach — the workspace is a *grant*, from `config.yaml` or `$PWD`,
-    /// and `Workspace::open` already refuses `$HOME` and filesystem roots
-    /// because a jail that wide protects nothing. An editor saying
-    /// `cwd: "/"` must not widen it.
-    ///
-    /// So it is kept for the mismatch to be reported rather than acted on. What
-    /// to do when the editor's project is not the workspace — refuse, warn, or
-    /// serve it anyway — is a decision for the box that runs a turn, since
-    /// before then there is nothing it could affect.
+    /// Honouring it would let a client choose what the file tools reach; the workspace is a grant (`config.yaml` or `$PWD`)
+    /// and `Workspace::open` refuses `$HOME` and roots. What to do on a mismatch is left to the box that runs a turn.
     fn new_session(&mut self, params: &serde_json::Value) -> serde_json::Value {
         let id = jk_agent::session::new_session_id();
         self.sessions.push(id.clone());
@@ -471,30 +429,15 @@ impl Connection {
 }
 
 impl Connection {
-    /// Run one turn for `session/prompt`, streaming updates as it goes.
+    /// Run one turn for `session/prompt`, streaming updates.
     ///
-    /// # `stopReason` is not `isError`, and assuming otherwise would lose data
-    ///
-    /// ACP's stop reasons say why a turn **ended**: `end_turn`, `max_tokens`,
-    /// `max_turn_requests`, `refusal`, `cancelled`. None of them means "the
-    /// tool failed", which is the opposite of MCP's `isError` — so the mapping
-    /// had to be read rather than carried across from [`crate::mcp`].
-    ///
-    /// **A permission refusal is `end_turn`, never `refusal`.** The spec is
-    /// explicit that on `refusal` "the user prompt and everything that comes
-    /// after it won't be included in the next prompt, so this should be
-    /// reflected in the UI" — it means the agent declined the whole exchange,
-    /// and an editor is entitled to discard the prompt. A blocked tool call is
-    /// not that: the turn ran, the model was told, and it answered. Reporting
-    /// it as `refusal` would throw away what the user typed.
-    ///
-    /// A turn that genuinely *failed* has no stop reason at all, so it is a
-    /// JSON-RPC error — again the opposite of MCP, where a failure rides
-    /// in-band on a successful result.
+    /// # `stopReason` is not `isError`
+    /// Stop reasons say why a turn **ended**, unlike MCP's `isError`. **A permission refusal is `end_turn`, never `refusal`:**
+    /// the spec lets an editor discard the prompt on `refusal`, and a blocked tool call is not that.
+    /// A turn that genuinely failed has no stop reason and is a JSON-RPC error.
     ///
     /// # Errors
-    /// A message when the frame is unusable or the turn failed, which the
-    /// caller returns as a JSON-RPC error.
+    /// A message when the frame is unusable or the turn failed, returned as a JSON-RPC error.
     fn prompt<W: Write, A: Asker>(
         &self,
         params: &serde_json::Value,
@@ -511,9 +454,7 @@ impl Connection {
             ));
         }
 
-        // The prompt is a list of content blocks. Only text is supported, and
-        // `initialize` says so — `promptCapabilities` declares image, audio and
-        // embedded context all false, so a client sending one was told not to.
+        // Only text blocks are supported; `initialize` declares image, audio and embedded context false.
         let text = params
             .get("prompt")
             .and_then(serde_json::Value::as_array)
@@ -537,18 +478,13 @@ impl Connection {
             session: session.to_owned(),
             asker,
         };
-        // The editor answers a permission request through `asker`, so a
-        // granted write actually happens — unlike MCP, where nobody can answer.
+        // The editor answers permission requests through `asker`, so a granted write happens (unlike MCP).
         let mut driver = AcpDriver {
             asker,
             session: session.to_owned(),
         };
         let outcome = agent.run_streaming_with_driver(&mut driver, &mut sink, session, &text);
-        // Cancellation wins over how the turn happened to finish. The spec is
-        // emphatic: `cancelled` "MUST be returned when the client sends a
-        // `session/cancel` notification, **even if the cancellation causes
-        // exceptions in underlying operations**" — so a cancelled turn is
-        // answered, not left hanging and not reported as a failure.
+        // Cancellation wins over how the turn finished: the spec requires `cancelled` after `session/cancel`, even if it causes errors underneath.
         if asker.cancelled() {
             return Ok(serde_json::json!({ "stopReason": "cancelled" }));
         }
@@ -564,9 +500,7 @@ fn refuse(id: jsonrpc::Id, code: i64, message: String) -> jsonrpc::Response {
     jsonrpc::Response::error(id, jsonrpc::Error::new(code, message))
 }
 
-/// Write one frame and **flush it**, for the reason [`crate::rpc`] documents:
-/// stdout to a pipe is block-buffered, so without the flush the editor waits
-/// for an answer sitting in this process's buffer.
+/// Write one frame and **flush it**, as [`crate::rpc`] documents (pipe stdout is block-buffered).
 fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::io::Result<()> {
     let text = serde_json::to_string(response).expect("a response serializes");
     output.write_all(text.as_bytes())?;
@@ -579,9 +513,7 @@ mod tests {
     use super::{Asker, Connection, PipeAsker, Rc, RefCell, Routed, UserPrompt, ACP_VERSION};
     use jk_protocol::jsonrpc;
 
-    /// Everything except `session/prompt` is answered without touching the
-    /// agent, so these tests pass no runtime at all — the reason `answer` takes
-    /// the session by argument rather than holding one.
+    /// Everything except `session/prompt` is answered without the agent, so these tests pass no runtime.
     fn negotiated() -> Connection {
         let mut connection = Connection::default();
         let value = call(
@@ -595,11 +527,7 @@ mod tests {
         connection
     }
 
-    /// Answer a line that does not need a turn.
-    ///
-    /// `session/prompt` is the only method that touches the agent, and it is
-    /// checked in `pkgs/host/host/tests/it/acp.rs` where a real one exists — so these
-    /// call the frame handling directly and never reach it.
+    /// Answer a line that does not need a turn; `session/prompt` is covered in `pkgs/host/host/tests/it/acp.rs`.
     fn call(connection: &mut Connection, line: &str) -> serde_json::Value {
         match connection.route(line) {
             Routed::Answer(response) => serde_json::to_value(response).expect("it serializes"),
@@ -680,8 +608,7 @@ mod tests {
         assert_eq!(connection.sessions, [id], "and the connection remembers it");
     }
 
-    /// Two sessions on one connection get different ids — otherwise a second
-    /// `session/new` would silently alias the first.
+    /// Two sessions on one connection get different ids; otherwise a second `session/new` would alias the first.
     #[test]
     fn each_session_gets_its_own_id() {
         let mut connection = negotiated();
@@ -721,8 +648,7 @@ mod tests {
         );
     }
 
-    /// But it is still refused before the handshake — the ordering MUST applies
-    /// to the method that matters most, not only to `session/new`.
+    /// Still refused before the handshake: the ordering MUST covers `session/prompt` too.
     #[test]
     fn session_prompt_before_initialize_is_refused() {
         let mut connection = Connection::default();
@@ -747,13 +673,7 @@ mod tests {
         );
     }
 
-    // ---- The agent→client direction, on the wire ----
-
-    /// Ask through a real [`PipeAsker`] with the answer already queued.
-    ///
-    /// The integration tests use a scripted `Asker`, which checks that the loop
-    /// honours an answer. These check the **wire shape** — what is written, and
-    /// how an ACP outcome maps back — which a scripted asker bypasses entirely.
+    /// Ask through a real [`PipeAsker`] with the answer queued; these check the wire shape, which scripted askers bypass.
     fn asked(answer: &str, prompt: &UserPrompt) -> (serde_json::Value, String) {
         let (handover, incoming) = std::sync::mpsc::channel();
         handover.send(answer.to_owned()).expect("queues the answer");
@@ -788,8 +708,7 @@ mod tests {
         assert_eq!(frame["id"], 7);
         assert_eq!(frame["params"]["sessionId"], "sess-1");
 
-        // The `optionId`s are the gate's own answers, so nothing translates
-        // between two vocabularies.
+        // `optionId`s are the gate's own answers; nothing translates.
         let ids: Vec<&str> = frame["params"]["options"]
             .as_array()
             .expect("options")
@@ -806,11 +725,7 @@ mod tests {
         );
     }
 
-    /// Every answer this cannot read takes the default, which refuses.
-    ///
-    /// The direction matters: an unreadable answer must never *widen* a
-    /// permission. A client that sends nonsense, or an outcome shape from a
-    /// future revision, gets a refusal rather than a grant.
+    /// Every answer this cannot read takes the default (refusal): unreadable input must never widen a permission.
     #[test]
     fn an_answer_that_cannot_be_read_refuses() {
         for answer in [
@@ -824,14 +739,8 @@ mod tests {
         }
     }
 
-    /// A `session/cancel` arriving while parked ends the wait with a refusal.
-    ///
-    /// The spec requires a cancelled outcome for every pending permission
-    /// request. Answering the parked `session/prompt` with
-    /// `stopReason: cancelled` is a later box; not hanging is this one's.
-    /// A cancel while parked refuses the permission **and** marks the turn
-    /// cancelled, which is what turns the parked prompt's answer from
-    /// `end_turn` into `cancelled`.
+    /// A `session/cancel` while parked ends the wait with a refusal and marks the turn cancelled,
+    /// turning the prompt's answer from `end_turn` into `cancelled`.
     #[test]
     fn a_cancel_while_parked_refuses_and_marks_the_turn() {
         let (handover, incoming) = std::sync::mpsc::channel();
@@ -847,9 +756,7 @@ mod tests {
             next_id: std::cell::Cell::new(7),
             cancelled: std::cell::Cell::new(false),
         };
-        // Not asserting `!cancelled()` first: `cancelled()` drains, and the
-        // cancel is already queued — so it is legitimately true straight away.
-        // What matters is that `ask` refuses *and* the turn is marked.
+        // `cancelled()` drains and the cancel is already queued, so it is true immediately; what matters is that `ask` refuses and the turn is marked.
         assert_eq!(
             asker.ask("sess-1", &confirm()),
             "no",
@@ -858,8 +765,7 @@ mod tests {
         assert!(asker.cancelled(), "and the turn is marked cancelled");
     }
 
-    /// A cancel arriving while the turn *streams* is noticed too — between
-    /// events is the only other place it can be.
+    /// A cancel while the turn streams is noticed too, between events.
     #[test]
     fn a_cancel_between_events_is_noticed_without_waiting() {
         let (handover, incoming) = std::sync::mpsc::channel();
@@ -881,8 +787,7 @@ mod tests {
         assert!(asker.cancelled());
     }
 
-    /// An ordinary frame arriving mid-turn is not a cancel, and must not be
-    /// mistaken for one — a client is allowed to talk while a turn runs.
+    /// An ordinary mid-turn frame is not a cancel.
     #[test]
     fn an_unrelated_frame_mid_turn_is_not_a_cancel() {
         let (handover, incoming) = std::sync::mpsc::channel();

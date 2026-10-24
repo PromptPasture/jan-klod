@@ -1,9 +1,5 @@
-//! Task classification + route resolution — pure Rust, unit-tested natively.
-//!
-//! The built-in task set mirrors the default `routing:` keys in `config.yaml`.
-//! A constrained-decoding grammar forces the classifier to emit exactly one of them;
-//! [`parse_task`] reads it back, and [`model_from_route`] extracts the model from
-//! a `provider/model` routing entry. (User-defined task types are a later refinement.)
+//! Task classification and route resolution: pure Rust, unit-tested natively.
+//! [`parse_task`] reads back the classifier's constrained output; [`model_from_route`] takes the model from a route.
 
 /// Built-in task types — the default `routing:` keys.
 pub const BUILT_IN_TASKS: &[&str] = &[
@@ -19,8 +15,7 @@ pub const BUILT_IN_TASKS: &[&str] = &[
     "agent-delegation",
 ];
 
-/// The default task when classification fails or is ambiguous — plain chat is the
-/// safe, cheapest route.
+/// Default task when classification fails: plain chat is the safe, cheapest route.
 pub const DEFAULT_TASK: &str = "chat";
 
 /// `GBNF` grammar constraining the classifier to exactly one of `tasks`.
@@ -54,12 +49,8 @@ pub fn model_from_route(route: &str) -> Option<&str> {
     Some(model.trim()).filter(|model| !model.is_empty())
 }
 
-/// The provider name a route names but the runtime cannot honour.
-///
-/// A `provider/model` route only applies the model — the fallback chain is fixed
-/// at boot, so `groq/llama-3.3-70b` sends the model name to whichever provider
-/// answers, not necessarily groq. Returned so the caller can warn instead of
-/// silently discarding it.
+/// The provider a route names but the runtime cannot honour. The fallback chain is fixed at boot,
+/// so the model goes to whichever provider answers, not necessarily the named one.
 #[must_use]
 pub fn unhonoured_provider(route: &str) -> Option<&str> {
     route
@@ -93,8 +84,7 @@ mod tests {
         // Bare is the form that means what it says.
         assert_eq!(model_from_route("gpt-4o"), Some("gpt-4o"));
         assert_eq!(model_from_route("qwen2.5:7b"), Some("qwen2.5:7b"));
-        // `provider/model` is accepted for the configs that already use it, but
-        // only the model is applied.
+        // `provider/model` is accepted for existing configs; only the model is applied.
         assert_eq!(model_from_route("openai/gpt-4o"), Some("gpt-4o"));
         assert_eq!(model_from_route("ollama/qwen2.5:7b"), Some("qwen2.5:7b"));
         assert_eq!(model_from_route("openai/"), None);
@@ -103,8 +93,7 @@ mod tests {
 
     #[test]
     fn a_provider_prefix_is_reported_rather_than_silently_dropped() {
-        // The chain is fixed at boot, so this half cannot be honoured. Saying so
-        // is the difference between a documented limit and a wrong endpoint.
+        // The chain is fixed at boot, so the provider half cannot be honoured and must be reported.
         assert_eq!(unhonoured_provider("groq/llama-3.3-70b"), Some("groq"));
         assert_eq!(
             unhonoured_provider("gpt-4o"),

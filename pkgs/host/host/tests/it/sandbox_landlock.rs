@@ -1,11 +1,6 @@
-//! Linux Landlock confinement tests (same four cases as `sandbox_seatbelt.rs`).
-//! Two backends, one standard; unconfined baseline catches test errors.
-//!
-//! Landlock is kernel-dependent (pre-5.13 or no `CONFIG_SECURITY_LANDLOCK`).
-//! Check availability first to avoid ambiguous failures.
-//!
-//! Backend path is explicit (`CARGO_BIN_EXE_jan-klod-gateway`) because
-//! `current_exe()` under `cargo test` is the test binary without `confine`.
+//! Linux Landlock confinement, mirroring `sandbox_seatbelt.rs`. Panics when the
+//! kernel lacks Landlock. The backend is the gateway binary, since `current_exe()`
+//! under `cargo test` lacks `confine`.
 #![cfg(target_os = "linux")]
 
 use std::io::Read;
@@ -75,7 +70,7 @@ fn runner(workspace: &Path) -> ProcessRunner {
     )
 }
 
-/// Runner confined by gateway (path explicit; see module docs).
+/// Runner confined by the gateway binary.
 fn confined(workspace: &Path) -> ProcessRunner {
     let backend = LandlockBackend::new(PathBuf::from(env!("CARGO_BIN_EXE_jan-klod-gateway")));
     runner(workspace).with_sandbox(std::sync::Arc::new(backend), policy(workspace))
@@ -130,12 +125,7 @@ fn a_confined_command_can_still_write_inside_the_workspace() {
     assert!(target.exists());
 }
 
-/// `2>/dev/null` works, which it did not before #212. The Linux twin of
-/// `sandbox_seatbelt.rs::a_confined_command_can_redirect_to_dev_null`.
-///
-/// The shell opens the redirect before running the program, so a denied
-/// `/dev/null` means the command never runs and the error names `/dev/null`
-/// rather than anything the operator wrote.
+/// `2>/dev/null` works, which it did not before #212. Linux twin of the seatbelt test.
 #[test]
 fn a_confined_command_can_redirect_to_dev_null() {
     require_landlock();
@@ -155,10 +145,7 @@ fn a_confined_command_can_redirect_to_dev_null() {
     );
 }
 
-/// The other half, and the reason the grant above is not a hole: the rule
-/// names the device, so the rest of `/dev` stays unwritable. Landlock scopes
-/// a file rule to that file, and this is what notices if it is ever widened
-/// to the directory.
+/// The grant above names the device file, not `/dev`. This fails if the rule is ever widened to the directory.
 #[test]
 fn granting_dev_null_does_not_grant_the_device_directory() {
     require_landlock();

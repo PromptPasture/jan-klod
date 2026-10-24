@@ -1,5 +1,5 @@
-//! HTTP client drives loop. Boots `Runtime`, binds REST on ephemeral port.
-//! Client thread POSTs, reads streamed response. `AgentSession` !Send on main thread.
+//! Drives the agent over the REST surface on an ephemeral port. `AgentSession`
+//! is !Send, so the client runs on a spawned thread.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -45,7 +45,6 @@ extensions:
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
-    // Client thread: POST message, read response
     let client = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"hello"}"#;
@@ -61,7 +60,6 @@ extensions:
         response
     });
 
-    // Server: handle one request on session thread.
     surface.serve_once(&agents).expect("serves one request");
 
     let response = client.join().expect("client thread");
@@ -74,7 +72,6 @@ extensions:
         "answer in body: {response}"
     );
 
-    // Second: GET /health for liveness
     let health_client = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         stream
@@ -94,7 +91,6 @@ extensions:
         "health body: {health}"
     );
 
-    // Third: SSE client (Accept: text/event-stream) gets streamed frames
     let sse_client = thread::spawn(move || {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"hello"}"#;
@@ -111,11 +107,7 @@ extensions:
     });
     surface.serve_once(&agents).expect("serves the SSE request");
     let sse = sse_client.join().expect("sse client thread");
-    // Case-insensitive because the header name's casing is the server's
-    // choice, not the protocol's: `hyper` writes it lowercase where
-    // `tiny_http` wrote it capitalised (#224). Every HTTP client compares
-    // these case-insensitively; only a test reading the raw socket can
-    // tell, and it should not be the thing that fails.
+    // Header casing is the server's choice (#224), so compare case-insensitively.
     assert!(
         sse.to_lowercase()
             .contains("content-type: text/event-stream"),

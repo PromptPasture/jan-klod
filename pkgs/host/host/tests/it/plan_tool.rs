@@ -1,14 +1,5 @@
-//! `tool-plan` across turns and across sessions.
-//!
-//! The guest's own tests (`pkgs/extensions/tool-plan/src/plan.rs`) cover every
-//! rule about what a plan *is*. These cover the two things that can only be
-//! true of the whole stack: a plan written in one turn is there in the next,
-//! and two sessions do not see each other's.
-//!
-//! The second is the one worth the machinery. `scope: session` is host-side
-//! (#215), the guest holds no session id, and nothing in the guest's unit
-//! tests can tell whether the host actually keyed by session — only a second
-//! session can.
+//! `tool-plan` across turns and sessions. Plan rules are covered by the guest's
+//! own tests; these cover what only the whole stack can show.
 
 use std::sync::{Arc, Mutex};
 
@@ -22,12 +13,9 @@ const GUESTS: [&str; 3] = [
     "tool-plan.wasm",
 ];
 
-/// What the model "decides" to send to `plan`, one entry per turn, and what
-/// came back.
+/// Scripted `plan` arguments and the requests that carried their results.
 struct Script {
-    /// Tool-call arguments, popped in order as turns run.
     calls: Mutex<Vec<String>>,
-    /// One entry per turn that ran a tool: the request carrying its result.
     seen: Mutex<Vec<String>>,
 }
 
@@ -40,20 +28,13 @@ impl Script {
         })
     }
 
-    /// One entry per turn that ran the tool, in order.
     fn turns(&self) -> Vec<String> {
         self.seen.lock().expect("not poisoned").clone()
     }
 }
 
-/// A provider that calls `plan` once per turn, then ends the turn.
-///
-/// **The turn boundary is read from the transcript, not counted.** Counting
-/// completions was the first attempt and it was wrong: a turn is two
-/// completions, so a counter made one turn consume two scripted calls and
-/// the next turn none. The request body carries the whole history, so the
-/// role of its last message says which half of a turn this is — a fresh user
-/// message means "call the tool", a tool result means "answer and stop".
+/// Calls `plan` once per turn, then ends it. The turn half is read from the
+/// last message's role: a turn is two completions, so counting them misaligns.
 fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
     let script = Arc::clone(script);
     move || -> jk_wasm::route::HttpFn {
@@ -76,8 +57,6 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
             });
 
             let response = if after_tool {
-                // Record what the tool actually returned, which is the last
-                // message in this request.
                 if let Some(body) = text {
                     script.seen.lock().expect("not poisoned").push(body);
                 }
@@ -104,7 +83,6 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
     }
 }
 
-/// A config enabling `tool.plan`, with session scoping as the issue requires.
 fn config_in(dir: &std::path::Path, scope_session: bool) -> std::path::PathBuf {
     let path = dir.join("config.yaml");
     let scope = if scope_session {
@@ -136,7 +114,6 @@ extensions:
     path
 }
 
-/// A plan written in one turn is still there in the next.
 #[test]
 fn a_plan_written_in_one_turn_is_read_back_in_the_next() {
     if !common::guests_staged(&GUESTS) {
@@ -170,11 +147,8 @@ fn a_plan_written_in_one_turn_is_read_back_in_the_next() {
     );
 }
 
-/// Two sessions do not share a plan.
-///
-/// This is the whole reason `scope: session` exists, and it cannot be tested
-/// anywhere below here: the guest has no session id, so from inside it the
-/// scoped and unscoped cases are identical.
+/// Only a second session can show that the host keys storage by session: the
+/// guest has no session id.
 #[test]
 fn two_sessions_do_not_share_a_plan() {
     if !common::guests_staged(&GUESTS) {
@@ -197,9 +171,7 @@ fn two_sessions_do_not_share_a_plan() {
 
     let turns = script.turns();
     assert_eq!(turns.len(), 2, "both turns ran the tool: {turns:?}");
-    // Each request carries its own session's history only, so s2's body is
-    // the whole evidence — if the host did not key by session, s1's step
-    // would be in it.
+    // If the host ignored the session key, s1's step would appear here.
     assert!(
         !turns[1].contains("belongs to s1"),
         "s2 was shown s1's plan: {}",
@@ -212,14 +184,8 @@ fn two_sessions_do_not_share_a_plan() {
     );
 }
 
-/// Without `scope: session`, the two sessions *do* share — which is what
-/// makes the test above mean something.
-///
-/// A passing isolation test proves nothing on its own: it passes just as
-/// well against a runtime where the second session saw an empty plan because
-/// the tool was broken, or because nothing was ever written. This is the
-/// control. It also pins the default, which several other guests depend on:
-/// storage is run-scoped unless an instance asks otherwise.
+/// Control for the isolation test: without `scope: session` the sessions share
+/// a plan. Also pins the run-scoped default that other guests rely on.
 #[test]
 fn without_session_scope_the_same_two_sessions_share_a_plan() {
     if !common::guests_staged(&GUESTS) {

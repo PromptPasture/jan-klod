@@ -1,5 +1,5 @@
-//! Tool-git: read-only ops against real repo, mutations refused, execution
-//! disabled denies all. Offline. Skips when guest not staged or git unavailable.
+//! Read-only git ops on a real repo; mutations are refused, and disabled execution denies all.
+//! Skips when the guest or git is unavailable.
 
 use std::time::Duration;
 
@@ -58,7 +58,6 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         git(&workspace_dir, &["commit", "--quiet", "-m", "add main"]),
         "commit succeeds"
     );
-    // Uncommitted edit (status/diff have something to report).
     std::fs::write(workspace_dir.join("main.rs"), "fn main() { todo!() }\n").unwrap();
 
     let workspace = Workspace::open(&workspace_dir).expect("workspace opens");
@@ -87,7 +86,6 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         "the working-tree change is reported: {diff}"
     );
 
-    // Staged diff empty; says so, not bare string.
     let staged = tool
         .invoke(r#"{"op":"diff","staged":true}"#)
         .expect("staged diff succeeds");
@@ -98,7 +96,7 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         .expect("show succeeds");
     assert!(show.contains("add main"), "the commit is shown: {show}");
 
-    // Mutating ops refused by guest (no process spawned).
+    // Refused by the guest before any process spawns.
     for mutating in [
         r#"{"op":"commit"}"#,
         r#"{"op":"push"}"#,
@@ -115,13 +113,12 @@ fn read_only_ops_report_the_repository_and_mutations_are_refused() {
         assert!(out.contains("reads a repository only"), "{out}");
     }
 
-    // Flag smuggling refused (op allowlist enforced).
+    // Flag injection is refused by the op allowlist.
     let smuggled = tool
         .invoke(r#"{"op":"show","rev":"--upload-pack=touch /tmp/pwned"}"#)
         .expect("a refusal is a result");
     assert!(smuggled.starts_with("REFUSED:"), "{smuggled}");
 
-    // Repository unchanged (read-only means read-only).
     let after = tool
         .invoke(r#"{"op":"log","count":5}"#)
         .expect("log succeeds");
@@ -135,7 +132,6 @@ fn tool_git_is_default_deny_without_execution() {
         return;
     };
 
-    // Workspace but no execution: tool loads but cannot run.
     let workspace_dir =
         std::env::temp_dir().join(format!("jk-toolgit-deny-{}", std::process::id()));
     std::fs::create_dir_all(&workspace_dir).unwrap();

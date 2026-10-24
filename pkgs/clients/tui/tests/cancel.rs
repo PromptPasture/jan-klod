@@ -1,11 +1,8 @@
 //! Acceptance #157, line 3: a cancelled turn **stops**, not just "message sent".
-//! (#133 precedent: a gate that looks like it runs but does not.)
 //!
-//! Fake server streams SSE `delta` frames forever (mid-turn stand-in). `cancel`
-//! on the `Rest` transport shuts down the client's socket. Without it,
-//! `stream_turn` stays blocked when the timeout elapses. A gate that doesn't
-//! run would pass silently (green despite nothing); the fake server here proves
-//! it must actually stop.
+//! The fake server streams `delta` frames forever. Without `cancel` shutting the
+//! socket, `stream_turn` would block past the timeout, so the test proves the
+//! turn actually stops (#133: a gate that looks like it runs but does not).
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener};
@@ -15,9 +12,7 @@ use std::time::Duration;
 
 use jk_tui::transport::{Rest, Transport};
 
-/// The fake core: accept one connection, read past request headers, then
-/// emit `delta` frames until the socket shuts down. Never stops on its own.
-/// Only `cancel` does.
+/// Fake core: emits `delta` frames until the socket shuts down, which only `cancel` does.
 fn fake_core() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds ephemeral port");
     let addr = listener.local_addr().expect("local addr");
@@ -45,8 +40,7 @@ fn fake_core() -> SocketAddr {
         loop {
             let frame = "event: delta\ndata: {\"text\":\"still going\"}\n\n";
             if stream.write_all(frame.as_bytes()).is_err() {
-                // `cancel` shut the socket down: this is the fake server
-                // discovering it, exactly as a real one would.
+                // `cancel` shut the socket down, as a real server would see it.
                 return;
             }
             thread::sleep(Duration::from_millis(20));
@@ -66,8 +60,7 @@ fn cancel_stops_a_turn_streaming_forever_over_rest() {
         let _ = tx.send(result);
     });
 
-    // Give the turn a moment to connect and start streaming before cancelling it.
-    // Cancelling a connection that has not been made yet is a different test.
+    // Cancel only once the turn is streaming; cancelling before connect tests something else.
     thread::sleep(Duration::from_millis(200));
     transport.cancel("s1").expect("a turn is running to cancel");
 
@@ -80,11 +73,7 @@ fn cancel_stops_a_turn_streaming_forever_over_rest() {
     );
 }
 
-/// #289: on Linux, a frame that arrives after the cancel's shutdown resets the
-/// connection, and the next read fails with ECONNRESET rather than seeing EOF.
-/// The reader is held off the socket across the cancel so the server's next
-/// frames always land in that window, instead of the rare timing that made the
-/// test above flaky.
+/// #289: on Linux a frame arriving after shutdown turns EOF into ECONNRESET. Holding the reader off the socket makes that window deterministic.
 #[test]
 fn a_cancel_that_resets_the_connection_still_ends_the_turn_cleanly() {
     let transport = std::sync::Arc::new(Rest::new(fake_core().to_string()));

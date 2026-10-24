@@ -133,8 +133,7 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
-    // Client A: read frames. On `prompt` frame, client B answers on second
-    // connection while stream stays open.
+    // On the `prompt` frame, a second connection answers while this stream stays open.
     let (stream_text, answered) = surface.serve_while(&agents, HashMap::new(), move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
@@ -153,7 +152,6 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
             let Ok(line) = line else { break };
             collected.push_str(&line);
             collected.push('\n');
-            // Prompt frame is cue: turn is parked waiting.
             if line.starts_with("event: prompt") && !answered {
                 answered = true;
                 let ack = post_answer(port, "p-1", "yes");
@@ -215,7 +213,7 @@ fn an_answer_with_nothing_pending_is_refused() {
         .expect("serves the stray answer");
     let response = client.join().expect("client thread");
 
-    // Route exists but nothing to answer returns 409, not 404 (no fake endpoint).
+    // 409, not 404: the route exists but nothing is pending.
     assert!(response.contains("409"), "conflict status: {response}");
     assert!(
         response.contains("no confirmation is pending"),
@@ -223,16 +221,8 @@ fn an_answer_with_nothing_pending_is_refused() {
     );
 }
 
-/// A bystander is **served** while another session is confirming (#225).
-///
-/// This is the direction that was impossible: `wait_for_answer` used to own
-/// the socket while a turn was parked and refuse every other caller with
-/// `409 no confirmation is pending` — a status about the *server's*
-/// single-threadedness, dressed as a statement about the caller's request.
-///
-/// The behaviour it replaces never had a test, which is how it survived
-/// being obviously wrong. This is that test, written in the direction that
-/// now works rather than the one that used to fail.
+/// A bystander is served while another session is confirming (#225). Previously
+/// the parked turn owned the socket and refused every other caller with 409.
 #[test]
 fn a_bystander_is_served_while_another_session_is_confirming() {
     short_answer_timeout();
@@ -289,13 +279,7 @@ fn a_bystander_is_served_while_another_session_is_confirming() {
     );
 }
 
-/// A request that *does* need the session waits for it and is then served —
-/// it is not refused either.
-///
-/// The distinction matters and is the honest limit of this slice: a
-/// bystander needing nothing from the session is answered immediately,
-/// while one needing it queues behind the turn. Queued is not refused, and
-/// `409` was refused.
+/// A request needing the busy session queues behind the turn; it is not refused.
 #[test]
 fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
     short_answer_timeout();
@@ -330,9 +314,7 @@ fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
         for line in reader.lines() {
             let Ok(line) = line else { break };
             if line.starts_with("event: prompt") && waiting.is_none() {
-                // Needs the session, which is parked — so this one cannot
-                // be answered until the turn finishes. It must still not
-                // be refused.
+                // The session is parked, so this waits for the turn to finish.
                 waiting = Some(thread::spawn(move || get(port, "/sessions")));
                 let _ = post_answer(port, "q-1", "yes");
             }

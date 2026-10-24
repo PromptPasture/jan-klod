@@ -1,22 +1,14 @@
 # jan-klod — headless-chat distribution.
 #
-# A chat channel, reached over Telegram (`jan-klod-gateway telegram`).
-# Nothing here touches the machine: no file tools, no registries, and
-# execution is off.
+# Chat channel over Telegram (`jan-klod-gateway telegram`). No file tools, registries or execution.
 #
 # Export OPENAI_API_KEY before starting.
 
-# --- telegram sender allowlist ----------------------------------------
-#
-# Telegram sender identity — asserted by the Telegram Bot API, not authenticated
-# by jan-klod — becomes the principal `telegram:<sender_id>`. An operator lists
-# which sender ids are permitted; the allowlist ships empty, so an unlisted sender
-# is refused before a session is created (#257).
-#
+# Telegram sender ids become principals `telegram:<sender_id>`. The Bot API asserts the id; jan-klod does not
+# authenticate it. Operators list permitted ids. Empty by default: every sender is refused before a session is created.
 telegram:
   allowed-senders: []
 
-# --- providers -------------------------------------------------------------
 extensions:
   provider:
     openai:
@@ -30,7 +22,6 @@ extensions:
       api-key: ${ANTHROPIC_API_KEY}
       model: claude-sonnet-4-6
 
-  # --- the turn's shaping phases -------------------------------------------
   interceptor:
     intent-router:
       enabled: true
@@ -51,13 +42,6 @@ storage:
 registry:
   trusted-keys: []
 
-# This distribution does not run commands, and says so rather than leaving the
-# key out. Absent would also deny — `enabled` defaults to false — but a reader
-# could not tell whether that was decided or forgotten, and a diff that turns
-# it on would show a key appearing rather than a value changing.
-#
-# `pkgs/host/host/tests/it/bundle_distributions.rs` asserts this, which is a better guard
-# than a second lock: it fails loudly where a contradictory sandbox pair would
-# hold quietly and mislead the next reader about what this distribution wanted.
+# Commands are off. Stated explicitly so the decision is visible. pkgs/host/host/tests/it/bundle_distributions.rs asserts this.
 execution:
   enabled: false

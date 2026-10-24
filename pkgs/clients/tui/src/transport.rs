@@ -1,9 +1,6 @@
 //! Transport to the core: over stdio to a spawned gateway, or over REST.
 //!
-//! # Why a trait
-//!
-//! REST handles are cloneable strings. Stdio can't: two threads share one pipe.
-//! Shared handles (`Send + Sync`) led to trait implementations.
+//! A trait because a stdio pipe cannot be shared between threads; REST handles can.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -27,8 +24,7 @@ pub struct SessionSummary {
     pub preview: String,
 }
 
-/// One way to drive a core. `Send + Sync`: handed to turn and answer threads
-/// concurrently, which is why this exists as a trait.
+/// One way to drive a core. `Send + Sync`, since turn and answer threads share it.
 pub trait Transport: Send + Sync {
     /// Allocate a new session and return its id.
     ///
@@ -36,23 +32,20 @@ pub trait Transport: Send + Sync {
     /// A human-readable message if the connection fails or the core refuses.
     fn create_session(&self) -> Result<String, String>;
 
-    /// All sessions with previews. Fresh per switcher open, never cached;
-    /// the core owns the session model.
+    /// All sessions with previews, fetched fresh each time: the core owns the session model.
     ///
     /// # Errors
     /// A human-readable message if the connection fails or the core refuses.
     fn session_list(&self) -> Result<Vec<SessionSummary>, String>;
 
-    /// One session's transcript. **Safe only when no turn streams**: reads off
-    /// the same pipe a turn reader holds. Switcher enforces this.
+    /// One session's transcript. **Only safe when no turn streams**: it reads the pipe a turn reader holds.
     ///
     /// # Errors
     /// A human-readable message if the connection fails or the session does
     /// not exist.
     fn session_get(&self, session: &str) -> Result<SessionGetResult, String>;
 
-    /// Stop the running turn. Over stdio: `turn/cancel`. Over REST: drop SSE.
-    /// Trait hides the transport difference.
+    /// Stop the running turn. Over stdio: `turn/cancel`. Over REST: drop the SSE connection.
     ///
     /// # Errors
     /// A human-readable message if the cancellation cannot be sent or acted on
@@ -82,16 +75,12 @@ pub trait Transport: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Over REST, always: shown to the user rather than logged, since a
-    /// keystroke that silently vanishes teaches the wrong lesson.
+    /// Over REST, always: shown to the user, since a silently dropped keystroke misleads.
     fn follow_up(&self, session: &str, message: &str) -> Result<(), String>;
 
     /// What the extensions contributed, as reported at connect.
     ///
-    /// Defaults to nothing: contributions travel on the client protocol's
-    /// notification, which only the stdio transport carries. Over REST the
-    /// menu simply gains no contributed entries, which the contract makes a
-    /// valid client rather than a degraded one.
+    /// Defaults to none: contributions travel on a notification only the stdio transport carries.
     fn contributions(&self) -> Vec<jk_protocol::Contributions> {
         Vec::new()
     }
@@ -100,8 +89,7 @@ pub trait Transport: Send + Sync {
     ///
     /// # Errors
     /// A human-readable message if the call cannot be sent or the extension
-    /// refuses it. Over REST, always: that projection does not carry
-    /// contributions, so there is nothing there to invoke.
+    /// refuses it. Over REST, always: that projection carries no contributions.
     fn invoke_contribution(&self, extension: &str, name: &str) -> Result<String, String> {
         let _ = (extension, name);
         Err("contributions are not available over this connection".to_owned())
@@ -110,14 +98,13 @@ pub trait Transport: Send + Sync {
     /// How to describe this connection in a status line.
     fn describe(&self) -> String;
 
-    /// Whether transport is alive (checked between turns). Defaults `true`;
-    /// most deaths are `Err` from `stream_turn`. Stdio overrides: child may exit silently.
+    /// Whether the transport is alive, checked between turns. Defaults to `true`; stdio
+    /// overrides it because its child can exit silently.
     fn alive(&self) -> bool {
         true
     }
 
-    /// Spawned gateway? Over stdio it dies with client, over `--addr` it
-    /// doesn't. Quit confirm needs this. Defaults `false`.
+    /// Whether the gateway is a child that dies with this client (stdio), not an `--addr` one. Defaults to `false`.
     fn is_stdio(&self) -> bool {
         false
     }
@@ -126,10 +113,7 @@ pub trait Transport: Send + Sync {
 /// REST + SSE gateway surface.
 pub struct Rest {
     addr: String,
-    /// Live turn socket, if any. `stream_turn` stores a clone for the turn
-    /// and clears it when done. `cancel` takes it and shuts it down to make
-    /// the reader see EOF (closed connection → `Flow::Stop` from client
-    /// side); an empty slot is how the reader tells a cancel from a failure.
+    /// The running turn's socket. `cancel` takes and shuts it down; an empty slot tells the reader that a cancel, not a failure, closed it.
     live: Arc<Mutex<Option<TcpStream>>>,
 }
 
@@ -158,9 +142,8 @@ impl Transport for Rest {
     }
 
     fn cancel(&self, _session: &str) -> Result<(), String> {
-        // Error, not silent no-op: `/cancel` "working" on nothing misleads.
-        // Taken, not borrowed: the reader checks the slot when a read fails,
-        // and an empty one means this cancel caused it (#289).
+        // An error, not a silent no-op: `/cancel` "working" on nothing misleads.
+        // `take` leaves the slot empty for the reader to see (#289).
         let taken = self
             .live
             .lock()
@@ -190,9 +173,7 @@ impl Transport for Rest {
     }
 
     fn follow_up(&self, _session: &str, _message: &str) -> Result<(), String> {
-        // Property of REST, not a limitation. No route reaches a turn in
-        // flight; only way to stop is drop SSE; no way to steer. Client names
-        // transport choice rather than silently dropping the keystroke.
+        // REST has no route to a turn in flight, so it cannot steer. Say so rather than drop the keystroke.
         Err(
             "this connection is REST, which cannot steer a turn in flight — \
              start the gateway over stdio to follow up, or wait for this turn \
@@ -209,26 +190,21 @@ impl Transport for Rest {
 /// Gateway log output handling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Logs {
-    /// Inherit stderr. Good for line REPL; interleaved logs are readable.
+    /// Inherit stderr: fine for the line REPL.
     Inherit,
-    /// Discard. Good for TUI, which owns terminal; logs would overlay
-    /// rendering. Better: log file (out of scope).
+    /// Discard stderr: the TUI owns the terminal, and logs would draw over it.
     Discard,
 }
 
-/// Spawned gateway, driven over stdin/stdout. One child, one pipe each way.
-/// `stream_turn` holds reader for the turn; `answer` takes writer briefly.
-/// Separate locks prevent deadlock on confirmation.
+/// Spawned gateway, driven over stdin/stdout. `stream_turn` holds the reader for the
+/// turn; `answer` takes the writer briefly. Separate locks prevent a deadlock on confirmation.
 pub struct Stdio {
     child: Mutex<Child>,
     writer: Mutex<ChildStdin>,
     reader: Mutex<BufReader<ChildStdout>>,
-    /// Request IDs: counter incremented by two threads atomically.
     next_id: AtomicI64,
     described: String,
-    /// What the core reported at the handshake, before the client had
-    /// anywhere to put it. Held rather than dropped: the notification arrives
-    /// once, ahead of the hello answer, and nothing is listening yet.
+    /// Set at the handshake, before any reader exists; the notification arrives once, ahead of the hello answer.
     contributed: Mutex<Vec<jk_protocol::Contributions>>,
 }
 
@@ -241,8 +217,7 @@ impl Stdio {
         Self::spawn_from(&crate::gateway_bin(), &[], logs)
     }
 
-    /// Spawn named gateway with `args` after `rpc`. Separate from `spawn` so
-    /// tests point at built binary and written config, not installed version.
+    /// Spawn the gateway at `bin` with `args` after `rpc`. Separate from `spawn` so tests can use a built binary.
     ///
     /// # Errors
     /// As `spawn`.
@@ -264,7 +239,6 @@ impl Stdio {
                     bin.display()
                 )
             })?;
-        // Each end owned once by the struct.
         let writer = child.stdin.take().ok_or("the gateway has no stdin")?;
         let reader = BufReader::new(child.stdout.take().ok_or("the gateway has no stdout")?);
         let transport = Self {
@@ -281,10 +255,8 @@ impl Stdio {
         }
     }
 
-    /// Handshake error → user-actionable message. Common failure: gateway
-    /// won't boot (no API key, unreadable config) — it explains itself on
-    /// stderr. "Connection closed" is unhelpful next to that. If child exited,
-    /// say so and point to stderr.
+    /// Turn a handshake failure into an actionable message. If the gateway exited,
+    /// its stderr says why, which a bare "connection closed" does not.
     fn explain(&self, err: String, logs: Logs) -> String {
         // `try_wait`, not `wait`: a version mismatch leaves the gateway running
         // and waiting for the next frame, and blocking on it would hang.
@@ -305,14 +277,12 @@ impl Stdio {
         })
     }
 
-    /// Agree on protocol version first. Core requires this, closes on
-    /// mismatch. Skipping it fails later, less clearly.
+    /// Agree on the protocol version first: the core closes on a mismatch.
     fn handshake(&self) -> Result<(), String> {
         let id = self.send(&Rpc::Hello {
             version: PROTOCOL_VERSION.to_owned(),
         })?;
-        // The contributions notification comes before this answer, so it is
-        // caught here or not at all.
+        // Contributions arrive before this answer, so they are caught here.
         let result = self.read_until(&id, &mut |event| {
             if let StreamEvent::Contributions(sets) = event {
                 if let Ok(mut held) = self.contributed.lock() {
@@ -340,8 +310,7 @@ impl Stdio {
         let frame = jsonrpc::Request::new(id.clone(), command.clone());
         let line = serde_json::to_string(&frame).map_err(|err| err.to_string())?;
         {
-            // Release writer before return so answer thread doesn't wait on
-            // a reading turn.
+            // Release the writer before returning, so `answer` never waits on a reading turn.
             let mut writer = self.writer.lock().map_err(|_| "the writer is poisoned")?;
             writeln!(writer, "{line}").map_err(|err| format!("writing to the gateway: {err}"))?;
             writer
@@ -352,9 +321,7 @@ impl Stdio {
     }
 
     /// Read frames until answer to `id`, handing notifications to `on_event`.
-    // Reader held for whole exchange on purpose: one turn owns stream until
-    // answer arrives. Prevents thread interleaving. Releasing sooner is the
-    // bug.
+    // Hold the reader for the whole exchange so turns cannot interleave frames.
     #[allow(clippy::significant_drop_tightening)]
     fn read_until(
         &self,
@@ -380,8 +347,7 @@ impl Stdio {
                     jsonrpc::Outcome::Error(error) if &response.id == id => {
                         return Err(error.message)
                     }
-                    // Other thread's answer: doesn't wait for reply. Refusal
-                    // matters (answer not taken), so surface it.
+                    // Another thread's refused request: surface it, since the answer was not taken.
                     jsonrpc::Outcome::Error(error) => on_event(StreamEvent::Error(error.message)),
                     jsonrpc::Outcome::Result(_) => {}
                 }
@@ -402,9 +368,7 @@ impl Stdio {
 }
 
 impl Stdio {
-    /// Send `session/create` and read answer. Safe only when no turn streams:
-    /// `stream_turn` holds reader, so racing call could steal the turn's frame.
-    /// Menu calls this for `/new`, when nothing else reads.
+    /// Only safe when no turn streams: `stream_turn` holds the reader, so a racing call could steal its frame.
     ///
     /// # Errors
     /// A human-readable message if the request cannot be sent, the response
@@ -419,8 +383,7 @@ impl Stdio {
             .ok_or_else(|| "the gateway's session/create answer carried no id".to_owned())
     }
 
-    /// Send `session/list` and read answer. Safe only when no turn streams
-    /// (see `session_get`).
+    /// Only safe when no turn streams (see `session_get`).
     fn session_list_over_stdio(&self) -> Result<Vec<SessionSummary>, String> {
         let id = self.send(&Rpc::SessionList)?;
         let result = self.read_until(&id, &mut |_| {})?;
@@ -446,7 +409,7 @@ impl Stdio {
             .collect()
     }
 
-    /// Send `session/get` and read answer. Safe only when no turn streams.
+    /// Only safe when no turn streams.
     fn session_get_over_stdio(&self, session: &str) -> Result<SessionGetResult, String> {
         let id = self.send(&Rpc::SessionGet {
             session: session.to_owned(),
@@ -520,18 +483,14 @@ impl Transport for Stdio {
             .unwrap_or_default()
     }
 
-    /// Safe only when no turn streams, like `session/get` and `session/create`
-    /// above: it reads the answer off the same pipe a turn's reader holds. The
-    /// menu is unreachable mid-turn, which is what keeps that true.
+    /// Only safe when no turn streams, like `session_get`: it reads its answer off the pipe a turn's reader holds.
     fn invoke_contribution(&self, extension: &str, name: &str) -> Result<String, String> {
         let id = self.send(&Rpc::SurfaceInvoke {
             extension: extension.to_owned(),
             name: name.to_owned(),
             arguments: Vec::new(),
         })?;
-        // A contribution may report that the set changed; the notification
-        // carrying the new set arrives before this answer, so it is taken
-        // here for the caller to read back.
+        // A changed contribution set arrives before this answer, so it is taken here.
         let result = self.read_until(&id, &mut |event| {
             if let StreamEvent::Contributions(sets) = event {
                 if let Ok(mut held) = self.contributed.lock() {
@@ -566,9 +525,7 @@ impl Transport for Stdio {
 }
 
 impl Drop for Stdio {
-    /// Process owned by client; ends with it. Killed, not hung up:
-    /// closing stdin lets gateway finish, but a turn in flight holds the wait.
-    /// Exiting client shouldn't block on the model.
+    /// Kill the child rather than close its stdin: a turn in flight would hold `wait` on the model.
     fn drop(&mut self) {
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
@@ -584,8 +541,6 @@ impl Drop for Stdio {
 pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
     match notification {
         Notification::TextDelta { text } => Some(StreamEvent::Delta(text.clone())),
-        // `{ name, .. }` used to discard id and arguments, so stdio threw away
-        // more than SSE got (#154, #161).
         Notification::ToolInvoked {
             id,
             name,
@@ -618,16 +573,11 @@ pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
             content: content.clone(),
             failed: *failed,
         }),
-        // Neither belongs in this client's stream. `session/updated`: it
-        // shows one session, so list moves are noise. `surface/contributions`:
-        // nothing renders them yet (#190), and ignoring them is a valid client
-        // rather than a gap — `wit/client-surface.wit` makes that a rule, so
-        // no extension may assume a contribution was rendered.
+        // Nothing renders contributions yet (#190); the event is still delivered.
         Notification::SurfaceContributions { extensions } => {
             Some(StreamEvent::Contributions(extensions.clone()))
         }
-        // `session/updated`: this client shows one session, so list moves are
-        // noise.
+        // Dropped: this client shows one session, so list changes are noise.
         Notification::SessionUpdated { .. } => None,
     }
 }
@@ -638,11 +588,7 @@ mod tests {
     use crate::StreamEvent;
     use jk_protocol::{Notification, PROTOCOL_VERSION};
 
-    /// Stdio half of #154: id and arguments reach client (used to be discarded).
-    /// Asserted here and in `tests/parse_frame.rs` because #81 had two faces,
-    /// only one reported. SSE+not-stdio pairing would be the same bug.
-    /// The contributions notification is not a turn event, but it arrives on
-    /// the same stream and has to reach the model rather than being dropped.
+    /// A contributions notification is not a turn event, but it must reach the client, not be dropped.
     #[test]
     fn a_contributions_notification_becomes_an_event() {
         let event = event_for(&Notification::SurfaceContributions {
@@ -660,6 +606,7 @@ mod tests {
         assert_eq!(sets[0].extension, "interceptor.system");
     }
 
+    /// Stdio half of #154: the call id and arguments reach the client.
     #[test]
     fn the_stdio_mapping_carries_the_call_id_and_its_arguments() {
         let event = event_for(&Notification::ToolInvoked {
@@ -678,8 +625,7 @@ mod tests {
         );
     }
 
-    /// Every notification is shown or deliberately dropped. Two are dropped
-    /// (named in `event_for` docs).
+    /// Every notification is shown or deliberately dropped; only `session/updated` is dropped.
     #[test]
     fn every_notification_is_decided_about() {
         let cases = [
@@ -752,8 +698,7 @@ mod tests {
         );
     }
 
-    /// Design point #103: answer with notification's session, not client's
-    /// current one.
+    /// Answer with the notification's session, not the client's current one (#103).
     #[test]
     fn an_ask_carries_the_session_it_was_asked_on() {
         let event = event_for(&Notification::Ask {
@@ -769,7 +714,7 @@ mod tests {
         assert_eq!(session, "the-turns-session");
     }
 
-    /// Missing gateway: user message with alternative, not panic or hang.
+    /// A missing gateway gives a message that names the alternative, not a panic or hang.
     #[test]
     fn a_missing_gateway_says_what_to_do_instead() {
         let outcome = Stdio::spawn_from(
@@ -784,7 +729,7 @@ mod tests {
         assert!(err.contains("--addr"), "names the alternative: {err}");
     }
 
-    /// Acceptance 3 transport half: refusal carries a reason.
+    /// REST refuses to steer, and the refusal says why and what to do instead.
     #[test]
     fn rest_refuses_to_steer_and_says_why_rather_than_how() {
         let rest = Rest::new("127.0.0.1:9".to_owned());
@@ -799,10 +744,9 @@ mod tests {
             refusal.contains("stdio") || refusal.contains("finish"),
             "a refusal a user can read says what to do instead: {refusal:?}"
         );
-        // Discard port, nothing sent.
     }
 
-    /// Method name is the contract; wrong one looks like ignored message.
+    /// The method name is the contract: a wrong one looks like an ignored message.
     #[test]
     fn steering_frames_as_the_method_the_core_matches_on() {
         let framed = serde_json::to_value(jk_protocol::Command::TurnFollowUp {
@@ -825,12 +769,8 @@ mod tests {
         );
     }
 
-    /// What leaves the client when steering. Protocol test above proves method
-    /// spelling; says nothing about which command `follow_up` builds. Probe
-    /// sent `turn/answer` instead, passed all tests, silent over real pipe
-    /// (core answers "no confirmation" to turn's reader). Drives fake gateway.
-    /// File not `sh -c`: `spawn_from` adds `rpc` before caller's args (real
-    /// gateway CLI fact, discovered by test).
+    /// Checks the frame `follow_up` writes, which the protocol test cannot see. Drives a
+    /// fake gateway script: `spawn_from` puts `rpc` before the caller's args, so a file, not `sh -c`.
     #[cfg(unix)]
     #[test]
     fn steering_over_stdio_writes_a_follow_up_frame() {
@@ -862,7 +802,7 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
             .follow_up("s1", "use the other file")
             .expect("steering is written, not waited for");
 
-        // Write is another process's read; wait for it, don't race.
+        // The fake gateway writes asynchronously; poll for the frame.
         let mut frame = String::new();
         for _ in 0..100 {
             if let Ok(text) = std::fs::read_to_string(&sent) {
@@ -887,10 +827,7 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
         );
     }
 
-    /// What `/cancel` over stdio sends. Same shape/reason as steering test:
-    /// probe sending wrong method passes protocol enum tests only. Real pipe:
-    /// core answers "no turn" to turn's reader; cancel doesn't happen. Drives
-    /// fake gateway.
+    /// Checks the frame `/cancel` writes over stdio, which the protocol test cannot see. Drives a fake gateway.
     #[cfg(unix)]
     #[test]
     fn cancel_over_stdio_writes_a_turn_cancel_frame() {
@@ -945,11 +882,7 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
         );
     }
 
-    /// Event loop notices dead gateway with nothing in flight. Script used to
-    /// exit after handshake, making pre-exit `alive()` a coin flip: child
-    /// often gone by `spawn_from` return, breaking "still alive" assertion.
-    /// Now script blocks on second frame; exit polled against deadline instead
-    /// of racing.
+    /// The script blocks after the handshake, so `alive()` is true before the exit. The exit is polled against a deadline, not raced.
     #[cfg(unix)]
     #[test]
     fn alive_reports_false_once_the_child_has_exited() {
@@ -972,15 +905,14 @@ IFS= read -r goodbye
         let Ok(gateway) = Stdio::spawn_from(&bin, &[], Logs::Discard) else {
             panic!("the fake gateway did not start or did not shake hands")
         };
-        // spawn_from returned: handshake done, script blocked on second read.
         assert!(gateway.alive(), "the child is still blocked on stdin");
 
-        // Any frame ends the read and script. Sent, not awaited.
+        // Any frame lets the script finish.
         gateway
             .send(&Rpc::SessionList)
             .expect("the frame that lets the fake gateway finish");
 
-        // Exit still async; deadline long enough only stuck child reaches it.
+        // The exit is asynchronous; the deadline only expires for a stuck child.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut seen_dead = false;
         while std::time::Instant::now() < deadline {
@@ -994,8 +926,7 @@ IFS= read -r goodbye
         assert!(seen_dead, "alive() never reported the child had exited");
     }
 
-    /// `create_session` reads own answer (unlike `answer`/`follow_up`), called
-    /// when no turn streams.
+    /// `create_session` reads its own answer, unlike `answer`/`follow_up`.
     #[cfg(unix)]
     #[test]
     fn create_session_over_stdio_reads_the_new_id() {
@@ -1004,8 +935,7 @@ IFS= read -r goodbye
         let dir = std::env::temp_dir();
         let bin = dir.join(format!("jk-gateway-create-{}.sh", std::process::id()));
 
-        // Handshake reply, then answer `session/create` with id. No file log;
-        // test reads id through client.
+        // Handshake reply, then the `session/create` answer.
         let script = format!(
             r#"#!/bin/sh
 IFS= read -r hello
@@ -1054,8 +984,7 @@ while IFS= read -r line; do :; done
         server_thread.join().unwrap();
     }
 
-    /// `session_list`/`session_get` read own answers (same shape as
-    /// `create_session`), safe only when nothing streams.
+    /// `session_list` and `session_get` read their own answers; only safe when nothing streams.
     #[cfg(unix)]
     #[test]
     fn session_list_and_session_get_over_stdio_read_their_own_answers() {
@@ -1108,8 +1037,7 @@ while IFS= read -r line; do :; done
         assert_eq!(result.messages[0].content, "hi");
     }
 
-    /// `session_list`/`session_get` over REST (#105): `GET /sessions` and
-    /// `GET /session/:id`, and the JSON comes back parsed.
+    /// `session_list` and `session_get` over REST: `GET /sessions` and `GET /session/:id`, parsed.
     #[test]
     fn session_list_and_session_get_over_rest_get_and_parse() {
         let server = tiny_http::Server::http("127.0.0.1:0").expect("binds ephemeral port");
@@ -1154,8 +1082,7 @@ while IFS= read -r line; do :; done
         server_thread.join().unwrap();
     }
 
-    /// Acceptance line 2's other half: cancelling with no turn running is a
-    /// clear error, not a no-op that looks like it worked.
+    /// Cancelling with no turn running is an error, not a no-op that looks like it worked.
     #[test]
     fn rest_cancel_with_nothing_running_is_a_clear_error() {
         let rest = Rest::new("127.0.0.1:9".to_owned());

@@ -1,18 +1,7 @@
-//! `tool-web-search` — search the web through a configured provider API, returning results as readable text.
+//! `tool-web-search` — search the web through a configured provider API, as readable text.
 //!
-//! `{ "query": "rust language" }` → plain text results one per line.
-//!
-//! ## Configuration and provider
-//!
-//! The tool reads `base-url` (the search API endpoint) and `api-key` (${VAR} environment variable
-//! reference) from `host-config`. The operator's choice of base-url determines which search
-//! provider is used and implicitly grants egress to that origin.
-//!
-//! ## Why disabled by default
-//!
-//! Web search results are reads, but queries are data that disclose what the model is working on,
-//! and the API key is a credential. `tool.web-search` is `enabled: false`; enabling is a
-//! deployment decision.
+//! `base-url` and `api-key` (an `${VAR}` reference) come from `host-config`; the base URL's origin is the granted egress.
+//! Disabled by default: queries disclose the model's work, and the key is a credential.
 
 /// Request timeout in milliseconds; a search that will not answer is not an answer.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -24,7 +13,6 @@ mod search {
     use std::fmt::Write as _;
 
     /// URL encode a string for use in query parameters.
-    /// Encodes spaces as %20 and other reserved characters.
     fn url_encode(s: &str) -> String {
         let mut result = String::new();
         for ch in s.chars() {
@@ -46,7 +34,7 @@ mod search {
     /// Construct a GET URL for the search provider.
     ///
     /// # Errors
-    /// Returns an error if required config is missing (`base_url` or `api_key`).
+    /// Errors when the base URL, API key or query is empty.
     pub fn construct_url(base_url: &str, query: &str, api_key: &str) -> Result<String, String> {
         if base_url.is_empty() {
             return Err("base-url is not configured".to_string());
@@ -58,34 +46,21 @@ mod search {
             return Err("query cannot be empty".to_string());
         }
 
-        // URL encode the query string
         let encoded_query = url_encode(query);
 
-        // Construct the URL with query parameters
-        // Assume base_url doesn't have query params; separate with ? if no existing ?
+        // base_url may already carry a query string.
         let separator = if base_url.contains('?') { "&" } else { "?" };
         let url = format!("{base_url}{separator}q={encoded_query}&api_key={api_key}");
         Ok(url)
     }
 
-    /// Parse JSON search results and format as plain text.
-    ///
-    /// Expected JSON structure (typical of `SerpAPI` and similar providers):
-    /// ```json
-    /// {
-    ///   "organic_results": [
-    ///     {"title": "...", "snippet": "...", "link": "..."},
-    ///     ...
-    ///   ]
-    /// }
-    /// ```
+    /// Format `organic_results` (SerpAPI-style) as one `title | snippet | link` line each.
     #[must_use]
     pub fn format_results(json_body: &str) -> String {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(json_body) else {
             return "(failed to parse search results as JSON)".to_string();
         };
 
-        // Try to extract results from common provider formats
         value
             .get("organic_results")
             .and_then(serde_json::Value::as_array)
@@ -291,11 +266,10 @@ mod component {
             let base_url = BASE_URL.with(std::cell::Cell::take);
             let api_key = API_KEY.with(std::cell::Cell::take);
 
-            // Restore the values for next invocation
+            // take() empties the cells; put the values back for the next call.
             BASE_URL.with(|u| u.set(base_url.clone()));
             API_KEY.with(|k| k.set(api_key.clone()));
 
-            // Construct the request URL
             let url = match search::construct_url(&base_url, query, &api_key) {
                 Ok(u) => u,
                 Err(reason) => return Ok(format!("CONFIGURATION ERROR: {reason}")),

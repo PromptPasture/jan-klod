@@ -1,20 +1,8 @@
 #!/usr/bin/env sh
-# Print the `jan-klod:interfaces` package version declared by a `wit/` directory.
-#
-# One reader, for one reason: the version is the single source for every
-# manifest's `api-version`, and a second parser is a second answer waiting to
-# disagree with the first. This was inline in `manifests.sh` until the version
-# needed reading from two places.
-#
-# It takes a **directory** rather than reading a fixed `wit/`, which is what
-# makes the second caller possible: a past revision's `wit/` can be materialised
-# (`git archive <ref> wit/ | tar -x -C <tmp>`) and read through this same code,
-# so "the version then" and "the version now" cannot be computed differently.
-#
-# Refuses rather than guesses. Two `.wit` files declaring different versions
-# have no answer to "which is the api-version", and neither does a directory
-# with no declaration at all — picking one would put a number into every
-# manifest that nothing in the tree actually claims.
+# Print the `jan-klod:interfaces` version declared by a wit/ directory: the single
+# source for every manifest's api-version. Takes a directory, so a past revision
+# (`git archive <ref> wit/ | tar -x -C <tmp>`) reads through the same code.
+# Refuses when files disagree or none declares it, rather than guessing.
 #
 # Usage: wit-version.sh <wit-dir>
 set -eu
@@ -26,8 +14,7 @@ WIT="${1:?usage: wit-version.sh <wit-dir>}"
     exit 1
 }
 
-# An unmatched glob stays literal in sh, and `sed` would then report a missing
-# file — true but confusing. Say which directory was empty instead.
+# An unmatched glob stays literal; name the directory instead of sed's error.
 set -- "$WIT"/*.wit
 [ -e "$1" ] || {
     echo "wit-version.sh: no *.wit files in $WIT" >&2

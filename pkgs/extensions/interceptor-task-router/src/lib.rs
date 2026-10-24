@@ -1,6 +1,4 @@
-//! Default `select-model` interceptor — classify request to task type,
-//! resolve routing table, set model. Pure Rust logic, unit-tested natively;
-//! Component-Model glue for `wasm32` only.
+//! Default `select-model` interceptor: classifies the request into a task and sets the routed model.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod routing;
@@ -42,7 +40,6 @@ mod component {
         host_log::log(level, "interceptor-task-router", message, &[]);
     }
 
-    /// Collect stream text and close handle.
     fn drain_text(handle: llm_provider::StreamHandle) -> String {
         let mut text = String::new();
         loop {
@@ -128,7 +125,6 @@ mod component {
 
             let task = classify(&user_message).unwrap_or_else(|| routing::DEFAULT_TASK.to_string());
 
-            // Resolve routing table entry.
             let Ok(raw) = host_config::get(&format!("routing.{task}")) else {
                 log(
                     LogLevel::Info,

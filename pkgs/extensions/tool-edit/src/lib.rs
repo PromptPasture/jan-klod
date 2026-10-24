@@ -1,13 +1,5 @@
 //! `tool-edit` — hash-anchored line edits routed through `host-fs`.
-//!
-//! Exposes `edit` tool with operations:
-//! - `view` → file as `anchor|lineno|text` lines
-//! - `replace` → replace lines `start..=end` with contents (empty deletes)
-//! - `insert` → insert contents before/after anchored line
-//!
-//! An **anchor** is `fnv1a32(lineno \0 text)`. If file changed, no anchor resolves;
-//! stale edits are rejected without write. Rejections return recovery text (re-view, retry).
-//! The patch logic is pure Rust (unit-tested natively); Component-Model glue only for wasm32.
+//! Anchor is `fnv1a32(lineno \0 text)`; a stale anchor is rejected without a write.
 
 // Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -18,9 +10,7 @@ mod edit {
     /// FNV-1a 32-bit prime.
     const FNV_PRIME: u32 = 0x0100_0193;
 
-    /// FNV-1a over `bytes`. Chosen because it needs no dependency and the anchor
-    /// is a change detector, not a security primitive — a collision costs a
-    /// rejected edit (both candidates are reported ambiguous), never a bad write.
+    /// FNV-1a. It only detects change, so a collision costs a rejected edit, never a bad write.
     fn fnv1a32(bytes: &[u8]) -> u32 {
         bytes.iter().fold(FNV_OFFSET, |hash, byte| {
             (hash ^ u32::from(*byte)).wrapping_mul(FNV_PRIME)
@@ -54,7 +44,6 @@ mod edit {
     }
 
     /// Split replacement `contents` into lines, dropping trailing newline.
-    /// The re-join supplies the separator between blocks.
     fn contents_lines(contents: &str) -> Vec<String> {
         if contents.is_empty() {
             return Vec::new();

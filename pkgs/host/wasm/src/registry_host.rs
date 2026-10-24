@@ -1,8 +1,5 @@
 //! Host adapter for `registry-skills` and `registry-mcp` extensions.
-//!
-//! Each registry gets its own `bindgen!` block, host state, and instantiation
-//! path (like `tool_host`). Both types share a `RegistryFleet` implementing
-//! `ToolInvoker` so the conductor dispatches skill and MCP calls the same way.
+//! Both share a `RegistryFleet` implementing `ToolInvoker`, so skill and MCP calls dispatch alike.
 
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
@@ -10,8 +7,6 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::host_fs::{FsError, Workspace};
 use crate::CoreError;
-
-// ─── skills world bindgen ────────────────────────────────────────────────────
 
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod skills_bind {
@@ -24,8 +19,6 @@ mod skills_bind {
 use skills_bind::jan_klod::interfaces::host_config as sk_config;
 use skills_bind::jan_klod::interfaces::host_fs as sk_fs;
 use skills_bind::jan_klod::interfaces::host_log as sk_log;
-
-// ─── mcp world bindgen ───────────────────────────────────────────────────────
 
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod mcp_bind {
@@ -40,8 +33,6 @@ use mcp_bind::jan_klod::interfaces::host_event as mcp_event;
 use mcp_bind::jan_klod::interfaces::host_http as mcp_http;
 use mcp_bind::jan_klod::interfaces::host_log as mcp_log;
 use mcp_bind::jan_klod::interfaces::host_process as mcp_proc;
-
-// ─── skills host state ───────────────────────────────────────────────────────
 
 struct SkillsHost {
     wasi: WasiCtx,
@@ -147,21 +138,16 @@ const fn to_sk_fs_err(err: FsError) -> sk_fs::FsError {
     }
 }
 
-// ─── mcp host state ──────────────────────────────────────────────────────────
-
 struct McpHost {
     wasi: WasiCtx,
     table: ResourceTable,
     component_id: String,
     config_json: String,
-    /// Bounded egress destinations, even though talking to third-party servers
-    /// is the whole purpose.
+    /// Bounded egress destinations.
     egress: crate::egress::EgressPolicy,
-    /// Bounded command runner for the long-lived half of `host-process` (#110).
-    /// Registries hold stdio MCP servers open, never run to completion.
+    /// Bounded command runner for the long-lived half of `host-process` (#110); stdio MCP servers stay open.
     process: crate::host_process::ProcessRunner,
     /// Long-lived children; same type and lifetime guarantee as `tool_host`.
-    /// Instance children die with it for the same reason tool children do.
     children: crate::host_process::Children,
 }
 
@@ -269,8 +255,6 @@ impl mcp_event::Host for McpHost {
     }
 }
 
-// ─── SkillsExtension ─────────────────────────────────────────────────────────
-
 /// An instantiated `registry-skills` extension.
 pub struct SkillsExtension {
     id: String,
@@ -355,8 +339,6 @@ impl SkillsExtension {
         }
     }
 }
-
-// ─── McpExtension ────────────────────────────────────────────────────────────
 
 /// An instantiated `registry-mcp` extension.
 impl mcp_proc::Host for McpHost {
@@ -511,8 +493,6 @@ impl McpExtension {
     }
 }
 
-// ─── RegistryFleet ───────────────────────────────────────────────────────────
-
 /// Skill metadata (mirrors `skill-info` WIT record).
 #[derive(Debug, Clone)]
 pub struct SkillMeta {
@@ -582,7 +562,6 @@ impl RegistryFleet {
         let mut out = Vec::new();
         for (idx, ext) in self.skills.iter_mut().enumerate() {
             for meta in ext.list_skills() {
-                // Keep cache in sync
                 if !self.skill_names.iter().any(|(n, _)| *n == meta.name) {
                     self.skill_names.push((meta.name.clone(), idx));
                 }
@@ -598,7 +577,6 @@ impl RegistryFleet {
         let mut out = Vec::new();
         for (idx, ext) in self.mcp.iter_mut().enumerate() {
             for meta in ext.list_tools() {
-                // Keep cache in sync
                 if !self.mcp_names.iter().any(|(n, _)| *n == meta.name) {
                     self.mcp_names.push((meta.name.clone(), idx));
                 }
@@ -622,7 +600,6 @@ impl jk_protocol::intercept::ToolInvoker for RegistryFleet {
         &mut self,
         call: &jk_protocol::turn::ToolCall,
     ) -> Option<jk_protocol::intercept::ToolInvocation> {
-        // Check skills first
         if let Some((_, idx)) = self.skill_names.iter().find(|(n, _)| n == &call.name) {
             let idx = *idx;
             return Some(match self.skills[idx].invoke(&call.name, &call.arguments) {
@@ -636,7 +613,6 @@ impl jk_protocol::intercept::ToolInvoker for RegistryFleet {
                 },
             });
         }
-        // Then MCP tools
         if let Some((_, idx)) = self.mcp_names.iter().find(|(n, _)| n == &call.name) {
             let idx = *idx;
             return Some(
@@ -656,8 +632,6 @@ impl jk_protocol::intercept::ToolInvoker for RegistryFleet {
     }
 }
 
-// ─── LazyRegistryFleet ───────────────────────────────────────────────────────
-
 /// A pending `registry-skills` instance—compiled, not instantiated.
 struct PendingSkills {
     id: String,
@@ -672,18 +646,14 @@ struct PendingMcp {
     component: Component,
     config_json: String,
     egress: crate::egress::EgressPolicy,
-    /// Carried not rebuilt: the runner is the boot path's confinement decision;
-    /// registries must get the same one tools get.
+    /// Carried, not rebuilt: the boot path's confinement decision, so registries get the one tools get.
     process: crate::host_process::ProcessRunner,
 }
 
 /// A registry fleet with compiled guests, not yet instantiated (#59).
 ///
-/// Mirrors [`crate::tool_host::LazyToolFleet`]—see its doc for why pending
-/// resolves together and the trade-off finer-grained laziness needs.
-///
-/// In shipped `config.yaml`, both `registry.skills` and `registry.mcp` are
-/// disabled, so this fleet is usually empty and `ensure` never runs.
+/// See [`crate::tool_host::LazyToolFleet`] for why pending resolves together. Usually empty in shipped
+/// config, where both registries are disabled.
 pub struct LazyRegistryFleet {
     engine: Engine,
     pending_skills: Vec<PendingSkills>,

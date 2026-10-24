@@ -1,11 +1,7 @@
-//! SQLite-backed key/value + history store.
+//! SQLite-backed key/value and turn-log store, host-side only (the sandbox has no filesystem).
 //!
-//! Implements full [`memory-store`](../../../../wit/memory-store.wit) (superset of
-//! `host-storage`). Host-side by design: sandbox gets no filesystem, database in
-//! core, served to extensions. SQLite embedded via `rusqlite`'s bundled feature.
-//!
-//! Two tables: `entries` (key/value on `namespace, key`; opaque JSON values),
-//! `events` (append-only turn log on `session, seq`). Timestamps in Unix seconds.
+//! Tables: `entries` (mutable key/value on `namespace, key`) and `events` (append-only log on `session, seq`).
+//! Timestamps are Unix seconds.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,10 +26,7 @@ pub struct Entry {
     pub updated_at: u64,
 }
 
-/// One row of a session's append-only turn log.
-///
-/// Not an [`Entry`]: an entry is current state addressed by a key and updated in
-/// place, while this is a fact addressed by its position and never changed.
+/// One row of a session's append-only turn log. Unlike an [`Entry`], it is never updated in place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoggedEvent {
     /// The session whose log this belongs to.
@@ -44,8 +37,7 @@ pub struct LoggedEvent {
     pub ts: u64,
     /// Which kind of event this is — the payload's discriminator.
     pub kind: String,
-    /// Opaque JSON payload. The store never interprets it; the envelope and its
-    /// version are the caller's business.
+    /// Opaque JSON payload; the store never interprets it.
     pub payload: String,
 }
 
@@ -63,8 +55,7 @@ pub enum StoreError {
     },
 }
 
-/// A SQLite-backed store. One [`Connection`]; the core owns a single instance and
-/// brokers `host-storage` calls into it.
+/// A SQLite-backed store over one [`Connection`].
 pub struct Store {
     conn: Connection,
 }
@@ -73,8 +64,7 @@ impl Store {
     /// Open (creating if needed) a store at `path`, ensuring the schema exists.
     ///
     /// # Errors
-    /// Returns [`StoreError::Backend`] if the database cannot be opened or the
-    /// schema cannot be created.
+    /// [`StoreError::Backend`] if the database or schema cannot be created.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let conn = Connection::open(path).map_err(|e| StoreError::Backend {
             detail: e.to_string(),
@@ -85,7 +75,7 @@ impl Store {
     /// Open an ephemeral in-memory store (tests, transient state).
     ///
     /// # Errors
-    /// Returns [`StoreError::Backend`] if the connection cannot be created.
+    /// [`StoreError::Backend`] if the connection cannot be created.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory().map_err(|e| StoreError::Backend {
             detail: e.to_string(),
@@ -117,20 +107,17 @@ impl Store {
             detail: e.to_string(),
         })?;
 
-        // Add prev_digest column if it doesn't exist (for backward compatibility with old databases)
+        // Older databases predate prev_digest.
         let store = Self { conn };
         store.ensure_prev_digest_column()?;
 
         Ok(store)
     }
 
-    /// Upsert `value` at `(namespace, key)`, returning the stored entry.
-    /// `created_at` is preserved across updates; `updated_at` advances.
+    /// Upsert `value` at `(namespace, key)`, keeping `created_at` and advancing `updated_at`.
     ///
     /// # Errors
-    /// Returns [`StoreError::Backend`] (with the SQL error message) on a SQL failure,
-    /// or [`StoreError::NotFound`] if the row cannot be read back (should not happen
-    /// after a successful write).
+    /// [`StoreError::Backend`] on a SQL failure, or [`StoreError::NotFound`] if the row cannot be read back.
     pub fn set(&self, namespace: &str, key: &str, value: &str) -> Result<Entry, StoreError> {
         let now = now_secs();
         self.conn
@@ -283,15 +270,11 @@ impl Store {
             })
     }
 
-    // ─── The append-only turn log ────────────────────────────────────────────
-
     /// Append one event to `session`'s log, returning the row.
     ///
-    /// `seq` allocated in-statement (`SELECT COALESCE(MAX(seq), 0) + 1 RETURNING seq`)
-    /// so no other append can claim that maximum. Core serialises callers via
-    /// `Arc<Mutex<Store>>` anyway. No update/delete: the log records what happened;
-    /// an API that rewrites it makes every replay a claim about the present.
-    /// [`Self::purge_session_events`] is the sole exception for forgetting sessions.
+    /// `seq` is allocated in-statement so no other append can claim the same maximum. The log is never
+    /// updated or deleted in place: rewriting it would make every replay a claim about the present.
+    /// [`Self::purge_session_events`] is the sole exception, for forgetting sessions.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -304,9 +287,7 @@ impl Store {
         self.append_event_at(session, kind, payload, now_secs())
     }
 
-    /// Append one event with an explicit timestamp (for migrations). Stamping
-    /// old transcripts with migration time would date them to the upgrade, which
-    /// the log must never invent.
+    /// Append one event with an explicit timestamp, for migrations: old transcripts keep their original time.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -317,7 +298,6 @@ impl Store {
         payload: &str,
         ts: u64,
     ) -> Result<LoggedEvent, StoreError> {
-        // Compute the digest of the previous event (if it exists)
         let prev_digest: Option<String> = self
             .conn
             .query_row(
@@ -342,7 +322,6 @@ impl Store {
                 detail: e.to_string(),
             })?;
 
-        // Insert the new event with the computed prev_digest
         let seq: i64 = self
             .conn
             .query_row(
@@ -371,9 +350,7 @@ impl Store {
         })
     }
 
-    /// Every event logged for `session`, in order. Unbounded on purpose: callers
-    /// (projection, fork, tests) want the whole log. [`Self::recent_turns`] is
-    /// the bounded sibling for `replay`, which wants only the end.
+    /// Every event logged for `session`, in order. Unbounded on purpose; [`Self::recent_turns`] is the bounded sibling for `replay`.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -406,21 +383,13 @@ impl Store {
             })
     }
 
-    /// Tail of `session`'s log with at most `turns` turns. Bounded sibling of
-    /// [`Self::session_events`] for `replay` to avoid reading long sessions.
+    /// Tail of `session`'s log with at most `turns` turns: the bounded sibling of [`Self::session_events`].
     ///
-    /// A turn begins at `user-message` and spans multiple rows (tool calls add two).
-    /// A plain `LIMIT` would cut turns in half; instead this finds the earliest
-    /// `user-message` seq among the last `turns` messages and reads from there.
-    /// ([`crate::projection::last_turns`] has the in-memory rule this must match.)
+    /// A turn starts at `user-message` and spans several rows, so a plain `LIMIT` would cut turns in half.
+    /// Instead this reads from the earliest `user-message` among the last `turns` messages; `COALESCE`
+    /// covers sessions with fewer turns. Must match [`crate::projection::last_turns`].
     ///
-    /// `COALESCE(MIN(seq), 0)` handles sessions with fewer than `turns` messages:
-    /// the inner query returns fewer rows or zero, `MIN` is the earliest or `NULL`,
-    /// and `COALESCE` turns `NULL` to `0` (seq no row can be below), matching
-    /// `last_turns` returning the whole slice when there are not that many turns.
-    ///
-    /// `turns == 0` exits before the query runs (not `LIMIT 0`): an empty inner
-    /// query would still make `COALESCE` fall back to `0` and read the whole log.
+    /// `turns == 0` returns before the query: an empty inner query would otherwise read the whole log.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -466,11 +435,8 @@ impl Store {
             })
     }
 
-    /// Every session with logged events, most recent first. Event-log counterpart
-    /// to [`Self::list_namespaces`], needed separately: namespaces exist in
-    /// `entries` while transcripts are written there; `list_namespaces` reports
-    /// nothing once they stop, while the log persists. Both ordered by `MAX(ts)`
-    /// DESC then id to agree while both exist.
+    /// Every session with logged events, most recent first. Separate from [`Self::list_namespaces`]:
+    /// transcripts stop writing `entries`, but the log persists.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -495,13 +461,10 @@ impl Store {
             })
     }
 
-    /// Copy `session`'s events up to `at_seq` into `into`, renumbered from 1.
-    /// Returns how many rows were copied.
+    /// Copy `session`'s events up to `at_seq` into `into`, renumbered from 1; returns how many were copied.
     ///
-    /// Original `ts` is preserved (these are the same facts; stamping them with
-    /// fork's creation time would claim they happened then). `seq` is assigned by
-    /// `ROW_NUMBER()` not carried, so fork's log is `1..n` by construction; today
-    /// that's the identity (appends contiguous), but this keeps it true always.
+    /// Original `ts` is kept: these are the parent's facts. `seq` is renumbered via `ROW_NUMBER()`,
+    /// so the fork log is `1..n` by construction.
     ///
     /// # Errors
     /// [`StoreError::Backend`] if `into` already has events (a fork must start
@@ -526,8 +489,7 @@ impl Store {
         Ok(copied as u64)
     }
 
-    /// Delete every event logged for `session` — the log's only removal path,
-    /// matching [`Self::purge_namespace`]'s shape for entries.
+    /// Delete every event logged for `session`: the log's only removal path.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -571,11 +533,8 @@ impl Store {
             })
     }
 
-    /// Ensure the `prev_digest` column exists in the events table.
-    /// For backward compatibility, this adds the column if it doesn't exist and
-    /// runs the migration to populate digests.
+    /// Add the `prev_digest` column to `events` if it is missing, then backfill it.
     fn ensure_prev_digest_column(&self) -> Result<(), StoreError> {
-        // Check if the column exists using PRAGMA table_info
         let has_column = {
             let mut stmt = self
                 .conn
@@ -596,14 +555,12 @@ impl Store {
         };
 
         if !has_column {
-            // Add the column if it doesn't exist
             self.conn
                 .execute("ALTER TABLE events ADD COLUMN prev_digest TEXT", [])
                 .map_err(|e| StoreError::Backend {
                     detail: e.to_string(),
                 })?;
 
-            // Run the migration to populate prev_digest values
             self.migrate_digests()?;
         }
 
@@ -619,16 +576,13 @@ impl Store {
         format!("{:x}", hasher.finalize())
     }
 
-    /// Idempotent migration to populate `prev_digest` for all events in all sessions.
-    /// For each session, walks events in order and sets `prev_digest` to the digest
-    /// of the previous event (or NULL for the first event).
+    /// Idempotent backfill of `prev_digest`: each event stores its predecessor's digest; the first stores NULL.
     ///
     /// # Errors
     /// Returns [`StoreError::Backend`] on any SQL failure.
     pub(crate) fn migrate_digests(&self) -> Result<u64, StoreError> {
         let mut migrated = 0;
 
-        // Get list of all sessions
         let sessions: Vec<String> = {
             let mut stmt = self
                 .conn
@@ -647,7 +601,6 @@ impl Store {
                 })?
         };
 
-        // For each session, compute digests and populate prev_digest
         for session in sessions {
             let events: Vec<(u64, u64, String, String)> = {
                 let mut stmt = self
@@ -677,10 +630,8 @@ impl Store {
                     })?
             };
 
-            // For each event after the first, compute the digest of the previous event
             for (i, (seq, _ts, _kind, _payload)) in events.iter().enumerate() {
                 if i == 0 {
-                    // First event has no previous, so prev_digest is NULL
                     continue;
                 }
 
@@ -704,15 +655,13 @@ impl Store {
         Ok(migrated)
     }
 
-    /// Internal method to verify a session's event chain integrity.
-    /// Returns a `ChainVerification` result, which is used by `event_log.rs`.
+    /// Verify a session's `prev_digest` chain, returning a [`ChainVerification`] for `event_log.rs`.
     pub(crate) fn verify_chain_internal(
         &self,
         session: &str,
     ) -> Result<crate::event_log::ChainVerification, crate::event_log::VerifyError> {
         use crate::event_log::{ChainStatus, ChainVerification, VerifyError};
 
-        // Query all events for the session with their prev_digest values
         let mut stmt = self
             .conn
             .prepare(
@@ -739,7 +688,6 @@ impl Store {
             return Err(VerifyError::NotFound(session.to_string()));
         }
 
-        // Verify the chain
         for (i, (seq, _ts, kind, _payload, prev_digest)) in events.iter().enumerate() {
             if i == 0 {
                 // First event must have NULL prev_digest
@@ -756,12 +704,10 @@ impl Store {
                 continue;
             }
 
-            // For events after the first, compute the digest of the previous event
             let (prev_seq, prev_ts, prev_kind, prev_payload, _) = &events[i - 1];
             let computed_digest =
                 Self::compute_event_digest(*prev_seq, *prev_ts, prev_kind, prev_payload);
 
-            // Check if the stored prev_digest matches the computed one
             if let Some(stored_digest) = prev_digest {
                 if stored_digest != &computed_digest {
                     return Ok(ChainVerification {

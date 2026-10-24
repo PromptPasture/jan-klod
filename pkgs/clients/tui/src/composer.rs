@@ -1,18 +1,7 @@
-//! The message buffer and its caret (#150).
+//! The message buffer and its caret: a model with no rendering, so tests run without a terminal.
 //!
-//! A model, not a widget: it holds text and a position and knows how to edit
-//! them, and something else decides what that looks like. That split is what
-//! lets every test here run without a terminal, the way `App` already does.
-//!
-//! # Graphemes, not `char` (lesson learned: emoji + pop left a stray joiner)
-//!
-//! All motion and deletion use **grapheme clusters**, caret always on boundary.
-//! `unicode-segmentation` is free (via [`crate::wrap`], from `ratatui-core`).
-//!
-//! # A word is run of non-whitespace
-//!
-//! Shell convention: `Ctrl+W` deletes to last space, not Unicode word boundaries
-//! (which would split `foo.bar` into three words — not what users typing paths want).
+//! Motion and deletion use grapheme clusters, so the caret never lands inside
+//! one. A word is a run of non-whitespace, as in shells, so `foo.bar` is one word.
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -45,7 +34,7 @@ impl Composer {
         self.caret
     }
 
-    /// Whether there is anything to send (whitespace-only = empty for `Ctrl+U` dispatch).
+    /// Whether there is anything to send; whitespace alone counts as empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.text.trim().is_empty()
@@ -62,21 +51,14 @@ impl Composer {
         Some(std::mem::take(&mut self.text).trim().to_string())
     }
 
-    /// Replace the whole buffer, caret at the end.
-    ///
-    /// For recall (#151), which swaps one message for another wholesale rather
-    /// than editing the one that is there.
+    /// Replaces the whole buffer, caret at the end. Used for recall (#151).
     pub fn set(&mut self, text: &str) {
         self.text.clear();
         self.text.push_str(text);
         self.caret = self.text.len();
     }
 
-    /// Replace the `count` bytes immediately before the caret with `text`.
-    ///
-    /// For accepting a completion (#153), which swaps the typed fragment for the
-    /// path it matched and leaves the caret after it — mid-message, so
-    /// [`Composer::set`] is the wrong tool.
+    /// Replaces the `count` bytes before the caret with `text`, for accepting a completion (#153).
     pub fn replace_before(&mut self, count: usize, text: &str) {
         let start = self.caret.saturating_sub(count);
         self.text.replace_range(start..self.caret, text);
@@ -95,7 +77,6 @@ impl Composer {
         self.insert(c.encode_utf8(&mut buf));
     }
 
-    /// The byte index of the grapheme boundary before the caret.
     fn prev_boundary(&self) -> Option<usize> {
         self.text[..self.caret]
             .grapheme_indices(true)
@@ -103,7 +84,6 @@ impl Composer {
             .map(|(i, _)| i)
     }
 
-    /// The byte index of the grapheme boundary after the caret.
     fn next_boundary(&self) -> Option<usize> {
         self.text[self.caret..]
             .graphemes(true)
@@ -207,13 +187,10 @@ impl Composer {
         self.caret = start;
     }
 
-    /// The most rows the composer occupies before it scrolls instead of growing.
+    /// Rows the composer grows to before it scrolls.
     pub const MAX_ROWS: usize = 8;
 
-    /// One wrapped row: start byte, text, hard end (newline or buffer end)?
-    /// Byte offset enables vertical motion (Vec<String> loses that info).
-    /// Soft wrap: last byte of row 1 == first byte of row 2 (no char between),
-    /// so up from row 2 would land back on row 2; thus stops one grapheme short on soft wraps.
+    /// Wrapped rows with byte offsets, which vertical motion needs; a `Vec<String>` loses them.
     fn layout(&self, width: usize) -> (Vec<Row>, (usize, usize)) {
         let width = width.max(1);
         let mut rows: Vec<Row> = Vec::new();
@@ -255,21 +232,15 @@ impl Composer {
         (rows, caret)
     }
 
-    /// Wrapped rows and caret position `(row, column)`.
-    /// Not [`crate::wrap::wrap`] (breaks on words, collapses whitespace—wrong for editing).
-    /// Wraps at pane edge between graphemes, preserving every byte.
-    /// Columns are display cells (CJK chars are 2 cells wide).
+    /// Wrapped rows and caret `(row, column)`. Breaks between graphemes, not words, so every byte survives.
+    /// Columns are display cells.
     #[must_use]
     pub fn rows(&self, width: usize) -> (Vec<String>, (usize, usize)) {
         let (rows, caret) = self.layout(width);
         (rows.into_iter().map(|r| r.text).collect(), caret)
     }
 
-    /// The byte offset at `column` cells into `row`.
-    ///
-    /// A soft-wrapped row's end is the next row's start, so landing there would
-    /// silently move the caret a row further than asked; on those rows the
-    /// column clamps to the last grapheme instead.
+    /// The byte offset at `column` cells into `row`. A soft-wrapped row clamps before its end, which is the next row's start.
     fn offset_in_row(row: &Row, column: usize) -> usize {
         let mut used = 0;
         let mut last = row.start;
@@ -287,7 +258,6 @@ impl Composer {
         }
     }
 
-    /// One wrapped row of the composer. See [`Composer::layout`].
     /// Whether the caret is on the first visual row.
     #[must_use]
     pub fn on_first_row(&self, width: usize) -> bool {
@@ -301,8 +271,7 @@ impl Composer {
         row + 1 >= rows.len()
     }
 
-    /// Move caret one visual row up (not logical: `↑` from wrapped line row 2 → row 1 of same line).
-    /// Column taken from current position, not remembered (if added, belongs here).
+    /// Moves the caret one visual row up, not one logical line. The column is taken from the current position.
     pub fn up(&mut self, width: usize) {
         let (rows, (row, col)) = self.layout(width);
         if row == 0 {
@@ -311,7 +280,7 @@ impl Composer {
         self.caret = Self::offset_in_row(&rows[row - 1], col);
     }
 
-    /// Move the caret one visual row down. See [`Composer::up`].
+    /// Moves the caret one visual row down. See [`Composer::up`].
     pub fn down(&mut self, width: usize) {
         let (rows, (row, col)) = self.layout(width);
         if row + 1 >= rows.len() {
@@ -320,11 +289,7 @@ impl Composer {
         self.caret = Self::offset_in_row(&rows[row + 1], col);
     }
 
-    /// The rows actually on screen, and the caret within them.
-    ///
-    /// Grows to [`Self::MAX_ROWS`] and then scrolls rather than growing further,
-    /// keeping the caret's row visible — a composer that grew without limit
-    /// would eat the transcript it is a reply to.
+    /// The rows on screen and the caret within them. Scrolls past [`Self::MAX_ROWS`], keeping the caret visible.
     #[must_use]
     pub fn visible(&self, width: usize) -> (Vec<String>, (usize, usize)) {
         let (rows, (caret_row, caret_col)) = self.rows(width);
@@ -336,7 +301,7 @@ impl Composer {
         (rows[start..=last].to_vec(), (caret_row - start, caret_col))
     }
 
-    /// How many lines the text occupies, at minimum one.
+    /// Number of logical lines, at least one.
     #[must_use]
     pub fn line_count(&self) -> usize {
         self.text.split('\n').count()
@@ -353,7 +318,6 @@ mod tests {
         c
     }
 
-    /// #150's first Acceptance line.
     #[test]
     fn type_move_by_word_and_delete_a_word() {
         let mut c = typed("alpha beta gamma");
@@ -371,8 +335,6 @@ mod tests {
         assert_eq!(c.text(), "alpha ", "the space before the word goes too");
     }
 
-    /// The bug the old `String::pop` buffer had, and the reason this module
-    /// exists rather than a caret being bolted onto it.
     #[test]
     fn backspace_removes_a_grapheme_not_a_char() {
         let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
@@ -395,7 +357,7 @@ mod tests {
         assert_eq!(c.caret(), 0, "one cluster back is the start");
         c.right();
         assert_eq!(c.caret(), family.len());
-        // Overrunning either end is a no-op rather than a panic.
+        // Overrunning either end is a no-op.
         c.right();
         c.right();
         assert_eq!(c.caret(), family.len());
@@ -426,8 +388,6 @@ mod tests {
         assert_eq!(c.caret(), 5);
     }
 
-    /// `Ctrl+U`'s two sides share exactly one condition, so this is what #148's
-    /// scroll arm and this module's kill arm both ask.
     #[test]
     fn whitespace_only_counts_as_empty() {
         assert!(Composer::default().is_empty());
@@ -450,7 +410,6 @@ mod tests {
         assert_eq!(blank.text(), "", "and the whitespace does not linger");
     }
 
-    /// Acceptance line 4: it grows, then scrolls rather than growing further.
     #[test]
     fn the_composer_grows_to_eight_rows_and_then_scrolls() {
         let mut c = Composer::default();
@@ -482,7 +441,6 @@ mod tests {
         assert_eq!(shown.len(), Composer::MAX_ROWS);
     }
 
-    /// The reason this does not reuse `wrap::wrap`.
     #[test]
     fn wrapping_the_buffer_preserves_every_byte() {
         let c = typed("a  b   c");
@@ -509,7 +467,7 @@ mod tests {
 
     #[test]
     fn vertical_motion_moves_by_visual_row_not_logical_line() {
-        // One logical line, wrapped into three rows of four cells.
+        // One logical line wrapped into three rows of four cells.
         let mut c = typed("abcdefghijkl");
         assert_eq!(c.rows(4).0.len(), 3);
         assert!(c.on_last_row(4) && !c.on_first_row(4));
@@ -543,10 +501,7 @@ mod tests {
             "\nbravo",
             "column 5 on a two-character row clamps to its end"
         );
-        // The column carried up is the one the caret has *now* — 2, the end of
-        // `xy` — not the 5 it started with. `Composer::up` takes the column
-        // fresh each press rather than remembering it across them, and this is
-        // what that reads like from outside.
+        // The column is re-read from the caret on each press, so it is 2 here, not 5.
         c.up(40);
         assert_eq!(
             &c.text()[c.caret()..],
@@ -555,8 +510,6 @@ mod tests {
         );
     }
 
-    /// Columns are cells, so a caret above a CJK row lands where it looks like
-    /// it should rather than two characters early.
     #[test]
     fn vertical_motion_counts_cells() {
         let mut c = typed("日本語\nabcdef");

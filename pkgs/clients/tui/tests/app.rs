@@ -69,7 +69,7 @@ fn selecting_an_option_and_answering_clears_the_wait() {
     });
     assert!(app.pending_prompt().is_some(), "the turn is waiting");
 
-    app.prompt_jump(1); // "yes"
+    app.prompt_jump(1);
     assert_eq!(
         app.take_answer(),
         Some(("s1".to_string(), "yes".to_string()))
@@ -86,8 +86,7 @@ fn an_unanswered_prompt_takes_the_prompts_own_default() {
         options: vec!["yes".into(), "no".into()],
         default: "no".into(),
     });
-    // Enter with nothing else pressed must do the safe thing: the initial
-    // selection is already `default`.
+    // Enter alone takes the safe default, which is already selected.
     assert_eq!(
         app.take_answer(),
         Some(("s1".to_string(), "no".to_string()))

@@ -1,16 +1,7 @@
-//! Telegram bot integration (headless). Bot API is outbound HTTP only
-//! (`getUpdates` long-poll, `sendMessage` POST); no `host-socket` needed.
-//! HTTP injected as [`Fetch`] closure for offline testing.
+//! Telegram bot (headless): `getUpdates` long-poll and `sendMessage` POST over an injected [`Fetch`]; chat id = session id.
 //!
-//! Message → turn → answer (chat id = session id).
-//!
-//! ## Confirmations in chat
-//!
-//! Headless path still gates on permissions. [`ChatDriver`] asks as a message,
-//! treats next user message as answer, long-polls `getUpdates` while blocked.
-//!
-//! Other chats' updates deferred, not dropped (preserve poll offset), run after
-//! current turn. Wait bounded by [`MAX_ANSWER_POLLS`]; expiry takes prompt default.
+//! [`ChatDriver`] asks confirmations as chat messages and takes the next message as the answer; other chats' updates
+//! are deferred, not dropped. The wait is bounded by [`MAX_ANSWER_POLLS`]; expiry takes the prompt default.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -33,21 +24,15 @@ pub struct Update {
     pub text: String,
 }
 
-/// The outbound HTTP the poller needs: `(method, url, headers, body) -> body`.
-/// Injected so tests can feed canned Telegram responses. The binary backs it with
-/// the real `host-http` client.
+/// The outbound HTTP the poller needs: `(method, url, headers, body) -> body`. Injected so tests can feed canned responses.
 pub type Fetch<'a> =
     &'a dyn Fn(&str, &str, &[(&str, &str)], Option<&[u8]>) -> Result<Vec<u8>, String>;
 
 /// Long-poll seconds passed to `getUpdates` (server holds the request open).
 const LONG_POLL_SECS: u32 = 30;
 
-/// How many long-polls a turn waits for its confirmation before giving up and
-/// taking the prompt's default.
-///
-/// Bounded by *polls* rather than wall-clock so the behaviour is identical under a
-/// canned `fetch` in a test and a real 30s-blocking one in production: four polls
-/// is roughly two minutes on the wire, and exactly four iterations in a test.
+/// Long-polls a turn waits for its confirmation before taking the prompt's default.
+/// Counted in polls, not wall-clock, so a canned test `fetch` behaves like the real 30s-blocking one.
 const MAX_ANSWER_POLLS: u32 = 4;
 
 /// Parse a `getUpdates` response body into the text messages it carries.
@@ -79,18 +64,12 @@ pub fn next_offset(updates: &[Update]) -> Option<i64> {
     updates.iter().map(|u| u.update_id).max().map(|max| max + 1)
 }
 
-/// One poll cycle: fetch updates from `offset`, drive each message through the
-/// loop, send the answer back, and return the next offset (unchanged if idle).
+/// One poll cycle: fetch updates from `offset`, drive each message through the loop, reply, and return the next offset.
 ///
-/// `allowed_senders`: The list of sender ids permitted to drive turns. Senders not
-/// on the list are refused before a session is created, as per #257 (Telegram sender
-/// allowlist). An empty list denies all senders; the allowlist is loaded from config
-/// and defaults to empty (deny all) if the telegram section is absent. If 22b (#185)
-/// has moved the bot to a guest, the allowlist moves to the guest's config and the
-/// principal storage moves to the guest's session context — same rule.
+/// `allowed_senders` gates who may drive turns (#257); empty denies all. Refused before a session is created.
 ///
 /// # Errors
-/// Returns a transport error string if `getUpdates` or a `sendMessage` fails.
+/// Transport error string if `getUpdates` or a `sendMessage` fails.
 pub fn poll_once(
     agent: &mut AgentSession,
     fetch: Fetch,
@@ -101,16 +80,14 @@ pub fn poll_once(
     let body = fetch("GET", &get_updates_url(token, offset), &[], None)?;
     let updates = parse_updates(&body);
 
-    // The offset and the deferred queue are shared with the driver: a turn that
-    // stops to ask a question polls for its answer, which consumes updates the
-    // outer loop must not re-fetch (offset) or lose (deferred).
+    // Shared with the driver: a turn that stops to ask polls for its answer, consuming updates the outer loop
+    // must not re-fetch or lose.
     let cursor = Rc::new(Cell::new(next_offset(&updates).unwrap_or(offset)));
     let deferred = Rc::new(RefCell::new(Vec::new()));
 
     let mut queue: VecDeque<Update> = updates.into_iter().collect();
     while let Some(update) = queue.pop_front() {
-        // Check sender against allowlist (empty by default denies all).
-        // Refuse before a session is created (#257).
+        // Refused before a session is created (#257); an empty allowlist denies all.
         if let Some(allowed) = allowed_senders {
             if !allowed.contains(&update.sender_id) {
                 eprintln!(

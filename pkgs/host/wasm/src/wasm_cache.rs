@@ -1,40 +1,12 @@
-//! Wasmtime's built-in compiled-artefact cache (wired into Engine each boot),
-//! not hand-rolled.
+//! Wasmtime's built-in compiled-artefact cache, wired into the `Engine` each boot (not hand-rolled).
 //!
-//! # Why built-in cache, not #60's fallback
+//! The built-in key covers bytes, Wasmtime version, target and engine config; corrupt artefacts are misses.
+//! This module picks where the cache lives, makes it user-private, and hands the [`Cache`] to
+//! [`crate::Runtime`] for hit/miss counters.
 //!
-//! #60 asked to evaluate Wasmtime's built-in cache first (adopt if sufficient).
-//! Checked against Wasmtime 49.0.2: API is `Cache::from_file` / `CacheConfig`
-//! plus `Config::cache(Some(cache))`, confirmed in source.
-//!
-//! * It caches **components**, not only core modules — Wasmtime's test suite
-//!   proves this directly: `Component::new` is a cache hit on a second call with
-//!   the same `Engine`/bytes.
-//! * The key already covers what #60 asked for: `sha256(bytes)` plus wasmtime
-//!   version, target triple, and engine config hash. `HashedEngineCompileEnv::hash`
-//!   hashes the compiler's target triple, codegen flags, ISA flags,
-//!   `Engine::tunables()`, `Engine::features()`, `Config::wmemcheck`, and
-//!   `Config::module_version` (defaults to Wasmtime version, so upgrades change
-//!   the hash) — computed by Wasmtime rather than re-derived here, where a missed
-//!   term would silently under-key a cache of *native code*. Component bytes are
-//!   a separate term, so byte changes also change the key.
-//! * Corrupt or foreign artefacts are misses, not errors: Wasmtime's deserializer
-//!   rejects them and recompiles. Exactly #60's requirement.
-//!
-//! Built-in cache meets the need. This module owns narrower parts: choosing
-//! *where* the cache directory lives, ensuring it is user-private, and handing
-//! the [`Cache`] back to [`crate::Runtime`] so a boot can report hit/miss
-//! counters that prove a second boot skipped Cranelift.
-//!
-//! # The security property this module is responsible for
-//!
-//! A cache **hit** is `Engine::load_code_bytes` handed a file this process did
-//! not just compile — the same trust `Component::deserialize` extends to an
-//! artefact from disk: it is accepted as native code, not re-verified. Wasmtime's
-//! key stops stale or foreign-engine artefacts from being reused; it says nothing
-//! about who else can *write* to the directory. A world-writable cache directory
-//! would let anything on the machine plant bytes this process later executes as
-//! compiled code. [`ensure_private_dir`] closes that gap: `0700` on unix.
+//! Security: a hit loads native code from disk without re-verifying it, so a world-writable cache dir
+//! would let anything on the machine plant code this process executes. [`ensure_private_dir`] closes
+//! that with `0700` on unix.
 
 use std::path::{Path, PathBuf};
 
@@ -42,18 +14,15 @@ use wasmtime::{Cache, CacheConfig, Config as EngineConfig, Engine};
 
 use crate::CoreError;
 
-/// Directory name used when `storage.cache-dir` names none: a sibling of
-/// `storage.path`'s directory (or of `config.yaml` itself, when storage is the
-/// default in-memory store) — "beside the `SQLite` db", per #60.
+/// Directory name used when `storage.cache-dir` names none: a sibling of `storage.path`'s directory
+/// (or of `config.yaml` when storage is the in-memory default), per #60.
 const DEFAULT_DIR_NAME: &str = "wasmtime-cache";
 
-/// Resolve the compile-cache directory: `storage.cache-dir` if the agent config
-/// names one (relative paths resolve against `config_dir`, same as `storage.path`),
-/// else `config_dir/wasmtime-cache`.
+/// Resolve the compile-cache directory: `storage.cache-dir` if set (relative to `config_dir`, like
+/// `storage.path`), else `config_dir/wasmtime-cache`.
 ///
-/// **Not** derived from `storage.path` — in-memory stores (no `storage.path` at
-/// all) are perfectly ordinary deployments, and the compile cache is independent
-/// of whether the transcript persists.
+/// **Not** derived from `storage.path`: in-memory stores have none, and the cache is independent of
+/// transcript persistence.
 pub fn resolve_cache_dir(config_dir: &Path, agent: &serde_json::Value) -> PathBuf {
     let configured = agent
         .get("storage")
@@ -67,13 +36,8 @@ pub fn resolve_cache_dir(config_dir: &Path, agent: &serde_json::Value) -> PathBu
 
 /// Create `dir` (and any missing parents) and make it user-private on unix.
 ///
-/// Called before the directory is handed to Wasmtime: `CacheConfig::validate`
-/// will itself `create_dir_all` a missing directory, but it never restricts its
-/// permissions — this is the one thing Wasmtime's own cache setup does not do on
-/// our behalf, and the one thing #60 calls out as non-optional.
-///
-/// Not gated behind `#[cfg(unix)]` at the call site: on a platform with no unix
-/// permission bits the directory is still created, just without the chmod.
+/// Called before handing the directory to Wasmtime, whose `CacheConfig::validate` creates a missing
+/// directory but never restricts its permissions. Without unix permission bits the chmod is skipped.
 ///
 /// # Errors
 /// Whatever `std::fs::create_dir_all`/`set_permissions` returns.
@@ -87,14 +51,10 @@ pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Build the `Engine` a boot uses, with Wasmtime's compile cache wired to
-/// `config_dir`/`agent`'s resolved cache directory.
+/// Build the `Engine` a boot uses, with Wasmtime's compile cache wired to the resolved cache directory.
 ///
-/// Returns the `Cache` handle alongside the `Engine` (not reachable back out of
-/// it: `Config::cache`'s stored copy is `pub(crate)` inside `wasmtime` itself) so
-/// a caller can read `cache_hits()`/`cache_misses()` after compiling every enabled
-/// instance — [`crate::Runtime::compile_cache_stats`] is that caller, and the boot
-/// report's line is what proves a second boot skipped Cranelift.
+/// Returns the `Cache` handle too (it is not reachable back out of the engine) so
+/// [`crate::Runtime::compile_cache_stats`] can read hit/miss counters.
 ///
 /// # Errors
 /// [`CoreError::Cache`] if the directory cannot be created/made private, or if
@@ -108,8 +68,7 @@ pub fn build_engine(
         path: dir.display().to_string(),
         message: source.to_string(),
     })?;
-    // `CacheConfig::with_directory` requires an absolute path; the directory
-    // now exists (just created, or already there), so canonicalizing cannot fail.
+    // `with_directory` requires an absolute path; the directory exists, so canonicalizing cannot fail.
     let canonical = dir.canonicalize().map_err(|source| CoreError::Cache {
         path: dir.display().to_string(),
         message: source.to_string(),
@@ -138,10 +97,7 @@ mod tests {
     use wasmtime::component::Component;
     use wasmtime::{Cache, CacheConfig, Config as EngineConfig, Engine, ModuleVersionStrategy};
 
-    /// Two distinct, individually valid components — used to prove a byte
-    /// change is a miss without needing a real staged guest (that variant is
-    /// covered end-to-end, through a real `Runtime::boot`, by
-    /// `pkgs/host/host/tests/it/wasm_cache.rs`).
+    /// Two distinct, individually valid components, to prove a byte change is a miss.
     const WAT_A: &str = "(component (core module (func)))";
     const WAT_B: &str = "(component (core module (func (param i32))))";
 
@@ -207,9 +163,8 @@ mod tests {
             "the first compile of unseen bytes is a miss"
         );
 
-        // A second, independent `Engine`/`Cache` pointed at the same directory
-        // — the shape of a real second boot — not a second call on the same
-        // `Engine`, which would prove only that an in-process cache works.
+        // A second independent `Engine`/`Cache` on the same directory models a real second boot; reusing one
+        // engine would prove only an in-process cache.
         let (engine2, cache2) =
             build_engine(&dir.0, &serde_json::json!({})).expect("builds a second engine");
         Component::new(&engine2, WAT_A).expect("compiles from the cache");
@@ -238,10 +193,8 @@ mod tests {
         );
     }
 
-    /// Simulate Wasmtime version change (can't link two versions into one binary).
-    /// Exercises the exact field an upgrade changes: `Config::module_version`
-    /// (defaults to Wasmtime version, hashed specifically to catch reuse bugs).
-    /// This workspace never overrides it; here we use two `Custom` strings.
+    /// Simulate a Wasmtime version change via `Config::module_version` (which defaults to the Wasmtime
+    /// version); the workspace never overrides it, so two `Custom` strings are used.
     #[test]
     fn a_module_version_change_the_same_shape_as_a_wasmtime_upgrade_is_a_miss() {
         let dir = temp_dir("version");

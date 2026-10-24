@@ -1,39 +1,21 @@
 #!/bin/sh
-# Generate a new extension crate, registered and ready to build.
+# Generate an extension crate in pkgs/extensions and register it (Cargo members,
+# Makefile GUESTS), so `make extensions` builds it.
 #
 # Usage: scripts/ext-new.sh <name> <kind>
 #   kind ∈ provider | tool | interceptor | registry-skills | registry-mcp
 #
-# Writes pkgs/extensions/<name>/, then registers the crate in the extensions
-# workspace and in the Makefile's GUESTS — so `make extensions` picks it up with
-# no second manual step, and `scripts/manifests.sh` generates its manifest from
-# its real imports.
-#
-# ## Why shell rather than an xtask
-#
-# What differs between kinds is one `world:` line and one trait impl. A Rust
-# xtask would need its own crate, its own build and its own place in the
-# workspace to do string substitution that `sed` already does — and it would be
-# the only build tool here that is not a Makefile target calling a script. If
-# the per-kind table ever grows logic rather than text, revisit.
-#
-# ## Why the stubs compile
-#
-# A template whose first build fails teaches the wrong thing first. Every stub
-# returns a real value rather than `todo!()`: an author deletes a body and writes
-# theirs, instead of chasing a panic through a toolchain they have not learned
-# yet.
+# Shell, not an xtask: the per-kind difference is one world line and one trait
+# impl, which sed substitutes. Revisit if the per-kind table grows logic.
+# Stubs return real values, not todo!(), so the first build passes.
 set -eu
 
 NAME="${1:-}"
 KIND="${2:-}"
-# The language axis (#187). Rust unless asked otherwise, because every
-# first-party extension is Rust and a default that surprises is worse than a
-# flag nobody passes.
+# Rust unless asked otherwise: every first-party extension is Rust.
 LANG="${3:-rust}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# Overridable so the self-test can generate into a scratch directory and
-# compare, rather than writing into the workspace to check what it writes.
+# Overridable so the self-test generates into a scratch directory.
 EXT="${EXT_ROOT:-$ROOT/pkgs/extensions}"
 
 usage() {
@@ -49,10 +31,7 @@ case "$NAME" in
 esac
 [ -e "$EXT/$NAME" ] && { echo "ext-new: $EXT/$NAME already exists" >&2; exit 2; }
 
-# The world each kind binds, the interface it exports beside
-# extension-lifecycle, and the types that interface's stub names. This table
-# *is* the difference between kinds; everything below it is identical for all
-# five.
+# The per-kind table: the only difference between kinds.
 case "$KIND" in
     provider)
         WORLD="provider-world";       IFACE="llm_provider";   TRAIT="LlmProvider"
@@ -73,9 +52,7 @@ case "$KIND" in
 esac
 
 
-# Every package carries a README (Phase 32): what it is, how it builds, where its
-# capabilities are recorded. The description line is the same placeholder the
-# manifest carries; an author replaces both.
+# Description is the same placeholder the manifest carries; the author replaces both.
 write_readme() {
     cat > "$EXT/$NAME/README.md" <<EOF
 # $NAME
@@ -92,20 +69,9 @@ The capabilities it needs are read from the built component into \`ext/$NAME.man
 EOF
 }
 
-# --- TypeScript ---------------------------------------------------------------
-#
-# A second language, generated the same way. What differs from the Rust path is
-# everything mechanical and nothing structural: no Cargo.toml, no generated
-# bindings to import, and registration in `TS_GUESTS` rather than `GUESTS`.
-#
-# `jco` lowers WIT's kebab-case to lowerCamelCase, so an interface becomes an
-# export name and a record field becomes a property. There is nothing to
-# generate bindings *from* — the component is built from this module against
-# `wit/`, and the componentize step is what checks the shapes below match.
-#
-# Only the kinds a third party is likely to write by hand. A provider or a
-# registry in JavaScript is possible and nobody has wanted one; adding a stub
-# for a kind nobody writes is a template to keep correct for free.
+# TypeScript: no Cargo.toml or generated bindings; registers in TS_GUESTS. jco
+# lowers kebab-case to lowerCamelCase, and componentize checks the shapes below.
+# Only tool and interceptor: a template nobody writes would be kept correct for free.
 if [ "$LANG" = "ts" ]; then
     case "$KIND" in
         tool|interceptor) ;;
@@ -153,11 +119,7 @@ export const extensionLifecycle = {
 };
 EOF
 
-    # The kind-specific export is appended rather than captured in a variable:
-    # a heredoc inside `$( )` is scanned for quotes by the shell before the
-    # heredoc's own quoting applies, so a single apostrophe in a doc comment
-    # ("the world's export") makes the whole script unparseable. Appending
-    # keeps the prose free.
+    # Appended, not captured in $( ): an apostrophe in a heredoc there breaks parsing.
     if [ "$KIND" = "tool" ]; then
         cat >> "$EXT/$NAME/src/guest.ts" <<'EOF'
 
@@ -202,13 +164,11 @@ export const interceptor = {
 EOF
     fi
 
-    # The stubs are quoted heredocs, so the name is substituted after the
-    # write. In-place editing is not portable; write beside and move.
+    # Quoted heredocs, so substitute after writing; sed -i is not portable.
     sed "s/NAME_PLACEHOLDER/$NAME/g" "$EXT/$NAME/src/guest.ts" > "$EXT/$NAME/src/guest.ts.tmp" \
         && mv "$EXT/$NAME/src/guest.ts.tmp" "$EXT/$NAME/src/guest.ts"
 
-    # Registration: the TypeScript list, not the cargo one. Idempotent for the
-    # same reason the Rust path is.
+    # Idempotent: re-registering would build and stage the guest twice.
     if [ -f "$EXT/Makefile" ] && ! grep -q "TS_GUESTS :=.*[ =]$NAME\( \|$\)" "$EXT/Makefile"; then
         awk -v name="$NAME" '
             /^TS_GUESTS :=/ && !done { print $0 " " name; done = 1; next }
@@ -223,23 +183,10 @@ EOF
     exit 0
 fi
 
-# --- Python -------------------------------------------------------------------
-#
-# A third language, and the one structural difference from TypeScript: there
-# *are* generated bindings. `componentize-py bindings` writes a `wit_world`
-# package beside the guest, and the stub imports its `Protocol`s — so the
-# shapes below are checked against the WIT rather than hand-matched, closer to
-# `wit-bindgen` than to `jco`.
-#
-# That package is build output, not scaffolding. It is regenerated by
-# `make -C pkgs/extensions py-guest` and gitignored, so a fresh guest directory
-# holds exactly two hand-written files and nothing that can go stale.
-#
-# `componentize-py` lowers kebab-case to snake_case: interface `tool-callable`
-# becomes the class `ToolCallable`, field `arguments-schema` becomes
-# `arguments_schema`, and a variant case becomes `Decision_Proceed`.
-#
-# Same two kinds as the TypeScript path, for the same reason.
+# Python: componentize-py generates a wit_world package, so the stubs are checked
+# against the WIT. That package is build output (gitignored, regenerated by
+# `make -C pkgs/extensions py-guest`), not scaffolding.
+# componentize-py lowers kebab-case to snake_case (Decision_Proceed for a variant case).
 if [ "$LANG" = "py" ]; then
     case "$KIND" in
         tool|interceptor) ;;
@@ -282,10 +229,7 @@ resolve these imports.
 
 EOF
 
-    # Appended rather than captured in a variable: a quoted heredoc inside
-    # `$( )` is still scanned for quotes by the shell, so one apostrophe in a
-    # docstring makes this script unparseable (learned on the TypeScript
-    # path).
+    # Appended, not captured (see the TypeScript block).
     if [ "$KIND" = "tool" ]; then
         cat >> "$EXT/$NAME/app.py" <<'EOF'
 import json
@@ -415,7 +359,6 @@ wit-bindgen.workspace = true
 workspace = true
 EOF
 
-# --- the exported interface's stub body, per kind ----------------------------
 stub_tool() {
     cat <<'EOF'
     impl ToolCallable for Component {
@@ -604,16 +547,9 @@ $STUB
 }
 EOF
 
-# --- registration ------------------------------------------------------------
-#
-# Both lists are flat text. Idempotent: re-registering an existing name would
-# build it twice and `manifests.sh` would stage it twice, so each edit checks
-# first.
-# Registration is skipped where there is no workspace to register into — which
-# is how the self-test generates into a scratch directory without needing to
-# fabricate one.
+# Idempotent: re-registering would build and stage the guest twice. Skipped
+# without a workspace, which is how the self-test generates into a scratch directory.
 if [ -f "$EXT/Cargo.toml" ] && ! grep -q "^    \"$NAME\"," "$EXT/Cargo.toml"; then
-    # After the last existing member, so the list stays where it was.
     awk -v name="$NAME" '
         /^]/ && !done { print "    \"" name "\","; done = 1 }
         { print }
@@ -627,18 +563,12 @@ if [ -f "$EXT/Makefile" ] && ! grep -q "GUESTS :=.*[ =]$NAME\( \|$\)" "$EXT/Make
     ' "$EXT/Makefile" > "$EXT/Makefile.tmp" && mv "$EXT/Makefile.tmp" "$EXT/Makefile"
 fi
 
-# Format what was just written, rather than hoping the template happens to be
-# canonical. Acceptance line 2 of #111 asks that a generated crate pass
-# `fmt --check` **untouched**, and the import line's length depends on how many
-# types a kind names — so no single hand-written layout satisfies every kind.
-# Formatting here makes that guarantee hold for kinds nobody has added yet.
-#
-# After registration, because `-p` needs the crate to be a workspace member.
+# Format after registration (`-p` needs a workspace member): the import line length
+# varies by kind, so no fixed layout passes fmt --check.
 if [ -f "$EXT/Cargo.toml" ]; then
     cargo fmt --manifest-path "$EXT/Cargo.toml" -p "$NAME"
 else
-    # No workspace: format the file directly, so a scratch generation is
-    # byte-comparable with a registered one.
+    # No workspace: format the file directly, so scratch output compares byte-for-byte.
     rustfmt --edition 2021 "$EXT/$NAME/src/lib.rs"
 fi
 

@@ -1,15 +1,5 @@
-//! How far a standing `always` reaches (#232).
-//!
-//! The docs now say: by default a grant lasts for the session that gave
-//! it, and `persist: true` shares it across every session as well as
-//! across restarts. Those are two different claims about scope, and a
-//! sentence about scope is worth exactly as much as the test under it —
-//! so both are asserted here, and the `persist` half is asserted
-//! *because* it is the one an operator deliberately turned on.
-//!
-//! The observable is **whether the gate asked**, counted by the driver.
-//! A grant that is remembered means no question; one that is not means
-//! the same question again.
+//! How far a standing `always` reaches (#232): by default it lasts for the session that gave it; `persist: true` shares it.
+//! The observable is whether the gate asked, counted by the driver.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -39,8 +29,7 @@ impl Driver for AlwaysAllow {
     }
 }
 
-/// A sink that keeps nothing: this test is about the questions, not the
-/// answers.
+/// Keeps no events; these tests count questions, not answers.
 struct Quiet;
 impl EventSink for Quiet {
     fn emit(&mut self, _event: &Event) -> Flow {
@@ -86,8 +75,7 @@ extensions:
     let factory = Arc::new(|| -> jk_wasm::route::HttpFn {
         Box::new(move |_m, _u, _h, body, _t| {
             let asked = String::from_utf8_lossy(body.unwrap_or_default()).into_owned();
-            // A tool call on the first completion of a turn; an answer
-            // once its result is in the history.
+            // Tool call on a turn's first completion; an answer once its result is in history.
             let reply = if asked.contains("tool_call_id") {
                 serde_json::json!({"choices":[{"message":{"role":"assistant",
                     "content":"all done"},"finish_reason":"stop"}]})
@@ -121,12 +109,8 @@ fn turn(agents: &Agents, session: &str, asked: &Arc<AtomicU32>) {
         .expect("the turn ran");
 }
 
-/// The default: a grant lasts for the session that gave it.
-///
-/// Three turns and two sessions. The second turn in the *same* session
-/// must not ask — otherwise "always" means nothing and this test would
-/// pass for the wrong reason, since a gate that always asks would also
-/// ask the second session.
+/// The default: a grant lasts for the session that gave it. The second turn in
+/// the same session must not ask, or the test would pass for the wrong reason.
 #[test]
 fn a_standing_grant_lasts_for_the_session_that_gave_it() {
     let Some((_guard, agents)) = agents_with_permission("default", false) else {
@@ -153,10 +137,7 @@ fn a_standing_grant_lasts_for_the_session_that_gave_it() {
     );
 }
 
-/// And `persist: true` shares it, which is the half the documentation
-/// would otherwise get wrong for the operator who turned it on.
-///
-/// Same script, same three turns, one config key different.
+/// `persist: true` shares the grant with every session.
 #[test]
 fn persist_true_shares_the_grant_with_every_session() {
     let Some((_guard, agents)) = agents_with_permission("persist", true) else {

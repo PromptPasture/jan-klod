@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
-# Pre-push hook — the full exit gate.
-# Skip entirely with: git push --no-verify
+# Pre-push hook: the full exit gate.
+# Skip with: git push --no-verify
 #
-# The gate sequence itself lives in the root Makefile's `gate-push` target,
-# not here — `.github/workflows/ci.yml` and a developer running `make
-# gate-push` by hand call the same target, so this hook cannot drift from CI
-# the way #65 did (`pre-push` once ran the host workspace suite twice, and
-# nothing but reading this file's bash would have caught it).
-#
-# Matching the sequence is not enough on its own: for seven pushes this hook
-# ran the same target in a different *environment* and passed every time CI
-# failed (#123). `CARGO_TERM_COLOR` now comes from the root Makefile too, so
-# both sides parse tool output the same way. Same reason, one layer down.
+# The sequence lives in the Makefile's `gate-push` target, shared with CI.
+# Env such as CARGO_TERM_COLOR is also set there, so both sides parse tool
+# output the same way.
 
 set -euo pipefail
 

@@ -15,8 +15,7 @@ interface host-log {
         value: string,
     }
 
-    /// Emit a structured log entry.
-    /// `component` is the extension name, e.g. "provider-openai".
+    /// Emit a structured log entry; `component` is the calling extension's name.
     log: func(
         level: log-level,
         component: string,

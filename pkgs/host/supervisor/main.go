@@ -61,7 +61,6 @@ func status(root string) int {
 func promote(root string) int {
 	stateFile := filepath.Join(root, "state.json")
 
-	// Launch the core in `slot` serving on the default bind.
 	start := func(slot Slot) (func(), error) {
 		bin := filepath.Join(root, string(slot), "jan-klod")
 		config := filepath.Join(root, "active", "config.yaml")

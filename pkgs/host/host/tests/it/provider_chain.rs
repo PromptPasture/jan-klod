@@ -1,10 +1,5 @@
-//! The `providers:` chain orders fallback correctly.
-//!
-//! Previously `build_agent` ignored the list and sorted providers alphabetically,
-//! so `providers:` edits had no effect. Two providers respond with distinguishable
-//! text to identify which was tried first; e.g., `beta` first defeats alphabetical order.
-//!
-//! Skips if guests are not staged in `ext/`.
+//! The `providers:` chain sets fallback order. Each provider answers with
+//! distinct text, so the order is observable.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
@@ -85,7 +80,7 @@ fn the_configured_chain_decides_which_provider_is_tried_first() {
     std::fs::create_dir_all(&dir).unwrap();
     let _guard = common::TempDir(dir.clone());
 
-    // `beta` first defeats alphabetical order (the regression case).
+    // `beta` first: alphabetical order would answer from alpha instead.
     let beta_first = config_with_chain(
         &dir,
         "providers:\n  - provider: beta\n  - provider: alpha\n",
@@ -96,7 +91,6 @@ fn the_configured_chain_decides_which_provider_is_tried_first() {
         "the chain's first entry answers"
     );
 
-    // Reversing the chain reverses the result.
     let alpha_first = config_with_chain(
         &dir,
         "providers:\n  - provider: alpha\n  - provider: beta\n",
@@ -142,7 +136,7 @@ fn a_provider_the_chain_omits_is_still_reachable() {
     let config = config_with_chain(&dir, "providers:\n  - provider: beta\n");
     assert_eq!(answer(&config, &ext_dir), "from-beta");
 
-    // No chain: boot order applies, `alpha` (alphabetically first) answers.
+    // No chain: falls back to boot order, which answers from alpha.
     let config = config_with_chain(&dir, "");
     assert_eq!(answer(&config, &ext_dir), "from-alpha");
 }

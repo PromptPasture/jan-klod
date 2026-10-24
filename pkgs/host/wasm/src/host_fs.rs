@@ -2,7 +2,6 @@
 //!
 //! Paths are workspace-relative; absolute paths and `..` escapes rejected.
 //! Default-deny: unconfigured means all ops return `Denied`.
-//!
 //! Caveat: lexical jailing only (no symlink escapes detected).
 
 use std::path::{Component, Path, PathBuf};
@@ -174,7 +173,6 @@ mod tests {
     #[test]
     fn inner_relative_paths_resolve_inside_the_root() {
         let (_dir, ws) = workspace();
-        // Relative paths that stay inside are allowed (e.g., `a/../b`).
         assert!(ws.resolve("a/../b.txt").is_ok());
         ws.write("a/../b.txt", "x").unwrap();
         assert!(ws.exists("b.txt"));

@@ -1,7 +1,7 @@
 package jan-klod:interfaces@0.4.0;
 
 /// Generic discrete callable tool.
-/// Implemented by: tool-web-search, any future tool-* extension.
+/// Implemented by each `tool-*` extension.
 interface tool-callable {
     enum tool-error {
         invalid-arguments,
@@ -29,13 +29,9 @@ world tool-world {
     import host-log;
     import host-config;
     import host-http;
-    // Phase 7: file tools route their I/O through the host's path-jailed workspace;
-    // execution tools run commands through the bounded host-process substrate.
     import host-fs;
     import host-process;
-    // Session-scoped working memory (#215). A tool that has to keep a plan
-    // across calls had nowhere to put it: only `interceptor-world` imported
-    // this, so the model-facing half of the fleet was the half without state.
+    // Session-scoped working memory: lets a tool keep state (e.g. a plan) across calls.
     import host-storage;
     import host-secrets;
 

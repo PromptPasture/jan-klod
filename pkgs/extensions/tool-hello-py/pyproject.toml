@@ -1,7 +1,4 @@
-# Read by scripts/manifests.sh for the generated manifest's version and
-# description, the way a Rust guest's Cargo.toml and a TypeScript guest's
-# package.json are. Not installed and not published — componentize-py takes
-# the module directly.
+# Read by scripts/manifests.sh for the generated manifest. Not installed or published; componentize-py builds the module directly.
 [project]
 name = "tool-hello-py"
 version = "0.1.0"

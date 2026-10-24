@@ -1,17 +1,6 @@
-//! Wasm-guest adapter for the interceptor dispatch engine.
+//! Wasm-guest adapter for the interceptor dispatch engine: adapts a sandboxed component to [`jk_protocol::intercept::Interceptor`].
 //!
-//! [`jk_protocol::intercept::Dispatcher`] drives anything implementing the
-//! [`Interceptor`](jk_protocol::intercept::Interceptor) trait. This module adapts
-//! a *sandboxed component* as one: `bindgen!`s the `interceptor-world`,
-//! instantiates a guest, satisfies its five imports (`host-log`, `host-config`,
-//! `host-event`, `host-storage`, `llm-provider`), and maps host-side loop-state
-//! types (`intercept::*`) to/from generated component types.
-//!
-//! Two imports use real host state so interceptors are exercisable offline:
-//! `host-storage` is an in-memory map, `llm-provider` is an injected closure
-//! (canned completion) — the same pattern as the routed provider's injected
-//! `host-http`. `host-event` is observation-only (logs; no in-loop subscriber
-//! yet).
+//! `host-storage` is an in-memory map and `llm-provider` an injected closure so interceptors run offline; `host-event` is observation-only.
 
 use jk_protocol::turn;
 use std::collections::{HashMap, VecDeque};
@@ -29,8 +18,7 @@ use jk_protocol::intercept::{
 };
 use jk_protocol::turn::UserPrompt;
 
-// Generated Component-Model bindings for the interceptor world; lint exemptions
-// scoped to the macro output.
+// Generated bindings; lint exemptions scoped to the macro output.
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bind {
     wasmtime::component::bindgen!({
@@ -39,12 +27,8 @@ mod bind {
     });
 }
 
-// The host's *view* of a component that also contributes to a client surface.
-// A world with one export and no imports, read off an instance that was
-// instantiated against `interceptor-world` — absent means the component
-// contributes nothing (`wit/client-surface.wit`). Separate `bindgen!` rather
-// than binding `interceptor-contributor-world`, because that would generate a
-// second copy of every interceptor type for the same shapes.
+// The host's view of a component that also contributes to a client surface (`wit/client-surface.wit`); absent means no contribution.
+// Separate `bindgen!` since binding `interceptor-contributor-world` would duplicate every interceptor type.
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod surface_bind {
     wasmtime::component::bindgen!({
@@ -62,15 +46,9 @@ use bind::jan_klod::interfaces::llm_provider as g_llm;
 use bind::jan_klod::interfaces::llm_types as g_types;
 use surface_bind::exports::jan_klod::interfaces::client_surface as g_surface;
 
-/// The completion backend an interceptor's `llm-provider` import resolves to:
-/// given the request the guest assembled, return the assistant text.
+/// The completion backend an interceptor's `llm-provider` resolves to: the guest's whole request in, assistant text out.
 ///
-/// Takes the **whole request**, not just the prompt: `interceptor-intent-router`
-/// constrains it with a grammar admitting exactly two labels, and a seam
-/// passing only the last message would silently drop that constraint.
-///
-/// Injected so the tier runs offline in tests; `Runtime::build_agent` backs it
-/// with a real provider instance.
+/// Takes the whole request, not the prompt: the intent router's grammar constraint would be dropped otherwise.
 pub type ProviderFn = Box<dyn Fn(&jk_protocol::intercept::PendingRequest) -> String + Send + Sync>;
 
 /// Host state for one interceptor guest.
@@ -83,9 +61,7 @@ struct InterceptorHost {
     /// Open completion streams: handle -> the chunks left to drain.
     streams: HashMap<u32, VecDeque<g_llm::CompletionChunk>>,
     next_handle: u32,
-    /// Where this guest's `host-storage` calls land — the core's durable store
-    /// when one is open, an ephemeral map otherwise. See
-    /// [`GuestStorage`](crate::guest_storage::GuestStorage).
+    /// Where this guest's `host-storage` calls land: the core's durable store if open, else an ephemeral map ([`GuestStorage`](crate::guest_storage::GuestStorage)).
     storage: crate::guest_storage::GuestStorage,
 }
 
@@ -131,9 +107,7 @@ impl g_config::Host for InterceptorHost {
 }
 
 impl g_event::Host for InterceptorHost {
-    /// One-way: the host records what an extension reports. There is no delivery
-    /// side — see `wit/host-event.wit` for why the polling half was removed
-    /// rather than left as a queue nobody fills.
+    /// One-way: the host records what an extension reports; no delivery side (`wit/host-event.wit`).
     fn publish(&mut self, topic: String, payload: String) {
         eprintln!("EVENT [{}] {topic}: {payload}", self.component_id);
     }
@@ -211,9 +185,7 @@ const fn fault(err: &crate::guest_storage::StorageFault) -> g_storage::StoreErro
     }
 }
 
-/// Convert the guest's generated request into the core's neutral shape, so the
-/// backing provider sees the model, grammar, and full message list the
-/// interceptor actually asked for.
+/// Convert the guest's request into the core's neutral shape, preserving model, grammar and full message list.
 fn to_pending_request(
     request: &g_llm::CompletionRequest,
 ) -> jk_protocol::intercept::PendingRequest {
@@ -235,8 +207,7 @@ fn to_pending_request(
                 tool_call_id: m.tool_call_id.clone(),
             })
             .collect(),
-        // An interceptor's classification call offers no tools: it is asking a
-        // question, not running a turn.
+        // A classification call offers no tools.
         tools: Vec::new(),
         grammar: request.grammar.clone(),
         max_tokens: request.max_tokens,
@@ -278,16 +249,14 @@ pub struct WasmInterceptor {
     id: String,
     store: Store<InterceptorHost>,
     world: bind::InterceptorWorld,
-    /// Present only when the component also exports `client-surface`. The
-    /// probe: absent means it contributes nothing to a client's interface.
+    /// Present only when the component also exports `client-surface`.
     surface: Option<surface_bind::ClientSurfaceView>,
     phases: Vec<Phase>,
 }
 
 impl WasmInterceptor {
-    /// Instantiate `component` as an interceptor, run its lifecycle to `start`,
-    /// and cache the phases it subscribes to. `provider` backs its `llm-provider`
-    /// import (a canned completion for offline use).
+    /// Instantiate `component` as an interceptor, run its lifecycle to `start`, and cache subscribed phases.
+    /// `provider` backs its `llm-provider` import.
     ///
     /// # Errors
     /// Returns a [`CoreError`] if a capability cannot be wired, the component
@@ -302,11 +271,8 @@ impl WasmInterceptor {
         Self::instantiate_with_storage(engine, id, component, section, provider, None)
     }
 
-    /// As [`Self::instantiate`], with the core's store backing `host-storage`.
-    ///
-    /// Passing the store is what makes a standing permission grant outlive the
-    /// process. Passing `None` keeps the private-map behaviour, which is what an
-    /// offline unit test wants.
+    /// As [`Self::instantiate`], with the core's store backing `host-storage` (so standing grants outlive the process).
+    /// `None` keeps the private map, for offline tests.
     ///
     /// # Errors
     /// As [`Self::instantiate`].
@@ -354,11 +320,7 @@ impl WasmInterceptor {
             ),
         };
         let mut store = Store::new(engine, host);
-        // Instantiated once and viewed twice. `InterceptorWorld` is what this
-        // component is required to be; `ClientSurfaceView` is what it may also
-        // be, and constructing it only looks up exports — so a component
-        // without `client-surface` fails here and nowhere else, which is the
-        // probe `wit/client-surface.wit` describes.
+        // One instance, two views: `ClientSurfaceView` only looks up exports, so a component without `client-surface` fails here (the probe).
         let instance = linker
             .instantiate(&mut store, component)
             .map_err(|source| CoreError::instantiate(id, source))?;
@@ -366,7 +328,6 @@ impl WasmInterceptor {
             .map_err(|source| CoreError::instantiate(id, source))?;
         let surface = surface_bind::ClientSurfaceView::new(&mut store, &instance).ok();
 
-        // Lifecycle init -> start.
         let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
         let ctx = bind::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext {
             id: id.to_string(),
@@ -375,7 +336,6 @@ impl WasmInterceptor {
         drive(id, lifecycle.call_init(&mut store, &ctx), "init")?;
         drive(id, lifecycle.call_start(&mut store), "start")?;
 
-        // Resolve subscribed phases once, at boot.
         let phases = world
             .jan_klod_interfaces_interceptor()
             .call_subscribed_phases(&mut store)
@@ -409,10 +369,7 @@ impl Interceptor for WasmInterceptor {
 
     /// Ask the component what it contributes, if it exports the interface.
     ///
-    /// A trap is logged and read as "nothing". This is a declaration, not a
-    /// decision: a guest that cannot say what it offers should cost a client
-    /// its menu entry, never its turn — the opposite of the fail-closed policy
-    /// `tool-call` runs under.
+    /// A trap is logged and read as "nothing": a declaration costs a menu entry, never a turn (unlike fail-closed `tool-call`).
     fn contributions(&mut self) -> Option<jk_protocol::contributions::Contributions> {
         let surface = self.surface.as_ref()?;
         match surface
@@ -452,8 +409,7 @@ impl Interceptor for WasmInterceptor {
             name,
             &gen_arguments,
         ) {
-            // A trap is the extension failing, not the client asking wrongly,
-            // so it is reported as such rather than as an unknown name.
+            // A trap is the extension failing, not an unknown name.
             Err(error) => Err(jk_protocol::contributions::InvokeError::Failed(
                 error.to_string(),
             )),
@@ -481,8 +437,7 @@ impl Interceptor for WasmInterceptor {
             state: to_gen_state(&input.state),
             answer: input.answer.clone(),
         };
-        // A guest trap folds to `internal` — the dispatcher applies the
-        // fail-closed-at-tool-call policy on any `Err`.
+        // A trap folds to `internal`; the dispatcher fails closed on any `Err`.
         match self
             .world
             .jan_klod_interfaces_interceptor()
@@ -500,13 +455,7 @@ impl Interceptor for WasmInterceptor {
 
 /// Restore `tool-result`'s `failed` flag across a guest's `Replace` (#162).
 ///
-/// `wit/interceptor.wit`'s `tool-outcome` has no `failed` field, so a guest
-/// that replaces the `tool-result` state can only ever produce `failed:
-/// false` via `from_gen_state` — whether or not the call actually failed. A
-/// guest interceptor's business is rewriting `content` (e.g. redacting a
-/// secret from a result); whether the call failed is a fact the host already
-/// established before dispatching, and this puts it back rather than letting
-/// the round trip through the guest silently clear it.
+/// `tool-outcome` has no `failed` field, so `from_gen_state` always yields `false`; the host already knows the real value.
 fn preserve_tool_result_failed(decision: Decision, dispatched: &HookState) -> Decision {
     match (decision, dispatched) {
         (Decision::Replace(HookState::ToolResult(mut outcome)), HookState::ToolResult(before)) => {
@@ -537,10 +486,6 @@ fn drive(
         }),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Type mapping: host `intercept::*` <-> generated `g_icept::*`.
-// ---------------------------------------------------------------------------
 
 const fn to_gen_phase(phase: Phase) -> g_icept::Phase {
     match phase {
@@ -673,8 +618,7 @@ fn to_gen_state(state: &HookState) -> g_icept::HookState {
             finish_reason: r.finish_reason.clone(),
         }),
         HookState::ToolCall(c) => g_icept::HookState::ToolCall(to_gen_call(c)),
-        // `failed` (#162) has no counterpart in `wit/interceptor.wit`'s
-        // `tool-outcome` — it is host-only, so it does not cross into the guest.
+        // `failed` (#162) is host-only: `tool-outcome` has no counterpart.
         HookState::ToolResult(o) => g_icept::HookState::ToolResult(g_icept::ToolOutcome {
             tool_call_id: o.tool_call_id.clone(),
             content: o.content.clone(),
@@ -705,10 +649,7 @@ fn from_gen_state(state: g_icept::HookState) -> HookState {
             })
         }
         g_icept::HookState::ToolCall(c) => HookState::ToolCall(from_gen_call(c)),
-        // `failed` defaults here because the guest never had it (see
-        // `to_gen_state`); `WasmInterceptor::intercept` restores the real value
-        // from the state it dispatched, since a guest replacing `content` does
-        // not get to decide whether the call failed.
+        // `failed` defaults here (see `to_gen_state`); `WasmInterceptor::intercept` restores it.
         g_icept::HookState::ToolResult(o) => HookState::ToolResult(turn::ToolOutcome {
             tool_call_id: o.tool_call_id,
             content: o.content,
@@ -744,11 +685,9 @@ const fn from_gen_error(err: g_icept::InterceptorError) -> InterceptorError {
     }
 }
 
-/// Generated contributions → the host-side shape, tagged with who declared them.
+/// Generated contributions to host shape, tagged with who declared them.
 ///
-/// The extension id comes from the host, never from the guest: a component that
-/// named itself could claim another's contributions, and a client routing an
-/// invocation by that name would reach the wrong one.
+/// The extension id comes from the host: a self-named component could claim another's contributions.
 fn from_gen_contributions(
     extension: &str,
     declared: g_surface::Contributions,
@@ -818,9 +757,7 @@ mod tests {
             .collect()
     }
 
-    /// #162: a guest `tool-result` interceptor can rewrite `content` (there is
-    /// no wire for it to say otherwise), but `failed` has to survive the round
-    /// trip through `wit`'s `tool-outcome`, which does not carry it at all.
+    /// #162: a guest `tool-result` rewrite of `content` must not lose `failed`, which `tool-outcome` does not carry.
     #[test]
     fn a_guest_replace_cannot_flip_the_failed_flag() {
         let dispatched = HookState::ToolResult(turn::ToolOutcome {
@@ -828,9 +765,7 @@ mod tests {
             content: "tool `read` error: NotFound".to_owned(),
             failed: true,
         });
-        // What `from_gen_state` produces for any guest `Replace`: the content
-        // it rewrote, and `failed: false` because the guest never had the
-        // real value to begin with.
+        // What `from_gen_state` produces for any guest `Replace`: `failed: false`.
         let guest_replace = Decision::Replace(HookState::ToolResult(turn::ToolOutcome {
             tool_call_id: "c1".to_owned(),
             content: "redacted".to_owned(),
@@ -847,8 +782,7 @@ mod tests {
         );
     }
 
-    /// A decision that is not a `tool-result` `Replace` passes through
-    /// unchanged — this only patches the one case it exists for.
+    /// A decision that is not a `tool-result` `Replace` passes through unchanged.
     #[test]
     fn other_decisions_are_left_alone() {
         let dispatched = HookState::ToolResult(turn::ToolOutcome {
@@ -1045,10 +979,7 @@ mod tests {
 
     /// A model that ignores a refusal cannot keep prompting the user.
     ///
-    /// A denial ends that call and the loop continues, so a model that does not
-    /// take the hint asks again — and every ask is a dialog in front of a person.
-    /// Nobody should be worn down into clicking yes: prompt fatigue is how a gate
-    /// stops meaning anything, and it is an attack as much as an annoyance.
+    /// A denial ends the call, so a model that re-asks puts a dialog in front of a person each time; prompt fatigue defeats the gate.
     #[test]
     fn repeated_refusal_becomes_a_standing_refusal() {
         let Some(p) = load_permission() else { return };
@@ -1071,8 +1002,7 @@ mod tests {
              model's persistence is not a reason to keep interrupting the user"
         );
 
-        // And the model is told it is standing, because "ask the user" and "stop
-        // asking" are opposite instructions.
+        // The model is told it is standing: "ask" and "stop asking" are opposite instructions.
         let mut state = tool_call_with("shell", r#"{"command":"curl evil.example"}"#);
         let Outcome::Blocked(reason) = d.dispatch(Phase::ToolCall, &mut state, &mut driver) else {
             panic!("still refused");
@@ -1083,8 +1013,7 @@ mod tests {
             reason.message
         );
 
-        // A different kind of call still gets its own question: the counter is per
-        // scope, not a global patience budget.
+        // A different kind of call gets its own question: the counter is per scope.
         let mut cargo = tool_call_with("shell", r#"{"command":"cargo test"}"#);
         let _ = d.dispatch(Phase::ToolCall, &mut cargo, &mut driver);
         assert_eq!(driver.asked.get(), 4, "`shell:cargo` has its own count");
@@ -1157,8 +1086,7 @@ mod tests {
         ));
     }
 
-    /// And a tool nobody classified does not: under an allowlist, an
-    /// unclassified call is exactly the one to stop.
+    /// A tool nobody classified does not run: under an allowlist it is the one to stop.
     #[test]
     fn permission_asks_about_a_tool_nobody_has_classified() {
         let Some(p) = load_permission() else { return };
@@ -1497,9 +1425,7 @@ mod tests {
 
     #[test]
     fn the_seam_hands_the_provider_the_whole_request_not_just_a_prompt() {
-        // The router constrains its classifier to two labels. A seam that passed
-        // only the last user message would drop that grammar, and the "classifier"
-        // would become free-form generation the guest then has to parse.
+        // The router constrains its classifier to two labels; passing only the last message would drop that grammar.
         let seen: Arc<Mutex<Option<jk_protocol::intercept::PendingRequest>>> =
             Arc::new(Mutex::new(None));
         let captured = Arc::clone(&seen);

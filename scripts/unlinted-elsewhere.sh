@@ -1,15 +1,7 @@
 #!/usr/bin/env sh
-# Name the files this platform's clippy could not have linted.
-#
-# A module gated to another OS is not compiled here, so clippy never reads it
-# — and a lint error in it is invisible until CI. Printing the list turns
-# "my gate was green" into "my gate was green, and here is what it did not
-# cover", which is the difference between a trustworthy gate and a quiet one
-# (#207).
-#
-# Advisory: always exits 0. This is not a second lint, it is a footnote on
-# the one that just ran. Making it fail would block work on every platform
-# for code that is correct on the platform that compiles it.
+# List files this platform's clippy did not lint: modules gated to another OS are
+# never compiled here. Advisory: always exits 0, since failing would block code
+# that is correct on the platform that compiles it.
 #
 # Usage: unlinted-elsewhere.sh <dir>...
 set -eu
@@ -22,8 +14,7 @@ case "$HERE" in
     *)      THIS="$HERE" ;;
 esac
 
-# Only whole-file gates. A `#[cfg]` on an inner item is not worth chasing with
-# a grep, and the file-level ones are where whole modules go unread.
+# Whole-file gates only; an inner #[cfg] is not worth a grep.
 found=$(grep -rl '^#!\[cfg(target_os = ' $WS --include='*.rs' 2>/dev/null || true)
 [ -n "$found" ] || exit 0
 

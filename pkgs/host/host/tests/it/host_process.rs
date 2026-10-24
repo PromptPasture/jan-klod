@@ -1,11 +1,5 @@
-//! `host-process` across the Component-Model boundary.
-//!
-//! Instantiates the `tool-proc-probe` guest and drives its
-//! `invoke({command, args})` through a bounded runner: a command runs and its
-//! stdout comes back, and with execution disabled every call is denied
-//! (default-deny). Offline.
-//!
-//! Skips (passes as a no-op) when the guest is not staged in `ext/`.
+//! `host-process` across the Component-Model boundary, through the `tool-proc-probe` guest. With execution disabled,
+//! every call is denied (default-deny). Offline. Skips (passes as a no-op) when the guest is not staged in `ext/`.
 
 use std::time::Duration;
 
@@ -71,13 +65,9 @@ fn host_process_is_default_deny_when_disabled() {
     );
 }
 
-/// A command run *through a guest* does not carry the host's credentials.
-///
-/// Unlike the `core::host_process` unit test, this covers the deployment path:
-/// a sandboxed tool inherits an environment that necessarily holds
-/// `OPENAI_API_KEY` (config expands `${...}`) and `JAN_KLOD_TOKEN`. A plain
-/// `env` command would put both into tool output — which becomes a transcript
-/// message sent to the model provider on the next turn.
+/// A command run through a guest must not inherit the host's credentials, since
+/// tool output is sent back to the model. Unlike the `core::host_process` unit
+/// test, this covers the deployment path.
 #[test]
 fn a_guest_run_command_does_not_receive_the_hosts_credentials() {
     let engine = Engine::default();
@@ -104,8 +94,7 @@ fn a_guest_run_command_does_not_receive_the_hosts_credentials() {
         !out.contains("must-not-leak"),
         "a credential reached the model through tool output:\n{out}"
     );
-    // And the environment is not simply empty — a command that gets no PATH
-    // cannot run anything, which would make this pass for the wrong reason.
+    // An empty environment would pass for the wrong reason.
     assert!(out.contains("PATH="), "PATH is still provided: {out}");
 
     std::fs::remove_dir_all(&workspace_dir).ok();

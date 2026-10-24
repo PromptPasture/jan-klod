@@ -1,17 +1,5 @@
-//! Where the two halves of storage are joined (#180).
-//!
-//! [`guest_storage`](jk_wasm::guest_storage) declares what `host-storage`
-//! needs; `jk-session` provides a SQLite store. Neither names the other, so
-//! something has to say they fit — and that something is this crate, which
-//! owns an [`AgentSession`](crate::AgentSession) and is therefore the only
-//! one that already knows both.
-//!
-//! It is a newtype rather than an `impl` on the store, and that is the part
-//! worth reading twice. Once #181 moves the capability into `jk-wasm` and
-//! #182 moves this into `jk-agent`, `jk-agent` will own neither the trait nor
-//! `Store` — so an `impl Entries for Arc<Mutex<Store>>` would stop compiling
-//! the moment the split it was written for happens. The wrapper is what makes
-//! the arrangement survive its own next slice.
+//! Joins `host-storage` to the SQLite session store (#180). A newtype rather than an `impl` on `Store`, because the
+//! planned split (#181, #182) would leave this crate owning neither the trait nor `Store`.
 
 use std::sync::{Arc, Mutex};
 
@@ -19,9 +7,7 @@ use jk_session::store::{Entry, Store, StoreError};
 use jk_wasm::guest_storage::{Entries, Row, StorageFault};
 
 /// The session store, offered to guests as the four calls `host-storage` has.
-///
-/// Holds the same handle the session does, so a guest's writes and the log's
-/// are one database and one lock.
+/// Shares the session's handle, so guest writes and the log use one lock.
 pub struct SessionEntries(Arc<Mutex<Store>>);
 
 impl SessionEntries {
@@ -32,10 +18,7 @@ impl SessionEntries {
     }
 
     /// Run `call` against the store, mapping both failure kinds.
-    ///
-    /// A poisoned lock is a [`StorageFault::Backend`]: some other thread
-    /// panicked holding the store, and answering a guest with stale or
-    /// partial data would be worse than refusing.
+    /// A poisoned lock maps to `Backend`: refusing beats answering with partial data.
     fn with<T>(
         &self,
         call: impl FnOnce(&Store) -> Result<T, StoreError>,
@@ -45,8 +28,7 @@ impl SessionEntries {
     }
 }
 
-/// A store error as the capability's two-shape fault, with the detail logged
-/// rather than dropped — the contract's error carries none.
+/// Maps a store error to the capability's fault. The detail is logged because the contract carries none.
 fn fault(err: &StoreError) -> StorageFault {
     match err {
         StoreError::NotFound => StorageFault::NotFound,
@@ -57,12 +39,8 @@ fn fault(err: &StoreError) -> StorageFault {
     }
 }
 
-/// A stored entry as the seam's plain row.
-///
-/// The `id` is dropped on purpose: it is `<namespace>/<key>` of the *scoped*
-/// namespace, and the capability rebuilds it from the namespace the guest
-/// asked for. Carrying it across would be carrying the answer to a question
-/// the other side is about to ask differently.
+/// A stored entry as the seam's plain row. The `id` is dropped: it names the
+/// scoped namespace, which the capability rebuilds from the guest's request.
 fn row(entry: Entry) -> Row {
     Row {
         namespace: entry.namespace,

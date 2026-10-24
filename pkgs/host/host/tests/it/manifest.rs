@@ -1,28 +1,12 @@
-//! Two independent readers of the same components must agree.
-//!
-//! `scripts/manifests.sh` derives each guest's capabilities from the
-//! `wasm-tools` CLI at build time; `Runtime::boot` derives them from wasmtime's
-//! component-type API at load time. Nothing forces those to agree — different
-//! tool, different library, different moment — so this asserts they do, for
-//! every staged guest.
-//!
-//! That is worth more than either check alone. A single reader can only be
-//! wrong consistently: if the filter widened to include a world's *exports*, a
-//! test comparing that reader against itself would pass while every manifest
-//! silently listed `tool-callable` as a capability. Two readers can only agree
-//! by both being right, or by being wrong in the same way for the same reason —
-//! and they share no code.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Two independent readers must agree on each staged guest's capabilities: `scripts/manifests.sh` (build time) and
+//! `Runtime::boot` (load time). They share no code, so agreement means both are right. Skips when the guests are not staged.
 
 use jk_agent::Runtime;
 use jk_wasm::LoadState;
 
 use crate::common;
 
-/// The guests whose manifests and imports are compared. Every one that is
-/// staged, rather than a chosen few: a mismatch on the eighteenth is as much a
-/// bug as one on the first.
+/// Every guest compared, not a chosen few.
 const GUESTS: [&str; 6] = [
     "provider-openai.wasm",
     "tool-fs.wasm",
@@ -94,12 +78,8 @@ fn what_a_component_imports_matches_what_its_manifest_declares() {
         return;
     }
     let ext_dir = common::repo_root().join("ext");
-    // A manifest per guest is the other half of the comparison; without it there
-    // is nothing to compare against, and silently passing would be the point of
-    // this file defeated.
+    // Without a manifest there is nothing to compare, so fail rather than pass silently.
     for guest in GUESTS {
-        // `GUESTS` names components (`tool-fs.wasm`) because that is what
-        // `guests_staged` checks; a manifest is named for the same stem.
         let manifest = ext_dir.join(format!("{}.manifest.toml", guest.trim_end_matches(".wasm")));
         assert!(
             manifest.exists(),
@@ -117,8 +97,7 @@ fn what_a_component_imports_matches_what_its_manifest_declares() {
 
     let mut compared = 0;
     for extension in runtime.extensions() {
-        // `tool.escape-probe` resolves to `tool-escape-probe.wasm`, and the
-        // manifest is named for the component, not the instance.
+        // The manifest is named for the component, not the instance.
         let component = extension.instance.component_file();
         let Some(observed) = &extension.capabilities else {
             panic!(
@@ -149,8 +128,7 @@ fn what_a_component_imports_matches_what_its_manifest_declares() {
     );
 }
 
-/// The specific values, so a change that made both readers agree on something
-/// wrong still fails. Chosen for what each proves rather than for coverage.
+/// Pins specific values, so both readers agreeing on something wrong still fails.
 #[test]
 fn the_capability_sets_are_the_ones_expected() {
     if !common::guests_staged(&GUESTS) {
@@ -171,21 +149,16 @@ fn the_capability_sets_are_the_ones_expected() {
             .unwrap_or_else(|| panic!("{component} was not loaded"))
     };
 
-    // Exports excluded: this one also exports `tool-callable` and
-    // `extension-lifecycle`, which are what it implements, not what it needs.
+    // Exports excluded: `tool-callable` is implemented, not needed.
     assert_eq!(of("tool-fs.wasm"), vec!["host-fs"]);
-    // Type-only imports excluded: this one also imports `llm-types`, which
-    // grants nothing.
+    // Type-only imports (`llm-types`) grant nothing, so they are excluded.
     assert_eq!(
         of("provider-openai.wasm"),
         vec!["host-config", "host-http", "host-log", "host-secrets"]
     );
-    // The component written to attempt escapes with plain `std` rather than
-    // typed imports asks for nothing but logging — which is why
-    // `sandbox_boundary.rs` can prove it gets nothing.
+    // Escape probe uses plain `std`, so it asks only for logging; `sandbox_boundary.rs` relies on this.
     assert_eq!(of("tool-escape-probe.wasm"), vec!["host-log"]);
-    // And the fact #46's deferred per-turn sandbox warning is waiting on: a
-    // tool that can run a command is distinguishable from one that cannot.
+    // Distinguishes a command-capable tool, as #46's deferred sandbox warning needs.
     assert_eq!(of("tool-shell.wasm"), vec!["host-process"]);
     assert!(
         !of("tool-fs.wasm").contains(&"host-process".to_string()),
@@ -193,13 +166,9 @@ fn the_capability_sets_are_the_ones_expected() {
     );
 }
 
-/// Acceptance line 1: a manifest that omits a capability the component imports
-/// is refused, and the message names the interface.
+/// A manifest that omits an imported capability is refused, naming the interface.
 ///
-/// The fixture is a real guest's manifest with one capability deleted, copied
-/// into a temp `ext/` alongside the real component. Building a guest that is
-/// deliberately wrong would have tested a component nobody ships; this tests
-/// the exact artifact that does ship, described wrongly.
+/// Uses a real guest's manifest with one capability deleted, so the test covers the shipped artifact.
 #[test]
 fn a_component_importing_more_than_it_declares_is_refused() {
     if !common::guests_staged(&["tool-fetch.wasm"]) {
@@ -254,13 +223,8 @@ fn a_component_importing_more_than_it_declares_is_refused() {
     );
 }
 
-/// Acceptance line 2: declaring a capability `config.yaml` does not grant is
-/// fine — it boots, and the capability is still denied at the call.
-///
-/// The manifest is not a second place grants are kept. Every capability is
-/// default-deny where it is used, so an over-declaring manifest asks for more
-/// than it receives and simply does not get it; refusing it would mean an
-/// author had to keep their declaration in step with every operator's config.
+/// Declaring a capability the config does not grant still boots; the capability
+/// is denied at the call. Refusing it would force authors to track every operator's config.
 #[test]
 fn declaring_a_capability_the_config_does_not_grant_still_boots() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -273,8 +237,7 @@ fn declaring_a_capability_the_config_does_not_grant_still_boots() {
     let _guard = common::TempDir(dir.clone());
 
     std::fs::copy(real_ext.join("tool-fs.wasm"), ext.join("tool-fs.wasm")).unwrap();
-    // Declare host-process as well, which this component does not import and
-    // which the config below does not grant (`execution:` is absent entirely).
+    // Declared but neither imported nor granted (no `execution:` block).
     let manifest = std::fs::read_to_string(real_ext.join("tool-fs.manifest.toml")).unwrap();
     std::fs::write(
         ext.join("tool-fs.manifest.toml"),
@@ -304,9 +267,6 @@ fn declaring_a_capability_the_config_does_not_grant_still_boots() {
         "what it imports is unchanged by what it declares"
     );
 
-    // And the declaration granted nothing: with no `execution:` block the
-    // process substrate is denied, so a command cannot run whatever the
-    // manifest says.
     let factory = || common::canned_http("unused");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
     let out = agent.run("s", "hello");
@@ -317,12 +277,8 @@ fn declaring_a_capability_the_config_does_not_grant_still_boots() {
     );
 }
 
-/// A component with no manifest beside it is refused by default.
-///
-/// The declaration is the thing that can be inspected *before* running
-/// anything, so a component that ships without one defeats the point of
-/// having them at all. Refusing by default is what makes the grant below a
-/// grant rather than a formality.
+/// A component with no manifest beside it is refused by default. Otherwise the
+/// `allow-unmanifested` grant below would be a formality rather than a grant.
 #[test]
 fn a_component_with_no_manifest_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -332,8 +288,7 @@ fn a_component_with_no_manifest_is_refused() {
     let ext = dir.join("ext");
     std::fs::create_dir_all(&ext).unwrap();
     let _guard = common::TempDir(dir.clone());
-    // The component alone — no manifest, as a hand-copied `.wasm` or a bundle
-    // built before manifests existed would leave it.
+    // The component alone, as a hand-copied or pre-manifest bundle would leave it.
     std::fs::copy(
         common::repo_root().join("ext").join("tool-fs.wasm"),
         ext.join("tool-fs.wasm"),
@@ -417,8 +372,7 @@ fn the_grant_is_off_by_default() {
     .unwrap();
 
     let config = dir.join("config.yaml");
-    // Explicitly false, and separately absent — a grant that only works when
-    // spelled `true` should read the same either way.
+    // Both explicit `false` and absent must refuse.
     for body in [
         "\nallow-unmanifested: false\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
         "\nextensions:\n  tool:\n    fs:\n      enabled: true\n",
@@ -431,13 +385,8 @@ fn the_grant_is_off_by_default() {
     }
 }
 
-/// `manifest::API_VERSION` is a constant, so it can drift from `wit/`. This is
-/// what stops it: the same agreement `scripts/manifests.sh` refuses to guess at,
-/// asserted from the other side.
-///
-/// A constant is right — an installed gateway has no `wit/` beside it, so a
-/// version read from that directory at runtime would be read from a directory
-/// that may not exist. The cost is exactly this test.
+/// `manifest::API_VERSION` is a constant that can drift from `wit/`; this asserts
+/// they agree. It is a constant, not a runtime read, because an installed gateway has no `wit/`.
 #[test]
 fn the_hosts_api_version_matches_the_wit_package() {
     let wit = common::repo_root().join("wit");
@@ -471,9 +420,8 @@ fn the_hosts_api_version_matches_the_wit_package() {
     );
 }
 
-/// A component built against a different interface package is refused, with
-/// both versions named — rather than failing later as an obscure missing
-/// import from the linker.
+/// A component built against another interface version is refused, naming both
+/// versions, rather than failing later as a missing import.
 #[test]
 fn a_component_built_against_another_api_version_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -486,12 +434,7 @@ fn a_component_built_against_another_api_version_is_refused() {
     let _guard = common::TempDir(dir.clone());
     std::fs::copy(real_ext.join("tool-fs.wasm"), ext.join("tool-fs.wasm")).unwrap();
 
-    // Both versions come from the host's own constant rather than from
-    // literals. This test used to spell them `0.1.0` and `0.2.0`, and the day
-    // `wit/` was bumped to 0.2.0 the "incompatible" rewrite became a no-op —
-    // the component was then perfectly compatible and the test failed asking
-    // why it had not been refused. A fixture that encodes the very number it is
-    // testing against goes stale the moment that number moves.
+    // Derived from the host constant, not literals, which go stale when `wit/` is bumped.
     let ours = jk_wasm::manifest::API_VERSION;
     let current = format!("api-version = \"{ours}\"");
     let manifest = std::fs::read_to_string(real_ext.join("tool-fs.manifest.toml")).unwrap();
@@ -499,9 +442,7 @@ fn a_component_built_against_another_api_version_is_refused() {
         manifest.contains(&current),
         "the fixture rewrites this line, so it has to be there: {manifest}"
     );
-    // A different **major**, which is incompatible under both rules — pre-1.0,
-    // where a differing minor is refused, and after, where a differing major
-    // is. So this stays a real mismatch whatever `wit/` is versioned at.
+    // A different major is incompatible under both pre-1.0 and post-1.0 rules.
     let theirs = "9.0.0";
     std::fs::write(
         ext.join("tool-fs.manifest.toml"),
@@ -530,18 +471,11 @@ fn a_component_built_against_another_api_version_is_refused() {
     );
 }
 
-/// A crate `make ext-new` generated boots — its manifest satisfies 16a's
-/// cross-check without anybody hand-writing one.
+/// A `make ext-new` crate boots, so its generated manifest passes the boot
+/// cross-check (#111, acceptance line 3). The manifest cannot under-declare, but
+/// that is not the same as boot accepting it; this asserts the latter.
 ///
-/// Acceptance line 3 of [#111](https://github.com/PromptPasture/jan-klod/issues/111).
-/// The manifest is generated by `scripts/manifests.sh` from the component's
-/// *real* imports, so it cannot under-declare — but "cannot under-declare" and
-/// "boot accepts it" are different claims, and only the second is what an
-/// extension author needs to be true. This asserts the second.
-///
-/// `tool-hello` is the committed output of `make ext-new NAME=tool-hello
-/// KIND=tool`, kept byte-identical to what the generator emits by
-/// `scripts/ext-new-selftest.sh`.
+/// `tool-hello` is the committed generator output, byte-identical per `scripts/ext-new-selftest.sh`.
 #[test]
 fn a_generated_crate_boots() {
     if !common::guests_staged(&["tool-hello.wasm"]) {

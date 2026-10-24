@@ -6,12 +6,10 @@ import (
 	"path/filepath"
 )
 
-// Activate atomically points the `active` symlink under `root` at `slot`. The
-// flip is what makes a blue/green switch (and its rollback) instant.
+// Atomic repoint of the `active` symlink under `root` to `slot`; makes switch and rollback instant.
 func Activate(root string, slot Slot) error {
 	link := filepath.Join(root, "active")
-	// A symlink cannot be replaced atomically in place; write a temp link and
-	// rename it over the old one (rename is atomic on the same filesystem).
+	// A symlink can't be swapped in place: rename a temp link over the old one (atomic on one fs).
 	tmp := link + ".tmp"
 	_ = os.Remove(tmp)
 	if err := os.Symlink(string(slot), tmp); err != nil {

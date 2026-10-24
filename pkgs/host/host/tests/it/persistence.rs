@@ -1,9 +1,6 @@
-//! State persists across runtime restarts.
+//! A transcript persisted to SQLite survives a runtime restart.
 //!
-//! Boots a runtime, runs a turn (persisted to SQLite), drops the runtime,
-//! boots a fresh one against the same DB, and verifies the transcript survives.
-//!
-//! Skips if guests are not staged in `ext/`.
+//! Skips when guests are not staged in `ext/`.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
@@ -43,7 +40,6 @@ extensions:
     )
     .unwrap();
 
-    // First boot: run a turn, persisted to SQLite.
     {
         let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
         let factory = || common::canned_http("first answer");
@@ -54,18 +50,16 @@ extensions:
             matches!(out, RunResult::Answered { .. }),
             "the turn completes"
         );
-        // Turn is two messages (question + answer) because transcript projects
-        // from the event log, not one `{user, answer}` row per turn.
+        // Two messages per turn: the transcript projects from the event log.
         assert_eq!(
             agent.transcript("chat-1").len(),
             2,
             "the turn's question and answer are recorded"
         );
-    } // runtime + agent (and the SQLite connection) dropped here
+    }
 
     assert!(db_path.exists(), "the store persisted a database file");
 
-    // Second boot against the same DB: transcript survives.
     {
         let runtime = Runtime::boot(&config, &ext_dir).expect("runtime reboots");
         let factory = || common::canned_http("unused");
@@ -86,11 +80,8 @@ extensions:
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Relative `storage.path` resolves against config, not cwd.
-///
-/// Installed jan-klod runs from any user directory. Against cwd, the default
-/// `jan-klod.db` would scatter across directories; against config, there is
-/// one store per deployment (invisible in checkout where both paths coincide).
+/// A relative `storage.path` resolves against the config file, not the cwd, so
+/// an installed gateway keeps one store per deployment.
 #[test]
 fn a_relative_storage_path_resolves_against_the_config_not_the_cwd() {
     if !common::guests_staged(&["provider-openai.wasm"]) {

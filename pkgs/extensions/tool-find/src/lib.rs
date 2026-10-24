@@ -1,15 +1,9 @@
 //! `tool-find` — glob search over the workspace tree through `host-fs`.
 //!
-//! - `{ "pattern": "**/*.rs" }` → Rust files in workspace
-//! - `{ "pattern": "*.toml", "path": "src" }` → matches under `src/`
-//!
-//! Discovery half of the file fleet: `tool-fs` can read/grep given paths, but can't enumerate.
-//! Walk is guest-side over `list-dir`, seeing only what the jail exposes.
-//! Matcher, walk, and output cap in shared `guest_fs` (unit-tested natively);
-//! this crate renders and holds Component-Model glue (wasm32 only).
+//! The walk runs guest-side over `host-fs` `list-dir`; the matcher, walk and output cap live in `guest_fs`.
+//! This crate renders the result and holds the Component-Model glue (wasm32 only).
 
-/// Format walk outcome as tool output: matching paths or no-match line,
-/// plus notes for any bounds or truncation (truncated tree never reads as exhaustive).
+/// Format the walk outcome. Bounds and truncation are noted, so a partial tree never reads as exhaustive.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn render(pattern: &str, outcome: &guest_fs::Outcome) -> String {
     if outcome.paths.is_empty() {
@@ -110,8 +104,7 @@ mod component {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or(".");
 
-            // A root the jail refuses is the tool's only hard failure: every other
-            // unreadable directory is simply not walked.
+            // Only a refused root fails the call; unreadable subdirectories are skipped.
             if host_fs::list_dir(root).is_err() {
                 return Err(ToolError::ExecutionFailed);
             }
@@ -181,7 +174,7 @@ mod tests {
 
     #[test]
     fn output_over_the_byte_cap_is_truncated_with_a_count() {
-        let long = "d/".repeat(60) + "f.rs"; // ~124 bytes per path
+        let long = "d/".repeat(60) + "f.rs";
         let paths: Vec<String> = (0..600).map(|i| format!("{i}{long}")).collect();
         let total = paths.len();
         let rendered = render(

@@ -1,6 +1,4 @@
-# The coding distribution's fleet, plus a shell — because compiling is running
-# a command, and nothing else here can. Everything in `coding/guests` is here
-# for the same reasons it is there; the last line is the whole difference.
+# Coding distribution plus a shell: compiling needs a command, nothing else here can run one.
 provider-openai
 provider-anthropic
 interceptor-intent-router

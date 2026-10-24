@@ -121,8 +121,6 @@ fn namespaces_list_most_recently_written_first() {
     assert!(namespaces.contains(&"beta".to_string()));
 }
 
-// ─── The append-only turn log ────────────────────────────────────────────────
-
 #[test]
 fn appends_are_numbered_from_one_and_in_order() {
     let store = Store::open_in_memory().unwrap();
@@ -141,9 +139,7 @@ fn appends_are_numbered_from_one_and_in_order() {
     assert_eq!(log, vec![first, second], "read back in seq order");
 }
 
-/// Each session numbers its own log. Sharing a counter would make `seq` a
-/// global clock, and then a session's log could not be read as a sequence
-/// without gaps — which is exactly what a replay needs it to be.
+/// Each session numbers its own log, so a log reads as a gap-free sequence for replay.
 #[test]
 fn each_session_has_its_own_sequence() {
     let store = Store::open_in_memory().unwrap();
@@ -163,8 +159,7 @@ fn a_session_with_no_events_reads_as_empty_rather_than_missing() {
     assert_eq!(store.session_events("never-used").unwrap(), Vec::new());
 }
 
-/// Ordering has to hold past the point where string comparison stops agreeing
-/// with numeric order — `"10" < "9"` — so this appends into double digits.
+/// Sorts past the point where string order diverges from numeric order (`"10" < "9"`).
 #[test]
 fn ordering_holds_past_single_digits() {
     let store = Store::open_in_memory().unwrap();
@@ -196,10 +191,8 @@ fn purging_a_session_leaves_other_sessions_and_the_entries_table_alone() {
     assert_eq!(store.get("ns", "k").unwrap().value, "v");
 }
 
-/// The log survives a reopen, and — the part worth asserting — an existing
-/// database file created before this table existed gains it on open, because
-/// the schema is `CREATE TABLE IF NOT EXISTS`. Without that, every deployed
-/// `jan-klod.db` would fail on the first append.
+/// The log survives a reopen, and a database created before the `events` table gains it on open
+/// (`CREATE TABLE IF NOT EXISTS`); without that, every deployed `jan-klod.db` would fail on append.
 #[test]
 fn an_existing_database_gains_the_table_and_keeps_the_log() {
     let dir = std::env::temp_dir().join(format!(
@@ -213,9 +206,7 @@ fn an_existing_database_gains_the_table_and_keeps_the_log() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("jan-klod.db");
 
-    // Build a database whose schema predates `events` — the `entries` table
-    // alone, exactly as a deployed `jan-klod.db` has it — using rusqlite
-    // directly rather than adding a test-only method to `Store`.
+    // Schema predates `events`, as in a deployed `jan-klod.db`; raw rusqlite avoids a test-only Store method.
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -248,11 +239,7 @@ fn an_existing_database_gains_the_table_and_keeps_the_log() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-// ─── What a projection needs from the store ──────────────────────────────────
-
-/// The reason `event_sessions` exists rather than reusing `list_namespaces`:
-/// a session can have a log and no entries at all, which is exactly the state
-/// every session is in once the transcript stops being written to `entries`.
+/// Sessions with a log even when they have no entries, which `list_namespaces` would miss.
 #[test]
 fn sessions_with_events_are_listed_even_with_no_entries() {
     let store = Store::open_in_memory().unwrap();
@@ -319,8 +306,7 @@ fn a_fork_copies_a_prefix_and_renumbers_from_one() {
     );
 }
 
-/// A fork is independent in both directions: appending to either afterwards
-/// must not appear in the other.
+/// Appends to either side after a fork stay out of the other.
 #[test]
 fn a_fork_and_its_parent_diverge() {
     let store = Store::open_in_memory().unwrap();
@@ -354,8 +340,7 @@ fn a_fork_and_its_parent_diverge() {
     );
 }
 
-/// Forking into a session that already has a log would interleave two
-/// histories, and the result would read as one. Refused with a reason.
+/// Forking into a session that already has a log would interleave two histories; refused.
 #[test]
 fn forking_into_a_used_session_is_refused() {
     let store = Store::open_in_memory().unwrap();
@@ -376,8 +361,7 @@ fn forking_into_a_used_session_is_refused() {
     );
 }
 
-/// A fork keeps the original timestamps: these are the parent's facts, and
-/// restamping them would claim they happened when the fork was made.
+/// A fork keeps the parent's timestamps; restamping would claim they happened at fork time.
 #[test]
 fn a_fork_preserves_the_original_timestamps() {
     let store = Store::open_in_memory().unwrap();
@@ -386,9 +370,7 @@ fn a_fork_preserves_the_original_timestamps() {
     assert_eq!(store.session_events("child").unwrap()[0].ts, original.ts);
 }
 
-/// Forking past the end copies what exists; forking at 0 copies nothing. Both
-/// are the caller's decision to make, so the store reports the count rather
-/// than guessing which is an error.
+/// Forking past the end copies what exists; forking at 0 copies nothing. The caller decides what counts as an error.
 #[test]
 fn a_fork_bound_outside_the_log_copies_what_there_is() {
     let store = Store::open_in_memory().unwrap();
@@ -403,13 +385,8 @@ fn a_fork_bound_outside_the_log_copies_what_there_is() {
     );
 }
 
-// ─── `recent_turns`: the SQL bound, checked against the in-memory rule (#85) ─
-
-/// Appends one turn to `session`: a `user-message`, then `tool_calls` pairs of
-/// `tool-invoked`/`tool-result` — the variable-row-count case a plain `LIMIT`
-/// cannot express — then a `done`. Turns in the same session vary in row
-/// count on purpose: 0 tool calls is 2 rows, 1 is 4, and so on, which is
-/// exactly the shape that defeats a row-based bound.
+/// Appends one turn: a `user-message`, `tool_calls` `tool-invoked`/`tool-result` pairs, then a `done`.
+/// Row counts vary per turn on purpose, which defeats a row-based `LIMIT`.
 fn append_turn(store: &Store, session: &str, turn: usize, tool_calls: usize) {
     store
         .append_event(
@@ -440,20 +417,15 @@ fn append_turn(store: &Store, session: &str, turn: usize, tool_calls: usize) {
     store.append_event(session, kind, &payload).unwrap();
 }
 
-/// Builds `session`'s log with one turn per entry of `tool_calls_per_turn`
-/// (that entry's value is how many tool calls that turn makes).
+/// Builds `session`'s log with one turn per entry of `tool_calls_per_turn`, each making that many tool calls.
 fn build_session(store: &Store, session: &str, tool_calls_per_turn: &[usize]) {
     for (turn, &tool_calls) in tool_calls_per_turn.iter().enumerate() {
         append_turn(store, session, turn, tool_calls);
     }
 }
 
-/// The two independent paths to a bounded replay must agree: `recent_turns`
-/// is a SQL query over `events`, `last_turns` is a slice over the whole log
-/// held in memory, and neither calls the other. If they disagreed, a replay
-/// would silently hand the model a different history than a full projection
-/// (`GET /session/:id`) would show for the same bound — the exact drift this
-/// asserts cannot happen.
+/// `recent_turns` (SQL) and `last_turns` (in memory) are independent; this asserts they agree,
+/// so a bounded replay never diverges from the full projection for the same bound.
 fn assert_recent_turns_matches_last_turns(store: &Store, session: &str, turns: u32) {
     let whole = store.session_events(session).unwrap();
     let expected = projection::last_turns(&whole, turns).to_vec();
@@ -480,16 +452,12 @@ fn recent_turns_matches_last_turns_at_exactly_the_bound() {
     let store = Store::open_in_memory().unwrap();
     build_session(&store, "s", &[1; 20]);
     assert_recent_turns_matches_last_turns(&store, "s", 20);
-    // One turn less than the log has, and one more: both sides of the exact
-    // match, still agreeing.
+    // Bounds one below, at, and one above the turn count.
     assert_recent_turns_matches_last_turns(&store, "s", 19);
     assert_recent_turns_matches_last_turns(&store, "s", 21);
 }
 
-/// Many more turns than the bound, with a per-turn tool-call count that
-/// varies (0, 1, 2, 3, repeating) — the case a `LIMIT` cannot express,
-/// because the turn kept at the boundary is a different number of rows than
-/// its neighbours.
+/// Many turns with varying tool-call counts (0, 1, 2, 3, repeating): the boundary turn's row count differs from its neighbours.
 #[test]
 fn recent_turns_matches_last_turns_on_a_long_session_with_variable_row_counts() {
     let store = Store::open_in_memory().unwrap();
@@ -508,14 +476,8 @@ fn recent_turns_matches_last_turns_on_an_empty_session() {
     }
 }
 
-/// A deterministic sweep over many generated logs, standing in for a
-/// property test: the repo has no `proptest`/`quickcheck` dependency, so this
-/// is a small seeded PRNG (xorshift64, `std` only) driving many
-/// turn-count/tool-call-count/bound combinations instead. Reproducible across
-/// runs, and — the point of it — exercises shapes a handful of hand-picked
-/// literals would not: bounds that land exactly on a turn boundary with a
-/// preceding turn of a different row count, bounds larger than the log,
-/// zero-tool-call turns next to multi-tool-call ones, and so on.
+/// Seeded xorshift64 sweep over generated logs, standing in for a property test (no proptest dependency).
+/// Covers bounds aligned to turn boundaries, bounds larger than the log, and mixed zero/multi-call turns.
 #[test]
 fn recent_turns_agrees_with_last_turns_across_many_generated_logs() {
     struct Xorshift64(u64);
@@ -546,8 +508,7 @@ fn recent_turns_agrees_with_last_turns_across_many_generated_logs() {
         for turns in [0, 1, 2, turn_count, turn_count + 1, 200] {
             assert_recent_turns_matches_last_turns(&store, &session, turns);
         }
-        // A handful of bounds strictly between 0 and the log's own turn
-        // count, landing mid-log rather than only at its edges.
+        // Bounds strictly inside the log's turn count, not only at its edges.
         for _ in 0..5 {
             let bound = if turn_count == 0 {
                 0
@@ -559,11 +520,8 @@ fn recent_turns_agrees_with_last_turns_across_many_generated_logs() {
     }
 }
 
-/// The measurable win #85 asks for: on a session long enough that trimming
-/// in SQL versus in memory is not a rounding error, `recent_turns` reads a
-/// small, bounded number of rows while `session_events` reads (and this
-/// asserts, decodes into) the whole log — and the two still resolve to the
-/// same conversation.
+/// On a long session `recent_turns` reads a bounded number of rows while `session_events` reads the whole log;
+/// both must resolve to the same conversation.
 #[test]
 fn recent_turns_reads_a_small_bounded_tail_of_a_long_session_with_the_same_messages() {
     let store = Store::open_in_memory().unwrap();
@@ -582,9 +540,7 @@ fn recent_turns_reads_a_small_bounded_tail_of_a_long_session_with_the_same_messa
         whole.len()
     );
 
-    // `Message` has no `PartialEq` (it is not a comparable value anywhere
-    // else in the crate), so the comparison is over `(role, content,
-    // tool_call_id)` tuples rather than the messages themselves.
+    // `Message` has no `PartialEq`, so compare `(role, content, tool_call_id)` tuples.
     let as_tuples = |messages: Vec<jk_protocol::turn::Message>| {
         messages
             .into_iter()

@@ -5,12 +5,7 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# This crate is the wire *contract*, so it performs no I/O: a transport (Slice
-# 13b stdio, 13c WebSocket) owns the sockets and the read loop. It does now pick
-# a format, because the `jsonrpc` module is the JSON-RPC 2.0 envelope and a
-# `result`/`data` payload whose shape varies per command cannot be described
-# without a value type. Zero new packages: serde_json is already a workspace
-# dependency. The contract types in the crate root remain format-free.
+# Wire contract. Performs no I/O; transports own the sockets. Picks serde_json only for the JSON-RPC envelope and per-command payloads, which need a value type.
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

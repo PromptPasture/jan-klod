@@ -7,7 +7,6 @@ publish.workspace = true
 description = "personality-data interceptor: reads and injects per-turn persona text from configuration."
 
 [lib]
-# A reactor component: exports interceptor-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]

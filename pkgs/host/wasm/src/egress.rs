@@ -1,27 +1,10 @@
-//! Where a sandboxed component is allowed to send a request.
+//! Egress policy: sandboxed components may reach public destinations only.
 //!
-//! Destination checking must live host-side. Guest-side checks (e.g. `tool-fetch`
-//! refusing private addresses) protect a confused model, not the host from a
-//! component that skips them. Default: **public destinations only**; loopback,
-//! private, link-local and unique-local are refused unless the operator named
-//! the origin.
-//!
-//! ## Why per-origin grants, not a boolean flag
-//!
-//! Self-hosted local models (Ollama on `127.0.0.1:11434`) need to reach private
-//! endpoints. A "allow all local" flag opens every local port to every guest.
-//! Per-origin grants reuse the config the operator already wrote (provider
-//! `base-url`, MCP server endpoint): the Ollama they configured is reachable,
-//! the Postgres they didn't is not.
-//!
-//! ## One DNS lookup, not two
-//!
-//! Checks every address a hostname resolves to; a public name pointing at
-//! `127.0.0.1` is caught. Addresses are handed back (not dropped) so the caller
-//! connects to the same addresses the check approved. This prevents DNS rebinding
-//! ([#108](https://github.com/PromptPasture/jan-klod/issues/108)): a name whose
-//! answer changes between check and connect is checked as public but connected to
-//! as private.
+//! Checked host-side (guest checks guard a confused model, not the host). Private,
+//! loopback, link-local and unique-local are refused unless the operator named the
+//! origin; per-origin grants (not an allow-local flag) let a configured Ollama through
+//! without opening other local ports. Resolved addresses are returned so the caller
+//! connects to what was checked, preventing DNS rebinding (#108).
 
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
@@ -29,9 +12,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use crate::http::WireError;
 
 /// Where a permitted request may go — what [`EgressPolicy::check`] decided.
-///
-/// Returned instead of `()` to pin the addresses the policy classified, preventing
-/// a second lookup (see module docs for DNS rebinding defense).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Destination {
     /// Hostname resolved; every answer was public. Connect to these addresses
@@ -294,7 +274,6 @@ mod tests {
     #[test]
     fn a_public_address_is_allowed_without_a_grant() {
         let policy = EgressPolicy::public_only();
-        // A literal, so there is no lookup to pin and nothing to rebind.
         assert_eq!(
             policy.check("https://93.184.216.34/"),
             Ok(Destination::AsNamed)
@@ -303,8 +282,6 @@ mod tests {
 
     #[test]
     fn a_resolved_name_hands_back_the_addresses_it_classified() {
-        // Issue #108: prevent DNS rebinding. Unapproved names are resolved
-        // and checked; approved origins skip resolution.
         let policy = EgressPolicy::public_only();
         assert_eq!(
             policy.check("http://localhost:8787/"),

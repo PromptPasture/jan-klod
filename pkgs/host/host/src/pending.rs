@@ -1,33 +1,8 @@
 //! Prompts waiting for an answer, and the route that delivers one (#225).
 //!
-//! A turn parked on an `ask` occupies the session's thread. So the answer
-//! **must not be a session job**: queued behind the parked turn, it would
-//! wait for the turn that is waiting for it. This is where the two meet
-//! instead — the turn registers a one-shot and blocks on it, and the
-//! accepting thread completes it without ever touching the session.
-//!
-//! # What it replaces
-//!
-//! `PromptDriver::wait_for_answer` used to *serve the socket itself* while
-//! parked: `Server::recv_timeout`, the answer POST handled inline, every
-//! other request refused `409` because "agent is mid-turn and
-//! single-threaded". That is why only one client could be served at a time,
-//! and it is the behaviour Phase 20 exists to remove.
-//!
-//! # One parked prompt per session, refused rather than replaced
-//!
-//! A session runs one turn at a time, so a second park is already a
-//! surprise. Replacing the first would orphan a turn that is still waiting
-//! and hand its answer to someone else; refusing the second keeps the
-//! damage where it started. The caller takes its prompt's own default,
-//! which is what it does for every other unanswerable case.
-//!
-//! # Nothing is left behind
-//!
-//! [`Parked`] removes its entry on drop, so an abandoned confirmation — a
-//! client that vanished, a turn that timed out — leaves no row. A registry
-//! that leaked one entry per abandoned confirmation would be a slow leak
-//! with no symptom until a session could never be asked again.
+//! The answer must not be a session job: queued behind the parked turn it would wait on itself, so the
+//! turn blocks on a one-shot that the accepting thread completes without touching the session.
+//! A second park for a session is refused, not replacing the first, which would orphan a waiting turn.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -37,11 +12,7 @@ use std::time::Duration;
 /// Sessions with a turn parked on a question.
 #[derive(Default)]
 pub struct Pending {
-    /// `session -> where its answer goes`.
-    ///
-    /// A `Mutex` and not a channel per session held elsewhere: the two ends
-    /// are on different threads and neither owns the other, so the map is
-    /// the only thing both can name.
+    /// `session -> where its answer goes`; a `Mutex` because the two ends are on different threads.
     waiting: Mutex<HashMap<String, Sender<String>>>,
 }
 
@@ -53,10 +24,7 @@ impl Pending {
     }
 
     /// Register `session` as waiting, and hand back what to wait on.
-    ///
-    /// `None` when that session already has a prompt parked — see the
-    /// module docs for why the second is refused rather than the first
-    /// replaced.
+    /// `None` when that session already has a prompt parked.
     pub fn park(&self, session: &str) -> Option<Parked<'_>> {
         let (answer, answers) = channel();
         let mut waiting = self.lock();
@@ -73,13 +41,9 @@ impl Pending {
     }
 
     /// Deliver `answer` to the turn parked on `session`.
-    ///
-    /// `false` when nothing is parked — which the route reports rather than
-    /// swallowing, because an answer accepted into silence looks to the
-    /// client exactly like one that arrived.
+    /// `false` when nothing is parked, so the client is not told an answer arrived when it did not.
     pub fn answer(&self, session: &str, answer: String) -> bool {
-        // Removed, not read: an answer is delivered once, and leaving the
-        // entry would let a second POST arrive at a waiter that has gone.
+        // Removed, not read: an answer is delivered once.
         let Some(waiting) = self.lock().remove(session) else {
             return false;
         };
@@ -92,12 +56,7 @@ impl Pending {
         self.lock().contains_key(session)
     }
 
-    /// The map, recovering from a poisoned lock.
-    ///
-    /// A panic while holding it leaves the map structurally sound — it is a
-    /// `HashMap` of channel senders, with no invariant a half-finished
-    /// insert could break. Refusing to serve confirmations for the rest of
-    /// the process because one job panicked would be the larger failure.
+    /// The map, recovering from a poisoned lock: it holds only channel senders, so no invariant can break.
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Sender<String>>> {
         self.waiting
             .lock()
@@ -114,12 +73,7 @@ pub struct Parked<'a> {
 
 impl Parked<'_> {
     /// Wait up to `slice` for the answer.
-    ///
-    /// `None` means the slice expired, **not** that no answer is coming —
-    /// the caller owns the real deadline and calls again, which is what
-    /// lets it write a heartbeat between slices. That division is
-    /// deliberate: the heartbeat is a *write* to the client's stream, and
-    /// nothing here should know that a stream exists.
+    /// `None` means the slice expired, not that no answer is coming; the caller owns the deadline and heartbeats between slices.
     #[must_use]
     pub fn wait(&self, slice: Duration) -> Option<String> {
         self.answers.recv_timeout(slice).ok()
@@ -148,10 +102,6 @@ mod tests {
     }
 
     /// An answer nobody is waiting for is refused, not swallowed.
-    ///
-    /// Accepted into silence, it looks to the client exactly like one that
-    /// arrived — and the turn it was meant for proceeds on its default
-    /// while the client believes it answered.
     #[test]
     fn an_answer_for_a_session_nobody_parked_is_refused() {
         let pending = Pending::new();
@@ -160,9 +110,6 @@ mod tests {
     }
 
     /// A second park is refused and the first still gets its answer.
-    ///
-    /// Replacing would orphan a turn that is still waiting and hand its
-    /// answer to whoever parked last.
     #[test]
     fn a_second_park_is_refused_and_the_first_still_answers() {
         let pending = Pending::new();
@@ -173,10 +120,6 @@ mod tests {
     }
 
     /// An abandoned confirmation leaves no row.
-    ///
-    /// The leak this prevents has no symptom until it has one: entries
-    /// accumulate silently, and the first thing anyone notices is a session
-    /// that can never be asked again, long after the turn that stranded it.
     #[test]
     fn a_dropped_wait_leaves_nothing_behind() {
         let pending = Pending::new();
@@ -186,14 +129,11 @@ mod tests {
             !pending.answer("s1", "too late".to_string()),
             "an answer found a waiter that is gone"
         );
-        // And the session can be parked again, which is the half a leak
-        // would have taken away.
+        // And the session can be parked again.
         assert!(pending.park("s1").is_some());
     }
 
-    /// A slice that expires is not a refusal: the caller writes its
-    /// heartbeat and asks again, which is how the deadline stays the
-    /// caller's.
+    /// A slice that expires is not a refusal: the caller heartbeats and asks again.
     #[test]
     fn an_expired_slice_can_be_waited_on_again() {
         let pending = Pending::new();
@@ -203,8 +143,7 @@ mod tests {
         assert_eq!(parked.wait(SLICE).as_deref(), Some("late but arrived"));
     }
 
-    /// The shape the surface will use: the answer arrives from another
-    /// thread, and the parked side never holds the lock while waiting.
+    /// The answer arrives from another thread; the parked side never holds the lock while waiting.
     #[test]
     fn the_answer_may_come_from_another_thread() {
         let pending = Pending::new();

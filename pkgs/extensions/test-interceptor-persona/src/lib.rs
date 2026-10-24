@@ -1,10 +1,5 @@
-//! Test guest for `interceptor-persona` — verifies persona configuration loading
-//! and injection into model requests at select-model phase.
-//!
-//! Tests persona behavior at the WIT boundary:
-//! 1. With `enabled: true`, persona text is injected into request messages.
-//! 2. With `enabled: false`, no persona text is injected.
-//! 3. Invalid persona names trigger warnings and fallback to built-in.
+//! Test guest for `interceptor-persona`: checks persona injection at the select-model phase.
+//! Asserts the configured persona is injected when enabled, absent when disabled, and that only the configured one appears.
 
 // Pure logic: unit-tested natively; WASM glue compiles for wasm32 only.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -51,7 +46,6 @@ mod persona_verification {
                             if let Some(interceptor_obj) = interceptor.as_object() {
                                 if let Some(persona) = interceptor_obj.get("persona") {
                                     if let Some(persona_obj) = persona.as_object() {
-                                        // Extract personalities map
                                         if let Some(personas_value) =
                                             persona_obj.get("personalities")
                                         {
@@ -66,7 +60,6 @@ mod persona_verification {
                                                 }
                                             }
                                         }
-                                        // Extract default name
                                         if let Some(default_value) = persona_obj.get("default") {
                                             if let Some(name) = default_value.as_str() {
                                                 default_name = name.to_string();
@@ -84,14 +77,12 @@ mod persona_verification {
         (personalities, default_name)
     }
 
-    /// Verify persona injection: assert the configured persona text is present when enabled,
-    /// and absent when disabled. Also verifies that only the configured persona is injected.
-    /// Returns Ok(()) if assertion passes, Err with message if assertion fails.
+    /// Assert the configured persona is present when enabled, absent when disabled, and that only
+    /// the configured persona is injected. Returns `Err` with a message on failure.
     pub fn verify_injection(config_json: &str, messages: &[String]) -> Result<(), String> {
         let enabled = is_persona_enabled(config_json);
         let (personalities, default_name) = extract_personas(config_json);
 
-        // Combine all message contents
         let all_message_content = messages.join("\n");
         let has_persona_section = all_message_content.contains("## Persona");
 
@@ -109,14 +100,12 @@ mod persona_verification {
             );
         }
 
-        // When enabled, verify the configured persona text is present
         if enabled {
-            // Get the text of the configured default persona
             let configured_text = personalities
                 .get(&default_name)
                 .cloned()
                 .unwrap_or_else(|| {
-                    // If no custom personas or default not found, should be the built-in default
+                    // Unknown or absent name: the built-in default.
                     "You are helpful, concise, and focused on solving the user's problem."
                         .to_string()
                 });
@@ -127,7 +116,6 @@ mod persona_verification {
                 ));
             }
 
-            // Verify that other personas' text is NOT present
             for (persona_name, persona_text) in &personalities {
                 if persona_name != &default_name && all_message_content.contains(persona_text) {
                     return Err(format!(
@@ -231,7 +219,6 @@ mod persona_verification {
                     }
                 }
             }"#;
-            // Message has a persona section but with the wrong persona's text
             let messages = vec!["## Persona\nYou are helpful and concise.".to_string()];
             assert!(verify_injection(config, &messages).is_err());
         }
@@ -252,7 +239,6 @@ mod persona_verification {
                     }
                 }
             }"#;
-            // Message has the correct persona text AND another persona's text
             let messages = vec![
                 "## Persona\nYou are a technical expert.".to_string(),
                 "Additional context: You are helpful and concise.".to_string(),
@@ -305,7 +291,6 @@ mod persona_verification {
                     }
                 }
             }"#;
-            // When default persona name doesn't exist, should fall back to built-in
             let builtin_text =
                 "You are helpful, concise, and focused on solving the user's problem.";
             let messages = vec![format!("## Persona\n{}", builtin_text)];
@@ -349,10 +334,8 @@ mod component {
 
     impl Lifecycle for Component {
         fn init(_ctx: ExtensionContext) -> Result<(), String> {
-            // Load and parse the config to verify it was set correctly
             let config_str = host_config::all().unwrap_or_else(|_| "{}".to_owned());
 
-            // Log what we received for debugging
             host_log::log(
                 LogLevel::Info,
                 "test-interceptor-persona",
@@ -397,17 +380,13 @@ mod component {
                 return Err(InterceptorError::InvalidState);
             };
 
-            // Get the full config to verify persona injection behavior
             let config_str = host_config::all().unwrap_or_else(|_| "{}".to_owned());
 
-            // Extract message contents for verification
             let message_contents: Vec<String> =
                 request.messages.iter().map(|m| m.content.clone()).collect();
 
-            // Verify persona injection: persona text must be present if enabled, absent if disabled
             match crate::persona_verification::verify_injection(&config_str, &message_contents) {
                 Ok(()) => {
-                    // Assertion passed; log for debugging and proceed
                     let persona_status =
                         if crate::persona_verification::is_persona_enabled(&config_str) {
                             "present (enabled)"
@@ -423,7 +402,6 @@ mod component {
                     Ok(Decision::Proceed)
                 }
                 Err(assertion_error) => {
-                    // Assertion failed; log error and reject
                     host_log::log(
                         LogLevel::Error,
                         "test-interceptor-persona",

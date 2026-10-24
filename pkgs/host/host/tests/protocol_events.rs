@@ -1,15 +1,6 @@
-//! Every turn event the conductor emits has a place in the client protocol.
-//!
-//! Without this, adding a `jk_protocol::turn::Event` variant is a silent hole: the
-//! event reaches the SSE sink and never reaches a protocol client, and nothing
-//! fails. The mapping below has no wildcard arm, so a new variant stops this
-//! file from compiling — which is the whole point of it existing.
-//!
-//! The mapping used to live here, because #41 added no transport and the core
-//! had no runtime reason to hold a protocol type. Slice 13b gave it one, so the
-//! function moved to `jk_host::rpc::notification_for` and this file
-//! asserts *that* — a test that validated its own copy of a mapping would pass
-//! while the copy the stdio transport actually sends drifted away from it.
+//! Every turn event has a place in the client protocol. `notification_for` has no
+//! wildcard arm, so a new `Event` variant fails to compile here. This asserts the
+//! mapping in `jk_host::rpc`, not a copy that could drift from what stdio sends.
 
 use jk_host::rpc::notification_for;
 use jk_host::serve;
@@ -17,8 +8,7 @@ use jk_protocol::turn::Event;
 use jk_protocol::turn::{ToolCall, ToolOutcome, UserPrompt};
 use jk_protocol::Notification;
 
-/// One event of each variant, every field distinguishable, so a field mapped to
-/// the wrong place shows up as a mismatch rather than as two equal strings.
+/// One event per variant, with distinguishable fields so misplaced values show as mismatches.
 fn every_event() -> Vec<Event> {
     vec![
         Event::TextDelta("the answer is".to_owned()),
@@ -43,8 +33,7 @@ fn every_event() -> Vec<Event> {
 #[test]
 fn every_event_maps_to_a_notification() {
     for event in every_event() {
-        // Compares against the variant this event must become, so a mapping
-        // that returns a plausible-but-wrong notification fails here.
+        // Catches a plausible but wrong notification.
         let expected = match &event {
             Event::TextDelta(_) => "TextDelta",
             Event::ToolInvoked(_) => "ToolInvoked",
@@ -68,7 +57,7 @@ fn every_event_maps_to_a_notification() {
     }
 }
 
-/// The mapping must be lossless: everything an event carries has to survive.
+/// The mapping is lossless: everything an event carries survives.
 #[test]
 fn nothing_an_event_carries_is_dropped() {
     assert_eq!(
@@ -122,10 +111,8 @@ fn nothing_an_event_carries_is_dropped() {
     );
 }
 
-/// Three notifications answer to no event, and that is not an oversight: `ask`
-/// comes from `jk_protocol::turn::Driver::ask` blocking a turn, `error` from a failed
-/// turn or an unservable request, and `session/updated` from the store — none
-/// of which passes through `EventSink`.
+/// Some notifications come from no event: `ask` from `Driver::ask`, `error` from failed
+/// turns, and `session/updated` from the store. None of them passes through `EventSink`.
 #[test]
 fn the_notifications_without_an_event_are_accounted_for() {
     let without_events = every_event()
@@ -148,24 +135,10 @@ fn the_notifications_without_an_event_are_accounted_for() {
     );
 }
 
-// ─── SSE compatibility ───────────────────────────────────────────────────────
-//
-// REST + SSE becomes one projection of the protocol rather than a second
-// contract, which only holds if the projection says nothing the protocol cannot
-// say. So: every key an SSE frame carries must reach the notification with an
-// equal value. The reverse used to not be asserted, on the grounds that a
-// notification may carry more than its frame — `tool-invoked` was the one
-// example, since the SSE `tool` frame dropped the call's `arguments` (#161).
-// That asymmetry is gone: `tool` and `tool-result` now carry exactly what
-// their notifications do, which `every_turn_event_frame_and_notification_agree`
-// checks directly rather than leaving to the one-directional check below.
+// SSE frames are a projection of the protocol: every key a frame carries must reach
+// its notification with an equal value.
 
-/// A frame's payload keys the protocol spells differently.
-///
-/// One today: the `error` frame's key is `error`, which the protocol calls
-/// `message` to match `warning`. Consistency inside the contract is worth more
-/// than agreeing with one legacy key, and the rename is recorded here rather
-/// than tolerated by a loose assertion.
+/// Frame keys the protocol spells differently: the `error` frame's `error` is `message`, to match `warning`.
 const RENAMES: &[(&str, &str)] = &[("error", "message")];
 
 /// Assert every key `data` carries survives into `notification`.
@@ -197,16 +170,8 @@ fn every_turn_event_frame_fits_its_notification() {
     }
 }
 
-/// The two invocation-carrying frames have each drifted from their
-/// notification once — `tool` dropped `arguments` (#161) and `tool-result`
-/// had nowhere to put `failed` before it existed (#162) — so this checks the
-/// stronger claim `assert_frame_fits` deliberately does not: not just that
-/// every frame key reaches the notification, but that neither side carries a
-/// key the other does not. Restricted to `tool`/`tool-result` rather than
-/// every kind, because `prompt`/`error`/`done` carry `session`/`agentic` that
-/// belong to the transport or the turn rather than to an invocation, and
-/// asserting exact equality there would be re-litigating a design this file
-/// is not about.
+/// `tool` and `tool-result` carry exactly the notification's fields. This is stricter than
+/// `assert_frame_fits`, and limited to these kinds because the others carry transport fields.
 #[test]
 fn tool_invocation_frames_and_notifications_carry_exactly_the_same_fields() {
     for event in every_event() {
@@ -227,9 +192,7 @@ fn tool_invocation_frames_and_notifications_carry_exactly_the_same_fields() {
     }
 }
 
-/// The `prompt` frame carries `session`, because the client answers it over a
-/// separate request. The notification has to carry it too or the answer has
-/// nothing to name — this is what the test caught.
+/// The `prompt` frame carries `session`, which the client needs to answer it.
 #[test]
 fn the_prompt_frame_fits_the_ask_notification() {
     let prompt = UserPrompt {
@@ -262,13 +225,8 @@ fn the_error_frame_fits_the_error_notification() {
     );
 }
 
-/// The frames above are the whole SSE surface, and this proves the shared
-/// constant lists exactly them — computed from `jk_protocol::turn::Event`, so adding a
-/// variant fails here rather than being noticed by a reader. The constant lives
-/// in `jk-protocol` because a client cannot see this crate, and the
-/// client's half of the check (`ui/tests/parse_frame.rs`) reads the same one.
-/// The keepalive is a `:` comment rather than a frame precisely so it needs no
-/// notification.
+/// The shared `SSE_FRAME_KINDS` constant must list exactly the frame kinds the core emits.
+/// The client's check (`ui/tests/parse_frame.rs`) reads the same constant.
 #[test]
 fn the_projected_frame_kinds_are_the_ones_the_protocol_covers() {
     let mut kinds: Vec<&str> = every_event()

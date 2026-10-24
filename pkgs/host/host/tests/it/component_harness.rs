@@ -1,15 +1,8 @@
-//! Component test harness — load a staged guest, wire host capabilities, and
-//! verify its WIT interface end-to-end through the Component Model, offline and
-//! deterministically. It instantiates each category world, backs imports with
-//! a reusable [`TestHost`] (config section, captured logs, canned `host-http`),
-//! then runs lifecycle plus the guest's interface.
-//!
-//! Each test skips with a note when its component is not staged in `ext/`, so a
-//! bare `cargo test` stays green. Build guests first (`make extensions`) or
-//! run the bundled target (`make harness`).
+//! Offline component tests: load a staged guest through the Component Model,
+//! back its imports with [`TestHost`], and exercise its WIT interface. Tests
+//! skip when their component is not staged in `ext/` (`make harness` builds it).
 
-// Dominated by `bindgen!`-generated code; exempt from the workspace lints, as the
-// sibling `provider_probe` example is.
+// Dominated by `bindgen!`-generated code, so it is exempt from the workspace lints.
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 use std::path::PathBuf;
@@ -38,17 +31,14 @@ mod skill_registry_bind {
     });
 }
 
-/// A canned `host-http` reply. The harness mirrors the host boundary in
-/// [`jk_wasm::http`]: 5xx → `server-error`, 4xx → `client-error`, else
-/// → success. One mock serves both happy path and error-mapping tests.
+/// A canned `host-http` reply; 5xx and 4xx map to errors as in [`jk_wasm::http`].
 #[derive(Clone)]
 struct MockHttp {
     status: u16,
     body: Vec<u8>,
 }
 
-/// Reusable host backing every guest's imports: config section, log buffer,
-/// and canned HTTP reply.
+/// Host backing every guest's imports: config section, log buffer, canned HTTP.
 struct TestHost {
     wasi: WasiCtx,
     table: ResourceTable,
@@ -78,8 +68,6 @@ impl WasiView for TestHost {
     }
 }
 
-// --- host-log: capture lines for assertions (one impl per generated world) ---
-
 impl provider_bind::jan_klod::interfaces::host_log::Host for TestHost {
     fn log(
         &mut self,
@@ -91,8 +79,6 @@ impl provider_bind::jan_klod::interfaces::host_log::Host for TestHost {
         self.logs.push(format!("{component}: {message}"));
     }
 }
-
-// --- host-config: serve the instance section (one impl per generated world) ---
 
 impl provider_bind::jan_klod::interfaces::host_config::Host for TestHost {
     fn get(
@@ -114,8 +100,6 @@ impl provider_bind::jan_klod::interfaces::host_config::Host for TestHost {
         Ok(self.section.all())
     }
 }
-
-// --- host-http: canned reply, split into ok/err the way the real host does ---
 
 impl provider_bind::jan_klod::interfaces::host_http::Host for TestHost {
     fn fetch(
@@ -141,8 +125,6 @@ impl provider_bind::jan_klod::interfaces::host_http::Host for TestHost {
     }
 }
 
-// --- host-secrets: grant and retrieve from environment ---
-
 impl provider_bind::jan_klod::interfaces::host_secrets::Host for TestHost {
     fn get(
         &mut self,
@@ -150,21 +132,18 @@ impl provider_bind::jan_klod::interfaces::host_secrets::Host for TestHost {
     ) -> std::result::Result<String, provider_bind::jan_klod::interfaces::host_secrets::SecretsError>
     {
         use provider_bind::jan_klod::interfaces::host_secrets::SecretsError;
-        // Check if the instance is granted the secrets capability.
+        // Config values are strings, so the grant is compared against "true".
         match self.section.get("secrets") {
             Some(s) => {
-                // Check if it's the boolean true (will be "true" as a JSON string)
                 if s != "true" {
                     return Err(SecretsError::Denied);
                 }
             }
             None => {
-                // Not granted
                 return Err(SecretsError::Denied);
             }
         }
 
-        // Attempt to read from environment
         match std::env::var(&name) {
             Ok(value) => Ok(value),
             Err(std::env::VarError::NotPresent) => Err(SecretsError::NotFound),
@@ -172,8 +151,6 @@ impl provider_bind::jan_klod::interfaces::host_secrets::Host for TestHost {
         }
     }
 }
-
-// --- host-fs: read, write, list, and exists for skill-registry-world ---
 
 impl skill_registry_bind::jan_klod::interfaces::host_fs::Host for TestHost {
     fn read(
@@ -197,7 +174,6 @@ impl skill_registry_bind::jan_klod::interfaces::host_fs::Host for TestHost {
         contents: String,
     ) -> std::result::Result<(), skill_registry_bind::jan_klod::interfaces::host_fs::FsError> {
         use skill_registry_bind::jan_klod::interfaces::host_fs::FsError;
-        // Create parent directories if needed
         if let Some(parent) = std::path::Path::new(&path).parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).map_err(|_| FsError::Io)?;
@@ -244,8 +220,6 @@ impl skill_registry_bind::jan_klod::interfaces::host_fs::Host for TestHost {
     }
 }
 
-// --- host-log for skill-registry-world ---
-
 impl skill_registry_bind::jan_klod::interfaces::host_log::Host for TestHost {
     fn log(
         &mut self,
@@ -257,8 +231,6 @@ impl skill_registry_bind::jan_klod::interfaces::host_log::Host for TestHost {
         self.logs.push(format!("{component}: {message}"));
     }
 }
-
-// --- host-config for skill-registry-world ---
 
 impl skill_registry_bind::jan_klod::interfaces::host_config::Host for TestHost {
     fn get(
@@ -285,8 +257,7 @@ impl skill_registry_bind::jan_klod::interfaces::host_config::Host for TestHost {
     }
 }
 
-/// Resolve a staged guest at `<repo>/ext/<file>`. Returns `None` (with a skip
-/// note) when absent, so an unbuilt tree still passes.
+/// Resolves a staged guest at `<repo>/ext/<file>`; `None` skips when absent.
 fn staged_component(engine: &Engine, file: &str) -> Option<Component> {
     let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "..", "ext", file]
         .iter()
@@ -311,7 +282,6 @@ fn provider_openai_complete_streams_text() -> Result<()> {
         return Ok(());
     };
 
-    // A canned, non-streaming Chat Completions reply.
     let body = json!({
         "choices": [{
             "message": { "role": "assistant", "content": "pong" },
@@ -402,8 +372,7 @@ fn provider_openai_maps_auth_error() -> Result<()> {
         return Ok(());
     };
 
-    // A 401 at the host boundary becomes client-error(401); the guest must map it
-    // to auth-failed.
+    // The host reports 401 as client-error(401); the guest must map it to auth-failed.
     let host = TestHost::new(
         json!({ "base-url": "http://mock/v1", "model": "mock-1", "api-key": "bad" }),
         MockHttp {
@@ -456,9 +425,7 @@ fn provider_openai_maps_auth_error() -> Result<()> {
     Ok(())
 }
 
-/// A reply carrying **both** a preamble and tool calls must yield both — a
-/// parser that treats them as `if tool_calls ... else if content ...` silently
-/// drops the preamble text that a model narrating before acting routinely sends.
+/// A reply with both a preamble and tool calls must yield both, not drop the text.
 #[test]
 fn provider_openai_keeps_text_that_accompanies_tool_calls() -> Result<()> {
     use provider_bind::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext;
@@ -567,14 +534,12 @@ fn registry_skills_loads_bundled_and_workspace_overrides() -> Result<()> {
         return Ok(());
     };
 
-    // Create a temporary directory structure for testing.
     let temp = common::TempDir(PathBuf::from("/tmp/registry-skills-test"));
-    let _ = std::fs::remove_dir_all(&temp.0); // Clean up if it exists
+    let _ = std::fs::remove_dir_all(&temp.0);
     std::fs::create_dir_all(&temp.0)?;
     std::fs::create_dir_all(temp.0.join("skills"))?;
     std::fs::create_dir_all(temp.0.join(".agents/skills"))?;
 
-    // Copy bundled skills from the distribution into the test structure.
     let dist_skills = common::repo_root().join("scripts/distributions/coding/skills");
     if dist_skills.exists() {
         for entry in std::fs::read_dir(&dist_skills)? {
@@ -587,13 +552,10 @@ fn registry_skills_loads_bundled_and_workspace_overrides() -> Result<()> {
         }
     }
 
-    // Save current directory and change to the test directory.
     let old_cwd = std::env::current_dir()?;
     std::env::set_current_dir(&temp.0)?;
 
-    // Ensure cleanup on exit by using a scope guard.
     let _guard = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // Set up the component runtime.
         let host = TestHost::new(
             json!({}),
             MockHttp {
@@ -615,7 +577,6 @@ fn registry_skills_loads_bundled_and_workspace_overrides() -> Result<()> {
         let lifecycle = world.jan_klod_interfaces_extension_lifecycle();
         let registry = world.jan_klod_interfaces_skill_registry();
 
-        // Initialize the component.
         let ctx = ExtensionContext {
             id: "registry-skills".to_string(),
             version: "0.0.0".to_string(),
@@ -629,7 +590,6 @@ fn registry_skills_loads_bundled_and_workspace_overrides() -> Result<()> {
             .expect("start call")
             .expect("start result");
 
-        // Verify bundled skills are loaded.
         let skills = registry
             .call_list_skills(&mut store)
             .expect("list_skills call")
@@ -641,7 +601,6 @@ fn registry_skills_loads_bundled_and_workspace_overrides() -> Result<()> {
             skills.len()
         );
 
-        // Check that all three expected skills are present with correct names.
         let skill_names: Vec<_> = skills.iter().map(|s| s.name.as_str()).collect();
         assert!(
             skill_names.contains(&"commit"),
@@ -659,14 +618,12 @@ fn registry_skills_loads_bundled_and_workspace_overrides() -> Result<()> {
             skill_names
         );
 
-        // Find the commit skill and note its original description.
         let original_commit = skills
             .iter()
             .find(|s| s.name == "commit")
             .expect("commit skill should exist");
         let original_description = original_commit.description.clone();
 
-        // Create a workspace override for the commit skill.
         let workspace_skill = r#"---
 name: commit
 description: Workspace commit guide
@@ -677,13 +634,11 @@ This is the workspace override version.
         std::fs::write(temp.0.join(".agents/skills/commit.md"), workspace_skill)
             .expect("write workspace override");
 
-        // Reload skills to pick up the workspace override.
         registry
             .call_reload(&mut store)
             .expect("reload call")
             .expect("reload result");
 
-        // Verify that the workspace version now takes precedence.
         let reloaded_skills = registry
             .call_list_skills(&mut store)
             .expect("list_skills after reload")
@@ -704,12 +659,10 @@ This is the workspace override version.
             original_description, reloaded_commit.description
         );
 
-        // Clean up the workspace override file.
         std::fs::remove_file(temp.0.join(".agents/skills/commit.md"))
             .expect("cleanup workspace override");
     }));
 
-    // Restore original directory.
     let _ = std::env::set_current_dir(old_cwd);
 
     Ok(())

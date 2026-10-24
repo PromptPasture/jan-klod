@@ -1,16 +1,6 @@
-//! Layered intent router — the first gate every prompt passes before the agent
-//! loop, classifying it as [`Intent::Simple`] (answer inline) or
-//! [`Intent::Agentic`] (enter the step controller).
-//!
-//! Three tiers, cheapest first (see `docs/concepts/small-model-harness.md`):
-//!
-//! 1. **Language detection** ([`language`]) — pure Rust, microseconds. Reliable
-//!    non-English detection bypasses English heuristics.
-//! 2. **Heuristics** ([`heuristics`]) — English exact-phrase matches, microseconds,
-//!    zero model cost. Settles obvious greetings/acks as [`Intent::Simple`].
-//! 3. **LLM classifier** — constrained-decoding call to `llm-provider`, invoked
-//!    only when cheap tiers don't settle. Handles all languages. Injected as a
-//!    closure so this module stays pure and unit-testable.
+//! Layered intent router: classifies a prompt as [`Intent::Simple`] or [`Intent::Agentic`].
+//! Tiers run cheapest first: language gate, English heuristics, LLM classifier (see `docs/concepts/small-model-harness.md`).
+//! The LLM tier is injected as a closure so this module stays pure and unit-testable.
 
 mod heuristics;
 mod language;
@@ -24,18 +14,13 @@ pub enum Intent {
     Agentic,
 }
 
-/// `GBNF` grammar for the tier-3 classifier: the model must emit exactly one of
-/// the two labels. Passed as the `grammar` field of the completion request so a
-/// constrained-decoding backend (`llama.cpp` / `vLLM` guided decoding) cannot
-/// produce anything else. Backends that ignore `grammar` still round-trip through
-/// [`parse_intent`].
+/// GBNF grammar constraining the tier-3 classifier to exactly one label.
+/// Backends that ignore `grammar` still go through [`parse_intent`].
 pub const CLASSIFIER_GRAMMAR: &str = "root ::= \"simple\" | \"agentic\"";
 
 /// Classify `prompt` through the layered tiers.
 ///
-/// `llm_classifier` is consulted **only** when the cheap tiers do not settle the
-/// prompt (heuristics pass, or the input is reliably non-English). It receives
-/// the raw prompt and returns the tier-3 verdict.
+/// `llm_classifier` runs only when the cheap tiers do not settle the prompt.
 pub fn classify(prompt: &str, llm_classifier: impl FnOnce(&str) -> Intent) -> Intent {
     if language::is_heuristic_eligible(prompt) && heuristics::is_simple(prompt) {
         return Intent::Simple;
@@ -45,9 +30,7 @@ pub fn classify(prompt: &str, llm_classifier: impl FnOnce(&str) -> Intent) -> In
 
 /// Parse the tier-3 classifier's raw completion text into an [`Intent`].
 ///
-/// Ambiguous output (neither label present, e.g. a backend that ignored the
-/// grammar and rambled) defaults to [`Intent::Agentic`] — the safe choice, since
-/// mis-skipping the loop on a real task is worse than an unnecessary loop.
+/// Ambiguous output defaults to [`Intent::Agentic`]: wrongly skipping the loop is worse than an extra one.
 #[must_use]
 pub fn parse_intent(text: &str) -> Intent {
     let lowered = text.trim().to_lowercase();
@@ -92,7 +75,6 @@ mod tests {
 
     #[test]
     fn model_verdict_is_respected() {
-        // A prompt the heuristics do not catch but the model deems simple.
         let intent = classify("What is the capital of France?", |_| Intent::Simple);
         assert_eq!(intent, Intent::Simple);
     }
@@ -122,7 +104,6 @@ mod tests {
     #[test]
     fn non_english_bypasses_heuristics_to_the_model() {
         let called = Cell::new(false);
-        // Reliable French — skips the English heuristics straight to the model.
         let intent = classify(
             "Peux-tu réécrire cette fonction et ajouter des tests unitaires complets ?",
             |_| {

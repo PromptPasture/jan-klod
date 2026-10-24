@@ -1,42 +1,6 @@
-//! `tool-proc` — the model's side of a long-lived child (#220).
+//! `tool-proc` — start, read and stop long-lived children, by granted name only.
 //!
-//! The host has held children open since #109, but only a *guest* could
-//! drive one. A model could run a command to completion and nothing else:
-//! no starting a dev server, no reading what it has printed since, no
-//! stopping it. This is that half.
-//!
-//! # By name, never by command
-//!
-//! Every operation names a child the operator wrote down in
-//! `execution.long-lived`; the command and its arguments come from config
-//! and are never in this component's hands. That is deliberate and is the
-//! reason `execution.long-lived` is narrower than `execution.enabled`: a
-//! tool that let the model choose the command would collapse the two, and
-//! the grant would stop meaning anything.
-//!
-//! So the widest thing a model can do here is start something already
-//! written down, read it, and stop it.
-//!
-//! # Handles never reach the model
-//!
-//! `host-process` issues a `u32` per child. The model gets names. The map
-//! between them lives in this instance's memory, which is the right home:
-//! a handle is meaningless outside the instance that was issued it, so
-//! `host-storage` — which survives instances — would be storing a number
-//! that is already stale by the time it is read back. A tool instance
-//! lives as long as its session, so a child started in one turn is still
-//! addressable in the next, which is the whole point.
-//!
-//! # A refusal is a result, not an error
-//!
-//! `tool-error` carries no message. A refusal raised as one is
-//! indistinguishable from a crash, and "you asked for a child nobody
-//! granted" has to read differently from "the tool broke". So refusals
-//! come back as `Ok` with `"refused"` and a reason — and, when the reason
-//! is an unknown name, with the names that *are* available, since a model
-//! that cannot see them cannot correct itself.
-//!
-//! Component-Model glue only, so it compiles for `wasm32` only.
+//! Commands come only from `execution.long-lived`, and handles stay in this instance. Refusals are `Ok` results because `tool-error` carries no message.
 
 #[cfg(target_arch = "wasm32")]
 mod component {
@@ -65,25 +29,17 @@ mod component {
     use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
     use bindings::jan_klod::interfaces::host_process;
 
-    /// Most bytes one `output` call returns. The host's own output cap
-    /// bounds it further; this only stops a single read from being the
-    /// whole of a chatty server's hour.
+    /// Most bytes one `output` call returns; the host's output cap bounds it further.
     const READ_BYTES: u32 = 8192;
     /// How long `output` waits for the first byte.
     ///
-    /// Short on purpose: an empty answer means "nothing yet", which the
-    /// model can act on, and a tool call that blocks the turn for seconds
-    /// to say the same thing is worse. `host-process` documents the empty
-    /// string as "nothing arrived", distinct from "finished" — `running`
-    /// below is what answers the second question.
+    /// Short on purpose: an empty read means "nothing yet", and blocking a turn is worse.
+    /// `running` answers whether the child has finished.
     const READ_WAIT_MS: u32 = 200;
 
     thread_local! {
         /// `name -> handle` for children this instance started.
-        ///
-        /// Not a map, because it holds at most as many entries as the
-        /// operator granted names — a handful — and a `Vec` keeps the
-        /// listing in start order without a second structure.
+        /// A `Vec` is enough: at most one entry per granted name, and it keeps start order.
         static STARTED: RefCell<Vec<(String, u32)>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -106,9 +62,7 @@ mod component {
         serde_json::json!({ "refused": reason }).to_string()
     }
 
-    /// A refusal for a name the operator did not grant, naming the ones
-    /// they did — a model that cannot see the alternatives cannot correct
-    /// itself, and would either give up or guess again.
+    /// A refusal for an ungranted name. Lists the granted names, since a model that cannot see them cannot correct itself.
     fn no_such_child(name: &str) -> String {
         serde_json::json!({
             "refused": format!("no long-lived child named `{name}` is granted"),
@@ -131,9 +85,7 @@ mod component {
 
     /// Start a granted child, or report the one already running.
     fn start(name: &str) -> String {
-        // Starting twice is the model losing track, not an error worth
-        // failing a turn over — and a second child under the same name
-        // would leave the first unreachable and unkillable by name.
+        // Already running is not an error, and a second child under one name would orphan the first.
         if handle(name).is_some_and(host_process::is_running) {
             return serde_json::json!({ "name": name, "started": false, "running": true })
                 .to_string();
@@ -161,8 +113,7 @@ mod component {
             return not_started(name);
         };
         let out = host_process::read_stdout(child, READ_BYTES, READ_WAIT_MS).unwrap_or_default();
-        // Both, always. An empty read does not mean the child is finished,
-        // and a caller told only one of these either spins or stops early.
+        // Always both: an empty read does not mean the child has finished.
         serde_json::json!({
             "name": name,
             "output": out,
@@ -171,7 +122,7 @@ mod component {
         .to_string()
     }
 
-    /// Stop a child this session started. Idempotent.
+    /// Stop a child this session started.
     fn stop(name: &str) -> String {
         let Some(child) = handle(name) else {
             return not_started(name);
@@ -184,8 +135,7 @@ mod component {
         serde_json::json!({ "name": name, "stopped": true }).to_string()
     }
 
-    /// Not started *here*: a granted name nobody started reads differently
-    /// from a name nobody granted, and the model's next move differs too.
+    /// A granted name this session has not started, which needs a different next move from an ungranted one.
     fn not_started(name: &str) -> String {
         if host_process::granted()
             .iter()
@@ -212,9 +162,7 @@ mod component {
             log(LogLevel::Info, "started; long-lived children by name");
             Ok(())
         }
-        /// The children are the host's to reap. It kills what is left when
-        /// this instance stops, which is the guarantee that holds whether
-        /// or not a model remembered to stop anything (#109).
+        /// The host kills any children still running when this instance stops.
         fn stop() {
             log(LogLevel::Info, "stopping");
         }
@@ -259,9 +207,7 @@ mod component {
             if op == "list" {
                 return Ok(list());
             }
-            // Every other op is about one child, and a missing name is the
-            // model's mistake rather than a refusal — there is nothing to
-            // tell it about a child it did not name.
+            // A missing name is a malformed call, not a refusal.
             let Some(name) = value.get("name").and_then(serde_json::Value::as_str) else {
                 return Err(ToolError::InvalidArguments);
             };

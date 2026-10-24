@@ -1,35 +1,5 @@
-//! Compile, install, load, call — one session, no restart (#221).
-//!
-//! Phase 25's exit gate. Every link had a test; the chain had none, and the
-//! two sets were disjoint: `self_extend.rs` compiles and stops,
-//! `install_then_call.rs` starts from a component someone else built. A
-//! chain of individually-tested links is not a tested chain.
-//!
-//! # What the scripted model does
-//!
-//! Six turns, in the `self-extend` distribution's posture — its `execution:`
-//! block spliced from the shipped file, its sandbox, its `install-tool`
-//! grant:
-//!
-//! 1. `shell` — `cargo build --offline --locked --target wasm32-wasip2`
-//! 2. `shell` — copy the artefact somewhere installable
-//! 3. `fs` — **write the manifest**, which the issue did not anticipate and
-//!    the installer requires: "a component nobody can inspect is not
-//!    installable"
-//! 4. `shell` — `shasum`, because an unsigned component needs its digest
-//! 5. `ext-install` — `path`, `allow-unsigned`, and **the digest read out of
-//!    turn 4's own output**, which is the step that existed only in theory
-//! 6. the new tool, by name
-//!
-//! Nothing is stubbed and no step is assumed. In particular the digest is
-//! not computed by the test and handed to the installer: it is parsed from
-//! what the shell tool returned, the way a model would have to.
-//!
-//! # Why it skips
-//!
-//! Compiling a real component needs a prepared crate — `make
-//! self-extend-fixture`, which locks and fetches once, online. The skip is
-//! loud and names the command, like `polyglot_ts.rs`.
+//! Compile, install, load, call in one session with no restart (#221); each link is tested alone elsewhere.
+//! Runs in the shipped `self-extend` posture. Skips until `make self-extend-fixture` has prepared the crate.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,22 +17,17 @@ const NEEDED: [&str; 4] = [
     "tool-fs.wasm",
 ];
 
-/// What turn 6 asserts on: the fixture's own answer, which can only reach
-/// the model if every link ran.
+/// The compiled tool's answer, which reaches the model only if every link ran.
 const PHRASE: &str = "compiled-in-session";
 
 /// Where turn 5's digest is spliced in.
 const DIGEST: &str = "{{sha256}}";
 
-/// The scripted model: a queue of `name|arguments`, and what came back.
+/// The scripted model: queued `name|arguments` calls and what came back.
 struct Script {
-    /// Popped front to back, one per turn.
     calls: Mutex<std::collections::VecDeque<String>>,
-    /// Tool names called, in order, so the chain's shape is checkable.
     named: Mutex<Vec<String>>,
-    /// Every request body that carried a tool result.
     results: Mutex<Vec<String>>,
-    /// The digest, as read out of the shell tool's own output.
     digest: Mutex<Option<String>>,
     completions: AtomicU32,
 }
@@ -99,8 +64,7 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
                 .unwrap_or(false);
 
             if after_tool {
-                // The model reads the tool's output. The digest is in there
-                // exactly once the shell has printed it, and nowhere else.
+                // The digest only appears once the shell has printed it.
                 if let Some(found) = sha256_in(&text) {
                     *script.digest.lock().expect("not poisoned") = Some(found);
                 }
@@ -175,8 +139,6 @@ fn fixture() -> Option<(common::TempDir, std::path::PathBuf, std::path::PathBuf)
     std::fs::create_dir_all(ws.join("wit")).expect("creates the wit dir");
     std::fs::create_dir_all(&ext).expect("creates the ext dir");
 
-    // The agent's starting point: a source tree, as the issue allows —
-    // "scaffolds or is given a source tree".
     for file in ["Cargo.toml", "Cargo.lock"] {
         std::fs::copy(source.join(file), ws.join(file)).expect("copies the crate");
     }
@@ -186,7 +148,6 @@ fn fixture() -> Option<(common::TempDir, std::path::PathBuf, std::path::PathBuf)
         std::fs::copy(entry.path(), ws.join("wit").join(entry.file_name())).expect("copies it");
     }
 
-    // The fleet it starts with: no `self-built` in sight.
     let staged = common::repo_root().join("ext");
     for guest in [
         "provider-openai",
@@ -237,13 +198,8 @@ extensions:
     Some((guard, config, ws))
 }
 
-/// The manifest the agent has to write, because the installer will not
-/// accept a component nobody can inspect.
-///
-/// `capabilities = []` is a claim, not an omission: the fixture imports
-/// nothing, and the host cross-checks that against the artefact's real
-/// imports — a manifest claiming less than the component asks for is
-/// refused.
+/// The manifest the installer requires. `capabilities = []` is checked by the
+/// host against the component's real imports.
 fn manifest_toml() -> String {
     format!(
         "name = \"tool-selfbuilt\"\nversion = \"0.0.0\"\napi-version = \"{api}\"\n\
@@ -256,7 +212,6 @@ fn manifest_toml() -> String {
 fn chain_script(component: &std::path::Path) -> Arc<Script> {
     Arc::new(Script {
         calls: Mutex::new(std::collections::VecDeque::from(vec![
-            // 1. compile, in the jail, offline.
             format!(
                 "shell|{}",
                 serde_json::json!({
@@ -264,7 +219,6 @@ fn chain_script(component: &std::path::Path) -> Arc<Script> {
                     "args": ["build", "--offline", "--locked", "--target", "wasm32-wasip2"]
                 })
             ),
-            // 2. put it where a manifest can sit beside it under its own name.
             format!(
                 "shell|{}",
                 serde_json::json!({
@@ -272,7 +226,6 @@ fn chain_script(component: &std::path::Path) -> Arc<Script> {
                     "args": ["target/wasm32-wasip2/debug/self_built.wasm", "tool-selfbuilt.wasm"]
                 })
             ),
-            // 3. the manifest, written through the file tool.
             format!(
                 "fs|{}",
                 serde_json::json!({
@@ -281,9 +234,7 @@ fn chain_script(component: &std::path::Path) -> Arc<Script> {
                     "contents": manifest_toml()
                 })
             ),
-            // 4. the digest. `shasum` on macOS, `sha256sum` on Linux — the
-            //    model would have to find out too, and either printing it
-            //    is enough.
+            // `sha256sum` on Linux, `shasum` on macOS; either output is enough.
             format!(
                 "shell|{}",
                 serde_json::json!({
@@ -291,8 +242,7 @@ fn chain_script(component: &std::path::Path) -> Arc<Script> {
                     "args": ["-c", "sha256sum tool-selfbuilt.wasm || shasum -a 256 tool-selfbuilt.wasm"]
                 })
             ),
-            // 5. install it. `{{sha256}}` is replaced with what turn 4
-            //    printed — the test never computes it.
+            // `{{sha256}}` is replaced with turn 4's printed digest.
             format!(
                 "ext-install|{}",
                 serde_json::json!({
@@ -301,7 +251,6 @@ fn chain_script(component: &std::path::Path) -> Arc<Script> {
                     "sha256": DIGEST
                 })
             ),
-            // 6. call the tool that did not exist when this session started.
             "self-built|{}".to_string(),
         ])),
         named: Mutex::new(Vec::new()),
@@ -324,9 +273,7 @@ fn an_agent_compiles_installs_and_calls_its_own_tool_in_one_session() {
         return;
     };
     let ext = guard.0.join("ext");
-    // The stem is `<category>-<kind>`: `adopt_installed` reads the category
-    // from it, so a component named `self-built` would be adopted into a
-    // category called `self` and never become a tool.
+    // Stem must be `<category>-<kind>`: adopt_installed reads the category from it.
     let component = ws.join("tool-selfbuilt.wasm");
 
     let script = chain_script(&component);
@@ -347,9 +294,7 @@ fn an_agent_compiles_installs_and_calls_its_own_tool_in_one_session() {
         agent.run("s1", turn);
     }
 
-    // Each link, checked where it happened rather than inferred from the
-    // end: a chain test that only asserts the last step cannot say which
-    // link broke.
+    // Each link is checked where it happens, so a failure names the broken link.
     assert!(
         ws.join("target/wasm32-wasip2/debug/self_built.wasm")
             .exists(),
@@ -371,7 +316,6 @@ fn an_agent_compiles_installs_and_calls_its_own_tool_in_one_session() {
         .clone()
         .expect("the agent could not obtain a digest, which is the step #221 doubted");
 
-    // The seam a host surface drives between turns.
     let installed = agent.take_installed();
     assert_eq!(
         installed,

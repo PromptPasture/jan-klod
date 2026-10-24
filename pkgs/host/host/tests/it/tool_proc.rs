@@ -1,14 +1,6 @@
-//! The model drives a long-lived child, across turns (#220).
-//!
-//! `execution_config.rs` proves the *host* holds a child open for a guest.
-//! This is the model-facing half: three turns of one session start a child,
-//! read what it printed, and stop it — and the turn boundary is the point,
-//! because a handle that did not survive it would make the tool useless for
-//! the thing it exists for.
-//!
-//! Everything is driven through a booted `Runtime` with a canned provider
-//! emitting tool calls, so the path is config → fleet → `tool-proc` →
-//! `host-process` and back into the model's context.
+//! The model drives a long-lived child across turns (#220): one turn starts it,
+//! the next reads it, a third stops it. Runs config -> fleet -> `tool-proc` ->
+//! `host-process` through a booted `Runtime` with a canned provider.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,12 +13,8 @@ use crate::execution_config::pid_alive;
 /// The guests a turn through `tool-proc` needs.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "tool-proc.wasm"];
 
-/// A child that prints once and then stays up.
-///
-/// It prints *without being written to*, unlike the `cat` the host-side
-/// tests use: `tool-proc` deliberately exposes no way to write to a child,
-/// so a child that only echoes would have nothing to read. `exec` replaces
-/// the shell so the pid that is printed is the pid that stays.
+/// Prints once and stays up. `tool-proc` cannot write to a child, so output must
+/// come unprompted; `exec` makes the printed pid the one that stays alive.
 const TICKER: &str = "execution:\n  enabled: true\n  long-lived:\n    - name: ticker\n      \
                       command: sh\n      args: [\"-c\", \"echo hello-from-child; exec sleep 30\"]\n";
 
@@ -44,9 +32,7 @@ impl Turns {
     }
 }
 
-/// Run one turn per entry in `calls`, in a single session, with the same
-/// fleet — which is what makes this a test of the turn boundary rather than
-/// of three separate runs.
+/// Runs one turn per entry in `calls`, in one session and one fleet, so the turn boundary is tested.
 fn run_turns(execution: &str, calls: &[serde_json::Value]) -> Turns {
     let dir = std::env::temp_dir().join(format!(
         "jk-toolproc-{}-{:?}",
@@ -80,9 +66,7 @@ workspace: {ws}
     )
     .unwrap();
 
-    // Two completions per turn: the even one asks for the tool, the odd one
-    // carries its result and ends the turn. So the odd bodies are what the
-    // model was told, which is the only thing worth asserting on.
+    // Each turn makes two completions: even ones request the tool, odd ones carry its result.
     let arguments: Vec<String> = calls.iter().map(serde_json::Value::to_string).collect();
     let nth = Arc::new(AtomicU32::new(0));
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -125,11 +109,7 @@ workspace: {ws}
     Turns { results }
 }
 
-/// The acceptance: started in one turn, read in the next, stopped in a third.
-///
-/// The turn boundary is the whole assertion. A handle kept anywhere that did
-/// not outlive a turn would pass a single-turn test and fail this one, and
-/// "start a dev server, then look at it" is the use this tool exists for.
+/// Started in one turn, read in the next, stopped in a third: the turn boundary is the point.
 #[test]
 fn a_child_starts_in_one_turn_is_read_in_the_next_and_stops_in_a_third() {
     if !common::guests_staged(&GUESTS) {
@@ -166,9 +146,7 @@ fn a_child_starts_in_one_turn_is_read_in_the_next_and_stops_in_a_third() {
     );
 }
 
-/// A name the operator never wrote down is refused — and the refusal says
-/// what *is* available, because a model that cannot see the alternatives
-/// cannot correct itself.
+/// An ungranted name is refused, and the refusal lists what is granted so the model can correct itself.
 #[test]
 fn an_ungranted_name_is_refused_and_the_refusal_names_what_is_granted() {
     if !common::guests_staged(&GUESTS) {
@@ -190,12 +168,7 @@ fn an_ungranted_name_is_refused_and_the_refusal_names_what_is_granted() {
     );
 }
 
-/// The control the refusal needs: with no grant at all there is nothing to
-/// list, so the test above passes against a tool that refuses everything
-/// unless a granted name really does start.
-///
-/// Also the `list` op's own coverage: the model can see the fleet of
-/// children before naming one.
+/// The `list` op shows granted children before the model names one.
 #[test]
 fn a_granted_name_is_listed_before_the_model_asks_for_it() {
     if !common::guests_staged(&GUESTS) {
@@ -214,20 +187,13 @@ fn a_granted_name_is_listed_before_the_model_asks_for_it() {
     );
 }
 
-/// The existing guarantee, re-asserted from the model's side: a child the
-/// *model* started and never stopped is still the host's to reap.
-///
-/// `execution_config.rs` proves this for a guest that leaks a handle. The
-/// difference here is who forgot — and a model forgetting is the ordinary
-/// case rather than the exotic one, so this must hold without anything in
-/// the guest cooperating.
+/// A child the model started and never stopped is still reaped by the host, with no guest help.
 #[test]
 fn a_child_the_model_forgot_does_not_outlive_the_runtime() {
     if !common::guests_staged(&GUESTS) {
         return;
     }
-    // Prints its own pid, then stays up. `sleep` ignores stdin, so nothing
-    // but a kill ends it inside thirty seconds.
+    // Prints its pid and stays up; only a kill ends it within thirty seconds.
     let grant = "execution:\n  enabled: true\n  long-lived:\n    - name: reporter\n      \
                  command: sh\n      args: [\"-c\", \"echo $$; exec sleep 30\"]\n";
     let turns = run_turns(

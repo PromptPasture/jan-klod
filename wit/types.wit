@@ -1,8 +1,7 @@
 package jan-klod:interfaces@0.4.0;
 
-/// Shared types — single canonical source for records crossing interface
-/// boundaries. Splitting these out keeps interfaces independently versionable:
-/// e.g. adding a field to `message` here touches one place, not every consumer.
+/// Shared types: the single canonical source for records crossing interface boundaries.
+/// Kept in one file so interfaces version independently.
 
 /// LLM conversation types, shared by llm-provider and interceptor.
 interface llm-types {

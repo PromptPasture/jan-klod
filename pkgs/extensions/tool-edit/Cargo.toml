@@ -7,7 +7,6 @@ publish.workspace = true
 description = "edit tool: hash-anchored line edits of a workspace file through host-fs; stale anchors are rejected, never applied."
 
 [lib]
-# A reactor component: exports tool-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]

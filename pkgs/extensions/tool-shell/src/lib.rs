@@ -1,8 +1,7 @@
 //! `tool-shell` — run a command in the workspace through `host-process`.
 //!
 //! `invoke({ "command", "args"? })` → `{ code, stdout, stderr }` (JSON).
-//! Gated by `tool-call` permission. Workspace-jailed by `host-process` substrate.
-//! Component-Model glue only (wasm32 only).
+//! Gated by `tool-call` permission; workspace-jailed by the `host-process` substrate.
 
 #[cfg(target_arch = "wasm32")]
 mod component {

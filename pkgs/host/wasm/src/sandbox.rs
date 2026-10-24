@@ -1,10 +1,5 @@
-//! Subprocess effect policy—no enforcement.
-//!
-//! [`crate::host_process`] confines the *caller* (default-deny, jailed cwd,
-//! timeout, output cap, env). Not the *command*—runs with user privileges (see
-//! security model). OS backends later. Defines what they'd enforce and what the
-//! runtime promises when none exist: named grant in `config.yaml` and mode
-//! saying plainly when nothing confines.
+//! Subprocess effect policy (`execution.sandbox`) and the backend trait; the policy itself enforces nothing.
+//! When no OS backend exists the runtime says so plainly instead of implying confinement.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,7 +8,7 @@ use serde_json::Value;
 
 use crate::host_fs::{FsError, Workspace};
 
-/// Default writable: workspace root (only place `host-fs` and cwd allow).
+/// Default writable: workspace root.
 const DEFAULT_WRITABLE: &str = ".";
 
 /// How a command's effects are confined.
@@ -26,8 +21,7 @@ pub enum SandboxMode {
     ApprovalOnly,
 }
 
-/// What the operator asked for in `execution.sandbox`. The *request*, not the
-/// effective policy (depends on boot-time backends resolved per-OS).
+/// The operator's request, not the effective policy (see [`EffectiveSandbox`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxPolicy {
     /// Requested mode, not effective.
@@ -57,14 +51,13 @@ pub enum SandboxConfigError {
 }
 
 impl SandboxPolicy {
-    /// Parse `execution.sandbox`, resolve `writable` against workspace.
+    /// Parse `execution.sandbox`, resolving `writable` against the workspace.
     ///
-    /// Strict on `mode` and `writable` (wrong defaults are unsafe); lenient on
-    /// booleans (false tightens policy). Absent block/sandbox/empty all give defaults.
+    /// Strict on `mode` and `writable` (wrong defaults are unsafe); lenient on booleans
+    /// (false tightens). Absent block or keys give defaults.
     ///
     /// # Errors
-    /// `SandboxConfigError` when `mode` unrecognised, `writable` not strings,
-    /// or entries escape workspace.
+    /// `SandboxConfigError` for an unknown `mode`, non-string `writable`, or entries escaping the workspace.
     pub fn from_config(
         execution: Option<&Value>,
         workspace: &Workspace,
@@ -118,52 +111,24 @@ pub enum SandboxError {
 
 /// An OS mechanism that confines a command's effects.
 ///
-/// Implementations are per-platform and land in their own slices — Seatbelt on
-/// macOS, Landlock on Linux. The trait is here now because the policy above is
-/// meaningless without a named place for enforcement to arrive, and because the
-/// boot path has to be able to say that the place is empty.
-/// `Send + Sync` because the runner that holds one is shared across the
-/// component host, which requires it — and because a backend has no per-command
-/// state to make that awkward: it turns a policy into a confined command and
-/// keeps nothing.
+/// `Send + Sync`: the runner holding one is shared across the component host; backends keep no per-command state.
 pub trait SandboxBackend: Send + Sync {
     /// The mechanism's name, for boot output — "Seatbelt", "Landlock".
     fn name(&self) -> &'static str;
 
     /// Return `command` confined to `policy`, ready to spawn.
     ///
-    /// # Why this takes and returns the command rather than borrowing it
-    ///
-    /// Because one of the two mechanisms in the roadmap works by **replacing**
-    /// the program. Seatbelt confines a child by running it under
-    /// `sandbox-exec -p <profile> -- <command>`, and `std::process::Command`
-    /// cannot be told to change its program: `get_program`, `get_args`,
-    /// `get_envs` and `get_current_dir` read it, and nothing writes it. A
-    /// `&mut Command` can therefore express an in-process mechanism (Landlock
-    /// restricting the child before `exec`) and cannot express a wrapping one.
-    /// Owned-in, owned-out expresses both — a wrapper builds a new command from
-    /// the parts of the old one, an in-process mechanism hands back the same
-    /// command with its own hook attached.
-    ///
-    /// This signature was `confine(&mut Command)` in 15a, where the only
-    /// implementation was one that confines nothing and the difference could not
-    /// show.
+    /// Takes and returns the command by value because Seatbelt must replace the program
+    /// (`sandbox-exec ... -- <command>`), which `&mut Command` cannot express.
     ///
     /// # Errors
-    /// [`SandboxError`] when the mechanism is unavailable or rejects the policy.
-    /// A backend must fail rather than apply a weaker policy than asked for:
-    /// partial confinement reported as success is the one outcome worse than
-    /// none, because it is indistinguishable from the real thing. Returning the
-    /// command unchanged is exactly that failure, so a backend that cannot
-    /// confine returns `Err` instead.
+    /// [`SandboxError`] when unavailable or the policy is rejected. A backend must fail rather
+    /// than apply a weaker policy or return the command unchanged: partial confinement
+    /// reported as success is indistinguishable from the real thing.
     fn confine(&self, command: Command, policy: &SandboxPolicy) -> Result<Command, SandboxError>;
 }
 
-/// A backend that confines nothing.
-///
-/// Not a placeholder to be swapped out — it is the honest answer on any platform
-/// whose backend has not been written, and it exists so tests can hold a
-/// backend-shaped thing that refuses.
+/// A backend that confines nothing; every `confine` is refused.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoBackend;
 
@@ -173,32 +138,21 @@ impl SandboxBackend for NoBackend {
     }
 
     fn confine(&self, _command: Command, _policy: &SandboxPolicy) -> Result<Command, SandboxError> {
-        // The command is dropped rather than handed back: returning it would be
-        // returning an unconfined command from a call whose whole purpose is to
-        // confine one.
+        // Dropped, not returned: an unconfined command must never come out of `confine`.
         Err(SandboxError::Unsupported)
     }
 }
 
 /// The backend this build has for the host OS, if any.
 ///
-/// `Option` rather than always handing back a [`NoBackend`], because "there is
-/// nothing here" is then a fact the boot path can state up front instead of one
-/// it discovers by trying to confine a command that is about to run.
-///
-/// On macOS that up-front answer includes whether the *mechanism* is present:
-/// Seatbelt is applied by `sandbox-exec`, and a build that has the backend on a
-/// system missing the tool has nothing either. Discovering that at the first
-/// command is exactly what this returning `Option` exists to avoid.
+/// `Option` so boot can state absence up front; on macOS that includes `sandbox-exec` being missing.
 #[must_use]
 #[cfg(target_os = "macos")]
 pub fn host_backend() -> Option<Box<dyn SandboxBackend>> {
     backend_at(std::path::Path::new(crate::sandbox_seatbelt::SANDBOX_EXEC))
 }
 
-/// [`host_backend`] with the mechanism's path as an argument, so the "it is not
-/// there" branch is reachable from a test. It cannot be reached by deleting
-/// `/usr/bin/sandbox-exec`.
+/// [`host_backend`] with the mechanism's path injected so the missing branch is testable.
 #[cfg(target_os = "macos")]
 fn backend_at(sandbox_exec: &std::path::Path) -> Option<Box<dyn SandboxBackend>> {
     sandbox_exec
@@ -213,12 +167,8 @@ pub fn host_backend() -> Option<Box<dyn SandboxBackend>> {
     linux_backend().ok()
 }
 
-/// The Linux backend, or the reason there is none.
-///
-/// One function for both answers, so [`host_backend`] and [`absence`] cannot
-/// disagree about *why* — the same mistake the macOS pair avoids the same way.
-/// Two things can be missing: the kernel's Landlock, and this executable (which
-/// Landlock confines a command by re-executing).
+/// The Linux backend, or why there is none (kernel Landlock missing, or this executable not re-executable).
+/// One function so [`host_backend`] and [`absence`] cannot disagree.
 #[cfg(target_os = "linux")]
 fn linux_backend() -> Result<Box<dyn SandboxBackend>, String> {
     crate::sandbox_landlock::available()?;
@@ -229,25 +179,16 @@ fn linux_backend() -> Result<Box<dyn SandboxBackend>, String> {
     Ok(Box::new(backend))
 }
 
-/// No backend: this build has one for macOS and Linux, and Windows is a spike
-/// (Slice 15d) rather than an implementation.
+/// No backend: Windows is a spike (Slice 15d), not an implementation.
 #[must_use]
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn host_backend() -> Option<Box<dyn SandboxBackend>> {
     None
 }
 
-/// [`host_backend`], with the binary a backend re-executes **named** rather than
-/// discovered.
+/// [`host_backend`] with the re-executed binary named rather than discovered.
 ///
-/// Only Landlock re-executes anything, so this differs from [`host_backend`] on
-/// Linux alone — Seatbelt applies a profile through `sandbox-exec` and ignores
-/// `wrapper` entirely. Returning `Option` for the same reason [`host_backend`]
-/// does: a named wrapper that is not there is "no backend", stated up front,
-/// not a command that fails later in a way indistinguishable from a denial.
-///
-/// See `Runtime::with_sandbox_wrapper` for the caller and for why this is a test
-/// seam rather than a configuration key.
+/// Only Landlock re-executes anything; Seatbelt ignores `wrapper`. See `Runtime::with_sandbox_wrapper`.
 #[must_use]
 #[cfg(target_os = "linux")]
 pub fn host_backend_at(wrapper: &std::path::Path) -> Option<Box<dyn SandboxBackend>> {
@@ -259,21 +200,14 @@ pub fn host_backend_at(wrapper: &std::path::Path) -> Option<Box<dyn SandboxBacke
     })
 }
 
-/// [`host_backend_at`] where nothing is re-executed: the argument cannot matter,
-/// so this is [`host_backend`].
+/// [`host_backend_at`] where nothing is re-executed.
 #[must_use]
 #[cfg(not(target_os = "linux"))]
 pub fn host_backend_at(_wrapper: &std::path::Path) -> Option<Box<dyn SandboxBackend>> {
     host_backend()
 }
 
-/// Why there is no backend, phrased for the operator reading a boot warning.
-///
-/// One function rather than a message built where it is used, so it cannot
-/// contradict [`host_backend`]: on macOS the *only* way to have no backend is
-/// for `sandbox-exec` to be missing, so that is what this says, and elsewhere
-/// the build simply has none. Both spellings name the platform, because the
-/// operator's next question is "on this machine, or at all?".
+/// Why there is no backend, for the boot warning; derived beside [`host_backend`] so they cannot contradict.
 fn absence() -> String {
     #[cfg(target_os = "macos")]
     {
@@ -285,9 +219,7 @@ fn absence() -> String {
     }
     #[cfg(target_os = "linux")]
     {
-        // Recomputed rather than remembered, and from the same function that
-        // decided: either the kernel has no Landlock or this executable cannot
-        // be re-executed, and the operator needs to know which.
+        // Recomputed from the deciding function: the operator needs to know which cause.
         linux_backend().err().map_or_else(
             || {
                 format!(
@@ -313,25 +245,19 @@ fn absence() -> String {
     }
 }
 
-/// The mode actually in force, and why it is not the one that was asked for.
+/// The mode actually in force, and why it differs from the request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveSandbox {
     /// The mode that will apply to commands.
     pub mode: SandboxMode,
-    /// Why [`Self::mode`] differs from the request — `None` when it does not.
-    ///
-    /// A downgrade always carries its reason, because a downgrade without one is
-    /// precisely the silent weakening this module exists to prevent. Callers
-    /// print it at boot and surface it on every turn that runs a command.
+    /// Why [`Self::mode`] differs from the request; a downgrade always carries its reason (no silent weakening).
     pub downgrade: Option<String>,
 }
 
 impl SandboxPolicy {
     /// What this policy amounts to, given the backend available.
     ///
-    /// Asking for [`SandboxMode::ApprovalOnly`] and getting it is not a
-    /// downgrade, so it carries no reason. Asking for [`SandboxMode::Os`] where
-    /// nothing can enforce it is, and does.
+    /// Asking for approval-only and getting it is not a downgrade.
     #[must_use]
     pub fn resolve(&self, backend: Option<&dyn SandboxBackend>) -> EffectiveSandbox {
         match (self.mode, backend) {
@@ -354,31 +280,19 @@ impl SandboxPolicy {
         }
     }
 
-    /// Whether any command may run at all, given what [`Self::resolve`] concluded.
+    /// Whether any command may run, given what [`Self::resolve`] concluded.
     ///
-    /// `require: true` is an operator saying they would rather no command ran
-    /// than one ran unconfined, so an approval-only outcome refuses instead of
-    /// warning. Decided here, at boot, rather than per-exec: the guest-facing
-    /// `proc-error` is a bare enum with no room for a reason, so a refusal
-    /// discovered at exec time would reach the caller as an ordinary "denied"
-    /// and tell nobody why. Boot can print the reason; `exec` cannot.
-    ///
-    /// `mode: approval-only` together with `require: true` is contradictory —
-    /// requiring an OS sandbox while asking for none — and resolves to a
-    /// refusal, which is the reading that cannot grant more than was asked for.
+    /// `require: true` refuses rather than warns when nothing confines. Decided at boot because the
+    /// guest-facing `proc-error` has no room for a reason. `mode: approval-only` with `require: true`
+    /// is contradictory and refuses (cannot grant more than asked).
     #[must_use]
     pub fn permits_execution(&self, effective: &EffectiveSandbox) -> bool {
         !(self.require && effective.mode != SandboxMode::Os)
     }
 
-    /// Why execution is refused, or `None` when it is not.
+    /// Why execution is refused, or `None`.
     ///
-    /// Kept beside [`Self::permits_execution`] rather than composed by the
-    /// caller, and deliberately *not* built from [`EffectiveSandbox::downgrade`]:
-    /// that sentence ends by saying a command is confined only by the
-    /// confirmation prompt, which is true of a downgrade and false of a
-    /// refusal, where no command runs at all. Reusing it produced a notice that
-    /// contradicted itself within one line.
+    /// Not built from [`EffectiveSandbox::downgrade`]: that wording says the confirmation prompt confines the command, false for a refusal.
     #[must_use]
     pub fn refusal(&self, effective: &EffectiveSandbox) -> Option<String> {
         if self.permits_execution(effective) {
@@ -411,8 +325,7 @@ fn flag(sandbox: Option<&Value>, name: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// A workspace in a fresh temp dir, the same shape `host_process`'s tests
-    /// use — no dev-dependency for a directory.
+    /// A workspace in a fresh temp dir (no dev-dependency).
     fn workspace() -> Workspace {
         let dir = std::env::temp_dir().join(format!(
             "jk-sandbox-{}-{}",
@@ -441,8 +354,7 @@ mod tests {
         assert!(!policy.require);
     }
 
-    /// `execution:` exists today without a `sandbox:` key in it, so this is the
-    /// state every currently-deployed config is in.
+    /// Every currently-deployed config has `execution:` without `sandbox:`.
     #[test]
     fn an_execution_block_without_a_sandbox_key_is_the_default_policy() {
         let policy = parse(r#"{ "enabled": true, "timeout-secs": 30 }"#).unwrap();
@@ -518,16 +430,13 @@ mod tests {
         assert!(policy.require);
     }
 
-    /// The lenient half of the asymmetry: a value that is not a boolean falls
-    /// back to `false`, which denies rather than grants.
+    /// Non-boolean values fall back to `false`, which denies.
     #[test]
     fn a_malformed_flag_can_only_tighten() {
         let policy = parse(r#"{ "sandbox": { "network": "yes", "require": 1 } }"#).unwrap();
         assert!(!policy.network, "`\"yes\"` must not read as a grant");
         assert!(!policy.require);
     }
-
-    // ─── Effective mode ─────────────────────────────────────────────────────
 
     #[test]
     fn os_mode_with_no_backend_becomes_approval_only_and_says_why() {
@@ -547,9 +456,7 @@ mod tests {
         );
     }
 
-    /// Stands in for a real backend. `resolve` decides on a backend's
-    /// *presence*; whether the mechanism then works is `confine`'s answer, not
-    /// `resolve`'s, so this one need not do anything.
+    /// Stands in for a backend; `resolve` decides on presence only.
     struct Stub;
     impl SandboxBackend for Stub {
         fn name(&self) -> &'static str {
@@ -568,9 +475,7 @@ mod tests {
         assert_eq!(effective.downgrade, None);
     }
 
-    /// Getting what you asked for is not a downgrade, so it must not be
-    /// reported as one — an operator who chose approval-only deliberately
-    /// should not be warned about their own choice on every turn.
+    /// Getting what was asked for is not a downgrade.
     #[test]
     fn asking_for_approval_only_is_not_a_downgrade() {
         let policy = parse(r#"{ "sandbox": { "mode": "approval-only" } }"#).unwrap();
@@ -582,17 +487,13 @@ mod tests {
     #[test]
     fn no_backend_refuses_rather_than_confining_nothing_quietly() {
         let policy = parse("{}").unwrap();
-        // `Command` has no `Debug`-comparable equality, so the outcome is
-        // matched rather than compared — and matching is what says the `Ok`
-        // arm is unreachable here, which is the property under test.
+        // `Command` lacks equality; match instead (the `Ok` arm is unreachable).
         let Err(err) = NoBackend.confine(Command::new("true"), &policy) else {
             panic!("a backend that confines nothing must refuse, not hand the command back")
         };
         assert_eq!(err, SandboxError::Unsupported);
         assert_eq!(NoBackend.name(), "none");
     }
-
-    // ─── require ────────────────────────────────────────────────────────────
 
     #[test]
     fn require_refuses_execution_when_nothing_can_confine() {
@@ -610,9 +511,7 @@ mod tests {
         assert!(policy.permits_execution(&policy.resolve(Some(&Stub))));
     }
 
-    /// Without `require`, the same unbackable request degrades instead — that is
-    /// the whole difference between the two settings, so it is asserted rather
-    /// than left to the reader of `permits_execution`.
+    /// Without `require`, the same unbackable request degrades instead.
     #[test]
     fn without_require_an_unbackable_request_still_runs() {
         let policy = parse(r#"{ "sandbox": { "mode": "os" } }"#).unwrap();
@@ -621,8 +520,7 @@ mod tests {
         assert!(policy.permits_execution(&effective));
     }
 
-    /// A contradictory pair: requiring an OS sandbox while asking for none.
-    /// Refusing is the reading that cannot grant more than was written.
+    /// Requiring an OS sandbox while asking for none refuses.
     #[test]
     fn requiring_os_while_asking_for_approval_only_refuses() {
         let policy =
@@ -635,10 +533,7 @@ mod tests {
         );
     }
 
-    /// The refusal notice must not borrow the downgrade's wording, which ends by
-    /// saying a command is confined only by the confirmation prompt. Under a
-    /// refusal there is no command, so that sentence would be false — and it
-    /// was, in the first version of this.
+    /// The refusal notice must not reuse the downgrade wording (false when no command runs).
     #[test]
     fn a_refusal_does_not_claim_a_command_still_runs() {
         for config in [
@@ -666,11 +561,7 @@ mod tests {
         assert_eq!(policy.refusal(&policy.resolve(None)), None);
     }
 
-    /// This is the state of every platform today, and the test says so out loud
-    /// so that the first slice to add a backend has to come here and change it.
-    /// 15b landed the macOS backend, so the old "no platform has one yet" is
-    /// retired in favour of one assertion per platform — each true where it
-    /// runs, rather than one that is vacuous on both.
+    /// Fails when a platform gains a backend, forcing this assertion to be updated.
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_has_the_seatbelt_backend() {
@@ -679,18 +570,9 @@ mod tests {
         assert_eq!(backend.name(), "Seatbelt");
     }
 
-    /// Linux has one too since 15c, and it can be absent for two different
-    /// reasons — so what is asserted is that the platform gets an answer, and
-    /// that an absent one still names the platform.
+    /// Linux's backend can be absent for two reasons; assert it answers and an absent one names the platform.
     ///
-    /// `if let … else` rather than a two-arm `match`, which trips
-    /// `clippy::single_match_else`. Noted because the mistake is invisible from
-    /// where this repository is developed: macOS `cargo clippy` never compiles
-    /// a `#[cfg(target_os = "linux")]` function, so the `match` form linted
-    /// clean locally and turned CI red. Reproducing it meant pointing this
-    /// `cfg` at macOS for one run, which is the cheap way to lint per-OS code
-    /// here: no Linux target is installed, and adding one to lint from macOS
-    /// would build this workspace's dependency graph a second time.
+    /// `if let ... else` rather than `match`: `clippy::single_match_else` fires on Linux-only code that macOS clippy never compiles.
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_either_has_landlock_or_says_what_is_missing() {
@@ -706,8 +588,7 @@ mod tests {
         }
     }
 
-    /// Everywhere else there is still nothing, and the reason still names the
-    /// platform — which is what an operator reading the boot warning needs.
+    /// Elsewhere there is still nothing, and the reason names the platform.
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[test]
     fn a_platform_with_no_backend_says_which_platform() {
@@ -719,9 +600,7 @@ mod tests {
         assert!(reason.contains(std::env::consts::OS), "{reason}");
     }
 
-    /// The branch that cannot be reached by deleting `/usr/bin/sandbox-exec`:
-    /// macOS with the mechanism missing has no backend, and the reason says so
-    /// rather than claiming the build has none.
+    /// macOS with `sandbox-exec` missing has no backend, and the reason says so.
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_without_sandbox_exec_has_no_backend_and_blames_the_tool() {

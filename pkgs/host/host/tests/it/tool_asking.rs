@@ -1,14 +1,6 @@
-//! A tool asks the user, and the turn carries on (#216).
-//!
-//! Until now only an interceptor could ask. These drive the other end:
-//! `tool-ask-probe` returns a question, the host puts it to the driver, and
-//! the tool is invoked again with the answer — the same return-then-reinvoke
-//! `interceptor.wit` uses, so no guest is ever on the stack while the loop
-//! is suspended.
-//!
-//! Three cases, and the second and third are the ones that decide whether
-//! this is safe to ship: what happens when nobody can answer, and what
-//! happens when a tool never stops asking.
+//! A tool can ask the user mid-call and the turn continues (#216). The probe
+//! returns a question and is re-invoked with the answer, so no guest is on the
+//! stack while the loop is suspended.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -37,8 +29,7 @@ impl Driver for Answering {
     }
 }
 
-/// The driver a headless surface uses: it cannot prompt, so the prompt's
-/// own default is the answer. The same type `AgentSession::run` uses.
+/// Driver for a headless surface, which cannot prompt: the prompt's default is the answer.
 struct Headless;
 impl Driver for Headless {
     fn ask(&mut self, prompt: &UserPrompt) -> String {
@@ -75,7 +66,6 @@ fn call(arguments: &str) -> jk_protocol::turn::ToolCall {
     }
 }
 
-/// The ordinary case: the tool asks, the user answers, the tool uses it.
 #[test]
 fn a_tool_asks_and_is_invoked_again_with_the_answer() {
     let Some(mut fleet) = fleet() else {
@@ -104,11 +94,7 @@ fn a_tool_asks_and_is_invoked_again_with_the_answer() {
     );
 }
 
-/// A tool that does not ask is unaffected by any of this.
-///
-/// The probe exports `tool-askable` and still finishes in one step when
-/// told to, so "can ask" and "does ask" stay separable — otherwise the
-/// interface would cost a round trip to every call.
+/// The probe can ask but may finish in one step, so "can ask" and "does ask" stay separate.
 #[test]
 fn a_tool_that_does_not_ask_answers_in_one_step() {
     let Some(mut fleet) = fleet() else {
@@ -130,13 +116,7 @@ fn a_tool_that_does_not_ask_answers_in_one_step() {
     assert!(out.content.contains("\"asked\":false"), "{}", out.content);
 }
 
-/// Nobody to ask: the prompt's own default is the answer, and the turn
-/// finishes.
-///
-/// A REST client or an ACP peer has no human behind it. The alternative to
-/// a default is a hung turn, which is why `interceptor.wit` put
-/// `default-answer` in the prompt and why `tool-askable` reuses that record
-/// rather than inventing one without it.
+/// With no one to ask, the prompt's default answers and the turn finishes instead of hanging.
 #[test]
 fn with_nobody_to_ask_the_default_answers_and_the_turn_finishes() {
     let Some(mut fleet) = fleet() else {
@@ -153,11 +133,7 @@ fn with_nobody_to_ask_the_default_answers_and_the_turn_finishes() {
     );
 }
 
-/// A tool that never stops asking is stopped by the host.
-///
-/// The bound is the host's, not the guest's promise. Without it a component
-/// could suspend a turn indefinitely, and the person answering the same
-/// question over and over is the one who would find out.
+/// The host bounds how often a tool may ask; a guest cannot be trusted to stop on its own.
 #[test]
 fn a_tool_that_asks_forever_is_cut_off_rather_than_hanging_the_turn() {
     let Some(mut fleet) = fleet() else {

@@ -9,36 +9,19 @@ members = [
     "pkgs/host/wasm",
     "pkgs/clients/tui",
 ]
-# A cargo workspace in its own right, sitting under this one's directory. It
-# declares its own `[workspace]`, so cargo's upward search stops there and it is
-# not silently adopted as a member — naming it here says so out loud, and makes
-# a future glob in `members` safe. `pkgs/host/supervisor` (Go) carries no
-# manifest and needs no entry.
+# Has its own `[workspace]`, so cargo would not adopt it as a member; excluded explicitly.
 exclude = ["pkgs/extensions"]
 
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-# Internal crates — a host binary and its libraries, not for crates.io. Marking
-# them unpublished also lets cargo-deny's `allow-wildcard-paths` exempt their
-# versionless intra-workspace path deps (see deny.toml [bans]).
+# Internal crates, not for crates.io. Also lets cargo-deny's `allow-wildcard-paths` exempt versionless path deps (deny.toml [bans]).
 publish = false
 
 [workspace.dependencies]
-# Default features off: they build GC, async Component Model, threads,
-# stack-switching, profiling, coredump, debug and pooling, none of which the host
-# calls. Measured in #307: clean debug build -20%, `jan-klod-gateway` -23%, same
-# test names. Each feature kept is one the host names:
-# - `runtime`, `std`, `cranelift`: compile and run guests on this machine.
-# - `component-model`: every guest is a component (`bindgen!` in `jk-wasm`).
-# - `cache`, `parallel-compilation`: `Config::cache` in `jk-wasm/src/wasm_cache.rs`.
-# - `wat`: tests build components from WAT text (`Component::new(&engine, WAT_A)`).
-# - `backtrace`: a guest trap's error still says which wasm function trapped.
-# Left out on purpose: `addr2line` and `demangle` read DWARF and the name
-# section, which guests do not have (`strip = true` in pkgs/extensions'
-# `[profile.release]`); `anyhow` only re-exports it for `bindgen!`'s `anyhow`
-# option, which no `bindgen!` here sets.
-# `wasmtime-wasi`'s `p2` turns `async` and `component-model` back on itself.
+# Default features off (GC, async, threads, profiling, debug, pooling: unused).
+# `backtrace` names the wasm function in guest traps; `wat` builds test components; `cache` is `Config::cache` in jk-wasm.
+# `addr2line` and `demangle` are omitted: guests are stripped and have no DWARF or name section.
 wasmtime = { version = "49", default-features = false, features = [
     "std",
     "runtime",
@@ -49,67 +32,35 @@ wasmtime = { version = "49", default-features = false, features = [
     "wat",
     "backtrace",
 ] }
-# `p2` only: guests are `wasm32-wasip2` components and the linker uses
-# `wasmtime_wasi::p2::add_to_linker_sync`. `p1` would pull `wiggle`; `p3` the
-# async Component Model.
+# `p2` only: guests are wasm32-wasip2 components. `p1` would pull in `wiggle`; `p3` the async Component Model.
 wasmtime-wasi = { version = "49", default-features = false, features = ["p2"] }
-# `derive` adds no package to the audited tree: serde and serde_derive are both
-# already in Cargo.lock, pulled in by serde_json and serde_yaml_ng.
+# `derive` adds no new packages: serde_derive is already in Cargo.lock.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 thiserror = "2"
 
-# Disk is tight and wasmtime's debug builds are large: full debug info balloons the
-# incremental cache (was 15GB+ for this workspace alone). Backtraces still resolve
-# to file:line; only step-through variable inspection in a debugger is reduced.
+# Full debug info grew the incremental cache past 15 GB. Backtraces still resolve to file:line.
 [profile.dev]
 debug = "line-tables-only"
-# Line tables stay in the object files instead of being copied into every linked
-# test binary. Backtraces through our code still resolve to file:line (checked
-# with a panicking test, #309). This is already the macOS default; on Linux it
-# saves ~165 MB.
+# Keeps line tables out of every linked test binary (~165 MB on Linux). Backtraces still resolve.
 split-debuginfo = "unpacked"
-# The incremental cache was the largest thing in `target/`: 1.6 GB after a clean
-# build + test build, `jk-wasm`'s 23 `bindgen!` worlds alone 972 MB, and it grows
-# with every edit. Turning it off costs time on each rebuild after an edit:
-# measured from editing `jk-wasm` to a finished test build, 4.7 s -> 15.9 s; from
-# editing `jk-host`, 2.7 s -> 7.5 s (#309). Turning it off only for `jk-wasm` kept
-# `jk-host` at 2.3 s but left 0.5 GB more on disk, and disk is the constraint here.
-# `CARGO_INCREMENTAL=1` turns it back on for one session.
+# Off to keep target/ small (1.6 GB). Costs rebuild time after edits. `CARGO_INCREMENTAL=1` turns it on for one session.
 incremental = false
 
-# Dependencies get none at all — not even the line tables.
-#
-# Note what the block above already does: a `[profile.dev]` setting applies to
-# every crate built with the profile, dependencies included, which is why the
-# 2026-07-06 change to it reclaimed so much. So this is not "deps still carry
-# full debug info"; it is the narrower step of dropping their remaining line
-# tables. Measured on a clean build of this workspace: 4.6GB -> 4.0GB.
-#
-# The asymmetry with the block above is deliberate: a backtrace through *our*
-# code still resolves to file:line, which is what a panic in a test needs. What
-# is given up is file:line on the third-party frames of a backtrace, and
-# stepping into a dependency in a debugger.
-#
-# `"*"` matches non-workspace packages only, so workspace members keep
-# `line-tables-only`.
+# Dependencies drop their remaining line tables. Workspace members keep `line-tables-only`, so our backtraces still resolve.
 [profile.dev.package."*"]
 debug = 0
-# Optimised dependency code is smaller: rlibs and test binaries take ~450 MB less.
-# It costs ~35 s on a clean build, and only a clean one, because dependencies are
-# never rebuilt after an edit to our crates. Test runs get faster, a little under
-# nextest (93 s -> 87 s) and 174 s -> 52 s single-threaded, where the unoptimised
-# Wasmtime compiler is on every test's critical path (#309).
+# Optimised deps: ~450 MB smaller rlibs and faster tests (the unoptimised Wasmtime compiler dominates test time).
+# Costs ~35 s on a clean build only.
 opt-level = 1
 
-# Linting policy, declared once and inherited by every crate via `lints.workspace = true`.
-# Levels are `warn` (visible, non-blocking locally); CI denies warnings (Slice 1b gate).
+# Inherited by every crate via `lints.workspace = true`. Warns locally; CI denies warnings.
 [workspace.lints.rust]
-unsafe_code = "deny"   # hand-written unsafe is forbidden; generated bindings opt back in locally
-missing_docs = "warn"  # document each crate's public API
+unsafe_code = "deny"   # generated bindings opt back in locally
+missing_docs = "warn"
 
 [workspace.lints.clippy]
-all = "warn"       # correctness, style, complexity, perf
-pedantic = "warn"  # stricter modern-Rust idioms
-nursery = "warn"   # in-development lints; may need occasional #[allow]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"   # in-development; expect occasional #[allow]

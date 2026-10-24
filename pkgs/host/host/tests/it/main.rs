@@ -1,11 +1,5 @@
-//! One test target instead of separate binaries. Previously each was ~4GB
-//! (wasmtime static linking) with redundant link steps. Single target, single link.
-//! Even restricting test selection doesn't help—cargo links all targets.
-//!
-//! Modules share a process but set process-global env vars (timeouts,
-//! leak-canaries) that race under `cargo test`'s thread parallelism.
-//! Use `cargo nextest run` for per-test isolation (as `make test`, `make harness`,
-//! `make gate` do).
+//! One test target: each separate target was ~4GB of wasmtime link. Modules share a process and set process-global env vars,
+//! so run with `cargo nextest run` for per-test isolation, as `make test`, `make harness` and `make gate` do.
 
 mod common;
 

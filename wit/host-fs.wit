@@ -1,12 +1,9 @@
 package jan-klod:interfaces@0.4.0;
 
-/// Scoped, path-jailed read/write access to a workspace directory (Phase 7).
+/// Scoped, path-jailed read/write access to a workspace directory.
 ///
-/// Host-provided: the guest never touches the raw filesystem. Every `path` is
-/// **workspace-relative** and resolved against a configured workspace root; any
-/// path that escapes the root (`..`, absolute, or a symlink target outside it) is
-/// rejected with `denied`. **Default-deny:** with no workspace configured, every
-/// operation returns `denied`.
+/// Paths are **workspace-relative**; any escaping the root (`..`, absolute, or an outside symlink) is
+/// rejected with `denied`. **Default-deny:** with no workspace configured, every operation returns `denied`.
 ///
 /// Implemented by the host; imported by file-touching `tool-*` extensions.
 interface host-fs {

@@ -1,8 +1,6 @@
 //! Tier-1 heuristics — English phrases, zero model cost.
 //!
-//! Curated phrases unambiguously answerable inline (no tools or multi-step loop).
-//! Unmatched cases pass to LLM tier. Rules grouped by category for easy addition.
-//! Conservative: false `simple` skips agent loop; when uncertain, pass through.
+//! Unmatched input passes to the LLM tier; a false `simple` skips the agent loop, so stay conservative.
 
 /// Greetings answerable with a greeting.
 const GREETINGS: &[&str] = &[
@@ -176,7 +174,6 @@ fn normalize(text: &str) -> String {
             }
         })
         .collect();
-    // Collapse runs of whitespace to single space, trim.
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

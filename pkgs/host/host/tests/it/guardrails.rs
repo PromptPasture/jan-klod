@@ -1,24 +1,15 @@
-//! `interceptor-guardrails` through the real loop.
-//!
-//! Unit tests over the guest's rule module prove matching; they cannot prove
-//! that a match reaches the transcript or stops a tool. These two turns do,
-//! and they are the acceptance of #177: a secret in model output never reaches
-//! the transcript, and a denied tool argument blocks with the reason surfaced.
-//!
-//! Skips if guests are not staged in `ext/`; build with `make ext`.
+//! `interceptor-guardrails` through the real loop. Unit tests prove matching; these prove a match reaches the
+//! transcript or stops a tool (the acceptance of #177). Skips if guests are not staged in `ext/`; build with `make ext`.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
 
 use crate::common;
 
-/// A fake API key, in the shape the rules match. Hard-coded rather than read
-/// from anywhere: this file must never carry a real one, and a shape is all
-/// the matcher sees.
+/// A fake API key in the shape the rules match. Never a real credential.
 const SECRET: &str = "sk-abcdefghijklmnop0123";
 
-/// Boot a runtime from `config`, run one turn, and hand back the agent so the
-/// caller can read what was persisted.
+/// Writes `body` to `dir/config.yaml` and returns its path.
 fn write_config(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let config = dir.join("config.yaml");
@@ -26,14 +17,10 @@ fn write_config(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
     config
 }
 
-/// The model answers with a credential in it. The guardrail redacts at
-/// `after-response` and again at `finalize`, and what the session records is
-/// the redacted text.
+/// The model answers with a credential; the session must record only the redacted text.
 ///
-/// Asserted against the **transcript**, not the stream. `finalize` edits the
-/// authoritative message while the streamed preview has already gone out —
-/// `wit/interceptor.wit` documents that divergence as intended, so watching
-/// the stream would fail for the wrong reason.
+/// Asserted against the **transcript**, not the stream: `finalize` edits the
+/// message after the streamed preview has gone out, as `wit/interceptor.wit` documents.
 #[test]
 fn a_secret_in_the_model_output_never_reaches_the_transcript() {
     let ext_dir = common::repo_root().join("ext");
@@ -68,8 +55,6 @@ extensions:
     );
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
-    // The provider hands back an answer with the credential embedded in prose,
-    // the way a model that just read a `.env` would.
     let factory = || common::canned_http("your key is sk-abcdefghijklmnop0123, keep it safe");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
@@ -102,8 +87,7 @@ extensions:
     );
 }
 
-/// A tool call whose arguments match a deny rule never runs, and the reason
-/// the operator wrote reaches the caller.
+/// A tool call whose arguments match a deny rule never runs, and the operator's reason reaches the caller.
 #[test]
 fn a_denied_tool_argument_blocks_with_the_reason_surfaced() {
     let ext_dir = common::repo_root().join("ext");
@@ -117,8 +101,7 @@ fn a_denied_tool_argument_blocks_with_the_reason_surfaced() {
 
     let dir = std::env::temp_dir().join(format!("jk-guardrails-deny-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    // A file the tool could read if nothing stopped it — so a passing test
-    // means the guardrail refused, not that the read would have failed anyway.
+    // A readable file, so a pass means the guardrail refused, not that the read failed.
     std::fs::write(dir.join("secrets.txt"), "contents\n").unwrap();
     let config = write_config(
         &dir,
@@ -153,8 +136,7 @@ extensions:
         let calls = std::sync::Arc::clone(&calls);
         Box::new(move |_m, _u, _h, _b, _t| {
             let n = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            // First the model reaches for the file; once the block comes back
-            // as the tool result, it answers in words.
+            // First reach for the file; answer in words once the block returns.
             let body = if n == 0 {
                 serde_json::json!({"choices":[{"message":{"role":"assistant","tool_calls":[
                     {"id":"c1","function":{"name":"fs",
@@ -180,8 +162,6 @@ extensions:
         "a blocked tool ends the call, not the turn: {out:?}"
     );
 
-    // The block travels back as the tool result, so the reason is in the
-    // transcript where the model — and the user reading it — can see it.
     let recorded = agent
         .transcript("deny-1")
         .iter()

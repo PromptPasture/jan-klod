@@ -1,10 +1,5 @@
-// Command jan-klod-supervisor is the tiny blue/green updater. It is a separate
-// process from the Rust core on purpose: the component performing the flip cannot
-// be the binary being swapped, so the supervisor survives a core swap. It carries
-// no agent logic and depends only on the Go standard library (a static,
-// dependency-free binary).
-//
-// This file holds the pure slot/state model — no I/O — so it is unit-tested.
+// Command jan-klod-supervisor is the blue/green updater; it runs as its own process so it survives a core swap.
+// It uses only the Go standard library, so it builds as a static binary.
 package main
 
 import (
@@ -23,8 +18,7 @@ const (
 	Green Slot = "green"
 )
 
-// Standby returns the slot that is not currently active — the one an update is
-// staged into and flipped to.
+// Standby returns the slot not currently active: the target of a staged update.
 func Standby(active Slot) Slot {
 	if active == Blue {
 		return Green
@@ -43,8 +37,7 @@ func Plan(active Slot) Update {
 	return Update{From: active, To: Standby(active)}
 }
 
-// Resolve returns the slot that should be active after the post-flip health
-// check: the new slot on success, the old slot on failure (rollback).
+// Resolve returns the slot to keep active after the health check: new on success, old (rollback) on failure.
 func (u Update) Resolve(healthy bool) Slot {
 	if healthy {
 		return u.To
@@ -52,18 +45,14 @@ func (u Update) Resolve(healthy bool) Slot {
 	return u.From
 }
 
-// State is the persisted deployment state (which slot is live, the rollback
-// target, and the live version). Serialized as JSON to keep the supervisor
-// dependency-free (stdlib only), rather than YAML.
+// State is the persisted deployment state. Stored as JSON, not YAML, to stay stdlib-only.
 type State struct {
 	Active   Slot   `json:"active"`
 	Previous Slot   `json:"previous"`
 	Version  string `json:"version"`
 }
 
-// AfterHealth returns the state to persist for update `u` given its health
-// result. On success the new slot becomes active and the old one the rollback
-// target; on failure the active slot is unchanged (the staged slot is discarded).
+// AfterHealth returns the state to persist for `u`. On failure the active slot is unchanged and the staged slot discarded.
 func (s State) AfterHealth(u Update, healthy bool, version string) State {
 	if healthy {
 		return State{Active: u.To, Previous: u.From, Version: version}
@@ -71,8 +60,7 @@ func (s State) AfterHealth(u Update, healthy bool, version string) State {
 	return State{Active: u.From, Previous: s.Previous, Version: s.Version}
 }
 
-// LoadState reads the state file, defaulting to a fresh `blue`-active state when
-// the file does not exist yet.
+// LoadState reads the state file; a missing file yields a fresh `blue`-active state.
 func LoadState(path string) (State, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

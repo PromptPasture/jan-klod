@@ -1,31 +1,13 @@
-//! A TypeScript component answers a real tool call, through the real loop.
-//!
-//! `polyglot.rs` proves the Component Model boundary is language-neutral by
-//! instantiating a committed `TinyGo` fixture directly. This proves something
-//! narrower and more current: a guest written in a second language, built
-//! today against today's `wit/`, is dispatched by the tool fleet during an
-//! ordinary turn — no host-side special case, no separate path.
-//!
-//! # Why it skips rather than committing a fixture
-//!
-//! The `TinyGo` spike is a committed artifact at ~75 KB. The TypeScript
-//! component is **12.7 MB**, because every JavaScript component carries an
-//! engine, so it is built where the toolchain exists and skipped where it does
-//! not (#187). The skip is loud: it names what is missing and how to get it,
-//! which is what stops "nothing ran" from reading like "everything passed".
-//!
-//! `JK_REQUIRE_GUESTS=1` does **not** force this one. That flag means "the
-//! Rust guests must be staged"; a 326 MB toolchain is a different ask, and
-//! conflating them would make `make gate` fail on every machine that has not
-//! opted in.
+//! A TypeScript component, built against today's `wit/`, answers a real tool
+//! call in an ordinary turn. It skips when not staged (#187): the component is
+//! 12.7 MB and needs `jco`. `JK_REQUIRE_GUESTS` does not force it.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
 
 use crate::common;
 
-/// The component this test needs, which `make -C pkgs/extensions ts-guest`
-/// stages when `jco` is present.
+/// Staged by `make -C pkgs/extensions ts-guest`.
 const TS_COMPONENT: &str = "tool-hello-ts.wasm";
 
 #[test]
@@ -47,9 +29,7 @@ fn a_typescript_tool_answers_a_real_tool_call() {
     );
     std::fs::create_dir_all(&dir.0).expect("creates the temp dir");
     let config = dir.0.join("config.yaml");
-    // `tool.hello-ts` resolves to `ext/tool-hello-ts.wasm` by the same naming
-    // rule every other instance uses. That is the claim under test: the host
-    // has no idea this one was written in TypeScript.
+    // Resolved by the same naming rule as every other instance: the host must not know this is TypeScript.
     std::fs::write(
         &config,
         "
@@ -70,8 +50,7 @@ extensions:
     )
     .expect("writes the config");
 
-    // First the model calls the tool, then it answers in words — the same two
-    // completions `tool_wiring.rs` uses to drive a fleet dispatch.
+    // Completion 0 calls the tool; completion 1 answers.
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let factory = move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::Arc::clone(&calls);
@@ -102,8 +81,7 @@ extensions:
         "the turn completed: {out:?}"
     );
 
-    // The guest's own words, not the host's: `tool-hello-ts` builds this
-    // string, so finding it in the transcript means the component ran.
+    // The string is built by the guest, so finding it means the component ran.
     let recorded = agent
         .transcript("ts-1")
         .iter()

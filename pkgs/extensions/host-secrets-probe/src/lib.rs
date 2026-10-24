@@ -1,10 +1,4 @@
-//! `host-secrets-probe` — a guest that tests host-secrets capability.
-//!
-//! Imports `host-secrets` and attempts to read secrets. Used to verify:
-//! - When not granted `secrets: true`, every call returns `denied`.
-//! - When granted but a secret is absent, returns `not-found`.
-//! - When granted and secret exists, returns the value.
-//! - When the capability is not declared in the manifest, load is refused.
+//! Guest that probes `host-secrets`: denied, not-found, found, and refused-at-load paths.
 
 #[cfg(target_arch = "wasm32")]
 mod component {

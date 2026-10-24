@@ -91,7 +91,6 @@ fn a_later_turn_carries_what_was_said_earlier() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Turn 1: stands alone.
     assert!(matches!(
         agent.run("s-1", "read src/main.rs"),
         RunResult::Answered { .. }
@@ -102,7 +101,6 @@ fn a_later_turn_carries_what_was_said_earlier() {
         "a first turn stands alone"
     );
 
-    // Turn 2: carries prior exchange (oldest first).
     assert!(matches!(
         agent.run("s-1", "now add a test for that"),
         RunResult::Answered { .. }
@@ -113,7 +111,6 @@ fn a_later_turn_carries_what_was_said_earlier() {
         "the earlier exchange precedes the new message, oldest first"
     );
 
-    // Different session = different conversation.
     assert!(matches!(
         agent.run("s-2", "unrelated question"),
         RunResult::Answered { .. }
@@ -146,7 +143,6 @@ fn resuming_a_session_after_a_restart_carries_its_history() {
         agent.run("resumed", "remember the widget refactor");
     }
 
-    // Restart: fresh Runtime over same SQLite file.
     let recorded = Arc::clone(&seen);
     let factory = move || recording_http(&recorded);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime reboots");
@@ -188,7 +184,7 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
     }
 
     let messages = last_messages(&seen);
-    // ≤41 messages: 20 replayed turns × (Q+A) + new message (capped, not full history).
+    // 20 replayed turns of Q+A, plus the new message.
     assert!(
         messages.len() <= 41,
         "replay is capped: {} messages",
@@ -328,8 +324,7 @@ workspace: {ws}
     config
 }
 
-/// Tool schemas on the wire (caught by reading request body). Canned providers
-/// return `tool_calls` blindly, missing requests with no schemas.
+/// Checks the request body: canned providers would accept requests with no tool schemas.
 #[test]
 fn the_model_is_actually_told_which_tools_exist() {
     if !common::guests_staged(&[
@@ -436,7 +431,6 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&http).expect("agent boots");
 
-    // Collect streamed events like REST surface and TUI do.
     let mut sink = WarningSink::default();
     let out = agent.run_streaming_headless(&mut sink, "trunc-1", "explain everything");
 
@@ -452,9 +446,8 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     );
 }
 
-/// AGENTS.md reaches the model labelled as the project's instructions.
-/// Read host-side, passed to `interceptor-system` as config (not granting
-/// `host-fs` to every interceptor just to read one file).
+/// AGENTS.md reaches the model, labelled as the project's instructions. The host
+/// reads it and passes it as config, so no interceptor needs `host-fs`.
 #[test]
 fn project_instructions_from_agents_md_reach_the_model() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-system.wasm"]) {

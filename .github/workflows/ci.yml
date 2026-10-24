@@ -1,18 +1,14 @@
 name: CI
 
-# Enforces the gates the Makefiles define — lint, host tests, the Component-Model
-# exit-gate harness, and the Phase 1 supply-chain gates. CI installs the tooling
-# and then calls the same `make` targets a developer runs locally, so the gate is
-# reproducible off the runner.
+# Runs the gates the Makefiles define: lint, host tests, the exit-gate harness, and supply-chain checks.
+# CI calls the same `make` targets a developer runs locally, so the gate is reproducible off the runner.
 
 on:
   push:
     branches: [main]
   pull_request:
 
-# One run per branch/PR — cancel a superseded run rather than let it finish. No
-# paths-ignore for docs: docs_match_config.rs's tests read README.md, docs/**
-# and pages/index.md, so a doc-only push still has to run lint-test.
+# One run per branch/PR. No paths-ignore for docs: docs_match_config.rs reads README.md, docs/** and pages/index.md.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -28,19 +24,14 @@ jobs:
     name: Lint + test (host workspace)
     runs-on: ubuntu-latest
     steps:
-      # fetch-depth: 2 for `make wit`'s version check, which compares `wit/`
-      # against a baseline. The default depth-1 checkout has no parent commit
-      # and no usable `origin/main`, so the check would report "no baseline"
-      # on every run and the job would still be green — a check that never
-      # runs, which is the thing it exists to prevent.
+      # fetch-depth 2: `make wit`'s version check needs a parent commit to compare against.
+      # A depth-1 checkout reports 'no baseline' on every run and still passes green.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      # wasm32-wasip2 because this job stages the guests below, and without the
-      # target `cargo build --target wasm32-wasip2` dies on the first dependency
-      # (`can't find crate for core`) before any test runs. It was missing, so
-      # every run of this job failed at that step from the moment it was added.
+      # wasm32-wasip2: this job stages the guests, which need it; without it cargo fails
+      # on the first dependency (`can't find crate for core`) before any test runs.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -55,46 +46,27 @@ jobs:
         with:
           workspaces: .
 
-      # `make test` runs the suite under cargo-nextest — one process per test,
-      # and a filter matching nothing exits non-zero instead of reporting green.
-      # Prebuilt binary, as with the supply-chain plugins below: `cargo install`
-      # from source would rebuild it on every run.
-      #
-      # Pinned, like every other tool here: these Makefiles parse nextest's
-      # output, so a CLI change lands on us the way cargo-deny's did. Keep in
-      # step with CARGO_NEXTEST_VERSION in versions.mk.
+      # nextest: one process per test; a filter matching nothing fails instead of passing.
+      # Prebuilt, since `cargo install` would rebuild it per run. Pinned: the Makefiles parse its output.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.143
 
-      # `make -C pkgs/extensions all` generates each guest's capability manifest
-      # by reading the component's own imports out of `wasm-tools component wit`,
-      # so staging the guests now needs this. Pinned like everything else here:
-      # these Makefiles parse its output. Keep in step with WASM_TOOLS_VERSION in
-      # versions.mk.
+      # Pinned: `make -C pkgs/extensions all` parses wasm-tools output to build each guest's manifest.
+      # Keep in step with WASM_TOOLS_VERSION in versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-tools@1.258.0
 
-      # jaq generates each guest's manifest, merges the SBOM and checks the
-      # registry index — all three read by something else, so it is pinned like
-      # every other tool here (#208). `jq` used to do this and was installed by
-      # nothing: it worked because runner images ship it.
+      # Pinned: jaq's output feeds the guest manifests, SBOM and registry index (#208). It was jq before,
+      # which worked only because runner images ship it.
       - uses: taiki-e/install-action@v2
         with:
           tool: jaq@2.3.0
 
-      # Two things resolve wit/spike/deps (wasi:cli & co) through bindgen!: the
-      # spike_gate example, which `make clippy` compiles by passing the `examples`
-      # feature it is gated behind, and the `it` test binary's polyglot module,
-      # which `make test` builds. Those deps are gitignored and fetched on demand
-      # from the committed wit/wkg.lock, so populate them first — the same `wkg
-      # wit fetch` a developer runs locally. Making the examples opt-in did not
-      # take this off the test path; the polyglot module was always on it.
-      #
-      # Prebuilt binary (pinned to the version that produced wit/wkg.lock) — instant,
-      # unlike `cargo install wkg`, which recompiles from source every run. wkg ships
-      # pure binaries (no archive), hence extension-matching + rename + chmod.
+      # wit/spike/deps is gitignored and needed by `make clippy` and `make test` (bindgen!), so fetch it
+      # from the committed wit/wkg.lock. Prebuilt, pinned to the version that produced that lock
+      # (`cargo install` would rebuild it per run). wkg ships bare binaries, hence extension-matching and rename.
       - name: Install wkg
         uses: jaxxstorm/action-install-gh-release@v1
         with:
@@ -108,94 +80,54 @@ jobs:
       - name: Fetch spike WIT deps
         run: make -C pkgs/extensions spike-deps
 
-      # Validate the WIT contracts, and warn if an edit to them did not bump the
-      # package version. No job ran `make wit` before this: `make test` and
-      # `make gate` reach `wit/` only through the guests that bind it, so a
-      # malformed contract or an unbumped version was caught by neither. Runs
-      # before the guests are staged, since they are built against these files.
+      # Validates the WIT contracts and warns on an unbumped package version. No other job reaches wit/,
+      # so without this a bad contract would pass. Runs before guests are staged, which build against these files.
       - run: make wit
 
-      # Stage the guests before testing. Without this the integration tests do not
-      # fail — they *skip*, because an absent component is a legitimate state for a
-      # developer who has not run `make ext` yet. That made this job's roughly
-      # thirty component tests no-ops while it reported success, the same way the
-      # pre-commit hook did until it was fixed. The `gate` job below was unaffected:
-      # it stages guests first.
+      # Stage guests first. Without them the component tests skip rather than fail, and the job passes
+      # with those tests as no-ops.
       - name: Stage guest components
         run: make -C pkgs/extensions all
 
-      # #79 gated the host's integration suite (pkgs/host/host/tests/it/) behind the
-      # `integration` cargo feature, so plain `make test` now builds and runs unit
-      # tests only — host workspace + guest native tests + the Go supervisor, no
-      # wasmtime link, no ~200M `it-*` binary. Deliberately not passing the feature
-      # here: before #79 this step already built and ran the full integration suite
-      # unconditionally, duplicating the `harness` job's `make gate` below — #64 kept
-      # that duplication because two independent runners cost nothing extra in wall
-      # clock. The feature gate changes that trade: carrying the suite here again
-      # would now cost a real extra wasmtime link and ~160 extra tests on every push,
-      # for signal that two identical ubuntu-latest runners on the same commit add
-      # little over one. So `harness` remains the sole job that exercises the full
-      # suite — its `make gate` has its own zero-test guard, so a broken
-      # `--features` flag fails loudly rather than this job silently covering for
-      # it. `make clippy` below still type-checks tests/it (see pkgs/host/Makefile),
-      # so a compile error there still fails this job even though nothing here
-      # links or runs it.
-      #
-      # The capabilities test (pkgs/host/config/tests/capabilities_validation.rs)
-      # checks the registry index `make registry-index` writes to dist/index.json,
-      # which is gitignored: nothing but a developer's earlier run ever made it, so
-      # this job was red from slice 31c on (#284). The guests are staged above.
+      # Unit tests only: #79 put the integration suite behind the `integration` feature, and the harness
+      # job runs it under `make gate`. Running it here too would add a second wasmtime link and ~160 tests per push.
+      # `make clippy` still type-checks tests/it, so a compile error there still fails this job.
+      # Generated here because the capabilities test reads dist/index.json, which is gitignored (#284).
       - name: Registry index (read by the capabilities test)
         run: make registry-index
 
-      # …and make a skip a failure, so this can never hollow out silently again.
+      # JK_REQUIRE_GUESTS=1 turns a skipped test into a failure.
       - run: make test
         env:
           JK_REQUIRE_GUESTS: "1"
 
-      # Node for the markdown lint below (`npx markdownlint-cli2`). Pinned to
-      # the same string the `supply-chain` job uses; keep the two in step.
-      # Quoted, because an unquoted 22.10 parses as a float and silently
-      # selects 22.1.
+      # Node for the markdown lint. Keep in step with supply-chain's node-version.
+      # Quoted: an unquoted 22.10 parses as the float 22.1.
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.2'
 
-      # Markdown lint (#234).
       - name: Markdown lint
         run: make lint-docs
 
-      # The two cargo workspaces cannot inherit one [workspace.lints] block, so
-      # this fails when they stop declaring the same policy.
+      # Cargo cannot share [workspace.lints] across workspaces; this catches the two drifting apart.
       - name: Lint policy drift ([workspace.lints] in every workspace)
         run: make lints-drift
 
-      # The registry index is a function of the staged components and nothing
-      # else (#137). Named here rather than folded into another target for the
-      # reason #130 recorded: a gate `ci.yml` does not call by name does not
-      # run, and looks exactly like a gate that passes.
-      #
-      # In this job because the guests are already staged above — the check
-      # needs `ext/*.manifest.toml`, and `JK_REQUIRE_GUESTS` inside the target
-      # makes an unstaged `ext/` a failure rather than a skip. It also probes
-      # itself, so a generator that is not in fact deterministic is refused
-      # rather than waved through.
+      # Called by name: a gate that ci.yml does not call never runs (#130). The guests are staged above, and
+      # JK_REQUIRE_GUESTS makes an unstaged ext/ fail rather than skip. It also probes its own determinism (#137).
       - name: Registry index determinism (#137)
         run: make registry-index-drift
 
       - run: make clippy
 
-      # The guests are their own workspace, so `make clippy` above does not
-      # reach them; they are staged in this job already, and the wasm target
-      # their second lint run needs is installed for that. Nothing else in CI
-      # would see a guest's lints (#205).
+      # The guests are a separate workspace, which `make clippy` does not reach (#205).
       - run: make clippy-guests
 
   harness:
     name: Component harness (exit gate)
     runs-on: ubuntu-latest
-    # nextest is configured never to terminate a slow test (.config/nextest.toml),
-    # so a hung test would otherwise run to GitHub's six-hour limit (#286).
+    # Nextest never terminates slow tests (.config/nextest.toml), so this timeout is the only bound on a hang (#286).
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -204,38 +136,27 @@ jobs:
         with:
           targets: wasm32-wasip2
 
-      # Cache only the heavy host workspace (wasmtime); the guests are ~35-dep
-      # crates that build in seconds, so they are not worth enumerating here.
+      # Cache only the host workspace (wasmtime). The guests build in seconds.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
 
-      # `make gate` runs under cargo-nextest; see the lint-test job for why, and
-      # for why the version is pinned.
+      # `make gate` runs under nextest. Same pinned version as lint-test.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.143
 
-      # `make gate` builds the guests, which now also generates their manifests
-      # from the components' real imports. See the lint-test job above.
+      # Pinned as in lint-test: `make gate` stages the guests, whose manifests read wasm-tools output.
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-tools@1.258.0
 
-      # jaq generates each guest's manifest, merges the SBOM and checks the
-      # registry index — all three read by something else, so it is pinned like
-      # every other tool here (#208). `jq` used to do this and was installed by
-      # nothing: it worked because runner images ship it.
+      # Pinned as in lint-test (#208).
       - uses: taiki-e/install-action@v2
         with:
           tool: jaq@2.3.0
 
-      # `make gate` builds the `it` test binary, and its polyglot module resolves
-      # wit/spike through bindgen!, so this job needs wit/spike/deps too. It died
-      # on "failed to resolve directory while parsing WIT for path .../wit/spike"
-      # before running a single test: gating the examples behind a feature fixed
-      # the example this job used to build, but the test binary binds the same
-      # world. Same pinned install as the lint-test job above.
+      # `make gate` builds the `it` binary, which resolves wit/spike via bindgen!, so fetch the deps as in lint-test.
       - name: Install wkg
         uses: jaxxstorm/action-install-gh-release@v1
         with:
@@ -249,20 +170,8 @@ jobs:
       - name: Fetch spike WIT deps
         run: make -C pkgs/extensions spike-deps
 
-      # Exit gate: builds every guest to wasm32-wasip2, then runs the full offline
-      # integration surface across all v1 guarantees — the thin loop with provider
-      # fallback, durable state + REST, UI + Telegram roundtrips, streaming/cancel/
-      # steering, the file-workspace substrate, and the tool fleet.
-      #
-      # `make harness` used to run first. It names nine test targets, every one a
-      # file in pkgs/host/host/tests/ that this job's `cargo test --workspace`
-      # already runs — so it was a second build and run of nine wasmtime-linked
-      # binaries, and it ran *without* JK_REQUIRE_GUESTS, meaning its own tests
-      # could skip and still report success. `gate` stages the guests itself
-      # (`gate: extensions`) and sets the flag, so dropping it loses nothing.
-      #
-      # `make gate` also runs the capabilities test, which reads the gitignored
-      # dist/index.json — the same gap #284 closed in the lint-test job (#246).
+      # Exit gate: builds every guest, then runs the full offline integration suite (`make gate`).
+      # `make gate` stages the guests and sets JK_REQUIRE_GUESTS itself.
       - name: Registry index (read by the capabilities test)
         run: make registry-index
       - run: make gate
@@ -275,25 +184,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # `make lockfile` (root Makefile) — every committed Cargo.lock must already
-      # be current, --locked, or the audited/denied tree below is not the tree
-      # that builds. This used to be a loop inlined here and, separately, in
-      # `.github/hooks/pre-push` — the same commands typed twice, free to drift.
-      # Both now call the one target (#72).
+      # Every committed Cargo.lock must be current (--locked), or the audited tree is not the one that builds.
+      # Shared with .github/hooks/pre-push (#72).
       - name: Verify lockfiles (--locked)
         run: make lockfile
 
-      # Prebuilt binaries — far faster than `cargo install` from source.
-      #
-      # All three are pinned, and cargo-deny is why: 0.20 removed `--config` from
-      # the `check` subcommand and made it global, so 0.19 and 0.20 need
-      # different invocations. Unpinned, this resolved to `@latest` (0.20.2)
-      # while local machines still had 0.19, and this job failed on main for days
-      # with "unexpected argument '--config' found". cargo-audit and
-      # cargo-cyclonedx had the identical exposure — `make audit` reads the
-      # former's exit code and `make sbom` the latter's output file — so they no
-      # longer float either. Keep in step with the CARGO_*_VERSION variables in
-      # versions.mk.
+      # Prebuilt binaries, far faster than `cargo install`. All pinned: cargo-deny 0.20 made `--config` global,
+      # so 0.19 and 0.20 need different invocations. Keep in step with CARGO_*_VERSION in versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-cyclonedx@0.5.9,jaq@2.3.0
@@ -304,9 +201,7 @@ jobs:
       - name: cargo-audit (RUSTSEC)
         run: make audit
 
-      # Go modules under pkgs/extensions (currently only the Slice 1a canary):
-      # verified module sums + govulncheck, readonly. cache-dependency-path globs
-      # every go.sum; the Makefile target globs every go.mod — no path is pinned.
+      # Go modules under pkgs/extensions: the cache globs every go.sum; the Makefile target globs every go.mod.
       - uses: actions/setup-go@v5
         with:
           go-version: stable
@@ -315,59 +210,24 @@ jobs:
       - name: Go supply-chain (mod verify + govulncheck)
         run: make -C pkgs/extensions go-supply-chain
 
-      # The supervisor's own Go leg (#130). It was the last line of the root
-      # `supply-chain` target, and this job calls the legs by name and never
-      # calls `supply-chain` itself — so the vulnerability scan for the
-      # repository's only production Go binary had never run on a runner, while
-      # the step above scanned what this file's own comment calls "currently
-      # only the Slice 1a canary". Nothing failed, because a gate that does not
-      # run looks exactly like a gate that passes.
-      #
-      # A separate step rather than folded into the one above: they are
-      # different modules with different makefiles, and naming it here is the
-      # half that stops it going missing again.
-      #
-      # No cache key for it. `setup-go` above globs `pkgs/extensions/*/go.sum`,
-      # and pkgs/host/supervisor has no go.sum at all — it is a dependency-free
-      # binary, so `go mod verify` passes trivially and the work is
-      # govulncheck's standard-library scan, which is where a Go toolchain CVE
-      # would land.
+      # The supervisor's Go leg (#130): a named step, since this job never calls `supply-chain` as a whole.
+      # No go.sum (dependency-free binary), so `go mod verify` is trivial; govulncheck's stdlib scan is the real check.
       - name: Supervisor supply-chain (mod verify + govulncheck)
         run: make supervisor-supply-chain
 
-      # The npm tree under pkgs/extensions (esbuild, for the TypeScript guests)
-      # — the repository's third ecosystem, joining this job rather than
-      # becoming an exception to it (#120).
-      #
-      # node-version is pinned for the reason the three cargo tools above are:
-      # an unpinned version is what failed main for days. The asymmetry worth
-      # knowing is that there is no `make setup` line to keep this in step with,
-      # because npm ships inside Node rather than being a tool make can install
-      # — the local leg uses whatever npm is on PATH. That is tolerable here and
-      # would not have been for cargo-deny: `npm audit`'s verdict comes from the
-      # registry's advisory database, so a client version difference changes the
-      # CLI surface rather than which advisories are found.
-      #
-      # No `cache: npm`, deliberately, and this is measured rather than assumed:
-      # `make npm-supply-chain` resolves and audits without installing, so the
-      # whole run leaves 8 KB across 3 files in the npm cache. Restoring and
-      # saving that costs more than it saves. `setup-go` above caches because it
-      # downloads modules for a real build; this leg downloads nothing. Add a
-      # cache the day this step installs.
+      # Pinned like the cargo tools. npm ships inside Node, so the local leg uses whatever npm is on PATH; that is
+      # tolerable because npm audit's verdict comes from the registry's advisory database.
+      # No `cache: npm`: the leg downloads nothing (measured at 8 KB across 3 files). Add one when it installs.
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.2'
 
-      # Lockfile sync, then advisories. The sync half is load-bearing: `npm
-      # audit` reads package-lock.json and is silent about a dependency that is
-      # only in package.json, so audit alone would leave a newly added package
-      # unscanned while reporting "found 0 vulnerabilities". The Makefile
-      # comment carries the rest, including why --omit=dev must never be added.
+      # Sync the lockfile before auditing: npm audit silently skips a dependency that only package.json lists.
+      # The Makefile has the rest, including why --omit=dev must never be added.
       - name: npm supply-chain (npm lockfile sync + npm audit)
         run: make npm-supply-chain
 
-      # SBOM for the Rust workspace (CycloneDX JSON). cargo-cyclonedx installed
-      # above via taiki-e/install-action alongside cargo-deny and cargo-audit.
+      # CycloneDX SBOM for the Rust workspace; cargo-cyclonedx comes from the install step above.
       - name: Generate SBOM
         run: make sbom
 

@@ -1,25 +1,8 @@
 //! `tool-ask-probe` — a tool that asks before it answers.
 //!
-//! Test instrument, in the shape of `tool-escape-probe`: a component that
-//! exists to exercise a boundary rather than to be useful. Nothing else
-//! exports `tool-askable`, so without this the whole asking path in
-//! `tool_host` has no coverage at all (#216).
-//!
-//! It exports both interfaces on purpose. `tool-callable` is what a host
-//! that has not learned `tool-askable` will call, and a tool that answered
-//! only one of them would be untestable from the other side.
-//!
-//! Three behaviours, chosen by the arguments:
-//!
-//! * `{}` — ask once, then answer with whatever came back. The ordinary
-//!   case.
-//! * `{"forever": true}` — ask every time, never finish. The host's bound
-//!   is the only thing that ends this, which is what makes the bound worth
-//!   having.
-//! * `{"skip": true}` — answer without asking, proving the interface does
-//!   not force a question.
-//!
-//! Component-Model glue only, so it compiles for `wasm32` only.
+//! Test instrument: the only component exporting `tool-askable`, so the asking path in `tool_host` is covered.
+//! Also exports `tool-callable`, so a host without `tool-askable` can still call it.
+//! Arguments: `{}` asks once; `forever: true` asks until the host's bound stops it; `skip: true` never asks.
 
 #[cfg(target_arch = "wasm32")]
 mod component {
@@ -74,7 +57,6 @@ mod component {
         }
     }
 
-    /// Whether `arguments` set a boolean flag.
     fn flag(arguments: &str, name: &str) -> bool {
         serde_json::from_str::<serde_json::Value>(arguments)
             .ok()
@@ -105,8 +87,7 @@ mod component {
             if flag(&arguments, "skip") {
                 return Ok(Step::Done(r#"{"asked":false,"answer":null}"#.to_string()));
             }
-            // Asking again even with an answer in hand: only the host's
-            // bound stops this, which is the point of the case.
+            // Asks again even with an answer in hand; only the host's bound stops this.
             if flag(&arguments, "forever") {
                 return Ok(Step::Asking(Ask {
                     question: QUESTION.to_string(),

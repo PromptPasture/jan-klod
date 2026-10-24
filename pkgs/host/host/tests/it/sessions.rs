@@ -1,10 +1,5 @@
-//! Two sessions, two agents, two turns at the same time (#229).
-//!
-//! The property the registry exists for, and the one that cannot be
-//! faked: a slow turn in one session and a fast turn in another, started
-//! together, with the fast one finishing while the slow one is still
-//! going. With a single agent the fast turn waits — which is the
-//! behaviour Phase 20's gate was filed against.
+//! Two sessions run turns at the same time through the agent registry (#229).
+//! A fast turn must finish while a slow turn in another session is still running.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,12 +10,8 @@ use jk_host::sessions::{Agents, Factory};
 
 use crate::common;
 
-/// A provider that takes its time when the message says to.
-///
-/// The delay is chosen by the *request*, not by the agent, so both
-/// sessions get an identical provider and the difference between them is
-/// only what they were asked to do. An agent-specific slow provider would
-/// prove nothing about concurrency.
+/// A provider that sleeps when the request asks it to. The delay comes from the
+/// request, not the agent, so both sessions get an identical provider.
 fn paced_factory(calls: &Arc<AtomicU32>) -> Factory {
     let calls = Arc::clone(calls);
     Arc::new(move || -> jk_wasm::route::HttpFn {
@@ -73,13 +64,8 @@ extensions:
     Some((guard, runtime))
 }
 
-/// The point of the slice: a turn in one session does not wait for a turn
-/// in another.
-///
-/// Asserted on **overlap**, not on ordering. "The fast one finished
-/// first" is satisfied by luck on a single agent if the slow turn happens
-/// to be queued second; "the fast one finished while the slow one was
-/// still running" is not.
+/// A turn in one session does not wait for a turn in another. Asserted on
+/// overlap, not order: a single agent could finish the fast turn first by luck.
 #[test]
 fn two_sessions_run_turns_at_the_same_time() {
     let Some((_guard, runtime)) = booted("concurrent") else {
@@ -106,9 +92,7 @@ fn two_sessions_run_turns_at_the_same_time() {
         let fast = agents.of("fast");
         let at = Arc::clone(&fast_done);
         scope.spawn(move || {
-            // Only once the slow turn is in flight, so finishing first means
-            // finishing *during* it. A fixed sleep stood in for this, and
-            // under load the slow turn could still be unstarted (#315).
+            // Start only once the slow turn is in flight (a fixed sleep was flaky, #315).
             slow_running
                 .recv_timeout(Duration::from_secs(60))
                 .expect("the slow turn starts");
@@ -133,11 +117,7 @@ fn two_sessions_run_turns_at_the_same_time() {
     );
 }
 
-/// Its control: the same two turns against **one** agent serialise.
-///
-/// Without this, the test above passes on a machine fast enough to make
-/// any ordering look like overlap. This is the behaviour being replaced,
-/// asserted so that the replacement means something.
+/// Control for the test above: one agent serialises the same two turns.
 #[test]
 fn one_agent_makes_the_same_two_turns_wait() {
     let Some((_guard, runtime)) = booted("serialised") else {
@@ -147,9 +127,7 @@ fn one_agent_makes_the_same_two_turns_wait() {
     let factory = paced_factory(&calls);
     let (jobs, queued) = jk_host::session_thread::queue::<AgentSession>();
 
-    // Both stamped inside the jobs, on the thread that serves them. Stamped
-    // by the callers after their answers, a slow caller descheduled under
-    // load could stamp after the fast one had finished (#315).
+    // Stamped inside the jobs, not by callers, which could be descheduled (#315).
     let slow_ended: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let fast_started: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let (started, slow_running) = std::sync::mpsc::channel();
@@ -167,10 +145,8 @@ fn one_agent_makes_the_same_two_turns_wait() {
         let fast = jobs.clone();
         let at = Arc::clone(&fast_started);
         scope.spawn(move || {
-            // Queued only once the slow turn is running, so the queue order
-            // is the one the test means rather than whichever thread the
-            // scheduler ran first. Bounded so a boot failure below ends the
-            // test instead of hanging it.
+            // Queue only once the slow turn runs, so the order is deterministic.
+            // Bounded, so a boot failure ends the test instead of hanging it.
             slow_running
                 .recv_timeout(Duration::from_secs(60))
                 .expect("the slow turn starts");
@@ -198,8 +174,7 @@ fn one_agent_makes_the_same_two_turns_wait() {
     );
 }
 
-/// Dropping the registry ends every thread, and waiting for them is what
-/// makes that observable.
+/// Dropping the registry stops every agent loop.
 #[test]
 fn dropping_the_registry_stops_every_agent() {
     let Some((_guard, runtime)) = booted("shutdown") else {
@@ -222,18 +197,9 @@ fn dropping_the_registry_stops_every_agent() {
     );
 }
 
-/// Two agents, one store — even with **no `storage.path` at all** (#233).
-///
-/// The configuration this is written against is the one that was wrong:
-/// with a path, several `Store::open` handles to one file agreed by luck
-/// and the bug was invisible. Without one, every agent used to get its
-/// own in-memory database, so a session had a transcript for the agent
-/// that wrote it and `[]` for every other — and the REST surface reads
-/// sessions through the *housekeeping* agent, so `GET /sessions` and
-/// `GET /session/{id}` reported nothing while the session worked.
-///
-/// Nothing errored, which is what made it worth a test rather than a
-/// comment.
+/// Agents share one store even with no `storage.path` (#233). Before the fix each
+/// agent had its own in-memory DB, and REST reads through the housekeeping agent,
+/// so sessions went missing silently.
 #[test]
 fn a_session_written_by_one_agent_is_visible_to_another() {
     if !common::guests_staged(&["provider-openai.wasm"]) {

@@ -1,7 +1,5 @@
-//! Storage scope for `interceptor-permission`: standing grants are run-scoped,
-//! not persisted (durability is opt-in `persist: true`). Tests: (1) grants don't
-//! survive restart, (2) `persist: true` keeps state, (3) components isolate
-//! namespaces and can't read session transcripts. Skips when guests not staged.
+//! Storage scope for `interceptor-permission`: standing grants are run-scoped
+//! unless the instance opts in with `persist: true`. Skips when guests are not staged.
 
 use jk_agent::Runtime;
 use jk_protocol::turn::{Driver, UserPrompt};
@@ -110,14 +108,12 @@ fn a_standing_grant_does_not_survive_a_restart() {
     let ext_dir = common::repo_root().join("ext");
     let config = config_with(&dir, &db, false);
 
-    // Two turns in one process: grant from first silences second.
     let first_process = turns_asked(&config, &ext_dir, 2);
     assert_eq!(
         first_process, 1,
         "a standing grant silences the gate within a run — otherwise `always` means nothing"
     );
 
-    // Restart: fresh Runtime over same DB. Session transcript survives; grant doesn't.
     let second_process = turns_asked(&config, &ext_dir, 1);
     assert_eq!(
         second_process, 1,
@@ -143,7 +139,6 @@ fn an_instance_that_opts_in_keeps_its_state_across_a_restart() {
     let first_process = turns_asked(&config, &ext_dir, 1);
     assert_eq!(first_process, 1, "the first run asks once");
 
-    // Restart: same DB, grant was persisted.
     let second_process = turns_asked(&config, &ext_dir, 1);
     assert_eq!(
         second_process, 0,
@@ -151,9 +146,7 @@ fn an_instance_that_opts_in_keeps_its_state_across_a_restart() {
     );
 }
 
-/// One DB backs opted-in interceptors and session logs. Isolation is enforced:
-/// guest namespaces prefixed (can't name other components), session logs in
-/// table `host-storage` can't address.
+/// One DB backs opted-in interceptors and session logs; their data stays isolated.
 #[test]
 fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
     if !common::guests_staged(&GUESTS) {
@@ -177,7 +170,6 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
     let store = jk_session::store::Store::open(&db).expect("opens the same db");
     let namespaces = store.list_namespaces().expect("lists namespaces");
 
-    // Gate asked for `permission`; must be prefixed to prevent namespace collisions.
     assert!(
         !namespaces.iter().any(|ns| ns == "permission"),
         "a guest's namespace must be prefixed with its component id, not taken \
@@ -189,8 +181,7 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
             .any(|ns| ns.starts_with("ext/interceptor.permission/")),
         "the grant landed under the component's own subtree: {namespaces:?}"
     );
-    // Session in same DB but in `events` table (not `entries`), unreachable by `host-storage`.
-    // Isolation: namespace prefix + table door.
+    // Sessions live in the `events` table, which guests cannot address.
     assert!(
         !namespaces.iter().any(|ns| ns == "s1"),
         "the session is not reachable as a namespace any more: {namespaces:?}"
@@ -203,7 +194,6 @@ fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
         "and it really is in this database, in the event log"
     );
 
-    // list_sessions shows real sessions, not interceptor namespaces.
     let sessions = agent.list_sessions();
     assert!(
         sessions.iter().any(|s| s == "s1"),

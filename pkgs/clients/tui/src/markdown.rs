@@ -1,20 +1,8 @@
-//! Assistant text as Markdown, in greys (#149).
+//! Assistant text as Markdown, in greys. Emphasis uses modifiers, not accents, so it survives `Mode::Mono`.
 //!
-//! # Greys, and why bold is not a colour
-//!
-//! **No accent colours**: four accents (focus, added, removed, attention) are spent.
-//! Emphasis uses modifiers (bold/italic) over same-ramp roles, survives `Mode::Mono`.
-//!
-//! # Unterminated fence = normal (streaming rule)
-//!
-//! Rendering text still arriving; unterminated fence is **normal** case.
-//! `pulldown-cmark` auto-closes (flickering when backticks land), so split at fence:
-//! before = Markdown; fence + after = verbatim with backticks shown.
-//!
-//! # Wrap after styling (not before)
-//!
-//! [`flow`] wraps styled spans (preserves bold across line breaks).
-//! Wrapping plain text first, then styling, loses Markdown information.
+//! Text is still streaming, so an unterminated fence is normal: everything from
+//! the fence on is shown verbatim. Wrapping happens after styling, so bold
+//! survives a line break.
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -23,10 +11,7 @@ use ratatui::text::{Line, Span};
 use crate::theme::{Glyph, Theme};
 use crate::wrap::width;
 
-/// The byte offset of a fence that never closes, if there is one.
-///
-/// Scans lines rather than parsing: the question is only whether the fences
-/// balance, and a parser that auto-closes at end of input cannot answer it.
+/// The byte offset of a fence that never closes. Scans lines, since a parser would auto-close it.
 fn unterminated_fence(text: &str) -> Option<usize> {
     let mut open_at = None;
     let mut offset = 0;
@@ -45,8 +30,7 @@ fn unterminated_fence(text: &str) -> Option<usize> {
     open_at
 }
 
-/// Lay styled spans across lines (≤ `max` cells), breaking between words.
-/// Wide words get own line; `prefix` repeats (list markers, quote gutters on every line).
+/// Lays styled spans across lines of at most `max` cells, breaking between words. `prefix` repeats on each line.
 fn flow(spans: &[(String, Style)], max: usize, prefix: &(String, Style)) -> Vec<Line<'static>> {
     let inner = max.saturating_sub(width(&prefix.0)).max(1);
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -85,9 +69,7 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
     unterminated_fence(text).map_or_else(
         || render_closed(text, max, theme),
         |at| {
-            // Everything before the open fence is settled Markdown; the fence
-            // and what follows are not, and will not be until it closes — so
-            // they go out verbatim, backticks and all, with nothing to restyle.
+            // The open fence and what follows are not settled Markdown, so they go out verbatim.
             let mut lines = render_closed(&text[..at], max, theme);
             lines.extend(verbatim(
                 &text[at..],
@@ -100,8 +82,7 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
     )
 }
 
-/// Emit `text` wrapped, one style, `indent` prefix.
-/// Indent is structure (survives `Mode::Mono`); `code_surface()` alone would vanish.
+/// Emits `text` wrapped in one style, with an `indent` prefix. The indent survives `Mode::Mono`, unlike the code surface.
 pub(crate) fn verbatim(text: &str, max: usize, indent: &str, style: Style) -> Vec<Line<'static>> {
     let inner = max.saturating_sub(width(indent)).max(1);
     text.lines()
@@ -110,8 +91,7 @@ pub(crate) fn verbatim(text: &str, max: usize, indent: &str, style: Style) -> Ve
         .collect()
 }
 
-#[allow(clippy::too_many_lines)] // one arm per Markdown construct; splitting it
-                                 // would hide the mapping this function *is*
+#[allow(clippy::too_many_lines)] // one arm per Markdown construct; splitting hides the mapping
 fn render_closed(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
     let body = Style::default().fg(theme.body());
     let secondary = Style::default().fg(theme.secondary());
@@ -123,7 +103,7 @@ fn render_closed(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
     let mut spans: Vec<(String, Style)> = Vec::new();
     let mut style = body;
     let mut prefix = none.clone();
-    // (next number, is ordered) per nesting level.
+    // Next number per nesting level; `None` for bullets.
     let mut lists: Vec<Option<u64>> = Vec::new();
     let mut quote_depth = 0usize;
     let mut in_code: Option<String> = None;
@@ -154,8 +134,7 @@ fn render_closed(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
             Event::End(TagEnd::Strong) => style = style.remove_modifier(Modifier::BOLD),
             Event::End(TagEnd::Link) => {
                 if let Some(url) = link.take() {
-                    // Text plus the URL, not an OSC 8 hyperlink: a terminal that
-                    // does not support them shows nothing where the link was.
+                    // Text plus URL, not an OSC 8 link, which some terminals would show as nothing.
                     spans.push((format!(" ({url})"), muted));
                 }
             }
@@ -255,8 +234,7 @@ mod tests {
         assert!(plain(&[on_surface[0].clone()]).contains("fn main"));
     }
 
-    /// The streaming rule. A fence that has opened and not closed is the normal
-    /// case while text is arriving, and styling it would mean restyling it.
+    /// Streaming rule: an open fence stays plain, since styling it would mean restyling it on close.
     #[test]
     fn an_unterminated_fence_stays_plain_with_its_backticks_shown() {
         let md = "intro\n\n```rust\nfn half_arriv";
@@ -294,7 +272,7 @@ mod tests {
         );
     }
 
-    /// Acceptance line 4, and the reason code blocks are indented.
+    /// With colour gone, the code indent is the only cue left.
     #[test]
     fn monochrome_still_tells_code_from_prose() {
         let md = "a sentence\n\n```\nsome_code()\n```";
@@ -334,14 +312,7 @@ mod tests {
         }
     }
 
-    /// Acceptance line 3, and the shape of the answer #149 box 2 reached.
-    ///
-    /// No fence is highlighted — tagged or not. Every policy-clean highlighter
-    /// measured cost between 136 MB and 540 MB of build output for a terminal
-    /// chat client, and the cheap one failed the licence policy; `pkgs/clients/tui`'s
-    /// reasoning is in README.md. So a code block is marked by its surface and
-    /// its indent and by nothing else, and this test is what a future
-    /// highlighting slice has to come back and change deliberately.
+    /// No fence is syntax-highlighted. A future highlighting slice must change this test on purpose.
     #[test]
     fn no_fence_carries_syntax_colour_tagged_or_not() {
         let t = theme(Mode::Dark);

@@ -1,16 +1,6 @@
-//! Loader for `config.yaml`.
-//!
-//! Extensions group by category (`provider`, `store`, …); each entry is one *instance*.
-//! The core interprets two keys:
-//!
-//! * `enabled` — load the instance (default `false`).
-//! * `type` — wasm discriminator; component is `ext/<category>-<type>.wasm`.
-//!   Defaults to entry name (`provider.openai` → `provider-openai.wasm`);
-//!   multiple instances may share one `type`.
-//!
-//! Everything else is opaque domain config: expanded `${VAR}` and passed to the
-//! instance via `host-config`. Top-level agent keys (`providers`, `routing`, …)
-//! are preserved for `manager-agent-loop`; the core has no routing logic.
+//! Loader for `config.yaml`. Extensions group by category and each entry is one instance. The core interprets `enabled` (default `false`)
+//! and `type` (component `ext/<category>-<type>.wasm`; defaults to the entry name, and instances may share a `type`).
+//! Everything else is opaque `${VAR}`-expanded config passed via `host-config`; top-level agent keys are preserved for `manager-agent-loop`.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -62,18 +52,13 @@ impl Observability {
     /// Parse observability config from a top-level value.
     ///
     /// # Errors
-    /// Returns error if:
-    /// - the value is not a mapping (`ObservabilityNotMap`)
-    /// - `output-format` is not a string (`ObservabilityFormatNotString`)
-    /// - `output-format` has an invalid value like `plain` (`InvalidOutputFormat`)
-    ///
-    /// Returns `Ok` with `OutputFormat::Human` default if `output-format` is absent.
+    /// Not a mapping (`ObservabilityNotMap`), or `output-format` not a string (`ObservabilityFormatNotString`)
+    /// or invalid (`InvalidOutputFormat`). An absent `output-format` defaults to `Human`.
     pub fn from_value(value: &Value) -> Result<Self, ConfigError> {
         let Value::Object(obs) = value else {
             return Err(ConfigError::ObservabilityNotMap);
         };
 
-        // Get the output-format key, defaulting to Human if absent
         match obs.get("output-format") {
             None => Ok(Self {
                 output_format: OutputFormat::Human,
@@ -156,12 +141,7 @@ impl Config {
     }
 
     /// Fetch a top-level key without expanding instance variables.
-    ///
-    /// [`Config::from_path`] expands `${VAR}` in enabled instances and fails on
-    /// unset, wrong for reading unrelated keys. `ext install` needs
-    /// `registry.trusted-keys` (no provider API key required). Uses the same
-    /// YAML parse as [`Config::from_path`], stopping before instance expansion.
-    ///
+    /// Unlike [`Config::from_path`], which fails on unset `${VAR}`; `ext install` needs `registry.trusted-keys` without a provider key.
     /// # Errors
     /// [`ConfigError::Read`], [`ConfigError::Yaml`], or [`ConfigError::RootNotMap`].
     pub fn top_level(path: impl AsRef<Path>, key: &str) -> Result<Option<Value>, ConfigError> {
@@ -193,14 +173,12 @@ impl Config {
         let instances = parse_instances(extensions)?;
         validate(&instances)?;
 
-        // Parse observability configuration or use default.
         let observability = if let Some(obs_value) = root.remove("observability") {
             Observability::from_value(&obs_value)?
         } else {
             Observability::default()
         };
 
-        // Whatever remains at the top level is opaque agent-behaviour config.
         Ok(Self {
             instances,
             agent: Value::Object(root),

@@ -1,16 +1,10 @@
-//! The wire names are the contract, so they are asserted rather than assumed.
-//!
-//! A rename is a major-version change (see the crate docs), and a rename is
-//! exactly what a careless `#[serde(rename)]` edit or a variant reshuffle
-//! produces silently. These tests make it loud.
+//! The wire names are the contract, so they are asserted: a rename is a major-version change.
 
 use jk_protocol::{jsonrpc, Command, HelloResult, Notification, PROTOCOL_VERSION};
 
 /// The `method` each command must serialize to.
 ///
-/// The match is exhaustive—no wildcard—so adding a command forces this file
-/// to compile-fail until its wire name is written here **and** a sample is
-/// added to [`every_command`] below.
+/// Exhaustive: a new command fails to compile until named here and sampled in [`every_command`].
 const fn expected_method(command: &Command) -> &'static str {
     match command {
         Command::Hello { .. } => "protocol/hello",
@@ -26,8 +20,7 @@ const fn expected_method(command: &Command) -> &'static str {
     }
 }
 
-/// One sample per command, every field populated — an empty string would
-/// round-trip even if a field were dropped from the type.
+/// One sample per command, every field populated so a dropped field fails the round-trip.
 fn every_command() -> Vec<Command> {
     vec![
         Command::Hello {
@@ -102,8 +95,7 @@ fn each_command_has_its_own_method() {
     );
 }
 
-/// Pins the shape a transport wraps for both variant kinds: a command with
-/// params, and one without.
+/// The shape a transport wraps, for a command with params and one without.
 #[test]
 fn the_envelope_is_method_plus_params() {
     assert_eq!(
@@ -120,8 +112,7 @@ fn the_envelope_is_method_plus_params() {
     );
 }
 
-/// The `method` each notification must serialize to. Exhaustive like
-/// [`expected_method`].
+/// The `method` each notification must serialize to; exhaustive like [`expected_method`].
 const fn expected_notification_method(notification: &Notification) -> &'static str {
     match notification {
         Notification::TextDelta { .. } => "text-delta",
@@ -172,8 +163,7 @@ fn every_notification() -> Vec<Notification> {
             session: "s1".to_owned(),
             preview: "hello".to_owned(),
         },
-        // Fully populated, nested included: the schema is derived from this
-        // value, so an empty list here would describe a list of nothing.
+        // Fully populated: the schema is derived from this value.
         Notification::SurfaceContributions {
             extensions: vec![jk_protocol::Contributions {
                 extension: "interceptor.system".to_owned(),
@@ -245,9 +235,7 @@ fn each_notification_has_its_own_method() {
     );
 }
 
-/// A command and a notification are told apart by their `method`, not by the
-/// envelope, so the two name spaces must not collide — a transport that routes
-/// on `method` alone would otherwise dispatch one as the other.
+/// Commands and notifications are told apart by `method`, so the name spaces must not collide.
 #[test]
 fn no_notification_shares_a_method_with_a_command() {
     for notification in every_notification() {
@@ -266,8 +254,7 @@ fn the_handshake_answers_with_this_builds_version() {
     assert_eq!(text, format!(r#"{{"version":"{PROTOCOL_VERSION}"}}"#));
 }
 
-/// The version is what tells a client whether it can talk to this core, so it
-/// has to be a version — `"dev"` or `"1"` would parse as neither.
+/// The version must parse as a version; `"dev"` or `"1"` would not.
 #[test]
 fn the_protocol_version_is_semver() {
     let parts: Vec<&str> = PROTOCOL_VERSION.split('.').collect();
@@ -280,11 +267,7 @@ fn the_protocol_version_is_semver() {
     }
 }
 
-// ─── The JSON-RPC envelope ───────────────────────────────────────────────────
-
-/// A frame is the command's own members plus the envelope's, in one flat
-/// object — asserted as exact text, because "flattened" is a claim about wire
-/// bytes and a shape assertion would pass on `{"command":{…}}` too.
+/// A frame is the command's members plus the envelope's, flat; asserted as exact text because a shape check would pass on `{"command":{…}}`.
 #[test]
 fn a_request_is_the_command_flattened_into_the_envelope() {
     assert_eq!(
@@ -298,8 +281,7 @@ fn a_request_is_the_command_flattened_into_the_envelope() {
         .expect("serializes"),
         r#"{"jsonrpc":"2.0","id":1,"method":"session/message","params":{"session":"s1","message":"hello"}}"#
     );
-    // A command with no fields carries no `params` member at all, which is what
-    // makes `flatten` legal over an adjacently tagged enum in the first place.
+    // No fields means no `params` member, which makes `flatten` legal over an adjacently tagged enum.
     assert_eq!(
         serde_json::to_string(&jsonrpc::Request::new(
             jsonrpc::Id::Number(2),
@@ -310,9 +292,8 @@ fn a_request_is_the_command_flattened_into_the_envelope() {
     );
 }
 
-/// Every command survives the frame in both directions. The round-trip is
-/// critical: `flatten` is implemented by buffering, and a type it cannot
-/// buffer serializes happily then fails to parse back.
+/// Every command survives the frame both ways; `flatten` buffers, so an unbufferable type
+/// would serialize but fail to parse back.
 #[test]
 fn every_command_round_trips_inside_a_frame() {
     for command in every_command() {
@@ -340,8 +321,7 @@ fn a_notification_frame_carries_no_id() {
     assert!(!text.contains("\"id\""), "no id member: {text}");
 }
 
-/// Both id spellings the spec allows, returned unchanged. A core answering
-/// `"7"` with `7` would break a client keying pending calls by the literal sent.
+/// Both id spellings round-trip unchanged; answering `"7"` with `7` would break clients keying on the literal.
 #[test]
 fn an_id_comes_back_the_way_it_was_sent() {
     for id in [
@@ -361,8 +341,7 @@ fn an_id_comes_back_the_way_it_was_sent() {
     }
 }
 
-/// The two shapes the spec allows, no third: [`jsonrpc::Outcome`] is an enum,
-/// so a response with both members — or neither — cannot be built.
+/// [`jsonrpc::Outcome`] is an enum, so a response with both members or neither cannot be built.
 #[test]
 fn a_response_carries_either_a_result_or_an_error() {
     assert_eq!(
@@ -381,8 +360,7 @@ fn a_response_carries_either_a_result_or_an_error() {
         .expect("serializes"),
         r#"{"jsonrpc":"2.0","id":"a","error":{"code":-32601,"message":"no such command"}}"#
     );
-    // `data` is absent rather than null when there is none: a client reading
-    // `data` as "detail was provided" must not see an empty one as detail.
+    // `data` is absent, not null, when there is none.
     let with_data = serde_json::to_string(&jsonrpc::Response::error(
         jsonrpc::Id::Number(1),
         jsonrpc::Error::new(jsonrpc::INTERNAL_ERROR, "boom")
@@ -395,8 +373,7 @@ fn a_response_carries_either_a_result_or_an_error() {
     );
 }
 
-/// The reserved codes are the spec's, not ours. Getting one wrong causes a
-/// conforming client to report the wrong failure.
+/// The reserved codes are the spec's.
 #[test]
 fn the_error_codes_are_the_ones_the_spec_reserves() {
     assert_eq!(jsonrpc::PARSE_ERROR, -32700);
@@ -404,8 +381,7 @@ fn the_error_codes_are_the_ones_the_spec_reserves() {
     assert_eq!(jsonrpc::METHOD_NOT_FOUND, -32601);
     assert_eq!(jsonrpc::INVALID_PARAMS, -32602);
     assert_eq!(jsonrpc::INTERNAL_ERROR, -32603);
-    // Server-defined space is -32000..=-32099; anything outside it collides
-    // with a meaning the spec already assigned.
+    // The server-defined range is -32000..=-32099.
     assert!(
         (-32099..=-32000).contains(&jsonrpc::INCOMPATIBLE_VERSION),
         "server-defined codes live in -32099..=-32000, got {}",
@@ -413,10 +389,8 @@ fn the_error_codes_are_the_ones_the_spec_reserves() {
     );
 }
 
-/// `COMMAND_METHODS` is hand-written, compared against the exhaustive `match`
-/// in [`expected_method`] **in both directions**: a command missing from the
-/// list reports as `method not found`, and a stale name reports as `invalid
-/// params` — a method the core lacks, described as one whose arguments were wrong.
+/// `COMMAND_METHODS` must match the exhaustive `match` in [`expected_method`] both ways:
+/// a missing command reports `method not found`, a stale one `invalid params`.
 #[test]
 fn the_method_list_holds_every_command_and_nothing_else() {
     let mut from_the_enum: Vec<&str> = every_command().iter().map(expected_method).collect();
@@ -429,9 +403,7 @@ fn the_method_list_holds_every_command_and_nothing_else() {
     );
 }
 
-/// The spec's answer to a frame it could not read an id from. Serde's
-/// untagged representation makes this work; untagged unit variants are
-/// obscure enough to be worth pinning.
+/// The spec's answer to a frame with no readable id; pins serde's untagged unit variant.
 #[test]
 fn an_unreadable_frame_is_answered_with_a_null_id() {
     let text = serde_json::to_string(&jsonrpc::Response::error(
@@ -445,13 +417,12 @@ fn an_unreadable_frame_is_answered_with_a_null_id() {
     );
     let back: jsonrpc::Response = serde_json::from_str(&text).expect("parses");
     assert_eq!(back.id, jsonrpc::Id::Null, "null reads back as Null");
-    // And it stays distinct from the id a client could actually send.
+    // Distinct from an id a client could send.
     assert_ne!(jsonrpc::Id::Null, jsonrpc::Id::Number(0));
     assert_ne!(jsonrpc::Id::Null, jsonrpc::Id::Text(String::new()));
 }
 
-/// While the protocol is `0.x`, a differing minor is refused — the reason
-/// this is not a major-only check.
+/// While the protocol is `0.x`, a differing minor is refused.
 #[test]
 fn a_differing_minor_is_refused_while_the_major_is_zero() {
     assert!(jk_protocol::compatible("0.1.0", "0.1.0"));
@@ -465,16 +436,14 @@ fn a_differing_minor_is_refused_while_the_major_is_zero() {
             "{refused} must not be accepted by a 0.1 core"
         );
     }
-    // From 1.0 the ordinary semver reading applies: additive minors pass.
+    // From 1.0, additive minors pass.
     assert!(jk_protocol::compatible("1.3.0", "1.1.0"));
     assert!(!jk_protocol::compatible("1.3.0", "2.0.0"));
-    // And this build's own version is compatible with itself, which is the
-    // assertion that fails if PROTOCOL_VERSION stops being parseable.
+    // This build is compatible with itself, which fails if PROTOCOL_VERSION stops parsing.
     assert!(jk_protocol::compatible(PROTOCOL_VERSION, PROTOCOL_VERSION));
 }
 
-/// A refused handshake returns no [`HelloResult`], so the refusal must say
-/// what this core speaks or the client is left guessing.
+/// A refused handshake returns no [`HelloResult`], so the refusal must state the core's version.
 #[test]
 fn a_refused_handshake_says_what_the_core_speaks() {
     let error = jsonrpc::incompatible_version("9.9.9");
@@ -493,17 +462,10 @@ fn a_refused_handshake_says_what_the_core_speaks() {
 
 // ─── JSON Schema export ──────────────────────────────────────────────────────
 //
-// The schema under `schema/` is what non-Rust clients generate types from,
-// so it must describe these types, not a past version. It is written by the
-// generator below rather than by hand, and this file is the single source of
-// the samples both wire tests and the schema use — so a new command or
-// notification cannot reach the schema without reaching the tests above.
+// The schema under `schema/` is what non-Rust clients generate from. It is written by
+// the generator below from the same samples the wire tests use.
 //
-// `schemars` would do this with a derive. It was measured and rejected: it adds
-// seven packages to the audited tree, one of them a second major version of
-// `syn` next to the one already there, and this repository treats build
-// footprint as a real cost (#41). `## Scope` permits either.
-
+// `schemars` was rejected: seven extra packages, including a second major of `syn` (#41).
 /// Where the committed schema lives.
 fn schema_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/protocol.schema.json")
@@ -511,13 +473,8 @@ fn schema_path() -> std::path::PathBuf {
 
 /// The JSON Schema for one field, inferred from a populated sample value.
 ///
-/// Panics on a kind it does not handle, rather than guessing: a field whose type
-/// stops being one of these must be described deliberately, not approximated.
-///
-/// Objects and lists of objects recurse, which the client surface needs — a
-/// contribution is a record holding lists of records. Every sample must still
-/// be **fully populated**, because an absent field describes nothing: the
-/// recursion can only report the shape it is shown.
+/// Panics on an unhandled kind rather than guessing. Objects and lists recurse;
+/// samples must be fully populated, since an absent field describes nothing.
 fn field_schema(value: &serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::String(_) => serde_json::json!({ "type": "string" }),
@@ -539,9 +496,7 @@ fn field_schema(value: &serde_json::Value) -> serde_json::Value {
             let first = items.first().unwrap_or_else(|| {
                 panic!("extend field_schema: a sample list must be non-empty, got {value}")
             });
-            // One element describes the list, so every element must agree —
-            // otherwise the schema would describe whichever happened to be
-            // first and silently permit the rest.
+            // One element describes the list, so all elements must agree.
             let item = field_schema(first);
             assert!(
                 items.iter().all(|other| field_schema(other) == item),
@@ -549,12 +504,8 @@ fn field_schema(value: &serde_json::Value) -> serde_json::Value {
             );
             serde_json::json!({ "type": "array", "items": item })
         }
-        // Described as a non-negative integer, not a bare `number`. Every
-        // numeric field this contract has is a count or a position in a
-        // sequence — `at-seq` is the first — so a client generating types from
-        // the schema should get an unsigned integer and reject `-1` and `1.5`
-        // rather than accept them and fail later. The first field that is
-        // genuinely a float will land in the panic below, which is the point.
+        // Unsigned integer, not a bare `number`: every numeric field here is a count or
+        // position. The first genuine float lands in the panic below, on purpose.
         serde_json::Value::Number(number) if number.is_u64() => {
             serde_json::json!({ "type": "integer", "minimum": 0 })
         }
@@ -570,7 +521,7 @@ fn variant_schema(envelope: &serde_json::Value) -> serde_json::Value {
         .and_then(serde_json::Value::as_str)
         .expect("every envelope is tagged");
     let Some(params) = object.get("params") else {
-        // A variant with no fields: serde omits `params` entirely.
+        // No fields: serde omits `params`.
         return serde_json::json!({
             "title": method,
             "type": "object",
@@ -603,12 +554,8 @@ fn variant_schema(envelope: &serde_json::Value) -> serde_json::Value {
 
 /// The same variant, inside its JSON-RPC frame.
 ///
-/// The frame is *expanded* into each variant rather than composed with a
-/// `$ref`: every variant schema above carries `additionalProperties: false`, so
-/// an `allOf` of the envelope and a `$ref` to the command would reject the very
-/// frames it is meant to describe — the envelope's own members would be the
-/// additional ones. Expanding costs a longer generated file and cannot be
-/// subtly wrong, which is the trade this repository keeps making.
+/// Expanded rather than `allOf` + `$ref`: variants carry `additionalProperties: false`,
+/// so composition would reject the envelope's own members.
 fn framed(variant: &serde_json::Value, with_id: bool) -> serde_json::Value {
     let mut schema = variant.clone();
     let object = schema
@@ -641,12 +588,8 @@ fn framed(variant: &serde_json::Value, with_id: bool) -> serde_json::Value {
 
 /// The two shapes a [`jsonrpc::Response`] takes.
 ///
-/// Written out rather than inferred from a sample, because `result` is whatever
-/// the answered command returns: a generator reading one sample would describe
-/// `HelloResult` as the only legal result. `true` is the 2020-12 spelling of
-/// "any value here". Hand-written means it can drift from the type, so
-/// [`the_hand_written_frames_still_match_the_types`] compares it against real
-/// values.
+/// Hand-written because `result` is any value (`true` is the 2020-12 spelling);
+/// [`the_hand_written_frames_still_match_the_types`] guards drift.
 fn response_schemas() -> Vec<serde_json::Value> {
     let id = serde_json::json!({ "$ref": "#/$defs/jsonrpc.Id" });
     vec![
@@ -678,7 +621,7 @@ fn response_schemas() -> Vec<serde_json::Value> {
 /// The whole schema, built from the samples above.
 fn generated_schema() -> serde_json::Value {
     let one_of = |mut variants: Vec<serde_json::Value>| {
-        // Sorted by title, so reordering the samples is not a schema change.
+        // Sorted by title so reordering samples is not a schema change.
         variants.sort_by(|a, b| a["title"].as_str().cmp(&b["title"].as_str()));
         serde_json::json!({ "oneOf": variants })
     };
@@ -708,10 +651,7 @@ fn generated_schema() -> serde_json::Value {
                 "required": ["version"],
                 "additionalProperties": false,
             },
-            // The read side of the contract. Absent until #106: `session/fork`
-            // took an event seq and nothing a client could read ever carried
-            // one, because the result of `session/get` was untyped JSON built
-            // in the core and so reached no schema at all.
+            // Read side of the contract (#106): `session/fork` took a seq no client could read.
             "SessionGetResult": {
                 "type": "object",
                 "properties": {
@@ -767,8 +707,7 @@ fn generated_schema() -> serde_json::Value {
 
 /// Regenerating the committed schema must be a no-op.
 ///
-/// Set `JK_UPDATE_SCHEMA=1` to rewrite it after a deliberate change; the
-/// rewritten file is what gets reviewed and committed.
+/// Set `JK_UPDATE_SCHEMA=1` to rewrite it after a deliberate change.
 #[test]
 fn the_committed_schema_matches_the_types() {
     let mut expected = serde_json::to_string_pretty(&generated_schema()).expect("serializes");
@@ -792,8 +731,7 @@ fn the_committed_schema_matches_the_types() {
     );
 }
 
-/// Every wire name reaches the schema. The test above compares whole documents,
-/// which fails loudly but says little; this one names what is missing.
+/// Every wire name reaches the schema; names what is missing.
 #[test]
 fn the_schema_covers_every_command_and_notification() {
     let schema = generated_schema();
@@ -805,8 +743,7 @@ fn the_schema_covers_every_command_and_notification() {
         .iter()
         .map(expected_notification_method)
         .collect::<Vec<_>>();
-    // The framed definitions are checked by the same list: a command that
-    // reaches the contract but not the frame is a command no client can send.
+    // The framed definitions are checked too: a command absent from the frame cannot be sent.
     for (def, names) in [
         ("Command", &commands),
         ("jsonrpc.Request", &commands),
@@ -825,11 +762,9 @@ fn the_schema_covers_every_command_and_notification() {
     }
 }
 
-/// The `jsonrpc.Response` and `jsonrpc.Error` definitions are written by hand
-/// (see [`response_schemas`]), so unlike everything else in this schema they can
-/// fall behind the Rust types without anything noticing. Compare them against
-/// real serialized values: every member a value carries must be described, and
-/// every member the schema requires must be present.
+/// The hand-written `jsonrpc.Response` and `jsonrpc.Error` schemas (see [`response_schemas`])
+/// can drift from the Rust types, so compare them to real values: every carried member
+/// described, every required member present.
 #[test]
 fn the_hand_written_frames_still_match_the_types() {
     let schema = generated_schema();
@@ -886,7 +821,7 @@ fn the_hand_written_frames_still_match_the_types() {
         }
     }
 
-    // The error object itself, with `data` both absent and present.
+    // The error object, with `data` absent and present.
     let described = members(&schema["$defs"]["jsonrpc.Error"]["properties"]);
     for error in [
         jsonrpc::Error::new(jsonrpc::PARSE_ERROR, "bad json"),

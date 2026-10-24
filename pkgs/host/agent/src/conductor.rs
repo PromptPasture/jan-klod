@@ -1,19 +1,5 @@
-//! Loop conductor — pure mechanism, zero policy.
-//!
-//! Sequences a turn: `before-loop` (may short-circuit to simple), request-shaping
-//! phases (`select-model` → `select-context` → `select-tools`), then the
-//! **`ReAct` loop**:
-//! `complete()` (with provider fallback) → `after-response` → parse tool calls →
-//! `tool-call` gate → dispatch → `tool-result` (block terminates) → repeat →
-//! `finalize`.
-//! Every decision is delegated to interceptors; conductor is mechanism only.
-//!
-//! Decoupled from Wasmtime via [`Completer`] and [`ToolInvoker`] traits;
-//! state machine is unit-tested with stubs.
-//!
-//! What a turn *emits* — [`Event`], [`Flow`], [`EventSink`] — now lives in
-//! [`jk_protocol::turn`] beside the rest of the turn vocabulary,
-//! because the event log encodes an `Event` and sits below this crate (#180).
+//! Loop conductor: sequences a turn and runs the `ReAct` loop. Every decision is delegated to interceptors.
+//! Decoupled from Wasmtime through [`Completer`] and [`ToolInvoker`], so it is unit-tested with stubs.
 
 use jk_protocol::turn::{Event, EventSink, Flow};
 
@@ -24,12 +10,10 @@ use jk_protocol::intercept::{
 
 use jk_protocol::turn::{Driver, Message, Role, ToolCall, ToolOutcome};
 
-/// Default cap on `ReAct` iterations to prevent infinite tool-call loops.
-/// Eight covers a real coding cycle; raise via `limits.max-iterations`.
+/// Default cap on `ReAct` iterations, to stop infinite tool-call loops. Raise via `limits.max-iterations`.
 pub const DEFAULT_MAX_ITERATIONS: u32 = 8;
 
-/// Bounds a turn runs under. A struct to keep related limits together without
-/// widening function signatures.
+/// Bounds a turn runs under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// Cap on `ReAct` cycles for one turn.
@@ -44,7 +28,7 @@ impl Default for Limits {
     }
 }
 
-/// Retries for malformed completions before giving up (no silent spiral).
+/// Retries for malformed completions before giving up.
 const MAX_RETRIES: u32 = 3;
 
 /// An [`EventSink`] that drops every event — the non-streaming default.
@@ -58,8 +42,7 @@ impl EventSink for NoSink {
 /// Result of running one turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunResult {
-    /// Loop produced an answer. `agentic=false` if `before-loop` short-circuited,
-    /// `true` if shaping phases ran. Text is final (after `after-response`/`finalize`).
+    /// The loop produced an answer.
     Answered {
         /// Final answer text (after `after-response`/`finalize`).
         text: String,
@@ -70,16 +53,12 @@ pub enum RunResult {
     Failed(String),
 }
 
-/// Run one turn through the loop.
+/// Runs one turn through the loop. `providers` is the fallback chain, `tools`
+/// routes tool calls, and `driver` answers interceptor `ask`s.
 ///
-/// `providers` = fallback chain (tried in order). `tools` routes tool calls.
-/// `driver` answers interceptor `ask`. Conductor is mechanism only; all policy
-/// in dispatched interceptors. `on_effective_message` fires once with the
-/// message model will receive after `before-loop` rewrites (see
-/// [`build_initial_request`]). Supplies hook; callers decide policy (e.g.,
-/// `run_and_persist` logs actual message sent, not original).
-#[allow(clippy::too_many_arguments)] // A turn genuinely needs all parameters; a struct
-                                     // would only hide the list.
+/// `on_effective_message` fires once with the message the model receives after
+/// `before-loop` rewrites (see [`build_initial_request`]).
+#[allow(clippy::too_many_arguments)] // A turn needs all of these; a struct would only hide them.
 pub fn run_turn(
     dispatcher: &mut Dispatcher,
     providers: &mut [Box<dyn Completer>],
@@ -93,9 +72,7 @@ pub fn run_turn(
     principal: Option<String>,
     on_effective_message: &mut dyn FnMut(&str),
 ) -> RunResult {
-    // Before anything dispatches: a fleet with session-scoped state needs to
-    // know which session it is in, and this is the only place a tool is
-    // dispatched from.
+    // Before any dispatch: session-scoped tool state needs to know its session.
     tools.bind_session(session);
 
     let (agentic, mut request) = build_initial_request(
@@ -108,7 +85,6 @@ pub fn run_turn(
         on_effective_message,
     );
 
-    // Agentic path shapes request; simple path answers inline.
     if agentic {
         for phase in [Phase::SelectModel, Phase::SelectContext, Phase::SelectTools] {
             match shape(dispatcher, driver, phase, request) {
@@ -118,7 +94,7 @@ pub fn run_turn(
         }
     }
 
-    // ReAct loop: complete → (tool calls?) → run tools → repeat. All paths set `final_text`.
+    // Every path below sets `final_text`.
     let mut final_text;
     let mut iterations = 0;
     loop {
@@ -129,14 +105,13 @@ pub fn run_turn(
                 return RunResult::Failed(reason);
             }
         };
-        // after-response may rewrite text.
         let text = post_phase(dispatcher, driver, Phase::AfterResponse, completion.text);
         request.messages.push(Message {
             role: Role::Assistant,
             content: text.clone(),
             tool_call_id: None,
         });
-        // Delta is preview; authoritative text in terminal Done. Sink Stop cancels turn.
+        // The delta is a preview; the terminal `Done` carries the authoritative text.
         let flow = if text.is_empty() {
             Flow::Continue
         } else {
@@ -145,8 +120,7 @@ pub fn run_turn(
         final_text = text;
 
         if flow == Flow::Stop {
-            // Cancel = client disconnect or stop button. Model is mid-thought,
-            // so record turn as unfinished, not as premature answer.
+            // Cancelled mid-thought: record the turn as unfinished, not as an answer.
             final_text = note_incomplete(
                 &final_text,
                 "stopped before the turn finished — the client disconnected or cancelled",
@@ -198,12 +172,9 @@ pub fn run_turn(
     RunResult::Answered { text, agentic }
 }
 
-/// Assemble first [`PendingRequest`]: run `before-loop` (may short-circuit simple),
-/// then prior history + new message. Returns whether agentic path should run.
-/// `history` before new message or session has no memory. Window trimming is
-/// `select-context`'s job. `on_effective_message` fires once after resolving,
-/// before `ReAct` loop emits. Callers logging from it get truthfully the *first*
-/// recorded item (see #84).
+/// Assembles the first [`PendingRequest`]: runs `before-loop`, then appends the
+/// new message to `history`. Returns whether the agentic path should run.
+/// `on_effective_message` fires once, before any loop event (#84).
 fn build_initial_request(
     dispatcher: &mut Dispatcher,
     driver: &mut dyn Driver,
@@ -222,7 +193,7 @@ fn build_initial_request(
         dispatcher.dispatch(Phase::BeforeLoop, &mut state, driver),
         Outcome::Proceeded
     );
-    // Interceptor may rewrite via `replace`. This is what model sees, so report this.
+    // The model sees this, which differs from `user_message` after a `replace`.
     let effective_message = match &state {
         HookState::BeforeLoop(turn) => turn.user_message.clone(),
         _ => user_message.to_string(),
@@ -246,7 +217,7 @@ fn build_initial_request(
     (agentic, request)
 }
 
-/// What `ReAct` loop does after cycle: keep going or stop with final text.
+/// What the `ReAct` loop does after a cycle.
 enum LoopStep {
     /// Keep looping.
     Continue,
@@ -264,11 +235,10 @@ fn handle_no_tool_calls(
     limits: Limits,
     final_text: String,
 ) -> LoopStep {
-    // Turn would end; driver may steer with follow-up.
     let Some(follow_up) = driver.follow_up() else {
         return LoopStep::Break(final_text);
     };
-    // prepare-next-turn: optional model/context swap before continuing.
+    // Optional model/context swap before the follow-up.
     let mut next_state = HookState::PrepareNextTurn(request.clone());
     let _ = dispatcher.dispatch(Phase::PrepareNextTurn, &mut next_state, driver);
     if let HookState::PrepareNextTurn(shaped) = next_state {
@@ -301,8 +271,8 @@ fn after_tool_calls(pass: ToolPass, final_text: String, sink: &mut dyn EventSink
     }
 }
 
-/// Note turn stopped at cycle cap. Half-finished answer that looks done is
-/// actionable wrong. Goes in text and events (headless callers see only text).
+/// Marks a turn stopped at the cycle cap. The note goes in the text and the
+/// events, since headless callers see only the text.
 fn cut_short(text: &str, cap: u32, sink: &mut dyn EventSink) -> String {
     note_incomplete(
         text,
@@ -314,8 +284,7 @@ fn cut_short(text: &str, cap: u32, sink: &mut dyn EventSink) -> String {
     )
 }
 
-/// Mark turn ended before model finished. Shared by all early exits; `run_and_persist`
-/// and `replay` use this, so incomplete must be marked or model learns false facts.
+/// Marks a turn ended before the model finished. An unmarked partial answer would teach the model false facts.
 fn note_incomplete(text: &str, note: &str, sink: &mut dyn EventSink) -> String {
     sink.emit(&Event::Warning(note.to_string()));
     if text.trim().is_empty() {
@@ -325,9 +294,8 @@ fn note_incomplete(text: &str, note: &str, sink: &mut dyn EventSink) -> String {
     }
 }
 
-/// Why tool-call pass ended loop. Separate variants, not bool, because
-/// `tool-result` terminate is **decision** (intended answer), sink cancel is
-/// **interruption** (mid-thought)—merging would record disconnect as finished.
+/// Why the tool pass ended the loop. Not a bool: a `tool-result` termination is
+/// a decision, a sink cancel is an interruption, and merging them would record a disconnect as finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolPass {
     /// Keep looping.
@@ -338,8 +306,8 @@ enum ToolPass {
     Cancelled,
 }
 
-/// Run each tool call: gate at `tool-call`, dispatch, run `tool-result`,
-/// append to conversation. Returns `ToolPass::Terminated` if `tool-result` blocks.
+/// Runs each tool call through the `tool-call` gate, dispatch and `tool-result`,
+/// appending each result to the conversation.
 fn run_tool_calls(
     dispatcher: &mut Dispatcher,
     tools: &mut dyn ToolInvoker,
@@ -350,7 +318,7 @@ fn run_tool_calls(
 ) -> ToolPass {
     let mut stop = ToolPass::Continue;
     for call in calls {
-        // tool-call gate (e.g. permission). Block denies this call; model told, loop continues.
+        // Block denies this call; the model is told and the loop continues.
         let mut call_state = HookState::ToolCall(call.clone());
         let invocation = match dispatcher.dispatch(Phase::ToolCall, &mut call_state, driver) {
             Outcome::Blocked(reason) => {
@@ -380,7 +348,7 @@ fn run_tool_calls(
             }
         };
 
-        // tool-result: may rewrite; block terminates loop.
+        // A block here terminates the loop.
         let mut result_state = HookState::ToolResult(ToolOutcome {
             tool_call_id: call.id.clone(),
             content: invocation.content,
@@ -395,8 +363,7 @@ fn run_tool_calls(
         }
         let outcome = match result_state {
             HookState::ToolResult(outcome) => outcome,
-            // Interceptor replaced state wrong—shouldn't happen. `failed: true`
-            // rather than silently reporting call that didn't run.
+            // An interceptor replaced the state with the wrong case; report failure, not a silent no-op.
             _ => ToolOutcome {
                 tool_call_id: call.id.clone(),
                 content: String::new(),
@@ -415,8 +382,7 @@ fn run_tool_calls(
     stop
 }
 
-/// Dispatch request-shaping phase, threading `PendingRequest` through matching
-/// hook-state case, returning (possibly replaced) request.
+/// Dispatches a request-shaping phase, returning the (possibly replaced) request.
 fn shape(
     dispatcher: &mut Dispatcher,
     driver: &mut dyn Driver,
@@ -440,8 +406,7 @@ fn shape(
     }
 }
 
-/// Dispatch post-completion phase (`after-response`/`finalize`);
-/// let interceptor rewrite authoritative text via `replace`.
+/// Dispatches `after-response` or `finalize`; an interceptor may rewrite the text via `replace`.
 fn post_phase(
     dispatcher: &mut Dispatcher,
     driver: &mut dyn Driver,
@@ -456,7 +421,7 @@ fn post_phase(
         Phase::Finalize => HookState::Finalize(FinalAnswer { text }),
         _ => return text,
     };
-    // Block here has no short-circuit meaning; read back what phase left.
+    // Blocking has no meaning here; read back whatever state the phase left.
     let _ = dispatcher.dispatch(phase, &mut state, driver);
     match state {
         HookState::AfterResponse(r) => r.text,
@@ -488,9 +453,8 @@ fn complete_with_fallback(
     Err(format!("all providers failed ({})", failures.join("; ")))
 }
 
-/// Complete with small-model harness: on malformed, feed bad output with
-/// correction and re-issue (up to [`MAX_RETRIES`]). Correction context is
-/// transient; only valid completion returned.
+/// Completes with a retry harness: malformed output is fed back with a
+/// correction and re-issued, up to [`MAX_RETRIES`]. Corrections are transient.
 fn complete_validated(
     providers: &mut [Box<dyn Completer>],
     request: &PendingRequest,
@@ -500,8 +464,7 @@ fn complete_validated(
     for attempt in 0..=MAX_RETRIES {
         let completion = complete_with_fallback(providers, &attempt_request, sink)?;
         if completion.was_truncated() {
-            // Not an error: text is real and worth returning. But truncated
-            // presented as whole is actionable wrong, so say it.
+            // Not an error, but a truncated answer presented as whole is wrong, so warn.
             sink.emit(&Event::Warning(
                 "the model stopped at its token limit — this answer is cut off".to_string(),
             ));
@@ -536,8 +499,7 @@ fn complete_validated(
     Err("retry loop exited unexpectedly".to_string())
 }
 
-/// Structural validation: every tool call's `arguments` must be valid JSON
-/// (tool-callable contract encodes arguments as JSON string).
+/// Every tool call's `arguments` must be valid JSON, since the contract encodes them as a string.
 fn validate(completion: &Completion) -> Result<(), String> {
     for call in &completion.tool_calls {
         serde_json::from_str::<serde_json::Value>(&call.arguments)
@@ -778,8 +740,7 @@ mod tests {
         assert_eq!(*seen.borrow(), vec![Some("gpt-x".to_string())]);
     }
 
-    /// #84: `on_effective_message` must see `before-loop` rewrite, not original—
-    /// hook exists for this; worth pinning independent of caller behavior.
+    /// #84: `on_effective_message` must see the `before-loop` rewrite, not the original.
     #[test]
     fn on_effective_message_sees_a_before_loop_rewrite_not_the_original() {
         let log = Rc::new(RefCell::new(vec![]));
@@ -817,7 +778,7 @@ mod tests {
         );
     }
 
-    /// Turn hitting cycle cap says so in text and stream (truncation reasoning).
+    /// A turn hitting the cycle cap says so in both text and stream.
     #[test]
     fn hitting_the_cycle_cap_is_reported_not_hidden() {
         let mut d = Dispatcher::new(vec![]);
@@ -876,7 +837,6 @@ mod tests {
     fn react_loop_runs_two_cycles_then_answers() {
         let mut d = Dispatcher::new(vec![]);
         let count = Rc::new(RefCell::new(0));
-        // Two tool completions, then final text.
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
             id: "p".into(),
             replies: RefCell::new(VecDeque::from(vec![
@@ -1284,7 +1244,7 @@ mod tests {
     #[test]
     fn a_follow_up_injects_another_cycle() {
         let mut d = Dispatcher::new(vec![]);
-        // Two text completions (no tools): first would end turn, driver steers with follow-up.
+        // The driver steers with a follow-up after the first text completion.
         let seen = Rc::new(RefCell::new(vec![]));
         let mut providers: Vec<Box<dyn Completer>> = vec![Box::new(ScriptedProvider {
             id: "p".into(),
@@ -1341,7 +1301,6 @@ mod tests {
             result: "r".into(),
             count: Rc::new(RefCell::new(0)),
         };
-        // Events: ToolInvoked, ToolResult (stop here), then Done.
         let mut sink = CancelAfter {
             events: vec![],
             after: 2,
@@ -1424,7 +1383,7 @@ mod tests {
 
     #[test]
     fn a_truncated_answer_says_so_instead_of_just_stopping() {
-        // Text is real and worth returning; presented as finished, it's actionable wrong.
+        // The text is real, but presenting it as finished would be wrong.
         let mut d = Dispatcher::new(vec![]);
         let mut providers = vec![truncated_provider()];
         let mut sink = RecordingSink::default();

@@ -1,8 +1,6 @@
 //! Context trimming — pure Rust, unit-tested.
 //!
-//! v1: char/4 token estimate + sliding window. System messages always kept;
-//! recent non-system messages kept oldest-first until budget exhausted.
-//! Current turn always kept even if it overflows.
+//! Keeps system messages and the current turn; recent messages fill the remaining budget.
 
 /// Estimate tokens (~4 chars/token).
 #[must_use]
@@ -12,8 +10,7 @@ pub const fn estimate_tokens(char_len: usize) -> usize {
 
 /// Return message indices to keep within `budget` tokens, in conversation order.
 ///
-/// `tokens[i]` is message i's estimated cost; `is_system[i]` indicates system messages.
-/// Both slices must have equal length.
+/// `tokens[i]` is message i's estimated cost; `is_system[i]` marks system messages.
 #[must_use]
 pub fn keep_indices(tokens: &[usize], is_system: &[bool], budget: usize) -> Vec<usize> {
     debug_assert_eq!(
@@ -26,7 +23,7 @@ pub fn keep_indices(tokens: &[usize], is_system: &[bool], budget: usize) -> Vec<
         return (0..tokens.len()).collect();
     }
 
-    // System messages always kept; non-system messages split remaining budget.
+    // System messages reserve their cost first; the rest share what is left.
     let system_total: usize = tokens
         .iter()
         .zip(is_system)
@@ -34,7 +31,6 @@ pub fn keep_indices(tokens: &[usize], is_system: &[bool], budget: usize) -> Vec<
         .sum();
     let mut remaining = budget.saturating_sub(system_total);
 
-    // Walk newest non-system messages, keeping recent window.
     let mut kept_recent = Vec::new();
     for i in (0..tokens.len()).rev() {
         if is_system[i] {
@@ -82,7 +78,6 @@ mod tests {
     fn always_keeps_the_current_turn_even_if_oversized() {
         let tokens = [5, 1000];
         let is_system = [true, false];
-        // Current turn kept even at tiny budget.
         assert_eq!(keep_indices(&tokens, &is_system, 1), vec![0, 1]);
     }
 

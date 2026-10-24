@@ -31,9 +31,7 @@ pub fn repo_root() -> PathBuf {
 /// Set to fail instead of skip when guests not staged. `make gate` exports it.
 const REQUIRE: &str = "JK_REQUIRE_GUESTS";
 
-/// Check whether every named guest is staged in `ext/`.
-/// Skipped test reports as passing, hiding broken assertions if `ext/` is unstaged.
-/// With `JK_REQUIRE_GUESTS` set (`make gate`, CI), missing guest panics instead of skip.
+/// Whether every named guest is staged in `ext/`. Panics instead of skipping when `JK_REQUIRE_GUESTS` is set.
 pub fn guests_staged(guests: &[&str]) -> bool {
     let ext_dir = repo_root().join("ext");
     let absent: Vec<&str> = guests
@@ -54,7 +52,7 @@ pub fn guests_staged(guests: &[&str]) -> bool {
     false
 }
 
-/// Check if program answers a version query. Try both `--version` and `version`.
+/// Whether the program answers a `--version` or `version` query.
 fn runnable(program: &str) -> bool {
     ["--version", "version"].iter().any(|flag| {
         std::process::Command::new(program)
@@ -66,8 +64,7 @@ fn runnable(program: &str) -> bool {
     })
 }
 
-/// Check if optional developer toolchain is present (no failure if absent).
-/// Distinct from [`tool_available`]: skip is announced, not silent.
+/// Whether an optional developer toolchain is present; a skip is announced.
 pub fn optional_tool(program: &str) -> bool {
     if runnable(program) {
         return true;
@@ -76,7 +73,7 @@ pub fn optional_tool(program: &str) -> bool {
     false
 }
 
-/// Check if external program is on `PATH`. Fails if missing when `JK_REQUIRE_GUESTS` is set.
+/// Whether an external program is on `PATH`. Panics when `JK_REQUIRE_GUESTS` is set.
 pub fn tool_available(program: &str) -> bool {
     if runnable(program) {
         return true;
@@ -107,8 +104,7 @@ pub fn canned_http(content: &'static str) -> HttpFn {
     })
 }
 
-/// Read complete HTTP request: headers + exact Content-Length bytes of body.
-/// Reads may arrive in segments; socket close without full read causes RST.
+/// Reads a full request: headers plus the Content-Length bytes of body.
 pub fn read_request(socket: &mut TcpStream) -> std::io::Result<String> {
     let mut raw: Vec<u8> = Vec::new();
     let mut chunk = [0_u8; 1024];
@@ -134,9 +130,7 @@ pub fn read_request(socket: &mut TcpStream) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&raw).into_owned())
 }
 
-/// Loopback server whose request count can be asserted without race.
-/// `only_hit` connects itself to flush the accept queue, proving counter is live.
-/// Returns count=1 means code under test never connected.
+/// Loopback server whose hit count can be asserted race-free.
 pub struct Countable {
     /// Loopback port this server listens on
     pub port: u16,
@@ -149,7 +143,7 @@ impl Countable {
         let port = listener.local_addr().expect("has an address").port();
         let hits = Arc::new(AtomicU32::new(0));
         let counted = Arc::clone(&hits);
-        // Blocking accept; thread dies with test (no stop flag, no cleanup cost)
+        // Blocking accept; the thread dies with the test process.
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut socket) = stream else { continue };
@@ -171,8 +165,7 @@ impl Countable {
         Self { port, hits }
     }
 
-    /// Assert server was reached exactly once (by this self-probe).
-    /// Self-probe proves counter is live and flushes accept queue.
+    /// Probes the server once and asserts that the probe was the only hit.
     pub fn only_hit(&self) {
         let before = self.hits.load(Ordering::SeqCst);
         let mut probe =

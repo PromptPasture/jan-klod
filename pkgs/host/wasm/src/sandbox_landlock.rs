@@ -1,27 +1,8 @@
-//! Landlock: confine a command by re-executing the gateway, which applies
-//! restrictions and execs the command (becoming it).
+//! Landlock backend: confine a command by re-executing the gateway (`confine` subcommand), which
 //!
-//! # Why re-exec not `pre_exec`
-//!
-//! Landlock restricts the calling process + children, so `CommandExt::pre_exec`
-//! (unsafe) between fork/exec is obvious. Workspace denies hand-written unsafe.
-//! `CommandExt::exec` is safe: rewrite to `<gateway> confine --writable <dir>
-//! [--network] -- <command> <args…>`. Child applies ruleset, execs command.
-//! Verified on Linux (#48): restriction survives exec.
-//!
-//! `pre_exec` needs async-signal-safe work; building a ruleset allocates.
-//!
-//! # No quoting problem (unlike Seatbelt)
-//!
-//! Seatbelt embeds paths in policy language, refusing literals with quotes
-//! (would inject s-expressions). Landlock takes argv entries—no syntax—so any
-//! path (including quotes) reaches intact. Interface difference, not policy.
-//!
-//! # Platform independence
-//!
-//! This module rewrites commands (platform-independent, tested everywhere).
-//! The gateway's `confine` subcommand (Linux-only, has `landlock` dependency)
-//! applies the ruleset.
+//! restricts itself and execs the command. Re-exec rather than `pre_exec` because the workspace
+//! denies unsafe and building a ruleset allocates (not async-signal-safe). Argv carries paths
+//! with no syntax, so unlike Seatbelt no quoting is needed. The `confine` half is Linux-only.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -31,10 +12,8 @@ use crate::sandbox::{SandboxBackend, SandboxError, SandboxPolicy};
 
 /// The gateway subcommand that restricts itself and execs.
 ///
-/// Deliberately undocumented: `docs_match_config::every_documented_command_exists`
-/// checks that documented commands exist, not that existing ones are documented,
-/// so an internal one is allowed — and it is one an operator has no reason to
-/// run.
+/// Deliberately undocumented: `docs_match_config::every_documented_command_exists` allows it
+/// and operators have no reason to run it.
 pub const CONFINE_SUBCOMMAND: &str = "confine";
 
 /// Names the writable paths the wrapper should grant.
@@ -48,16 +27,9 @@ pub const NETWORK_FLAG: &str = "--network";
 pub struct LandlockBackend {
     /// The gateway to re-execute.
     ///
-    /// Resolved once, at boot, rather than per command: on Linux
-    /// `current_exe()` reads `/proc/self/exe`, which reports a *deleted* binary
-    /// with a `(deleted)` suffix — so a gateway replaced or upgraded while it
-    /// runs would otherwise hand every command a path that cannot be spawned.
-    /// Boot is where that becomes a refusal with a reason.
-    ///
-    /// It is a field rather than a call so a test can point it at the binary it
-    /// just built: under `cargo test`, `current_exe()` is the *test* binary,
-    /// which has no `confine` subcommand, and every command would fail in a way
-    /// that reads exactly like Landlock refusing.
+    /// Resolved once at boot: `current_exe()` reports a replaced binary with a `(deleted)` suffix,
+    /// which would otherwise break every command. A field so tests can point it at the real
+    /// gateway (under `cargo test` `current_exe()` has no `confine` subcommand).
     wrapper: PathBuf,
 }
 
@@ -68,13 +40,10 @@ impl LandlockBackend {
         Self { wrapper }
     }
 
-    /// A backend that re-executes this process's own binary, if it can be
-    /// resolved to something that exists.
+    /// A backend re-executing this process's own binary, if it resolves to something that exists.
     ///
     /// # Errors
-    /// [`SandboxError::Refused`] when the executable cannot be resolved — see
-    /// [`Self::wrapper`] for why that is a boot-time refusal rather than a
-    /// per-command surprise.
+    /// [`SandboxError::Refused`] when the executable cannot be resolved (see [`Self::wrapper`]).
     pub fn here() -> Result<Self, SandboxError> {
         let exe = std::env::current_exe().map_err(|err| {
             SandboxError::Refused(format!(
@@ -107,8 +76,7 @@ impl SandboxBackend for LandlockBackend {
         if policy.network {
             wrapped.arg(NETWORK_FLAG);
         }
-        // `--` so a command whose own first argument starts with `-` is not read
-        // as another flag of ours.
+        // `--` so a command starting with `-` is not read as our flag.
         wrapped
             .arg("--")
             .arg(command.get_program())
@@ -117,11 +85,7 @@ impl SandboxBackend for LandlockBackend {
     }
 }
 
-/// What the `confine` subcommand was asked to allow.
-///
-/// Parsed from argv rather than from a serialized blob: argv entries carry no
-/// syntax, so a path arrives exactly as the operator wrote it and there is
-/// nothing to escape or to refuse.
+/// What the `confine` subcommand was asked to allow, parsed from argv (no syntax to escape).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Confinement {
     /// Paths the command may write under.
@@ -160,9 +124,8 @@ impl std::fmt::Display for ConfineArgsError {
 /// Read the `confine` subcommand's arguments.
 ///
 /// # Errors
-/// [`ConfineArgsError`] when a flag is malformed or no command follows `--`.
-/// Refused rather than defaulted: a `confine` that cannot read its policy must
-/// not run the command, because running it would run it *unconfined*.
+/// [`ConfineArgsError`] when a flag is malformed or no command follows `--`; never defaults,
+/// since running the command would run it unconfined.
 pub fn parse_confine_args<I, S>(args: I) -> Result<Confinement, ConfineArgsError>
 where
     I: IntoIterator<Item = S>,
@@ -190,9 +153,7 @@ where
         }
     }
     out.command = args.collect();
-    // An empty program name is not a command: `Command::new("")` cannot be
-    // spawned, and reporting that as a spawn failure later would read like the
-    // sandbox refusing rather than like the caller passing nothing.
+    // An empty program name is not a command; a later spawn failure would read like a sandbox refusal.
     let nothing_to_run = out.command.first().is_none_or(|program| program.is_empty());
     if !saw_separator || nothing_to_run {
         return Err(ConfineArgsError::NoCommand);
@@ -200,31 +161,18 @@ where
     Ok(out)
 }
 
-/// Whether `path` is one this backend can grant.
-///
-/// Only that it exists: unlike Seatbelt there is no syntax to refuse, and
-/// Landlock's own `PathFd` needs to open the path, so a missing one is the only
-/// thing that cannot be granted.
+/// Whether `path` can be granted: it must exist (Landlock's `PathFd` opens it); there is no syntax to refuse.
 #[must_use]
 pub fn grantable(path: &Path) -> bool {
     path.exists()
 }
 
-// ─── The Linux half: applying the ruleset ────────────────────────────────────
-//
-// Everything above rewrites a command and is platform-independent. What follows
-// talks to the kernel, so it exists only where that kernel does.
+// ─── Linux half: applying the ruleset ───
 
 /// Whether this kernel can enforce anything, and what to say when it cannot.
 ///
-/// Checked at boot rather than at the first command: a kernel without Landlock
-/// is a fact the runtime can report while it is still reporting other facts,
-/// which is what [`crate::sandbox::host_backend`] returning `Option` is for.
-///
-/// Asks for the *first* Landlock version's filesystem rights as a
-/// [`CompatLevel::HardRequirement`], which is an error on a kernel that has no
-/// Landlock rather than a silently empty ruleset. The ruleset it builds is
-/// dropped unused — this only wants the answer.
+/// Checked at boot. Requests the first ABI's filesystem rights as a hard requirement so a kernel
+/// without Landlock errors instead of yielding an empty ruleset; the ruleset is dropped unused.
 ///
 /// # Errors
 /// The reason, ready to print, when Landlock is unavailable.
@@ -245,12 +193,9 @@ pub fn available() -> Result<(), String> {
         })
 }
 
-/// Landlock is Linux's, so everywhere else the answer is a flat no.
+/// Landlock is Linux's, so elsewhere the answer is a flat no.
 ///
-/// Present on every platform rather than gated away, so the module — and the
-/// tests that use it — type-check everywhere even though they only *run* on
-/// Linux. A predicate that exists only where it succeeds cannot be compiled
-/// against by the code that has to handle it failing.
+/// Present on every platform so the module and its tests type-check everywhere.
 ///
 /// # Errors
 /// Always, naming the platform.
@@ -262,14 +207,10 @@ pub fn available() -> Result<(), String> {
     ))
 }
 
-/// The newest Landlock version whose filesystem rights this build asks for.
+/// The newest Landlock ABI whose filesystem rights this build asks for.
 ///
-/// A **maintenance point**, and the crate's own documentation says so: "the
-/// Landlock ABI should be incremented (and tested) regularly". Asking for more
-/// rights *restricts* more kinds of operation, so a version left behind is a
-/// hole — `Truncate` arrived in ABI 3, and a build handling only ABI 1 would let
-/// a command truncate a file it cannot write. Requested best-effort, so a kernel
-/// that does not know these rights is not refused for it.
+/// Maintenance point: a version left behind is a hole (`Truncate` arrived in ABI 3). Best-effort,
+/// so older kernels are not refused.
 #[cfg(target_os = "linux")]
 const NEWEST_FS: landlock::ABI = landlock::ABI::V6;
 
@@ -277,33 +218,15 @@ const NEWEST_FS: landlock::ABI = landlock::ABI::V6;
 #[cfg(target_os = "linux")]
 const NETWORK_ABI: landlock::ABI = landlock::ABI::V4;
 
-/// Restrict *this* process to `plan`, so the command it is about to become
-/// inherits the restriction.
+/// Restrict *this* process to `plan` so the command it becomes inherits the restriction.
 ///
-/// # What is granted
-///
-/// Read on `/`, and read-write beneath each `writable` path. Reads are not
-/// narrowed for the same reason Seatbelt does not narrow them: the gap being
-/// closed is over effects, and a command that cannot read its own toolchain does
-/// not run at all.
-///
-/// # Two compatibility levels, on purpose
-///
-/// ABI 1's filesystem rights are a [`CompatLevel::HardRequirement`] — without
-/// them there is no confinement to speak of, so a kernel that cannot provide
-/// them must fail rather than proceed. Everything newer is best-effort, so a
-/// kernel that lacks it is not refused. Denying the network is a hard
-/// requirement *again*, because it needs ABI 4 and a kernel without it must not
-/// be reported as having denied something it cannot.
+/// Grants read on `/` (a command that cannot read its toolchain does not run, as with Seatbelt)
+/// and read-write beneath each `writable` path. ABI 1 filesystem rights and network denial (ABI 4)
+/// are hard requirements; everything newer is best-effort.
 ///
 /// # Errors
-/// The reason, ready to print, when the ruleset cannot be built or cannot be
-/// **fully** enforced. Anything short of full enforcement is a refusal:
-/// [`RulesetStatus::NotEnforced`] is what a kernel without Landlock produces and
-/// `PartiallyEnforced` is what a partial one does, and a partly applied sandbox
-/// reported as success is indistinguishable from the real thing — which the
-/// [`crate::sandbox::SandboxBackend`] contract calls the one outcome worse than
-/// none.
+/// The reason, ready to print, when the ruleset cannot be built or **fully** enforced:
+/// partial enforcement reported as success breaks the [`crate::sandbox::SandboxBackend`] contract.
 ///
 /// [`RulesetStatus::NotEnforced`]: landlock::RulesetStatus::NotEnforced
 #[cfg(target_os = "linux")]
@@ -350,13 +273,9 @@ pub fn apply(plan: &Confinement) -> Result<(), String> {
         ))
         .map_err(|err| format!("Landlock refused the read rule for `/`: {err}"))?;
 
-    // `/dev/null`, for every command and by nobody's configuration (#212).
-    // See `sandbox_seatbelt.rs`'s `DEV_NULL_RULE` for why this grants nothing
-    // and why a shell that cannot write here does not run the command at all.
-    //
-    // `WriteFile` alone, not `from_all`: `/dev/null` is a file, and the
-    // directory rights in `from_all` are not valid on a file rule — Landlock
-    // refuses the whole ruleset rather than ignoring the surplus.
+    // `/dev/null` for every command (#212); see `DEV_NULL_RULE` in `sandbox_seatbelt.rs`.
+    // `WriteFile` alone, not `from_all`: directory rights are invalid on a file rule and Landlock
+    // refuses the whole ruleset.
     created = created
         .add_rule(PathBeneath::new(
             PathFd::new("/dev/null")
@@ -450,9 +369,7 @@ mod tests {
         assert!(args_of(&allowed).contains(&NETWORK_FLAG.to_owned()));
     }
 
-    /// The difference from Seatbelt worth keeping a test on: a path with a quote
-    /// in it survives, because argv has no syntax. `sandbox_seatbelt` has to
-    /// refuse this exact path.
+    /// A path with a quote survives, because argv has no syntax (Seatbelt refuses it).
     #[test]
     fn a_path_seatbelt_would_refuse_passes_through_untouched() {
         let hostile = r#"/tmp/a") (allow file-write* (subpath "/"#;
@@ -470,8 +387,7 @@ mod tests {
         );
     }
 
-    /// The round trip that keeps the two halves in step: whatever `confine`
-    /// writes, `parse_confine_args` reads back.
+    /// `confine` output round-trips through `parse_confine_args`.
     #[test]
     fn what_the_backend_writes_is_what_the_wrapper_reads() {
         let backend = LandlockBackend::new(PathBuf::from("/gw"));
@@ -480,7 +396,6 @@ mod tests {
         let wrapped = backend
             .confine(original, &policy(&["/work", "/other"], true))
             .expect("wraps");
-        // Skip the subcommand itself, as `main` does when dispatching.
         let argv: Vec<String> = args_of(&wrapped).into_iter().skip(1).collect();
         assert_eq!(
             parse_confine_args(argv).expect("parses"),
@@ -494,7 +409,7 @@ mod tests {
 
     #[test]
     fn a_confine_that_cannot_read_its_policy_refuses_rather_than_running() {
-        // Every one of these would otherwise run the command *unconfined*.
+        // Each would otherwise run the command unconfined.
         for (argv, expected) in [
             (
                 vec![WRITABLE_FLAG],

@@ -1,19 +1,5 @@
-//! What a confined command can and cannot do, on macOS.
-//!
-//! The three behaviours Slice 15b exists for — an escape write is denied, an
-//! in-workspace write is allowed, the network is refused — driven through the
-//! real [`ProcessRunner`], plus through Component-Model boundary to cover the
-//! guest's path.
-//!
-//! **The in-workspace write is not a formality.** Seatbelt matches the resolved
-//! path, and every temp directory here is under a symlink (`/var` →
-//! `/private/var`), so a profile carrying the unresolved path denies *everything*
-//! — including the grant. A suite with only the escape test would be green and
-//! hollow. That case fails if canonicalization is ever dropped.
-//!
-//! macOS-only by `#[cfg]`, because Seatbelt is. On Linux these don't exist,
-//! which [#95](https://github.com/PromptPasture/jan-klod/issues/95) records:
-//! CI runs on Linux, so nothing here is verified there.
+//! Seatbelt confinement on macOS: escape writes denied, in-workspace writes allowed, network refused. Not run on Linux CI (#95).
+//! The in-workspace write is the canary: Seatbelt matches resolved paths, and temp dirs sit under a symlink.
 #![cfg(target_os = "macos")]
 
 use std::io::Read;
@@ -79,9 +65,7 @@ fn confined(workspace: &Path) -> ProcessRunner {
     .with_sandbox(std::sync::Arc::from(backend), policy(workspace))
 }
 
-/// The same runner with nothing confining it — the control for every case
-/// below. Without it, a failure proves nothing — a missing binary or bad cwd
-/// fails identically.
+/// Unconfined control for each case, so a failure is attributable to the sandbox.
 fn unconfined(workspace: &Path) -> ProcessRunner {
     ProcessRunner::new(
         Workspace::open(workspace).expect("the workspace opens"),
@@ -104,8 +88,6 @@ fn a_confined_command_cannot_write_outside_the_workspace() {
     let dirs = dirs("escape");
     let target = dirs.outside.join("leak");
 
-    // Control first: unconfined, this succeeds. That makes the denial below
-    // attributable to the sandbox.
     assert_eq!(write_to(&unconfined(&dirs.workspace), &target), 0);
     assert!(target.exists(), "the control wrote the file");
     std::fs::remove_file(&target).expect("removes it again");
@@ -122,7 +104,7 @@ fn a_confined_command_cannot_write_outside_the_workspace() {
     );
 }
 
-/// The case that catches canonicalization bugs. See the module docs.
+/// The canary for canonicalization bugs (see module docs).
 #[test]
 fn a_confined_command_can_still_write_inside_the_workspace() {
     let dirs = dirs("inside");
@@ -136,14 +118,8 @@ fn a_confined_command_can_still_write_inside_the_workspace() {
     assert!(target.exists());
 }
 
-/// `2>/dev/null` works, which it did not before #212.
-///
-/// The shell opens the redirect *before* running the program, so a denied
-/// `/dev/null` means the command never executes — and the error names
-/// `/dev/null` rather than anything the operator wrote. This was found through
-/// a cascade: `xcode-select` probes with `2> /dev/null`, so a refused write
-/// here was reported as a missing `clang`, which reads like a broken
-/// toolchain rather than a sandbox.
+/// `2>/dev/null` works, which it did not before #212. A denied `/dev/null` would
+/// surface as a missing `clang` via `xcode-select`, which hides the sandbox.
 #[test]
 fn a_confined_command_can_redirect_to_dev_null() {
     let dirs = dirs("devnull");
@@ -162,12 +138,8 @@ fn a_confined_command_can_redirect_to_dev_null() {
     );
 }
 
-/// The other half of the one above, and the reason it is not a hole.
-///
-/// Granting `/dev/null` must grant `/dev/null` and not `/dev`. Without this,
-/// widening the rule from `literal` to `subpath` — an easy edit, since every
-/// other grant in the profile is a `subpath` — would hand every command the
-/// device directory and pass the test above unchanged.
+/// Granting `/dev/null` must not grant `/dev`. Widening the rule to a subpath
+/// would otherwise pass the test above unchanged.
 #[test]
 fn granting_dev_null_does_not_grant_the_device_directory() {
     let dirs = dirs("devdir");
@@ -185,11 +157,8 @@ fn granting_dev_null_does_not_grant_the_device_directory() {
     );
 }
 
-/// Network denial, asserted by what the listener *did not see*.
-///
-/// Not by `curl`'s exit code: a connection to a closed port fails the same way
-/// a denied one does. A listener that is genuinely accepting connections tells
-/// the two apart — the unconfined attempt arrives, the confined one does not.
+/// Network denial, judged by what the listener did not see. A closed port fails
+/// the same way a denied connection does, so curl's exit code proves nothing.
 #[test]
 fn a_confined_command_cannot_reach_the_network() {
     if !common::tool_available("curl") {
@@ -201,8 +170,6 @@ fn a_confined_command_cannot_reach_the_network() {
     let (arrived, connections) = mpsc::channel();
     thread::spawn(move || {
         for stream in listener.incoming() {
-            // Read briefly so the client isn't left writing into a void, then
-            // report that someone arrived.
             if let Ok(mut stream) = stream {
                 let mut discard = [0_u8; 64];
                 let _ = stream.read(&mut discard);
@@ -230,11 +197,7 @@ fn a_confined_command_cannot_reach_the_network() {
     );
 }
 
-/// The same denial, reached the way a component reaches it.
-///
-/// `host_process.rs` drives this guest through an unconfined runner; this drives
-/// it through a confined one, so what is covered is the guest's path to a
-/// *sandboxed* command rather than the runner's alone.
+/// The same denial, reached through a guest rather than the runner alone.
 #[test]
 fn a_guest_running_a_command_is_confined_too() {
     let engine = Engine::default();
@@ -254,7 +217,6 @@ fn a_guest_running_a_command_is_confined_too() {
         target.display()
     );
 
-    // The control, through the same guest: unconfined, the write lands.
     let mut tool = ToolExtension::instantiate(
         &engine,
         "tool.proc-probe",

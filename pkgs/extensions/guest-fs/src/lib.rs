@@ -1,9 +1,5 @@
 //! Shared helpers for `host-fs`-routed guests (`tool-fs`, `tool-find`, `tool-edit`).
-//!
-//! A library, not a component: no WIT bindings. Guests share this tested logic
-//! instead of copying it locally.
-//!
-//! Enforces policy about cost and shape: output limits, glob matching, walk bounds.
+//! Plain library (no WIT bindings); enforces output, glob, and walk bounds.
 
 /// Max output bytes per call.
 pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
@@ -14,10 +10,7 @@ pub const MAX_VISITS: usize = 20_000;
 /// Max directory depth relative to search root.
 pub const MAX_DEPTH: usize = 24;
 
-/// Directories pruned unless the pattern names them explicitly.
-///
-/// Build/vendor trees are pruned (expensive, rarely intended); name them in the
-/// pattern to opt back in.
+/// Build/vendor trees are pruned unless the pattern names them explicitly.
 pub const PRUNED_DIRS: [&str; 6] = [
     ".git",
     "node_modules",
@@ -49,7 +42,7 @@ pub fn truncate(output: String) -> String {
     if output.len() <= MAX_OUTPUT_BYTES {
         return output;
     }
-    // Backoff to valid UTF-8 boundary to avoid panic on slice.
+    // Slicing mid-char panics; back off to a char boundary.
     let mut safe_len = MAX_OUTPUT_BYTES;
     while safe_len > 0 && !output.is_char_boundary(safe_len) {
         safe_len -= 1;
@@ -61,10 +54,7 @@ pub fn truncate(output: String) -> String {
     )
 }
 
-/// Expand slash-less patterns to search recursively.
-///
-/// `*.rs` in strict glob means "top level only"; most callers mean recursive.
-/// Patterns with any `/` are left unchanged.
+/// Expand slash-less patterns to match at any depth (`*.rs` alone is top-level only).
 #[must_use]
 pub fn normalize(pattern: &str) -> String {
     if pattern.contains('/') {
@@ -95,12 +85,11 @@ fn match_segments(pat: &[&str], seg: &[&str]) -> bool {
     }
 }
 
-/// Match one path segment against `*`/`?` pattern.
 fn match_name(pattern: &str, name: &str) -> bool {
     let pat: Vec<char> = pattern.chars().collect();
     let text: Vec<char> = name.chars().collect();
     let (mut pi, mut ti) = (0, 0);
-    // Last `*` seen and chars it consumed (for backtracking).
+    // Backtrack point: last `*` and how much text it has eaten.
     let mut star: Option<usize> = None;
     let mut eaten = 0;
     while ti < text.len() {
@@ -112,7 +101,6 @@ fn match_name(pattern: &str, name: &str) -> bool {
             eaten = ti;
             pi += 1;
         } else if let Some(s) = star {
-            // Give `*` one more char and retry.
             eaten += 1;
             ti = eaten;
             pi = s + 1;
@@ -123,33 +111,25 @@ fn match_name(pattern: &str, name: &str) -> bool {
     pat[pi..].iter().all(|c| *c == '*')
 }
 
-/// Check if walk should descend into directory `name`.
-///
 /// Pruned unless the pattern names them explicitly.
 fn should_descend(name: &str, pattern: &str) -> bool {
     !PRUNED_DIRS.contains(&name) || pattern.split('/').any(|segment| segment == name)
 }
 
-/// Check if credential file should be withheld from walk results.
-///
-/// Withheld unless named explicitly in the pattern (same as pruned dirs).
-/// Broad globs like `**/*` skip them; explicit `**/.env` does not.
-/// Names don't disclose secrets; contents are still read-gated.
+/// Withheld unless the pattern names it: `**/*` skips `.env`, `**/.env` does not.
+/// Names are not secret; contents stay read-gated.
 fn hidden_credential(name: &str, pattern: &str) -> bool {
     is_credential_file(name) && !pattern.split('/').any(|segment| segment == name)
 }
 
-/// Test if filename marks it as holding credentials.
+/// Test if filename marks it as holding credentials (name heuristic).
 ///
-/// Reads and greps run without asking (read-only allowlist).
-/// A grep for "password" in `.env` exposes secrets to transcript.
-/// The shared walk skips these; explicit reads by path are still gated.
+/// Walks skip these, since a grep over `.env` would leak secrets into the transcript;
+/// explicit path reads stay gated.
 ///
-/// Heuristic based on name only; doesn't catch semantic patterns like
-/// `config/production.yaml`.
+/// Name-only: misses semantic cases such as `config/production.yaml`.
 #[must_use]
 pub fn is_credential_file(name: &str) -> bool {
-    /// Exact names.
     const NAMES: [&str; 8] = [
         ".env",
         ".envrc",
@@ -160,7 +140,6 @@ pub fn is_credential_file(name: &str) -> bool {
         "credentials",
         "id_rsa",
     ];
-    /// Suffixes, including the `.env.production` family.
     const SUFFIXES: [&str; 7] = [".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".ppk"];
 
     let lower = name.to_lowercase();
@@ -173,11 +152,9 @@ pub fn is_credential_file(name: &str) -> bool {
 
 /// Walk `root` collecting files matching `pattern`.
 ///
-/// `list` returns None for unreadable dirs (skipped, not fatal).
-/// Paths matched relative to `root` and reported with it.
+/// `list` returns None for unreadable dirs; those are skipped, not fatal.
 ///
-/// All dimensions bounded ([`MAX_VISITS`], [`MAX_DEPTH`], [`MAX_RESULTS`]):
-/// glob cost is tree-driven, not arg-driven.
+/// Every dimension is bounded ([`MAX_VISITS`], [`MAX_DEPTH`], [`MAX_RESULTS`]), so cost follows the tree.
 pub fn walk(root: &str, pattern: &str, list: &dyn Fn(&str) -> Option<Vec<Entry>>) -> Outcome {
     let pattern = normalize(pattern);
     let mut paths = Vec::new();
@@ -241,7 +218,6 @@ mod tests {
         assert!(super::hidden_credential("server.pem", "**/*.pem"));
     }
 
-    /// Credential-file rule (shared by `find` and `grep`).
     #[test]
     fn credential_files_are_recognised() {
         for name in [
@@ -350,7 +326,6 @@ mod tests {
             ("src", &[("main.rs", false), ("util", true)]),
             ("src/util", &[("helper.rs", false)]),
         ]);
-        // Pattern is matched relative to `src`, results are prefixed with it.
         let found = walk("src", "*.rs", &list);
         assert_eq!(found.paths, vec!["src/main.rs", "src/util/helper.rs"]);
     }
@@ -365,7 +340,6 @@ mod tests {
         let list = tree(&dirs);
         assert!(PRUNED_DIRS.contains(&"target"));
         assert_eq!(walk(".", "**/*.rs", &list).paths, vec!["src/main.rs"]);
-        // Naming the pruned directory opts back in.
         assert_eq!(
             walk(".", "target/**/*.rs", &list).paths,
             vec!["target/build.rs"]

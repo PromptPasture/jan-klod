@@ -1,26 +1,12 @@
 //! `tool-fs` — the single filesystem tool, routed through `host-fs`.
 //!
-//! Exposes one tool named `fs`; the operation is chosen by an `op` argument:
-//!
-//! - `{ "op": "read",  "path" }`              → the file's contents.
-//! - `{ "op": "write", "path", "contents" }`  → a write confirmation.
-//! - `{ "op": "grep",  "pattern", "path"?, "glob"? }` → matching lines.
-//!
-//! `grep` searches a **directory tree** when `path` names one (default: workspace root),
-//! and a single file when it names a file. "Where is this symbol?" is one call,
-//! not `find` + `read` per hit. Tree results are `path:lineno:line`;
-//! single-file results are `lineno:line`.
-//!
-//! Output is capped at [`guest_fs::MAX_OUTPUT_BYTES`] so a single result cannot
-//! consume the budget, and a tree search is bounded the same way as a glob —
-//! any limiting bound is reported in the result. The matching logic is pure Rust
-//! (unit-tested natively); the glue compiles for `wasm32` only.
+//! One tool, `fs`; `op` selects `read`, `write` or `grep`. Tree grep hits are `path:lineno:line`.
+//! Output is capped at [`guest_fs::MAX_OUTPUT_BYTES`]. The matching logic is pure Rust; the glue compiles for `wasm32` only.
 
-/// Most matching lines a tree-wide grep reports. Past this the answer is not a
-/// search result any more, it is a haystack — the caller should narrow instead.
+/// Most matching lines a tree-wide grep reports; past this the caller should narrow the search.
 const MAX_MATCHES: usize = 400;
 
-// Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
+// Only the wasm32 glue calls this module outside tests; the allow covers native builds.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod fs {
     use crate::MAX_MATCHES;
@@ -40,16 +26,13 @@ mod fs {
     pub struct Hits {
         /// One `path:lineno:line` entry per matching line.
         pub lines: Vec<String>,
-        /// Set when [`MAX_MATCHES`] cut the search short — a partial result must
-        /// never read as "these are all the matches".
+        /// Set when [`MAX_MATCHES`] cut the search short, so a partial result is not read as complete.
         pub capped: bool,
     }
 
     /// Collect matches across `files`, reading each through `read`.
     ///
-    /// `read` is the `host-fs` seam; a file that cannot be read (binary, gone,
-    /// not UTF-8) is skipped rather than failing the whole search — one unreadable
-    /// file in a tree must not cost the caller the other 200 results.
+    /// An unreadable file (binary, gone, not UTF-8) is skipped, not fatal.
     pub fn grep_tree(
         files: &[String],
         pattern: &str,
@@ -76,17 +59,8 @@ mod fs {
         }
     }
 
-    /// Format a tree grep, stating every way the result was held back **before**
-    /// the hits rather than after them.
-    ///
-    /// Markers used to trail (#145). Why leading is better:
-    ///
-    /// - The consumer is a language model. One reading 50 grep hits concludes
-    ///   the symbol appears 50 times; a caveat below the data is the tail readers drop.
-    /// - [`guest_fs::truncate`] cuts the **tail**. A result hitting [`guest_fs::MAX_OUTPUT_BYTES`]
-    ///   loses trailing markers entirely — exactly where a bound is most likely to bite.
-    ///
-    /// Leading markers survive both truncation and the model's consumption.
+    /// Format a tree grep. Bounds are stated **before** the hits, not after: the
+    /// output is cut from the tail, and a trailing caveat is the one a reader skips.
     pub fn render(pattern: &str, hits: &Hits, walk_bound: Option<&str>) -> String {
         if hits.lines.is_empty() {
             return format!("no matches for {pattern}");
@@ -172,9 +146,7 @@ mod fs {
             assert_eq!(render("zzz", &hits, None), "no matches for zzz");
         }
 
-        /// This test used to assert the opposite — `starts_with("a.rs:1:x\n")`,
-        /// "hits come first". #145 reversed it on purpose: a caveat a reader
-        /// meets after the data is a caveat the reader has already acted past.
+        /// Bounds lead the hits: a caveat after the data is one a reader has already acted past.
         #[test]
         fn a_bounded_walk_is_reported_before_the_hits() {
             let hits = Hits {
@@ -189,11 +161,7 @@ mod fs {
             assert!(rendered.ends_with("\na.rs:1:x"), "{rendered}");
         }
 
-        /// The reason leading beats trailing, rather than merely differing from
-        /// it: `guest_fs::truncate` cuts the tail at `MAX_OUTPUT_BYTES`, so a
-        /// trailing marker was *deleted* by a long result — the very case where
-        /// a bound is most likely to have bitten. Enough hits to overflow the
-        /// cap, and the marker must still be readable.
+        /// A leading marker survives `truncate`, which cuts the tail at `MAX_OUTPUT_BYTES`.
         #[test]
         fn a_marker_survives_the_output_cap_that_would_have_cut_a_trailing_one() {
             let line = "src/some/quite/long/path/to/a/file.rs:1234:some matching line of code";
@@ -331,10 +299,8 @@ mod component {
         }
     }
 
-    /// Grep a file or a whole tree, deciding which by probing `list-dir`: a path
-    /// that lists is a directory, anything else is read as a file. (`host-fs` has
-    /// no `is-dir`, and adding one to the contract for a two-branch dispatch is not
-    /// worth widening the interface.)
+    /// Grep a file or a whole tree: a path that lists is a directory, anything else is a file.
+    /// `host-fs` has no `is-dir`, and widening the contract for this dispatch was not worth it.
     fn grep(path: &str, pattern: &str, glob: &str) -> Result<String, ToolError> {
         if host_fs::list_dir(path).is_err() {
             let content = host_fs::read(path).map_err(|_| ToolError::ExecutionFailed)?;

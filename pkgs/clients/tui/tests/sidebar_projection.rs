@@ -1,9 +1,7 @@
 #![allow(missing_docs)]
-//! #104's Acceptance line 7: "sidebar issues no `Command` — projection only."
-//! Grep-style test: scans sidebar.rs code (comments stripped) for `Command`
-//! (dispatches menu) and `Transport` (sends). Lives in `tests/` so grep never
-//! reads its own assertion text back — a check for `"Command"` in the same
-//! file would trip on itself.
+//! #104: the sidebar is projection only, so `sidebar.rs` must not mention `Command` or `Transport`.
+//!
+//! Lives in `tests/` so the grep never reads its own assertion text back.
 
 use std::fs;
 use std::path::Path;
@@ -15,8 +13,7 @@ fn the_sidebar_issues_no_command_and_holds_no_transport() {
 
     let mut checked = 0usize;
     for (n, line) in text.lines().enumerate() {
-        // Everything from the first `//` is a comment; a `//` inside a string
-        // literal would only make this check miss something, never invent one.
+        // A `//` inside a string literal can only make this miss, never falsely match.
         let code = line.split("//").next().unwrap_or_default();
         checked += 1;
         assert!(

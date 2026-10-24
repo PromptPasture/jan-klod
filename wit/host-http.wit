@@ -7,9 +7,9 @@ interface host-http {
         connection-failed,
         timeout,
         tls-error,
-        /// HTTP 4xx — carries the status code.
+        /// HTTP 4xx status code.
         client-error(u16),
-        /// HTTP 5xx — carries the status code.
+        /// HTTP 5xx status code.
         server-error(u16),
         backend,
     }
@@ -26,7 +26,7 @@ interface host-http {
         headers: list<http-header>,
         /// Empty for GET/DELETE.
         body: option<list<u8>>,
-        /// Timeout in milliseconds; 0 = use host default (30 000).
+        /// Timeout in ms; 0 = host default (30 000).
         timeout-ms: u32,
     }
 
@@ -36,6 +36,6 @@ interface host-http {
         body: list<u8>,
     }
 
-    /// Synchronous HTTP request. Extensions block until response is received.
+    /// Synchronous request; blocks until the response arrives.
     fetch: func(request: http-request) -> result<http-response, http-error>;
 }

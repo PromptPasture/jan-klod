@@ -1,20 +1,6 @@
-//! The JSON-RPC 2.0 envelope the stdio and WebSocket transports both wrap a
-//! [`Command`](crate::Command) or a [`Notification`](crate::Notification) in.
-//!
-//! # Why this is in the contract crate and not in the transport
-//!
-//! The crate docs used to say framing belongs to transport—right for one, wrong
-//! for two parties. The core writes frames (`jk_host::rpc`, Slice 13b)
-//! and *every client* reads them; `jan-klod` (the TUI client) depends on neither
-//! `jk-agent` nor Wasmtime by design. A frame type reachable only from the
-//! core would be hand-rolled twice, the divergence this contract prevents. So
-//! framing lives here, beside the commands it carries; the transport keeps
-//! what is genuinely its own: the sockets, pipes, and read loop.
-//!
-//! JSON is not a choice being made here. This is the *JSON*-RPC envelope; a
-//! payload whose type varies per command needs a value type for any description
-//! at all, and every transport in the roadmap — stdio, WebSocket, MCP, ACP — is
-//! JSON. The contract types in the crate root stay format-free.
+//! The JSON-RPC 2.0 envelope the stdio and WebSocket transports wrap a
+//! [`Command`](crate::Command) or [`Notification`](crate::Notification) in.
+//! Lives here, not in the transport, so the core and every client share one frame type.
 //!
 //! # Shapes
 //!
@@ -30,10 +16,9 @@ use serde::{Deserialize, Serialize};
 /// The value of the `jsonrpc` member on every frame.
 pub const VERSION: &str = "2.0";
 
-/// The JSON was not valid, so no `id` could be read from it.
+/// The JSON was not valid, so no `id` could be read.
 pub const PARSE_ERROR: i64 = -32700;
-/// Valid JSON, but not a well-formed request: a wrong `jsonrpc`, a missing
-/// `method`, or params that do not match the method named.
+/// Valid JSON, but not a well-formed request.
 pub const INVALID_REQUEST: i64 = -32600;
 /// No command carries this `method`.
 pub const METHOD_NOT_FOUND: i64 = -32601;
@@ -41,16 +26,13 @@ pub const METHOD_NOT_FOUND: i64 = -32601;
 pub const INVALID_PARAMS: i64 = -32602;
 /// The core failed while serving a command it understood.
 pub const INTERNAL_ERROR: i64 = -32603;
-/// Server-defined (the spec reserves `-32000..=-32099` for these): the client
-/// speaks a protocol version this core cannot talk to. See
-/// [`incompatible_version`].
+/// Server-defined (spec reserves `-32000..=-32099`): the client's protocol
+/// version is incompatible. See [`incompatible_version`].
 pub const INCOMPATIBLE_VERSION: i64 = -32000;
 
-/// A request id, echoed back on the response that answers it.
+/// A request id, echoed back on the response.
 ///
-/// Both spellings the spec allows: a client sending string ids is conforming,
-/// and a core rejecting them would not be. This crate's schema is what non-Rust
-/// clients generate from, so what it accepts is what they will send.
+/// Both spellings the spec allows, since non-Rust clients generate from this schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Id {
@@ -58,10 +40,7 @@ pub enum Id {
     Number(i64),
     /// A string id.
     Text(String),
-    /// No id could be read from the frame — JSON did not parse, or it parsed
-    /// to something other than a request. The spec requires `null` in the
-    /// answer, the one thing distinguishing it from an answer the client sent.
-    /// A client must not *send* this.
+    /// No id could be read from the frame; answered with `null`. A client must not send this.
     Null,
 }
 
@@ -73,8 +52,7 @@ pub struct Request {
     pub jsonrpc: String,
     /// Answered with this same id.
     pub id: Id,
-    /// The command's `method` and `params`, flattened into this frame — which
-    /// is why [`Command`](crate::Command) is adjacently tagged.
+    /// The command's `method` and `params`, flattened (hence adjacent tagging).
     #[serde(flatten)]
     pub command: crate::Command,
 }
@@ -148,9 +126,7 @@ impl Response {
 
 /// What a [`Response`] carries.
 ///
-/// An enum rather than two `Option` fields, so a response with both — or with
-/// neither, which the spec forbids just as firmly — cannot be built. Serialized
-/// externally tagged, which is exactly the spec's `result`/`error` member.
+/// An enum so a response with both or neither of `result`/`error` cannot be built.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
@@ -191,13 +167,10 @@ impl Error {
     }
 }
 
-/// The error a core answers an incompatible [`Command::Hello`] with, before
-/// closing the connection.
+/// The error answering an incompatible [`Command::Hello`] before closing.
 ///
-/// The core's own version travels in `data` rather than only inside the
-/// message: a refused handshake is the one exchange where the client learns
-/// nothing else about what this core speaks, since it gets no
-/// [`HelloResult`](crate::HelloResult) at all.
+/// The core's version travels in `data` because the client gets no
+/// [`HelloResult`](crate::HelloResult) to learn it from.
 ///
 /// [`Command::Hello`]: crate::Command::Hello
 #[must_use]

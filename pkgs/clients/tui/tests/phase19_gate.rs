@@ -1,18 +1,10 @@
-//! Gate test (#97): a full turn on 120×32 and 60×20 terminals with
-//! `NO_COLOR=1` on 16 colours renders correctly and loses no information.
+//! Gate (#97): a full turn at 120×32 and 60×20 with `NO_COLOR=1` on 16 colours
+//! renders without overflow and loses no information.
 //!
-//! # Why this file exists
-//!
-//! Exit criteria must be tested, not written as assertions. Unrun gates are
-//! discovered failures (#130, #133).
-//!
-//! # What "loses no information" means
-//!
-//! **Text is byte-identical between coloured and colourless renders:**
-//! everything colour carries is also in glyph, label, or position. Under
-//! `Mode::Mono`, every role is `Color::Reset`, so colour-only distinctions
-//! vanish. The second assertion counts distinct glyphs, not just comparing
-//! renders (which would pass even if only tint told states apart).
+//! Exit criteria are tested, not written as prose: unrun gates are discovered
+//! failures (#130, #133). Text must be byte-identical between coloured and
+//! colourless renders. Distinct glyphs are counted, since equal renders would
+//! pass even if only tint told states apart.
 
 use jk_tui::app::{App, Prompt};
 use jk_tui::blocks;
@@ -20,8 +12,7 @@ use jk_tui::layout;
 use jk_tui::theme::{Depth, GlyphSet, Mode, Theme};
 use jk_tui::wrap::width as cells;
 
-/// The turn the gate names, driven through the model rather than assembled as
-/// entries — so this exercises the paths a real turn takes.
+/// The turn, driven through the model so it exercises the paths a real turn takes.
 fn a_full_turn() -> App {
     let mut app = App::default();
 
@@ -33,16 +24,13 @@ fn a_full_turn() -> App {
     app.take_submission().expect("the user said something");
     app.begin_turn();
 
-    // Long enough to test wrapping at both widths; short fixture would not
-    // approach the pane, hiding the overflow bug that probing at `pane + 20`
-    // first exposed.
+    // Long enough to wrap at both widths; a short fixture would hide the overflow bug.
     app.apply_delta(
         "Reading the file first, and then a considerably longer sentence whose \
          only job is to be wider than sixty columns so that the wrap is doing \
          real work at both of the sizes this gate names.",
     );
 
-    // Two tool calls, one of which edits a file.
     app.record_tool_invoked(
         "c1".to_string(),
         "fs".to_string(),
@@ -65,11 +53,9 @@ fn a_full_turn() -> App {
         false,
     );
 
-    // A failing tool, so the failure path is visible.
     app.record_tool_invoked("c3".to_string(), "git".to_string(), None);
     app.record_tool_result("c3", "tool `git` error: not a repository".to_string(), true);
 
-    // An `ask`, answered.
     app.ask(Prompt {
         session: "gate".to_string(),
         question: "write src/main.rs?".to_string(),
@@ -81,7 +67,6 @@ fn a_full_turn() -> App {
     app.push_char('s');
     app.take_answer().expect("the prompt was answered");
 
-    // A follow-up sent mid-turn, then a cancel.
     app.push_char('s');
     app.take_submission().expect("a follow-up was typed");
     app.cancel();
@@ -116,7 +101,6 @@ fn a_full_turn_renders_at_both_sizes_the_gate_names() {
             "{w}×{h} is one of the two sizes the gate names and it reports too small"
         );
 
-        // Transcript width minus border.
         let pane = usize::from(frame.content.width).saturating_sub(2);
 
         for (name, theme) in themes() {
@@ -138,10 +122,7 @@ fn a_full_turn_renders_at_both_sizes_the_gate_names() {
     }
 }
 
-/// Second assertion: `NO_COLOR` on 16 colours loses no information.
-///
-/// Text must be byte-identical; colour is the *second* signal, so removing it
-/// must change styling only. A difference means something was colour-only.
+/// `NO_COLOR` changes styling only: text must be byte-identical, so a difference means something was colour-only.
 #[test]
 fn no_color_on_sixteen_colours_loses_nothing_but_colour() {
     let app = a_full_turn();
@@ -156,9 +137,7 @@ fn no_color_on_sixteen_colours_loses_nothing_but_colour() {
                 .collect()
         };
 
-        // Unicode and ASCII differ by design; compare *information*: every
-        // state's mark must be present and distinct. Equal line counts proves
-        // structure survives.
+        // Unicode and ASCII differ by design, so compare information: each state's mark must be present and distinct.
         assert_eq!(
             plain(coloured).len(),
             plain(mono).len(),
@@ -168,12 +147,7 @@ fn no_color_on_sixteen_colours_loses_nothing_but_colour() {
     }
 }
 
-/// Tool states stay distinguishable with no colour.
-///
-/// **Every block has identical arguments and result text**, so lines differ
-/// only by status mark. (First version failed: compared lines whose content
-/// differed, missing the glyph. Probe that made `ToolFailed` render as
-/// `ToolDone` without failing exposed the hole.)
+/// Tool states stay distinguishable with no colour. Every block has identical text, so only the status mark differs.
 #[test]
 fn the_tool_states_are_told_apart_without_colour() {
     const SAME_ARGS: &str = r#"{"path":"src/main.rs"}"#;

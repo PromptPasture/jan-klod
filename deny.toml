@@ -1,43 +1,23 @@
 # cargo-deny policy — the primary supply-chain gate for the Rust host workspace
-# (the repo root, whose members are pkgs/host/agent, pkgs/host/config,
-# pkgs/host/host, pkgs/host/protocol, pkgs/host/session and pkgs/clients/tui) and the guest
-# extensions workspace (pkgs/extensions/*, one shared Cargo.lock across all
-# guests). One shared policy keeps the license / advisory / source rules
-# identical across both workspaces. Every invocation points here with
-# `--config`, so the file's location is not significant. Closes the Phase 1
-# supply-chain gate (docs/decisions/2026-06-29-extension-technologies/PLAN.md).
+# Covers the host workspace (repo root) and the guest extensions workspace (pkgs/extensions/*).
+# Every invocation passes `--config`.
 #
 # cargo-deny config schema (v2 semantics): anything not explicitly allowed — a
 # license, an advisory, or a source — is denied by default. There is no implicit
 # catch-all to forget to set.
 
 [advisories]
-# RUSTSEC vulnerabilities are denied by default. Accept one only by listing its ID
-# here with a documented reason and an expiry plan.
-#
-# The entry below is `unmaintained`, not a vulnerability: `cargo audit` exits 0
-# on it and would do so with this list empty. It is here because cargo-deny's
-# default `unmaintained` scope is the whole graph.
-#
-# The expiry plan is not a date: it leaves when the crate above it stops
-# depending on it. `make deny` fails the day it is fixed upstream and the ID
-# stops matching anything, which is the signal to delete the line. Nothing here
-# may be a `vulnerability` or an `unsound` — if a future entry would be, that is
-# a different decision than this one.
+# Accept an ID only with a reason and an expiry plan. Vulnerability or unsound advisories
+# are never accepted here. This entry is unmaintained, not a vulnerability; cargo-deny's
+# unmaintained scope covers the whole graph. It goes when its parent crate stops depending on it.
 ignore = [
-    # unsafe-libyaml <- serde_yaml_ng <- jk-config/jk-host,
-    # which parse and write config.yaml. Unmaintained, with no advisory against
-    # its code. Replacing the parser changes how every config.yaml is read, so
-    # that is its own decision, tracked in #312; this line goes with it.
-    "RUSTSEC-2024-0449", # unsafe-libyaml
+    # unsafe-libyaml, via serde_yaml_ng which parses config.yaml. Replacing the parser is #312.
+    "RUSTSEC-2024-0449",
 ]
 
 [licenses]
-# Every SPDX expression in the dependency graph must be satisfiable from this
-# permissive set. Verified against `cargo metadata --all-features` for the host
-# workspace; the guest graphs are a strict subset. Copyleft and unknown licenses
-# are denied by omission (e.g. a `GPL-2.0-only OR BSD-3-Clause` crate is accepted
-# only via its BSD-3-Clause branch).
+# Permissive licenses only, verified against `cargo metadata --all-features`. Dual-licensed
+# crates pass via a permissive branch; copyleft and unknown licenses are denied by omission.
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
@@ -48,22 +28,16 @@ allow = [
     "Zlib",
     "CDLA-Permissive-2.0",
 ]
-# Require high confidence before a license is inferred from file text.
 confidence-threshold = 0.9
 
 [bans]
-# Duplicate transitive versions are noise, not a security failure, in a young tree
-# — surface them without breaking the build. Wildcard version requirements are
-# forbidden: they defeat the locked-build guarantee — but only for registry crates.
-# Intra-workspace path deps (jk-agent, jk-config, …) carry no version and so read as
-# `*`; they resolve from the filesystem, not a registry, so a wildcard there is
-# harmless and expected for unpublished crates.
+# Duplicate versions only warn. Wildcards are denied for registry crates; unpublished
+# intra-workspace path deps have no version and are exempt via allow-wildcard-paths.
 multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 
 [sources]
-# Only the default crates.io registry is permitted. Any other registry or a git
-# dependency must be added here deliberately.
+# Only crates.io is permitted; other registries and git dependencies are denied.
 unknown-registry = "deny"
 unknown-git = "deny"

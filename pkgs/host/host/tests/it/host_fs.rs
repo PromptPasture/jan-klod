@@ -1,8 +1,5 @@
-//! `host-fs` across Component-Model boundary. Instantiates `tool-fs` guest,
-//! drives `invoke({op, path, ...})` against path-jailed workspace: normal paths
-//! round-trip, escaping denied, no workspace = all denied (default-deny). Offline.
-//!
-//! Skips when guest not staged in `ext/`.
+//! `host-fs` across the Component-Model boundary, through the `tool-fs` guest. Escapes from the path-jailed workspace
+//! are denied, and with no workspace everything is denied (default-deny). Offline. Skips when the guest is not staged.
 
 use jk_wasm::host_fs::Workspace;
 use jk_wasm::host_process::ProcessRunner;

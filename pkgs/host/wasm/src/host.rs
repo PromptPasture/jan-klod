@@ -1,8 +1,6 @@
 //! Host-side state and capability implementations.
 //!
-//! Each extension instance gets its own [`HostState`] and Wasmtime store, so
-//! `host-config` scopes to its section and `host-log` is tagged with its id.
-//! These are the host half of `provider-world` imports (see [`crate::bindings`]).
+//! Each extension instance gets its own [`HostState`] and Wasmtime store.
 
 use std::fmt::Write as _;
 
@@ -111,7 +109,6 @@ impl host_log::Host for HostState {
         };
         let mut line = format!("{level} [{}] {component}: {message}", self.component_id);
         for field in fields {
-            // Write to String is infallible.
             let _ = write!(line, " {}={}", field.key, field.value);
         }
         eprintln!("{line}");
@@ -135,8 +132,7 @@ impl host_config::Host for HostState {
 }
 
 impl host_http::Host for HostState {
-    /// Outbound HTTP: adapt types to the neutral blocking client (ureq, rustls).
-    /// Only network access an extension gets.
+    /// Outbound HTTP via the blocking client; the only network access an extension gets.
     fn fetch(
         &mut self,
         request: host_http::HttpRequest,
@@ -184,27 +180,19 @@ const fn to_http_error(err: &crate::http::WireError) -> host_http::HttpError {
 }
 
 impl host_secrets::Host for HostState {
-    /// Retrieve a secret by name from the configured backend (currently environment).
-    ///
-    /// Returns `denied` if the instance does not have `secrets: true` in config.yaml.
-    /// Returns `not-found` if the backend has no secret with this name.
-    /// Returns `backend` if the backend itself failed.
+    /// Secret from the environment; `denied` unless the instance has `secrets: true`.
     fn get(&mut self, name: String) -> Result<String, host_secrets::SecretsError> {
-        // Check if the instance is granted the secrets capability.
         match self.section.get("secrets") {
             Some(s) => {
-                // Check if it's the boolean true (will be "true" as a JSON string)
                 if s != "true" {
                     return Err(host_secrets::SecretsError::Denied);
                 }
             }
             None => {
-                // Not granted
                 return Err(host_secrets::SecretsError::Denied);
             }
         }
 
-        // Attempt to read from environment
         match std::env::var(&name) {
             Ok(value) => Ok(value),
             Err(std::env::VarError::NotPresent) => Err(host_secrets::SecretsError::NotFound),

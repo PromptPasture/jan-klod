@@ -63,8 +63,7 @@ export const toolCallable = {
         if (typeof named === "string" && named.length > 0) who = named;
       }
     } catch {
-      // A malformed argument object is the caller's, and greeting the world
-      // is a better answer than a trap that the loop reports as a tool crash.
+      // Malformed args are the caller's; greet anyway rather than trap, which the loop reports as a tool crash.
     }
     return JSON.stringify({ greeting: `hello, ${who}, from TypeScript` });
   },

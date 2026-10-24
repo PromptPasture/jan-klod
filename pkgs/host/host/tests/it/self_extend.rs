@@ -1,31 +1,5 @@
-//! The `self-extend` distribution compiles, and the default one refuses.
-//!
-//! Slice 25a's acceptance, and the pair matters more than either half: a test
-//! that only showed a build succeeding would pass against a runtime with no
-//! sandbox at all, and a test that only showed a refusal would pass against
-//! one where nothing works.
-//!
-//! # What this asserts that the sandbox tests do not
-//!
-//! `sandbox_seatbelt.rs` and `sandbox_landlock.rs` prove the boundary holds
-//! for a single `sh -c`. This proves a *real toolchain* runs inside it —
-//! `cargo` spawning `rustc`, writing a target directory, using `TMPDIR`,
-//! redirecting to `/dev/null` somewhere in its own plumbing — from the
-//! execution block the distribution actually ships.
-//!
-//! # The execution block is read, not restated
-//!
-//! Both tests splice the `execution:` block out of the distribution's own
-//! `config.yaml`. A copy written here would keep passing after someone
-//! changed the shipped file, which is the failure this slice is most exposed
-//! to: the whole claim is about what a distribution is configured to permit.
-//!
-//! # What it deliberately does not build
-//!
-//! A dependency-free crate, not a real guest. The 47-crate vendored build was
-//! verified offline by hand for #192 and takes ~15 s; repeating it here would
-//! put that on every `make gate` to test the same boundary this does in about
-//! a second. What is under test is the sandbox, not `wit-bindgen`.
+//! The `self-extend` distribution compiles a real toolchain in its sandbox, and the default one refuses. Both halves are needed.
+//! The `execution:` block is spliced from the shipped config, so this tests what ships.
 
 use jk_agent::Runtime;
 
@@ -86,12 +60,7 @@ pub fn shipped_fleet() -> Option<(common::TempDir, serde_json::Value)> {
     Some((guard, metas))
 }
 
-/// The `execution:` block the distribution ships, spliced verbatim.
-///
-/// It is the last block in each of these files, so "from the line to the end"
-/// is the whole of it. Guarded rather than trusted: if the file is reordered
-/// this returns something that is not an execution block, and the assertion
-/// below says so instead of silently testing a config nobody ships.
+/// The shipped `execution:` block, spliced verbatim to the end of the file.
 pub fn shipped_execution_block(distribution: &str) -> String {
     let path = common::repo_root()
         .join("scripts/distributions")
@@ -112,14 +81,8 @@ pub fn shipped_execution_block(distribution: &str) -> String {
     block
 }
 
-/// The install step of the chain exists at all (#221).
-///
-/// `registry.install-tool` is what decides whether `ext-install` is in the
-/// fleet, and this distribution left it unset until now — so
-/// compile → install → load → call had no install step, in the one
-/// distribution that slice is about. Asserted against the **booted fleet**
-/// rather than the YAML, because a key read by nobody is what this failed
-/// as: the config said `registry:` and the model saw five tools.
+/// The install step exists in the booted fleet (#221). Checked against the fleet,
+/// not the YAML: a `registry:` key nobody reads is what this failed as.
 #[test]
 fn the_distribution_offers_the_agent_a_way_to_install_what_it_built() {
     let Some((_guard, tools)) = shipped_fleet() else {
@@ -135,8 +98,7 @@ fn the_distribution_offers_the_agent_a_way_to_install_what_it_built() {
         names.contains(&"ext-install"),
         "the agent cannot install what it compiles: {names:?}"
     );
-    // Its control: the fleet is the real one, not an empty list that would
-    // make any absence assertion pass.
+    // Control: the fleet is real, not an empty list.
     assert!(
         names.contains(&"shell"),
         "the compiling half of the chain is missing too: {names:?}"
@@ -159,13 +121,11 @@ fn seed_crate(workspace: &std::path::Path) {
     .expect("writes the source");
 }
 
-/// `cargo build`, as a tool call would make it. `--offline` because the
-/// distribution denies the network and a build that reached for it would hang
-/// rather than fail cleanly.
+/// `cargo build` as a tool call would make it. `--offline`: the distribution denies
+/// the network, so a build reaching for it would hang.
 const BUILD_ARGS: [&str; 4] = ["build", "--offline", "--target", "wasm32-wasip2"];
 
-/// A workspace under a path the test controls, seeded and returned with its
-/// guard. `None` when the toolchain is absent.
+/// A seeded workspace under a test-controlled path. `None` when cargo is absent.
 fn workspace(tag: &str) -> Option<(common::TempDir, std::path::PathBuf)> {
     if !common::tool_available("cargo") {
         eprintln!("skipping: cargo is not on PATH");
@@ -178,9 +138,7 @@ fn workspace(tag: &str) -> Option<(common::TempDir, std::path::PathBuf)> {
     Some((common::TempDir(dir), ws))
 }
 
-/// The `wasm32-wasip2` target is not checked for separately: `guests_staged`
-/// below is true only when `make extensions` has built the Rust guests, which
-/// needs that target. A machine that can reach this line has it.
+/// `wasm32-wasip2` is not checked separately: `make extensions` needs it to stage these.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "tool-proc-probe.wasm"];
 
 #[test]
@@ -214,12 +172,7 @@ fn the_self_extend_distribution_compiles_to_wasm_inside_the_jail() {
     );
 }
 
-/// Compiling did not come at the boundary's expense.
-///
-/// The test above is already load-bearing here — `require: true` means a
-/// platform that resolved no backend denies every command, so an artifact
-/// existing proves something confined the build. This says the confinement
-/// still refuses: same distribution, same runner, a write one directory up.
+/// The compiling distribution still refuses a write outside the workspace.
 #[test]
 fn the_self_extend_distribution_still_refuses_a_write_outside_the_workspace() {
     if !common::guests_staged(&GUESTS) {
@@ -248,12 +201,8 @@ fn the_self_extend_distribution_still_refuses_a_write_outside_the_workspace() {
     );
 }
 
-/// The same call, under the distribution that does not ship a shell.
-///
-/// This is what makes the test above say something about the *distribution*
-/// rather than about cargo. `coding`'s `execution.enabled` is `false`, so the
-/// runner denies before any sandbox question arises — which is the posture
-/// this slice was required not to change.
+/// The same call under `coding`, which has execution disabled. This makes the
+/// test above about the distribution, not cargo.
 #[test]
 fn the_coding_distribution_refuses_the_same_command() {
     if !common::guests_staged(&GUESTS) {
@@ -274,12 +223,7 @@ fn the_coding_distribution_refuses_the_same_command() {
         !ws.join("target").exists(),
         "no build happened: cargo never ran, so it created no target directory"
     );
-    // The model is told `execution-failed`, and that is all: the reason
-    // ("Execution is disabled, or the `cwd` escapes the workspace") stays in
-    // the host's log, because `tool-proc-probe` does not carry `ProcError`'s
-    // message into its `ToolError`. That is this probe's shape rather than
-    // the product's, so it is asserted as it is rather than wished otherwise
-    // — the claim here is that the call failed and nothing was built.
+    // The model sees only `execution-failed`: tool-proc-probe does not pass ProcError's message through.
     assert!(
         turn.produced("execution-failed"),
         "and the model was told the call failed rather than being handed an \

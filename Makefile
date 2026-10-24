@@ -2,48 +2,30 @@
 
 .DEFAULT_GOAL := all
 
-# Orchestrates two sub-makefiles: pkgs/host/Makefile (the Rust host workspace) and
-# pkgs/extensions/Makefile (guest components, staged in ext/). Also owns the
-# root WIT contracts and the integration targets spanning both subtrees.
+# Orchestrates pkgs/host/Makefile and pkgs/extensions/Makefile, and owns the root WIT
+# contracts and the integration targets spanning both subtrees.
 
-# Pinned tool versions, shared with pkgs/extensions/Makefile, which includes the
-# same file. See versions.mk for why it is a file and not a block here.
+# Pinned tool versions; see versions.mk.
 include versions.mk
 
-# The host cargo workspace is rooted here, at the repo root (Phase 32). HOST_MK
-# is where its sub-makefile and the crates live.
+# The host cargo workspace is rooted at the repo root; its crates live under HOST_MK.
 HOST_WS := .
 HOST_MK := pkgs/host
 EXT := pkgs/extensions
 SUPERVISOR := pkgs/host/supervisor
 
-# EXT_DIR mirrors the extensions sub-makefile's staging dir.
 CONFIG := $(abspath config.yaml)
 EXT_DIR := $(abspath ext)
 
-# The shipped config.yaml's storage.cache-dir default (#60): Wasmtime's
-# compiled-component cache, beside config.yaml unless an operator overrides
-# the key. A path this Makefile assumes rather than reads out of the YAML —
-# the same convention CONFIG/EXT_DIR already are.
+# Wasmtime's compiled-component cache. Assumed to match config.yaml's default
+# storage.cache-dir (#60), not read from it.
 CACHE_DIR := $(abspath wasmtime-cache)
 
-# Colour, set here so a local gate runs in CI's environment rather than its own.
-#
-# `.github/workflows/ci.yml` sets `CARGO_TERM_COLOR: always`, and cargo and
-# nextest honour it even when stdout is a pipe. Locally nothing set it, so the
-# default `auto` gave *uncoloured* output into exactly the pipes these Makefiles
-# parse — and `gate`'s zero-test guard, which counts lines of `nextest list`,
-# matched 172 locally and 0 in CI (#123). `.github/hooks/pre-push` therefore
-# passed on every push that CI then failed.
-#
-# The hook already says the gate sequence lives here "so this hook cannot drift
-# from CI". The environment it runs in has to live here for the same reason,
-# or the sequence matching proves nothing. `?=` so a developer who wants plain
-# output can still ask: `CARGO_TERM_COLOR=never make gate`.
+# Match CI's CARGO_TERM_COLOR (ci.yml): uncoloured pipe output made the gate's zero-test
+# guard count 0 in CI (#123). `?=` lets a developer opt out: CARGO_TERM_COLOR=never make gate.
 CARGO_TERM_COLOR ?= always
 export CARGO_TERM_COLOR
 
-# List the common targets.
 help:
 	@echo "Targets:"
 	@echo "  all         build the host workspace + Rust guests (default)"
@@ -80,23 +62,14 @@ help:
 	@echo "  install-hooks  configure git to use .github/hooks/"
 	@echo "  clean       remove build artifacts"
 
-# Root-level WIT contracts are language-neutral, so they stay a root concern.
-#
-# Two checks, and the order matters: validate the contracts first, then ask
-# whether an edit to them bumped the package version. A warning about the
-# version of a file that does not parse would be noise on top of a real error.
-# The version check is advisory (always exits 0) until the interface freeze.
+# Validate first: a version warning about a file that does not parse is noise.
+# The version check is advisory (exit 0) until the interface freeze.
 wit:
 	wasm-tools component wit wit/
 	sh scripts/wit-version-check.sh
 
-# wit/spike/deps (wasi:cli & co) is gitignored and only ever populated by `make
-# setup` (below) or `make -C pkgs/extensions spike-deps` — nothing on the plain
-# build path fetches it. Without this check, a fresh clone that skipped setup
-# hits `bindgen!`'s compile-time WIT resolution instead: "failed to resolve
-# directory while parsing WIT for path .../wit/spike", which names no fix.
-# Checked, not fetched — an actual `wkg wit fetch` here would put a network
-# call on `gate`, which its own comment calls the offline suite.
+# wit/spike/deps is gitignored and only `make setup` fills it. Without this check, bindgen!
+# fails with an error that names no fix. Checked, not fetched: a fetch would put the network on `gate`.
 check-spike-deps:
 	@test -d wit/spike/deps || { \
 	  echo "error: wit/spike/deps is missing (gitignored, not from git checkout)." >&2; \
@@ -107,36 +80,19 @@ check-spike-deps:
 
 all: core extensions
 
-# --- Build (delegated to the sub-makefiles) ---
 core:
 	$(MAKE) -C $(HOST_MK) build
 
 extensions:
 	$(MAKE) -C $(EXT) all
 
-# Alias: `ext` is the name every skip notice tells developers to run, but
-# `ext/` is also a directory, so plain make no-ops on it without .PHONY.
+# Alias for `extensions`; listed in .PHONY because ext/ is also a directory.
 ext: extensions
 
-# Scaffold a new extension, registered and ready to build.
-#
-#   make ext-new NAME=tool-hello KIND=tool
-#   make ext-new NAME=tool-hello KIND=tool LANG=ts
-#
-# KIND ∈ provider | tool | interceptor | registry-skills | registry-mcp. Not
-# `agent`: there is no agent world in wit/ and `Runtime::boot` has no arm for
-# one, so a generated agent crate could compile against nothing and never load
-# (#111).
-#
-# LANG ∈ rust (default) | ts | py. Both non-Rust paths cover tool and
-# interceptor only, and their builds need a toolchain `make setup` does not
-# install — `jco` (326 MB) or `componentize-py` (50 MB), for the reasons in
-# versions.mk (#187, #188).
-#
-# `LANG` is also the locale variable, and make imports the environment, so a
-# bare `$(LANG)` reads `en_US.UTF-8` on most machines. Only a command-line
-# `LANG=` is the language axis; the inherited locale is left alone, both here
-# and in every recipe that runs a locale-sensitive tool.
+# Scaffold: make ext-new NAME=tool-hello KIND=tool LANG=ts. KIND is provider | tool |
+# interceptor | registry-skills | registry-mcp (no `agent`: nothing in wit/ or Runtime::boot can load one, #111).
+# LANG ts|py cover tool and interceptor only; they need jco or componentize-py, which `make setup` skips.
+# Make imports the environment's LANG (the locale), so only a command-line LANG= counts.
 EXT_LANG := $(if $(filter command line,$(origin LANG)),$(LANG),rust)
 EXT_NEW_USAGE := usage: make ext-new NAME=<name> KIND=<kind> [LANG=rust|ts|py]
 ext-new:
@@ -145,72 +101,44 @@ ext-new:
 	sh scripts/ext-new.sh "$(NAME)" "$(KIND)" "$(EXT_LANG)"
 
 
-# Host-side unit tests: the core workspace plus the guests' native tests.
 test: test-core test-guests
 
 test-core:
 	$(MAKE) -C $(HOST_MK) test
 
-# The legs `gate` doesn't cover: guest native tests + the Go supervisor.
+# Not covered by `gate`: guest native tests and the Go supervisor.
 test-guests:
 	$(MAKE) -C $(EXT) test
 	cd $(SUPERVISOR) && go vet ./... && go test ./...
 
-# Markdown lint (#234), rules in .markdownlint.yaml. Tracked files only:
-# a glob would also walk generated or vendored trees such as node_modules/.
-# Pinned like every other npm tool here, so a release cannot change the verdict.
-# The pre-commit hook runs it when a commit stages a .md file; ci.yml runs it
-# in the job that already sets up Node.
+# Tracked files only, since a glob would walk node_modules. Pinned so a release cannot change the verdict.
 lint-docs:
 	git ls-files -z '*.md' | xargs -0 npx --yes markdownlint-cli2@0.23.3
 
-# The guests are their own cargo workspace too, and declare the same strict
-# lint policy — see `pkgs/extensions/Makefile` for why this runs twice.
+# Guests are a separate cargo workspace with the same strict lint policy.
 clippy-guests:
 	$(MAKE) -C $(EXT) clippy
 
-# Cargo cannot share [workspace.lints] across the two workspaces, so this is
-# what keeps the policy one policy (#275). Cheap: no build, no toolchain.
+# Cargo cannot share [workspace.lints] across the two workspaces; this keeps the policy one (#275).
 lints-drift:
 	sh scripts/lints-drift.sh
 
-# --- Registry index (Slice 16d-1) ---
-#
-# `index.json`: what a registry can say about each staged component *before*
-# anyone downloads it — above all the capabilities it asks the host for, which
-# is what the manifest exists to make knowable in advance.
-#
-# Not committed, unlike this repository's other generated artifacts. It
-# describes `ext/`, and `ext/*.wasm` is gitignored and rebuilt per clone, so a
-# committed index would carry digests that differ per machine. That is also why
-# `registry-index-drift` checks reproducibility rather than diffing against a
-# committed file — the script says the rest.
-#
-# Output beside the release archives, because that is what the index describes:
-# the individual `.wasm` and `.manifest.toml` files a release publishes at plain
-# paths, which `ext install` fetches one by one and verifies per file.
+# index.json is not committed: it describes gitignored ext/ and carries per-machine digests.
+# Written beside the release archives, since it describes the files published there.
 REGISTRY_INDEX ?= $(BUNDLE_OUT)/index.json
 
-# Where the files the index names will actually be served from. The default is
-# this repository's GitHub Pages path; publishing the first-party index is
-# 16d-3's slice, and it overrides this with wherever that release puts the
-# files. A base carrying a query or fragment is refused by the generator — `ext
-# install` derives the manifest and signature URLs as siblings, and a relative
-# reference drops a query.
+# Where the indexed files are served from. Must carry no query or fragment: `ext install`
+# derives sibling URLs from it.
 REGISTRY_URL ?= https://promptpasture.github.io/jan-klod/ext
 
-# Who published this index. A manifest names no author — it is generated from a
-# component's own imports — so this is the one field that is stated rather than
-# derived, and stating it once here beats inventing a per-component answer.
+# A manifest names no author, so the publisher is stated once here rather than derived.
 REGISTRY_AUTHOR ?= PromptPasture
 
 registry-index: extensions
 	sh scripts/registry-index.sh $(EXT_DIR) $(REGISTRY_URL) $(REGISTRY_AUTHOR) $(REGISTRY_INDEX)
 
-# Called by name from `ci.yml`, which is what makes it a gate rather than a
-# target somebody could type (#130). JK_REQUIRE_GUESTS turns "no manifests
-# staged, nothing to check" from a skip into a failure, the same way `gate` and
-# `gate-commit` do.
+# Called by name from ci.yml so it is a gate, not a target someone might skip (#130).
+# JK_REQUIRE_GUESTS makes an empty ext/ a failure, as `gate` does.
 registry-index-drift: export JK_REQUIRE_GUESTS = 1
 registry-index-drift: extensions
 	sh scripts/registry-index-drift.sh $(EXT_DIR) $(REGISTRY_URL) $(REGISTRY_AUTHOR)
@@ -219,50 +147,26 @@ registry-index-drift: extensions
 supervisor:
 	cd $(SUPERVISOR) && go build ./...
 
-# Self-contained release bundle: core binary + staged guests + config + README,
-# as dist/jan-klod-<version>-<os>-<arch>.tar.gz.
+# Release bundle: core binary, staged guests, config, README, as dist/jan-klod-<version>-<os>-<arch>.tar.gz.
 BUNDLE_OUT ?= $(abspath dist)
 
-# `make bundle DIST=coding` builds from a named distribution — a guest list and
-# a config under scripts/distributions/. With no DIST this keeps doing exactly
-# what it did before: the repository's own config.yaml and the whole of ext/.
-# That default is asserted by pkgs/host/host/tests/it/bundle_distributions.rs rather than
-# left as an intention.
+# DIST=<name> builds from scripts/distributions/<name>. Unset, the repo's config.yaml and all
+# of ext/ are bundled; bundle_distributions.rs asserts that default.
 DIST ?=
 
 bundle: extensions
 	cd $(HOST_WS) && cargo build --release -p jk-host -p jk-tui
 	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT) "$(abspath scripts/distributions/$(DIST)/skills)"; 	else 	  sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
 
-# Lint the host workspace, then say what this platform could not lint.
-#
-# **A green `clippy` here is not a green clippy in CI, and the difference is
-# invisible without saying so.** A module behind `#![cfg(target_os = "...")]`
-# for another platform is never compiled, so clippy never reads it — not its
-# code and not its doc comments. That is how `main` went red on a
-# `doc_markdown` error in `sandbox_landlock.rs` while every local gate stayed
-# green (#207).
-#
-# It is printed rather than commented because a comment in a Makefile is read
-# once, by whoever edits the Makefile. Cross-linting instead would need a C
-# cross-toolchain for a transitive build script (#212 measured that), which
-# is a large install to catch a class of error CI catches for free — so the
-# answer is "CI covers these", said out loud on every run.
+# Lint the host workspace, then print what this platform cannot lint. Code behind another
+# OS's #![cfg(...)] is never compiled here, so a green local clippy can still fail in CI (#207).
+# Cross-linting needs a C toolchain (#212), so CI covers that gap.
 clippy: check-spike-deps
 	$(MAKE) -C $(HOST_MK) clippy
 	@sh scripts/unlinted-elsewhere.sh $(HOST_MK) pkgs/clients/tui
 
-# --- Supply-chain gates (CI enforces all of these) ---
-
-# Verify each Cargo.lock is current against its manifest — `--locked` fails
-# rather than silently re-resolving, so a stale lock cannot slip an
-# audited/denied tree that differs from the one that actually builds. Two
-# workspaces: the host workspace and the guest extensions workspace (one
-# shared Cargo.lock across all guests, so a new guest added to
-# pkgs/extensions/Cargo.toml's members is covered without editing this list).
-# This used to be a loop inlined in both `pre-push` and `ci.yml`'s
-# supply-chain job — the same commands typed twice, free to drift the way
-# the rest of #72 was about. Named here, both now call it.
+# --locked fails on a stale Cargo.lock rather than re-resolving, so the audited tree is
+# the tree that builds. Covers both workspaces.
 lockfile:
 	@for m in $(HOST_WS)/Cargo.toml $(EXT)/Cargo.toml; do \
 	  cargo metadata --locked --format-version 1 --manifest-path "$$m" >/dev/null \
@@ -276,20 +180,8 @@ audit deny:
 	$(MAKE) -C $(EXT) $@
 
 # CycloneDX SBOM for all Rust crates. Install once: cargo install cargo-cyclonedx
-#
 # cargo-cyclonedx writes one document beside each member's manifest; the
-# results are then merged into one document by `jaq` (#208).
-#
-# **One** glob, `src/*/*.cdx.json`, and that is not a shortcut: every crate in
-# the workspace — the seven members (`jk-session` joined in Phase 21b,
-# `jk-wasm` in 21c) — is a direct child of `src/`, so one
-# level of wildcard reaches all seven and nothing else.
-# It has to be exactly one level. `src/**/...` is what was here before, and in
-# `sh` (no `globstar`) `**` is just `*`, so it was never recursive; when the
-# members moved out from under `pkgs/host/core/` it silently stopped matching four of
-# the five and the SBOM lost them. A glob that quietly describes less than it
-# claims is the failure this repository keeps paying for, so the count is
-# asserted rather than trusted.
+# results are merged by jaq (#208).
 # One glob per group directory: every package that writes a document beside its manifest.
 SBOM_DOCS := $(HOST_MK)/*/*.cdx.json pkgs/clients/*/*.cdx.json
 sbom:
@@ -302,53 +194,15 @@ sbom:
 	  jaq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
 	  > sbom.cdx.json
 
-# The npm leg (#120). A named target rather than a line inlined below, and that
-# is not a style choice: the inlined supervisor line further down has never run
-# on a CI runner, because CI calls the legs by name and never calls
-# `supply-chain` itself (#130). A gate that does not run looks exactly like a
-# gate that passes.
-#
-# Advisories only. `npm audit` is the analogue of `cargo audit`; there is no
-# analogue here of `cargo deny`'s licence and source policy, so pkgs/extensions'
-# npm dependencies are checked for known vulnerabilities and for nothing else.
-#
-# `npm ci --dry-run` first, and it is load-bearing rather than belt-and-braces:
-# `npm audit` reads package-lock.json and **does not notice** a package.json
-# naming a dependency the lockfile has never seen — it reports "found 0
-# vulnerabilities" and exits 0 while a new dependency goes entirely unscanned.
-# This is what `make lockfile` buys for Cargo: the audited tree has to be the
-# tree that builds. `--dry-run` because resolving the tree is the whole point;
-# installing it is not, and `npm audit` needs no node_modules.
-#
-# DO NOT add --omit=dev or --production here. Every one of pkgs/extensions' 27
-# npm packages is a devDependency (esbuild and its per-platform binaries; there
-# are no runtime dependencies at all), so omitting them makes this command scan an empty set,
-# report "found 0 vulnerabilities" and exit 0 forever. The usual advice — audit
-# what ships, skip the build tools — inverts this gate's entire purpose: a
-# compromised build-time package runs with the privileges of whoever builds.
+# npm advisories only: npm audit has no licence or source policy like cargo deny.
+# Run `npm ci --dry-run` first: npm audit reads package-lock.json and silently passes on a
+# package.json dependency the lock lacks. Do not add --omit=dev: every pkgs/extensions npm
+# package is a devDependency, so the audit would scan nothing and still pass.
 npm-supply-chain:
 	cd $(EXT) && npm ci --dry-run && npm audit
 
-# The supervisor's own Go leg (#130). A named target, and the name is the whole
-# fix: this was the last line of `supply-chain` below, and CI calls the legs by
-# name and never calls `supply-chain` itself — so the vulnerability scan for the
-# repository's only production Go binary ran exactly when somebody typed
-# `make supply-chain` by hand. Inlining made it invisible to the workflow and
-# nothing failed, because a gate that does not run looks exactly like a gate
-# that passes. Extracting it without also calling it by name in `ci.yml` would
-# have reproduced the same bug in tidier form, which is why the two happen
-# together.
-#
-# `go run …@$(GOVULNCHECK_VERSION)` rather than a `govulncheck` off `PATH`,
-# matching pkgs/extensions' `go-supply-chain`: no runner has govulncheck
-# installed, and the neighbouring leg already resolves the tool this way. That
-# answered #131's second question — the supervisor does use the same call — and
-# #131 then closed the first one by pinning the version both sites share, in
-# versions.mk.
-#
-# `pkgs/host/supervisor` has no `go.sum`: it is a dependency-free binary, so
-# `go mod verify` passes trivially and the real work here is govulncheck's
-# **standard library** scan, which is what a Go toolchain CVE would land in.
+# Go supervisor: `go run ...@$(GOVULNCHECK_VERSION)`, since no runner has govulncheck on PATH.
+# No go.sum (dependency-free binary), so the real check is govulncheck's stdlib scan.
 supervisor-supply-chain: export GOFLAGS = -mod=readonly
 supervisor-supply-chain:
 	cd $(SUPERVISOR) && go mod verify && go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
@@ -358,22 +212,9 @@ supervisor-supply-chain:
 supply-chain: deny audit sbom npm-supply-chain supervisor-supply-chain
 	$(MAKE) -C $(EXT) go-supply-chain
 
-# --- Integration (host + staged extensions; spans both subtrees) ---
-
-# Build guests, then verify each through the Component Model, offline (canned
-# host-http, no api key, no network):
-#   component_harness — each guest's WIT interface + lifecycle, in isolation
-#   agent_loop         — the config-driven agent loop (greeting + multi-step)
-#   persistence        — a transcript survives a Runtime restart (SQLite store)
-#   api_rest           — a turn driven over the host-side REST surface
-#   telegram           — a canned inbound message drives a turn + reply
-#   host_fs            — guest read/write through host-fs; escapes denied
-#   host_process       — guest command through host-process; denied when disabled
-#   tool_fleet         — ToolFleet dispatches a call to the matching tool-* guest
-#   tool_wiring        — build_agent wires an enabled tool.* into the fleet
-# These are modules of one test binary (pkgs/host/host/tests/it/main.rs), run by
-# --test name filter. A typo'd filter can still match other modules and exit 0,
-# so each name is checked against the filesystem before the run.
+# Build guests, then run the named integration modules offline (canned host-http, no api key).
+# These are modules of one test binary, so a typo'd filter could match another and exit 0;
+# each name is checked on disk first.
 HARNESS_MODULES := component_harness agent_loop persistence api_rest rpc telegram \
                    host_fs host_process tool_fleet tool_wiring guardrails client_surface contributions_rest
 harness: export JK_REQUIRE_GUESTS = 1
@@ -384,53 +225,15 @@ harness: check-spike-deps extensions
 	done
 	cd $(HOST_WS) && cargo nextest run -p jk-host --features jk-host/integration $(addsuffix ::,$(HARNESS_MODULES))
 
-# Exit gate: the full offline integration suite, nothing allowed to skip.
-# JK_REQUIRE_GUESTS turns a silently-skipped test into a failure.
-#
-# #79 verified this gate's test count is unchanged by the feature gate below:
-# 504 tests run, 0 skipped (160 of them jk-host::it, the rest unit
-# tests across the workspace) under JK_REQUIRE_GUESTS=1, same as immediately
-# before the `integration` feature landed. That absolute count will drift as
-# the suite grows — it is not itself a gate — but a *drop to zero* is exactly
-# what the guard below exists to catch.
-#
-# nextest over `cargo test`: (1) one process per test — some modules set
-# conflicting process-global env vars, which race under in-binary threading;
-# (2) nextest exits nonzero on zero tests matched, `cargo test` exits 0.
-# --no-fail-fast reports every failure in the run, not just the first.
-# Doctests run separately since nextest doesn't run them.
-#
-# --features jk-host/integration cannot be dropped: since #79 the `it`
-# target (tests/it/, the whole integration suite) carries `required-features =
-# ["integration"]`, so without this flag cargo simply does not build it — no
-# wasmtime link, no test, and critically no *failure* either. `cargo nextest
-# run --workspace` without the feature still finds every other crate's unit
-# tests, runs them, and exits 0, having never touched integration coverage. In
-# the same spirit as the note above about not naming individual test files:
-# dropping this flag is a second, quieter way for the whole suite to vanish
-# that JK_REQUIRE_GUESTS cannot catch, since the tests are never compiled to
-# check anything. The guard below is what actually catches it.
-#
-# Positive guard, not a convention: fail the gate if the integration suite
-# resolved to zero tests, rather than trusting that the feature flag above is
-# never dropped or mistyped. `cargo nextest list` is cheap (no run, just
-# compiles-and-enumerates) and prints one line per test as
-# "<binary> <test-name>"; the `it` binary's lines start with
-# "jk-host::it ".
-#
-# `--color never` is what makes that last sentence true, and it is not
-# cosmetic. `.github/workflows/ci.yml` sets `CARGO_TERM_COLOR: always`, which
-# nextest honours even when stdout is a pipe: every line then *begins* with an
-# SGR escape, the `^` anchor below matches nothing, and the guard reports zero
-# tests for a suite that compiled all of them. It did exactly that, and held
-# `main` red for seven runs (#123) — measured on one tree: 172 matches
-# uncoloured, 0 coloured, 172 with this flag. Nothing local sets the variable,
-# so `.github/hooks/pre-push` ran the same guard green every time.
-#
-# The list also gets its own line now. Folded into the `$(…)` with
-# `2>/dev/null`, a compile failure and a zero count were one outcome — "exit 1"
-# with no output — and the redirect discarded the error that said which. Let
-# cargo fail on its own exit code, then count from the file.
+# Exit gate: the full offline integration suite. JK_REQUIRE_GUESTS turns a skipped test into a failure.
+# nextest, not `cargo test`: one process per test, and it fails when zero tests match.
+# --no-fail-fast reports every failure, not just the first.
+# --features jk-host/integration is required: the `it` target is behind required-features, so
+# without it cargo builds no integration tests and reports success. The guard below catches that.
+# Guard: fail if the integration suite lists zero tests. Lines are "<binary> <name>".
+# --color never is required: CI's CARGO_TERM_COLOR=always puts an escape at each line start,
+# so the ^ anchor matches nothing and the guard reports zero (#123).
+# The list runs on its own line, so a compile failure is not mistaken for a zero count.
 GATE_LIST := $(HOST_WS)/target/gate-tests.txt
 
 gate: export JK_REQUIRE_GUESTS = 1
@@ -448,29 +251,11 @@ gate: check-spike-deps extensions
 	cd $(HOST_WS) && cargo nextest run --workspace --features jk-host/integration --no-fail-fast
 	cd $(HOST_WS) && cargo test --doc --workspace
 
-# --- Hook-facing gates (also called directly by .github/workflows/ci.yml) ---
-#
-# `.github/hooks/pre-commit` and `.github/hooks/pre-push` used to carry these
-# two sequences as bash: each hook a hand-ordered list of `make` calls that
-# only the hook itself could run and that `ci.yml` had no way to reuse — two
-# independent copies of "what a commit/push must pass," free to drift the way
-# #65 did (`pre-push` ran the host workspace suite twice, and nothing but
-# reading the bash would have caught it). Naming them here means a developer
-# can run either by hand, and the hook and `ci.yml` share one place these
-# steps are listed instead of restating them.
-#
-# The staged-diff skip check that lets a doc-only commit skip `pre-commit`
-# instantly stays in the hook itself, not here: it reads the git index
-# (`git diff --cached --name-only`), and a target has no notion of a staged
-# diff to read.
+# Gates called by both .github/hooks and ci.yml, so each sequence is listed once.
+# The staged-diff skip check stays in the hook: a target has no notion of the git index.
 
-# The pre-commit gate: both `cargo fmt --check` invocations, then a rebuilt
-# (not just removed) ext/ — an absent ext/ makes
-# scripts/manifests-selftest.sh (run by `make -C pkgs/extensions test`, part of
-# `make test` below) skip instead of checking anything, so `rm -rf` alone
-# would let a missing manifest report green. JK_REQUIRE_GUESTS=1 is what turns
-# a skipped self-test into a failure rather than trusting the rebuild alone to
-# keep it honest, the same reasoning `gate`'s own export above uses.
+# Rebuild ext/ rather than leave it missing: manifests-selftest.sh skips when ext/ is absent,
+# and JK_REQUIRE_GUESTS=1 turns that skip into a failure.
 gate-commit: export JK_REQUIRE_GUESTS = 1
 gate-commit:
 	cargo fmt --manifest-path $(HOST_WS)/Cargo.toml --all -- --check
@@ -480,25 +265,11 @@ gate-commit:
 	$(MAKE) -C $(HOST_MK) check
 	$(MAKE) test
 
-# The pre-push gate: a push pays the full gate unconditionally, no skip check.
-# `spike-deps` here is the *fetch*, not the `check-spike-deps` prerequisite
-# `clippy` and `gate` already carry below — that target only verifies
-# wit/spike/deps exists, so a clone that skipped `make setup` still needs this
-# explicit fetch before clippy/gate can compile against it. Guests are
-# rebuilt for the same reason `gate-commit` rebuilds them. `test-guests`, not
-# `test`, runs here: `gate` below is a strict superset of the host workspace's
-# unit tests once --features jk-host/integration is added, so running
-# `test-core` a second time here would just repeat it for no extra coverage.
-#
-# Both clippys run here and neither runs in `gate`, which stays inside the
-# host workspace. `clippy-guests` came with #205: a strict lint policy that
-# only CI runs is a policy a developer meets after pushing.
-#
-# **This does not make a green push imply a green CI**, and it is worth
-# knowing why. `pkgs/host/host/tests/it/sandbox_landlock.rs` is
-# `#![cfg(target_os = "linux")]`, so on macOS clippy never compiles it and
-# never reads it; CI runs Linux and does. No target added here closes that,
-# because the gap is the platform rather than the target list (#207).
+# A push runs the full gate unconditionally. Both clippys run here, not in `gate`, which stays host-only.
+# spike-deps here is the fetch: check-spike-deps (clippy, gate) only verifies it exists.
+# test-guests, not test: `gate` already covers the host unit tests.
+# A green push does not imply a green CI: sandbox_landlock.rs is cfg(target_os = "linux"),
+# so macOS clippy never reads it (#207).
 gate-push: export JK_REQUIRE_GUESTS = 1
 gate-push:
 	$(MAKE) -C $(EXT) spike-deps
@@ -516,19 +287,16 @@ gate-push:
 	$(MAKE) -C $(EXT) go-supply-chain
 	$(MAKE) sbom
 
-# Boot the real core against config.yaml: resolve extensions against ext/,
-# compile present components, run their lifecycle, print the boot plan.
+# Boot the core against config.yaml and ext/.
 run:
 	cd $(HOST_WS) && cargo run --quiet -p jk-host -- $(CONFIG) $(EXT_DIR)
 
-# Serve the loop over the host-side REST surface. Uses live host-http, so the
-# enabled provider needs its api-key env. Override BIND=host:port.
+# Serve the agent loop over REST; needs the provider's api-key env. Override BIND=host:port.
 BIND ?= 127.0.0.1:8787
 serve:
 	cd $(HOST_WS) && cargo run --quiet -p jk-host -- serve $(CONFIG) $(EXT_DIR) $(BIND)
 
-# TUI client — connects to the gateway (auto-starting it if not running).
-# Override ADDR=host:port and SESSION=id.
+# TUI client; connects to the gateway, auto-starting it. Override ADDR and SESSION.
 ADDR ?= 127.0.0.1:8787
 SESSION ?= cli
 chat:
@@ -538,29 +306,20 @@ chat:
 chat-telegram:
 	cd $(HOST_WS) && cargo run --quiet -p jk-host -- telegram $(CONFIG) $(EXT_DIR)
 
-# Drives a provider's llm-provider.complete path against a live endpoint.
-# Needs the provider's api-key env (e.g. OPENAI_API_KEY) — real, billed call.
+# Live provider completion: a real, billed call; needs the provider's api-key env.
 probe:
 	cd $(HOST_WS) && cargo run --quiet -p jk-host --features examples --example provider_probe -- $(CONFIG) $(EXT_DIR)
 
-# Resolve config.yaml and print the extension plan (each instance -> wasm).
 config:
 	cd $(HOST_WS) && cargo run --quiet -p jk-config --features examples --example dump -- $(CONFIG)
 
-# One-time developer setup: cargo supply-chain plugins, git hooks, and the WIT
-# deps that only `wkg` can fetch.
-# The crate the self-extension chain test compiles (#221). Online and once:
-# it locks and fetches so the *jailed* build, which has no network and may not
-# write outside its workspace, can run `--offline --locked` against the shared
-# cargo cache. About 1 MB of `.crate` files rather than a 34 MB vendor tree —
-# the reasoning, and the numbers, are in the script.
-#
-# Not part of `all`, `gate` or `setup`: it reaches the network, and the test
-# that wants it skips loudly when it is absent.
+# Fetches the self-extension test's crate fixture (#221). Online, run once: the jailed test build
+# has no network, so it runs --offline --locked against the cache this fills. Not part of all, gate or setup.
 self-extend-fixture:
 	sh scripts/self-extend-fixture.sh
 
 
+# One-time developer setup: cargo plugins, git hooks, and the WIT deps only wkg can fetch.
 setup:
 	cargo install cargo-audit --version $(CARGO_AUDIT_VERSION)
 	cargo install cargo-cyclonedx --version $(CARGO_CYCLONEDX_VERSION)

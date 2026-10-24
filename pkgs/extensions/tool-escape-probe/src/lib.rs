@@ -1,16 +1,7 @@
 //! `tool-escape-probe` — a guest that misbehaves intentionally.
 //!
-//! Cooperative guests ask for needed capabilities and stay inside them (poor sandbox test).
-//! This one skips checks: opens TCP sockets directly (not via `host-http`), reads stdin,
-//! and opens paths with `std::fs` (not `host-fs`). Uses only ordinary Rust `std`.
-//!
-//! Each attempt is reported; `sandbox_boundary.rs` asserts they're always refused.
-//! Three properties depend on dependencies' *defaults*, not runtime config:
-//! - `wasi:sockets` in every linker; refused via `SocketAddrCheck::default()`
-//! - `wasi:filesystem` wired but empty (no preopens)
-//! - stdin inherited (guest could read the terminal)
-//!
-//! Test instrument only, enabled by tests.
+//! Deliberately misbehaves (raw sockets, stdin, env, `std::fs`); `sandbox_boundary.rs` asserts every attempt is refused.
+//! Relies on dependency defaults, not runtime config: socket checks, empty preopens, and inherited stdin.
 
 #[cfg(target_arch = "wasm32")]
 mod component {
@@ -60,7 +51,6 @@ mod component {
         }
     }
 
-    /// Try to connect straight to `addr`, bypassing `host-http` entirely.
     fn try_socket(addr: &str) -> String {
         use std::io::Write;
         match std::net::TcpStream::connect(addr) {
@@ -72,23 +62,18 @@ mod component {
         }
     }
 
-    /// Try to read the host process's standard input.
     fn try_stdin() -> String {
         use std::io::Read;
         let mut buf = String::new();
         match std::io::stdin().read_to_string(&mut buf) {
-            // An empty read is not a refusal, but it is also not the terminal:
-            // the test distinguishes them by feeding stdin real bytes.
+            // An empty read is neither a refusal nor the terminal; the test feeds real bytes to tell.
             Ok(n) => format!("READ {n} bytes: {buf}"),
             Err(err) => format!("refused: {err}"),
         }
     }
 
-    /// Try to read the host's environment, where the credentials are.
-    ///
-    /// Closed only because `WasiCtxBuilder::inherit_env` is not called — a
-    /// crate default, exactly like the socket check. If it ever flips, every
-    /// component reads the operator's provider key with one line of `std`.
+    /// Read the host's environment, where the credentials are.
+    /// Closed only because `WasiCtxBuilder::inherit_env` is not called. If that flips, every guest reads provider keys.
     fn try_env() -> String {
         let named: Vec<String> = [
             "OPENAI_API_KEY",
@@ -114,8 +99,7 @@ mod component {
     /// Try to read the host's command line, which names its config and bind address.
     fn try_args() -> String {
         let args: Vec<String> = std::env::args().collect();
-        // A guest always sees *something* here — wasi gives argv[0] — so an empty
-        // list is not the test; the host's real arguments appearing is.
+        // wasi always supplies argv[0], so the test is the host's real arguments appearing, not emptiness.
         format!("ARGS {args:?}")
     }
 
@@ -159,8 +143,7 @@ mod component {
                 .get("target")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
-            // A refusal is a *result*, not a trap: the test needs to read what the
-            // guest saw, and a trapped component tells it nothing.
+            // Refusals are results, not traps: a trapped component tells the test nothing.
             Ok(match op {
                 "socket" => try_socket(target),
                 "stdin" => try_stdin(),

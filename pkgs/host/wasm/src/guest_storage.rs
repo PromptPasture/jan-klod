@@ -1,41 +1,15 @@
-//! `host-storage`, once, for every world that imports it.
+//! `host-storage` logic shared by every world that imports it. `bindgen!` generates a distinct
 //!
-//! This was private to [`crate::interceptor_host`] until a tool needed it too
-//! (#215). It is lifted rather than copied for a reason specific to
-//! `bindgen!`: each world generates its **own** `host-storage` trait and its
-//! own `Entry` and `store-error` types, identical in shape and distinct to
-//! the compiler. So the logic cannot live under the trait if two worlds are
-//! to share it — it lives here over plain types, and each host writes a thin
-//! `impl` that converts.
-//!
-//! What that leaves in each host is mechanical: call the method, map the
-//! result. What lives here is the part worth having in one place — the
-//! namespace scoping that keeps one guest out of another's data.
-//!
-//! # The seam under it
-//!
-//! Durable storage is reached through [`Entries`], a trait, rather than
-//! through the session store directly (#180). The capability lives with the
-//! component host; the SQLite store lives in `jk-session`, below it; and
-//! neither should name the other. So this side declares what it needs — four
-//! calls over a [`Row`] — and the crate that owns a session supplies
-//! something that does them.
-//!
-//! The trait is written here, with the capability, rather than beside the
-//! store: a seam takes the shape of whichever side declares it, and the side
-//! that knows what is *needed* is this one. Written the other way round it
-//! would be the store's whole API with a `dyn` in front of it.
+//! `host-storage` trait and types per world, so the namespace scoping lives here over plain types
+//! and each host writes a thin converting `impl`. Durable storage is reached via the [`Entries`] seam
+//! (#180), declared here so neither this crate nor `jk-session` names the other.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// One row as a backing store holds it: the scoped namespace it was written
-/// under, and no presentation applied.
+/// One row as a backing store holds it: the scoped namespace, no presentation applied.
 ///
-/// Deliberately the same shape as a session store's own row, and deliberately
-/// not that type. Naming it would be the dependency this seam exists to
-/// avoid, and the duplication is five fields that have not changed since the
-/// store was written.
+/// Deliberately not the session store's own row type, to avoid the dependency the seam avoids.
 pub struct Row {
     /// The namespace as stored — scoped, not the one the guest asked for.
     pub namespace: String,
@@ -51,19 +25,9 @@ pub struct Row {
 
 /// What `host-storage` needs from a durable store, and nothing more.
 ///
-/// Four calls. The store behind them has many more — an event log, session
-/// listing, fork points — and none of that is this capability's business: a
-/// guest that can reach `host-storage` must not thereby be able to read a
-/// transcript.
-///
-/// `&self` throughout, because the implementations share one store between
-/// every guest in a fleet and do their own locking. An `&mut self` here would
-/// make that sharing impossible to express.
-///
-/// `Send + Sync` because a `wasmtime::Store`'s data must be, and this ends up
-/// inside one. Not a new constraint — the handle this replaces was an
-/// `Arc<Mutex<_>>`, which is both — but it has to be said out loud now that
-/// the type is erased.
+/// The store has far more (event log, transcripts); a guest must not reach those through this.
+/// `&self` because one store is shared by every guest and locks internally; `Send + Sync` because
+/// a `wasmtime::Store`'s data must be.
 pub trait Entries: Send + Sync {
     /// Upsert `value` and return the row as stored.
     ///
@@ -92,7 +56,7 @@ pub trait Entries: Send + Sync {
     fn recent(&self, namespace: &str, limit: u32) -> Result<Vec<Row>, StorageFault>;
 }
 
-/// An entry as a guest sees it, before a world's own `Entry` is built from it.
+/// An entry as a guest sees it.
 pub struct StoredEntry {
     /// `<namespace>/<key>`, in the guest's own namespace.
     pub id: String,
@@ -119,25 +83,14 @@ pub enum StorageFault {
 
 /// Where a guest's `host-storage` calls actually land.
 ///
-/// Durability is opt-in per instance and the default is load-bearing:
-/// permission gates' standing grants are documented as dying with the
-/// process, and making every guest durable would quietly turn "always allow"
-/// into "allow forever".
-///
-/// Every namespace is prefixed with the owning component's id, so sharing one
-/// database does not let a guest name `session-abc` and read the transcript,
-/// or name a peer's namespace and read its decisions. The core's own
-/// namespaces contain no `/`, so nothing a guest can ask for collides with
-/// them.
+/// Durability is opt-in per instance and the default is load-bearing: permission gates' standing
+/// grants die with the process, and durable-by-default would turn "always allow" into "allow forever".
+/// Namespaces are prefixed with the component id so a guest cannot name `session-abc` or a peer's
+/// namespace; the core's own namespaces contain no `/`, so nothing a guest asks for collides.
 pub struct GuestStorage {
     /// Where the entries live.
     backing: Backing,
-    /// Whether namespaces are additionally keyed by session (#215).
-    ///
-    /// Opt-in, and the default is not a detail: `interceptor-permission`'s
-    /// standing grants are deliberately run-scoped, so turning this on for
-    /// everything would silently narrow "always allow" to "always allow, in
-    /// this session".
+    /// Whether namespaces are additionally keyed by session (#215); opt-in so "always allow" stays run-scoped.
     by_session: bool,
     /// The session a call belongs to, bound by the conductor at the top of a
     /// turn. `None` until something binds it.
@@ -173,8 +126,7 @@ impl GuestStorage {
 
 /// Where a guest's entries actually live.
 pub enum Backing {
-    /// A private map, for when no store is open (unit tests, offline
-    /// harnesses).
+    /// A private map, for when no store is open (tests, offline harnesses).
     Ephemeral {
         /// (namespace, key) -> (value, created, updated).
         entries: HashMap<(String, String), (String, u64, u64)>,
@@ -182,9 +134,7 @@ pub enum Backing {
         clock: u64,
     },
     /// A durable store, namespaced to the owning component.
-    ///
-    /// Reached through [`Entries`] rather than held directly, so this crate
-    /// never names the crate that knows SQLite (#180).
+    /// A durable store scoped to the owning component, reached through [`Entries`] (#180).
     Durable {
         /// Shared with the agent session that opened it, and with every
         /// other guest in the fleet.
@@ -198,11 +148,8 @@ impl GuestStorage {
     /// The namespace a guest request actually reaches.
     ///
     /// # Errors
-    /// [`StorageFault::Backend`] when this storage is session-scoped and
-    /// nothing has bound a session. **Fail closed rather than fall back to
-    /// the unscoped namespace**: the fallback would silently share one
-    /// guest's state across every session, which is the exact property
-    /// session scoping exists to prevent, and nothing would report it.
+    /// [`StorageFault::Backend`] when session-scoped and no session is bound. Fails closed: falling back
+    /// to the unscoped namespace would silently share state across sessions.
     fn scope(&self, namespace: &str) -> Result<String, StorageFault> {
         let within = match (&self.by_session, &self.session) {
             (false, _) => namespace.to_string(),
@@ -221,8 +168,7 @@ impl GuestStorage {
         })
     }
 
-    /// Undo [`Self::scope`], so a returned entry names the namespace the
-    /// guest asked for rather than what the host stored under.
+    /// Undo [`Self::scope`] so a returned entry names the namespace the guest asked for.
     fn unscope(&self, namespace: &str) -> String {
         let outer = match &self.backing {
             Backing::Ephemeral { .. } => namespace,
@@ -385,8 +331,7 @@ mod tests {
         }
     }
 
-    /// The property the whole option exists for: one tool, two sessions, two
-    /// plans.
+    /// One tool, two sessions, two plans.
     #[test]
     fn two_sessions_do_not_share_a_session_scoped_namespace() {
         let mut first = GuestStorage::per_session(ephemeral());
@@ -395,8 +340,7 @@ mod tests {
             .set("plan".into(), "k".into(), "from s1".into())
             .expect("writes");
 
-        // Same storage, rebound — a fleet outlives a session, so this is the
-        // real sequence rather than two objects.
+        // Rebound on the same storage: a fleet outlives a session.
         first.bind_session("s2");
         assert!(
             matches!(first.get("plan", "k"), Err(StorageFault::NotFound)),
@@ -414,8 +358,7 @@ mod tests {
         );
     }
 
-    /// Unscoped storage is unchanged by any of this — the default a
-    /// permission gate's standing grants rely on.
+    /// Unscoped storage is unchanged (permission gates' standing grants rely on it).
     #[test]
     fn shared_storage_ignores_the_session_entirely() {
         let mut shared = GuestStorage::shared(ephemeral());
@@ -432,9 +375,7 @@ mod tests {
         );
     }
 
-    /// Fail closed. The tempting alternative — fall back to the unscoped
-    /// namespace — shares one guest's state across every session and reports
-    /// nothing, which is the exact failure session scoping prevents.
+    /// Fails closed: an unscoped fallback would share state across sessions unreported.
     #[test]
     fn session_scoped_storage_with_no_session_refuses() {
         let mut unbound = GuestStorage::per_session(ephemeral());
@@ -448,8 +389,7 @@ mod tests {
         ));
     }
 
-    /// A returned entry names the namespace the guest asked for, not the one
-    /// the host stored under — session prefix included.
+    /// A returned entry names the namespace the guest asked for, session prefix included.
     #[test]
     fn a_session_scoped_entry_is_presented_unscoped() {
         let mut storage = GuestStorage::per_session(ephemeral());

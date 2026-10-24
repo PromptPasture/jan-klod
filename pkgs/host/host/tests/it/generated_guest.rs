@@ -1,52 +1,6 @@
-//! **The test template for a new extension — copy this file.**
-//!
-//! `make ext-new NAME=tool-yours KIND=tool` writes a crate that compiles. This
-//! is the other half: a guest is not finished when it compiles, it is finished
-//! when the host loads it and calls it. Discovering that pattern by reading the
-//! rest of `pkgs/host/host/tests/` is the afternoon the PDK exists to remove
-//! ([#112](https://github.com/PromptPasture/jan-klod/issues/112)).
-//!
-//! # Copying this
-//!
-//! Three things are yours and everything else is harness:
-//!
-//! 1. `COMPONENT` — your guest's staged `.wasm`.
-//! 2. `INSTANCE_ID` — the `category.name` the host would use, e.g. `tool.yours`.
-//! 3. The assertions in [`the_generated_guest_answers_when_called`] — what your
-//!    `invoke` returns, and what its `meta` advertises.
-//!
-//! Then add `mod your_module;` to `main.rs`. **Not a new file beside it**: that
-//! file is one test binary on purpose, because `wasmtime` links statically and
-//! every extra integration target is another multi-gigabyte link.
-//!
-//! # What it does not need
-//!
-//! No `Runtime`, no config, no provider. `ToolExtension::instantiate` loads a
-//! component and runs its lifecycle directly, which is what you want while
-//! writing a guest — a whole agent tells you less and takes longer to fail.
-//! Loading through a booted runtime is covered separately by
-//! `manifest.rs::a_generated_crate_boots`, which is where the manifest
-//! cross-check happens.
-//!
-//! # How this is known to fail
-//!
-//! A harness that loads nothing passes exactly as quietly as one that loads a
-//! working component, so this file was probed three ways rather than trusted
-//! ([#112](https://github.com/PromptPasture/jan-klod/issues/112) Acceptance
-//! line 2). Each fails, and each says which thing broke:
-//!
-//! | broken | what the failure says |
-//! |---|---|
-//! | the component is not staged, under `JK_REQUIRE_GUESTS=1` | `must not be skipped, but ["tool-hello.wasm"] are not staged` |
-//! | `invoke` returns something else | `assertion left == right failed … left: "broken"` |
-//! | `extension-lifecycle`'s `init` returns `Err` | `LifecycleRejected { phase: "init", … }` |
-//!
-//! The first is the one that matters most and is the cheapest to lose: without
-//! `JK_REQUIRE_GUESTS` a missing component makes this test *skip*, which reads
-//! as green. That flag is what `make gate` sets, and it is why the skip below
-//! goes through the shared policy rather than an `if` of its own.
-//!
-//! Offline. Skips (passes as a no-op) when the guest is not staged in `ext/`.
+//! Template for a new extension: copy it and replace `COMPONENT`, `INSTANCE_ID`, and the assertions.
+//! Add a `mod` line to `main.rs` rather than a new target, since each target is a multi-gigabyte link.
+//! Skips when the guest is not staged in `ext/`, unless `JK_REQUIRE_GUESTS=1` turns the skip into a failure.
 
 use jk_wasm::host_process::ProcessRunner;
 use jk_wasm::tool_host::ToolExtension;
@@ -57,10 +11,7 @@ use crate::common;
 
 /// Yours: the staged component this exercises.
 ///
-/// `tool-hello` is what `make ext-new NAME=tool-hello KIND=tool` emits, kept
-/// byte-identical to the generator's output by `scripts/ext-new-selftest.sh` —
-/// so this file tests a *generated* guest rather than one that was generated
-/// once and has been drifting since.
+/// `tool-hello` is kept byte-identical to `make ext-new` output by `scripts/ext-new-selftest.sh`.
 const COMPONENT: &str = "tool-hello.wasm";
 
 /// Yours: the instance id the host would give it (`category.name`).
@@ -76,9 +27,6 @@ fn component(engine: &Engine) -> Option<Component> {
 }
 
 /// A generated guest loads, starts, and answers when it is called.
-///
-/// The assertions below are the ones to replace. Everything above them is the
-/// same for any `tool-*` guest.
 #[test]
 fn the_generated_guest_answers_when_called() {
     let engine = Engine::default();
@@ -86,15 +34,12 @@ fn the_generated_guest_answers_when_called() {
         return;
     };
 
-    // Instantiating runs `extension-lifecycle`'s `init` and `start`; a guest
-    // that fails either does not get this far, so reaching the next line is
-    // itself the lifecycle assertion.
+    // Instantiation runs `init` and `start`, so reaching the next line proves both succeeded.
     let mut guest = ToolExtension::instantiate(
         &engine,
         INSTANCE_ID,
         &component,
-        // No workspace and no command runner: this guest was granted neither,
-        // and handing it either would test a guest nobody will run.
+        // Granted no workspace or command runner, as a real guest would be.
         None,
         ProcessRunner::disabled(),
     )

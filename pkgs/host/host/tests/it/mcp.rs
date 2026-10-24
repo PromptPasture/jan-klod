@@ -1,8 +1,5 @@
-//! MCP port driven as an editor drives it (full exchange against real agent).
-//!
-//! `core::mcp` tests frame rules without runtime. This module shows a whole
-//! exchange: `initialize`, `tools/list`, and a `tools/call ask` running an
-//! actual turn against a canned provider. Offline (as Acceptance requires).
+//! MCP driven as an editor drives it: `initialize`, `tools/list` and `tools/call`
+//! running a real turn against a canned provider. Offline.
 
 use std::path::PathBuf;
 
@@ -50,7 +47,7 @@ fn exchange(agent: &mut jk_agent::AgentSession, lines: &[&str]) -> Vec<serde_jso
     let text = String::from_utf8(output).expect("frames are UTF-8");
     text.lines()
         .map(|line| {
-            // Every line must parse; transport says frames are newline-delimited.
+            // Transport is newline-delimited, so every line must parse.
             serde_json::from_str(line)
                 .unwrap_or_else(|err| panic!("{line:?} is not a frame: {err}"))
         })
@@ -74,7 +71,7 @@ fn an_editor_initializes_lists_tools_and_calls_ask() {
         ],
     );
 
-    // Three requests + one notification = three frames (notifications don't reply).
+    // The notification gets no reply, so three frames.
     assert_eq!(frames.len(), 3, "{frames:#?}");
     assert_eq!(frames[0]["id"], 1);
     assert_eq!(frames[0]["result"]["protocolVersion"], "2025-11-25");
@@ -84,7 +81,6 @@ fn an_editor_initializes_lists_tools_and_calls_ask() {
         Some(3)
     );
 
-    // Turn's answer came back as tool content.
     let call = &frames[2];
     assert_eq!(call["id"], 3);
     assert_eq!(
@@ -103,10 +99,8 @@ fn an_editor_initializes_lists_tools_and_calls_ask() {
     );
 }
 
-/// Missing argument is `isError: true`, not a JSON-RPC error.
-///
-/// Bad argument = tool failure (model can correct); JSON-RPC error = malformed
-/// request (editor sees broken server). Different claims.
+/// A missing argument is `isError: true`, not a JSON-RPC error: a tool failure
+/// can be corrected by the model, while a protocol error means a broken server.
 #[test]
 fn a_missing_question_is_an_is_error_not_a_protocol_error() {
     let Some((_dir, mut agent)) = booted("noq", "unused") else {
@@ -134,9 +128,7 @@ fn a_missing_question_is_an_is_error_not_a_protocol_error() {
     assert!(frames[0].get("error").is_none(), "{:#?}", frames[0]);
 }
 
-/// Two unsessioned calls share one session (conversation possible).
-///
-/// Single-request tests miss the alternative (fresh per call losing context).
+/// Two calls without a session id continue the same session.
 #[test]
 fn two_calls_without_a_session_continue_the_same_one() {
     let Some((_dir, mut agent)) = booted("session", "ack") else {
@@ -158,7 +150,7 @@ fn two_calls_without_a_session_continue_the_same_one() {
         );
     }
 
-    // Transcript proves: one session with both turns, not two separate ones.
+    // One session holds both turns, not one per call.
     let sessions = jk_agent::session::sessions_payload(&agent);
     let ids: Vec<&str> = sessions["sessions"]
         .as_array()
@@ -179,10 +171,8 @@ fn two_calls_without_a_session_continue_the_same_one() {
     );
 }
 
-// ---- The read tools, and the refusal (#56 box 3) ----
-
-/// Agent whose provider asks for workspace write first, then answers.
-/// Temp dir allows test to verify the write didn't happen.
+/// An agent whose provider asks for a workspace write, then gives up. The temp
+/// dir lets the test check that the write did not happen.
 fn booted_writing(tag: &str) -> Option<(common::TempDir, jk_agent::AgentSession, PathBuf)> {
     const GUESTS: [&str; 4] = [
         "provider-openai.wasm",
@@ -224,7 +214,6 @@ extensions:
     )
     .expect("writes the config");
 
-    // First call: model requests write. Second: model gives up, answers.
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let http = move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::Arc::clone(&calls);
@@ -253,10 +242,8 @@ extensions:
     Some((dir, agent, target))
 }
 
-/// Write-requiring turn is refused; file is not written (Acceptance line 2).
-///
-/// Assertion is on effect, not wording (absent file proves boundary, not story).
-/// Critical here: MCP client cannot answer confirmation prompts; fail-open would go unnoticed.
+/// A write-requiring turn is refused and the file is not written. Asserted on
+/// effect, not wording. An MCP client cannot answer prompts, so a fail-open gate would go unnoticed.
 #[test]
 fn a_write_requiring_turn_is_refused_and_nothing_is_written() {
     let Some((_dir, mut agent, target)) = booted_writing("refuse") else {
@@ -274,11 +261,11 @@ fn a_write_requiring_turn_is_refused_and_nothing_is_written() {
         "the model asked to write {} and the gate refused, with nobody to ask",
         target.display()
     );
-    // Turn completed (refusal is answer, not transport failure).
+    // A refusal is an answer, not a transport failure.
     assert!(frames[0].get("error").is_none(), "{:#?}", frames[0]);
 }
 
-/// `session_list`/`session_get` match REST payloads (editor and browser align).
+/// `session_list` and `session_get` return what the REST endpoints return.
 #[test]
 fn the_read_tools_return_the_sessions_a_turn_created() {
     let Some((_dir, mut agent)) = booted("reads", "answered") else {
@@ -294,7 +281,6 @@ fn the_read_tools_return_the_sessions_a_turn_created() {
     );
     assert_eq!(frames.len(), 3, "{frames:#?}");
 
-    // Payload is text; parse back to verify it's client-usable JSON.
     let listed: serde_json::Value = serde_json::from_str(
         frames[1]["result"]["content"][0]["text"]
             .as_str()

@@ -1,11 +1,7 @@
 //! `provider-openai` — OpenAI-compatible implementation of `llm-provider`.
-//!
-//! The reference network extension. Imports `host-http`, `host-config`, `host-log`, and `host-secrets`.
-//! `complete` builds a Chat Completions request, calls `host-http::fetch` (no streaming),
-//! parses the reply into chunks, and buffers them under a stream handle. One build serves
-//! all OpenAI-compatible endpoints (LM Studio, Groq, vLLM, …); `base-url`, `api-key`, and `model` differ.
+//! Reference network extension; one build serves every OpenAI-compatible endpoint via `base-url`, `api-key` and `model`.
 
-// Generated Component-Model bindings; lint exemptions (including `unsafe` ABI shims) scoped to the macro.
+// Generated Component-Model bindings; lints are relaxed only here.
 #[allow(
     unsafe_code,
     missing_docs,
@@ -49,7 +45,6 @@ struct ProviderConfig {
 }
 
 thread_local! {
-    /// Endpoint settings captured at `init`.
     static CONFIG: RefCell<ProviderConfig> = RefCell::new(ProviderConfig::default());
     /// Open streams: handle -> chunks.
     static STREAMS: RefCell<HashMap<StreamHandle, VecDeque<CompletionChunk>>> =
@@ -58,7 +53,6 @@ thread_local! {
     static NEXT_HANDLE: RefCell<StreamHandle> = const { RefCell::new(1) };
 }
 
-/// Forward a line to the core's log pipeline, tagged with this component's name.
 fn log(level: LogLevel, message: &str) {
     host_log::log(level, "provider-openai", message, &[]);
 }
@@ -94,7 +88,6 @@ fn message_to_json(msg: &Message) -> Value {
 }
 
 /// Convert a tool to `OpenAI`'s `{type:"function", function:{…}}` shape.
-/// The `parameters-schema` is already JSON; fall back to `{}` if not valid JSON.
 fn tool_to_json(tool: &ToolDefinition) -> Value {
     let parameters: Value =
         serde_json::from_str(&tool.parameters_schema).unwrap_or_else(|_| json!({}));
@@ -108,8 +101,7 @@ fn tool_to_json(tool: &ToolDefinition) -> Value {
     })
 }
 
-/// Build the Chat Completions request body. `stream` is false —
-/// `host-http` buffers the whole response anyway.
+/// Build the Chat Completions body. `stream` is false: `host-http` buffers the whole response anyway.
 fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     let mut obj = Map::new();
     obj.insert("model".to_owned(), json!(model));
@@ -142,7 +134,6 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
 }
 
 /// Parse a Chat Completions response into an ordered chunk stream.
-/// Text, then tool calls, always closed by `done`.
 fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| ProviderError::Transient)?;
     let choice = value
@@ -153,7 +144,6 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
 
     let mut chunks = VecDeque::new();
     // Include both text and tool calls: models often narrate before acting.
-    // Text precedes calls, matching model emission order.
     if let Some(content) = message.get("content").and_then(Value::as_str) {
         if !content.is_empty() {
             chunks.push_back(CompletionChunk::TextDelta(content.to_owned()));
@@ -212,8 +202,7 @@ const fn map_http_error(err: HttpError) -> ProviderError {
         HttpError::ClientError(401 | 403) => ProviderError::AuthFailed,
         HttpError::ClientError(404) => ProviderError::ModelNotFound,
         HttpError::ClientError(429) => ProviderError::RateLimited,
-        // Not transient: refused connection, DNS failure, or TLS error means the address is wrong,
-        // server is down, or egress is denied. Retrying won't fix these.
+        // Not transient: a refused connection, DNS, or TLS failure will not clear on retry.
         HttpError::ConnectionFailed | HttpError::Timeout | HttpError::TlsError => {
             ProviderError::Unreachable
         }
@@ -224,8 +213,7 @@ const fn map_http_error(err: HttpError) -> ProviderError {
     }
 }
 
-/// Allocate the next stream handle. Wrapping is fine; collisions with a still-open
-/// handle are not a concern here.
+/// Allocate the next stream handle; wrapping is accepted.
 fn next_handle() -> StreamHandle {
     NEXT_HANDLE.with(|h| {
         let mut n = h.borrow_mut();
@@ -243,8 +231,7 @@ impl Lifecycle for Component {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
         let section: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
 
-        // Determine the API key: prefer `api-key-secret` (read through host-secrets)
-        // over `api-key`, falling back to `api-key` when the secret is not available.
+        // Prefer `api-key-secret` read through host-secrets; fall back to `api-key`.
         let api_key = section
             .get("api-key-secret")
             .and_then(Value::as_str)
@@ -375,8 +362,7 @@ impl LlmProvider for Component {
     }
 }
 
-// The `export!` macro emits the component's `unsafe extern "C"` ABI shims;
-// scope the binding lints to this glue.
+// `export!` emits the `unsafe extern "C"` shims that the allow below covers.
 #[allow(
     unsafe_code,
     missing_docs,

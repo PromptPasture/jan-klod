@@ -1,18 +1,6 @@
-//! What the tool selector costs and saves, against a real fleet (#219).
-//!
-//! `interceptor_host.rs` drives the same component against tools written in
-//! the test. These drive it against the tools `self-extend` actually ships,
-//! read out of a booted runtime rather than restated here — the whole claim
-//! of the slice is about prompt bytes, and bytes invented in a test fixture
-//! would measure the fixture.
-//!
-//! # The distribution is read, not copied
-//!
-//! The config is the shipped `self-extend/config.yaml` with three
-//! substitutions: a mock provider URL, a literal key in place of the
-//! environment one, and temporary paths. Each is asserted to have matched,
-//! so a reordered or rewritten distribution fails here instead of quietly
-//! measuring something nobody ships.
+//! What the tool selector costs and saves against the fleet `self-extend` ships (#219).
+//! The shipped config is used with only mock-provider, key and path substitutions,
+//! each asserted to match, so the measurement cannot drift from what ships.
 
 use jk_protocol::intercept::{Dispatcher, HookState, PendingRequest, Phase};
 
@@ -84,10 +72,7 @@ fn advertised(
         .collect()
 }
 
-/// Bytes a tool costs in the prompt: its name, its prose, and its schema.
-///
-/// Every provider wraps these differently, so the wrapper is left out and
-/// what is compared is the payload each of them carries.
+/// Prompt bytes a tool costs: name, prose and schema, excluding each provider's wrapper.
 fn schema_bytes(tools: &[(String, String, String)]) -> usize {
     tools
         .iter()
@@ -95,8 +80,7 @@ fn schema_bytes(tools: &[(String, String, String)]) -> usize {
         .sum()
 }
 
-/// The acceptance, against the shipped fleet: a relevant tool is advertised
-/// and an unrelated one is not.
+/// Against the shipped fleet, a relevant tool is advertised and an unrelated one is not.
 #[test]
 fn a_bounded_fleet_keeps_the_relevant_tool_and_drops_the_unrelated_one() {
     let Some((_guard, tools)) = shipped_fleet() else {
@@ -115,8 +99,7 @@ fn a_bounded_fleet_keeps_the_relevant_tool_and_drops_the_unrelated_one() {
     );
 }
 
-/// Nothing matched is the case that decides whether this is safe: the floor
-/// answers, rather than an empty tool list.
+/// With nothing matching, the floor still advertises tools rather than an empty list.
 #[test]
 fn a_request_matching_nothing_still_advertises_the_floor() {
     let Some((_guard, tools)) = shipped_fleet() else {
@@ -130,8 +113,7 @@ fn a_request_matching_nothing_still_advertises_the_floor() {
     assert_eq!(kept.len(), 2, "the floor did not hold: {kept:?}");
 }
 
-/// Configured with nothing, the selector advertises the fleet — so this
-/// slice cannot have quietly hidden a tool from an existing deployment.
+/// Unconfigured, the selector advertises the whole fleet, so existing deployments see no change.
 #[test]
 fn an_unconfigured_selector_advertises_the_whole_fleet() {
     let Some((_guard, tools)) = shipped_fleet() else {
@@ -142,13 +124,8 @@ fn an_unconfigured_selector_advertises_the_whole_fleet() {
     assert_eq!(kept.len(), whole, "the default is not a pass-through");
 }
 
-/// The measurement the slice exists for: what a bound saves in prompt bytes,
-/// against the fleet `self-extend` ships.
-///
-/// Asserted as a direction and a floor on the saving rather than a fixed
-/// number — the figure moves whenever a tool's schema does, and a test
-/// pinning it would fail for reasons that have nothing to do with selection.
-/// The figure itself is recorded on #219.
+/// A tighter bound saves prompt bytes. Asserted as a direction, not a fixed figure,
+/// since schema edits would otherwise break it.
 #[test]
 fn the_bound_saves_prompt_bytes_and_says_how_many() {
     let Some((_guard, tools)) = shipped_fleet() else {

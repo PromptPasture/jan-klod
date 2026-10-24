@@ -1,12 +1,6 @@
-//! A model on localhost, with no API key, over a real socket — the
-//! self-hosted case (Ollama, LM Studio, llama.cpp). Other provider tests inject
-//! a canned `HttpFn`, skipping what matters here: that a keyless provider
-//! boots and completes, that the egress policy permits a provider's `base-url`
-//! even on loopback, and that `type:` names an actual component. This stands up
-//! an OpenAI-shaped endpoint on loopback and drives a turn through the real
-//! client to cover all three.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! A keyless self-hosted model (Ollama, LM Studio, llama.cpp) over a real loopback socket. Canned `HttpFn` tests cannot
+//! show that a keyless provider boots, that egress permits a loopback `base-url`, or that `type:` names a real component.
+//! Skips when the guests are not staged in `ext/`.
 
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
@@ -30,9 +24,8 @@ struct FakeOllama {
     requests: Arc<AtomicU32>,
     saw_authorization: Arc<AtomicU32>,
     stop: Arc<AtomicU32>,
-    /// I/O the endpoint could not complete. Discarding these is what let
-    /// [`FakeOllama`] answer a request it had not read, so a test that trusts
-    /// what the endpoint saw has to assert this is empty first.
+    /// I/O failures the endpoint could not complete. Assert this is empty before
+    /// trusting `requests` or `saw_authorization`.
     faults: Arc<Mutex<Vec<String>>>,
 }
 
@@ -40,11 +33,8 @@ impl FakeOllama {
     fn start(answer: &'static str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
-        // The listener stays blocking, which decides two things at once. It ends
-        // the poll-with-a-sleep accept loop — `Drop` sets the stop flag and then
-        // connects, so the wake-up arrives as a connection — and it removes a
-        // platform difference: BSD `accept()` hands back a socket that inherited
-        // the listener's `O_NONBLOCK` (verified on this host).
+        // Blocking accept: `Drop` wakes it with a connection. Non-blocking would
+        // also leak `O_NONBLOCK` to accepted sockets on BSD (verified on this host).
         let requests = Arc::new(AtomicU32::new(0));
         let saw_authorization = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicU32::new(0));
@@ -70,12 +60,8 @@ impl FakeOllama {
                             break;
                         }
                         counted.fetch_add(1, Ordering::Relaxed);
-                        // Read the request to completion under a deadline. One
-                        // read can return part of it or none of it, and
-                        // answering early leaves the rest unread, so the close
-                        // sends RST instead of FIN and the RST discards the
-                        // response. The client sees "unreachable" for a turn the
-                        // endpoint answered correctly.
+                        // Read the whole request under a deadline: answering early leaves
+                        // bytes unread, so the close sends RST and discards the response.
                         if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
                             fault("set_read_timeout", &e);
                         }
@@ -105,9 +91,7 @@ impl FakeOllama {
                             fault("write_all", &e);
                         }
                     }
-                    // A listener that cannot accept serves nothing, so say so
-                    // rather than spinning: the test reads `faults` before it
-                    // trusts anything this endpoint saw.
+                    // Stop and record rather than spin; the test checks `faults` first.
                     Err(e) => {
                         fault("accept", &e);
                         break;
@@ -143,8 +127,7 @@ fn a_keyless_local_model_completes_a_turn_over_a_real_socket() {
 
     let ollama = FakeOllama::start("the local model answered");
     let config = dir.join("config.yaml");
-    // Shape of the shipped `provider.ollama` block: `type: openai`, loopback
-    // `base-url`, no `api-key`.
+    // Shape of the shipped `provider.ollama` block.
     std::fs::write(
         &config,
         format!(
@@ -163,9 +146,8 @@ extensions:
     .unwrap();
 
     let runtime = Runtime::boot(&config, common::repo_root().join("ext")).expect("runtime boots");
-    // The real client, bounded by the real policy — not a canned `HttpFn`.
-    // Reaches this loopback endpoint only because the policy lifts the
-    // provider's `base-url` from config.
+    // The real client and policy, not a canned `HttpFn`: loopback is reachable only
+    // because the policy lifts the provider's `base-url` from config.
     let policy = runtime.egress_policy();
     let factory = move || -> jk_wasm::route::HttpFn {
         let policy = policy.clone();
@@ -192,9 +174,7 @@ extensions:
         ollama.requests.load(Ordering::Relaxed) >= 1,
         "the request actually crossed a socket"
     );
-    // Assert this *before* what the endpoint saw: the header check below reads a
-    // counter derived from the request text, so an unreported read failure used
-    // to satisfy it with an empty string rather than with evidence.
+    // Check faults before the header counter, which an unreported read failure would satisfy vacuously.
     let faults = ollama
         .faults
         .lock()
@@ -206,8 +186,7 @@ extensions:
          the request it answered: {faults:?}"
     );
 
-    // No key configured means no header invented: a local endpoint that rejects
-    // unexpected credentials must not receive any.
+    // No key configured, so no Authorization header may be invented.
     assert_eq!(
         ollama.saw_authorization.load(Ordering::Relaxed),
         0,
@@ -215,10 +194,7 @@ extensions:
     );
 }
 
-/// A failure names the endpoint and what to check, not a generated binding's
-/// Debug output that wrongly implies retrying could help.
-///
-/// The endpoint here is a closed port — the most common first-run failure.
+/// A failure names the endpoint and the cause, not a generated binding's Debug output.
 #[test]
 fn an_unreachable_provider_says_so_and_names_the_endpoint() {
     if !common::guests_staged(&["provider-openai.wasm"]) {

@@ -1,8 +1,5 @@
 //! `provider-anthropic` — Anthropic Messages API implementation.
-//!
-//! Posts to `/v1/messages` via `host-http`. System messages go to the top-level `system`
-//! field; tool results become `{"role":"user","content":[{"type":"tool_result",…}]}`.
-//! Maps `401/403` → `AuthFailed`, `429` → `RateLimited`. Never logs `api-key`.
+//! Posts to `/v1/messages` via `host-http`. Never logs `api-key`.
 
 #[allow(
     unsafe_code,
@@ -83,7 +80,6 @@ fn str_field(obj: &Value, key: &str) -> String {
 }
 
 /// Convert a WIT message to Anthropic API JSON.
-/// System messages are extracted separately; tool results become `{"role":"user","content":[{"type":"tool_result",…}]}`.
 fn message_to_json(msg: &Message) -> Value {
     match msg.role {
         Role::System => {
@@ -118,7 +114,6 @@ fn tool_to_json(tool: &ToolDefinition) -> Value {
 }
 
 /// Build the Anthropic `/v1/messages` request body.
-/// Extracts the first `Role::System` message to the top-level `system` field; others go to `messages`.
 fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     let mut obj = Map::new();
     obj.insert("model".to_owned(), json!(model));
@@ -127,7 +122,6 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
         json!(request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
     );
 
-    // Extract system prompt to top level (not in messages).
     let system: Option<String> = request
         .messages
         .iter()
@@ -215,7 +209,6 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
         .and_then(Value::as_str)
         .unwrap_or("end_turn")
         .to_owned();
-    // Normalize to the core's finish-reason vocabulary.
     let finish = match stop_reason.as_str() {
         "tool_use" => "tool-calls",
         "max_tokens" => "length",
@@ -250,8 +243,7 @@ const fn map_http_error(err: HttpError) -> ProviderError {
         HttpError::ClientError(401 | 403) => ProviderError::AuthFailed,
         HttpError::ClientError(404) => ProviderError::ModelNotFound,
         HttpError::ClientError(429) => ProviderError::RateLimited,
-        // Not transient: refused connection, DNS failure, or TLS error means the address is wrong,
-        // server is down, or egress is denied. Retrying won't fix these.
+        // Not transient: a refused connection, DNS, or TLS failure will not clear on retry.
         HttpError::ConnectionFailed | HttpError::Timeout | HttpError::TlsError => {
             ProviderError::Unreachable
         }
@@ -269,8 +261,7 @@ impl Lifecycle for Component {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
         let section: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
 
-        // Determine the API key: prefer `api-key-secret` (read through host-secrets)
-        // over `api-key`, falling back to `api-key` when the secret is not available.
+        // Prefer `api-key-secret` read through host-secrets; fall back to `api-key`.
         let api_key = section
             .get("api-key-secret")
             .and_then(Value::as_str)

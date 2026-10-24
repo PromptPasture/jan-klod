@@ -1,36 +1,8 @@
 //! `jan-klod` — TUI client for the jan-klod gateway.
 //!
-//! Usage:
-//!   `jan-klod [session]`                    — line REPL over stdio
-//!   `jan-klod tui [session]`                — full-screen terminal UI (`ratatui`)
-//!   `jan-klod --addr <host:port> [session]` — drive a gateway that is running
-//!   `jan-klod --version` / `jan-klod --help` — print the version / usage
-//!
-//!   session  session id, shared across the conversation (default: cli)
-//!   --addr   `host:port` of a running gateway; without it, one is spawned
-//!   --ascii  draw with the ASCII glyph vocabulary whatever the locale says
-//!
-//! By default jan-klod starts its own `jan-klod-gateway rpc` and talks to it
-//! over that process's stdin and stdout — no port, no token, nothing left
-//! running when the client exits. It deliberately does *not* name
-//! `config.yaml`/`ext`, so the gateway resolves them itself: the working
-//! directory when it holds them, otherwise the installed copies.
-//!
-//! With `--addr`, it drives a gateway already listening there over REST + SSE
-//! instead, starting one with `serve --bind <addr>` if nothing answers.
-//!
-//! ## Why `--addr` is a flag
-//!
-//! It used to be the first positional argument, with the session second. That
-//! only worked while an address was required: now that the common case has no
-//! address at all, `jan-klod my-session` would have read a session id as a
-//! host:port and failed to connect to it. The gateway made the same move for
-//! the same reason (`serve --bind`, rather than a path slot that might be an
-//! address), and it tells the user so when it sees one in the wrong place.
-//! This does too.
-//!
-//! In the REPL, type a message and press enter to drive a turn; empty input,
-//! `quit`, or EOF exits.
+//! By default it spawns its own `jan-klod-gateway rpc` over stdio; `--addr`
+//! drives a running gateway over REST + SSE instead. Config and ext paths are
+//! left to the gateway to resolve.
 
 mod tui;
 
@@ -45,11 +17,9 @@ use std::time::{Duration, Instant};
 use jk_tui::transport::{Logs, Rest, Stdio as StdioTransport, Transport};
 use jk_tui::{gateway_bin, StreamEvent};
 
-/// The address `--addr` defaults to when it is given with no value, and the one
-/// `serve` binds by default.
+/// Default for a bare `--addr`, and the address `serve` binds by default.
 const DEFAULT_ADDR: &str = "127.0.0.1:8787";
 
-/// What `--help` prints.
 const USAGE: &str = "\
 Usage: jan-klod [tui] [--addr <host:port>] [--ascii] [session]
 
@@ -79,9 +49,7 @@ fn main() -> ExitCode {
     let use_tui = mode == Mode::Tui;
     let session = parsed.session.unwrap_or_else(|| "cli".to_string());
 
-    // The gateway's own log output shares this terminal. A line REPL can read
-    // an interleaved log line; a full-screen TUI cannot, since it is drawing
-    // over the same cells.
+    // A full-screen TUI cannot share the terminal with gateway log lines.
     let logs = if use_tui {
         Logs::Discard
     } else {
@@ -89,9 +57,7 @@ fn main() -> ExitCode {
     };
     let (transport, _gateway): (Arc<dyn Transport>, Option<Child>) = match parsed.addr {
         Some(addr) => {
-            // Keep the child alive for the process's lifetime, as before: this
-            // path spawns a gateway that listens, and killing it at the end of
-            // `main` is what stops it outliving the client.
+            // Held until `main` returns; dropping it early would orphan the gateway.
             let spawned = ensure_gateway(&addr);
             (Arc::new(Rest::new(addr)), spawned)
         }
@@ -117,31 +83,23 @@ fn main() -> ExitCode {
     repl(&transport, &session)
 }
 
-/// What the arguments asked for.
 #[derive(Debug)]
 struct Args {
     /// `Some` when the user named a running gateway, which selects REST.
     addr: Option<String>,
     session: Option<String>,
-    /// `--ascii`: draw with the ASCII glyph vocabulary whatever the locale says.
-    ///
-    /// An override for the locale and nothing else — it does not touch colour,
-    /// which is `NO_COLOR`'s and `JAN_KLOD_THEME`'s business.
+    /// `--ascii`: force ASCII glyphs. Colour is left to `NO_COLOR` and `JAN_KLOD_THEME`.
     ascii: bool,
 }
 
-/// Which client surface to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    /// The line REPL: the default, and the only one that needs no terminal
-    /// capability and no window.
+    /// The line REPL: the default, and the only one needing no terminal capability.
     Repl,
-    /// The full-screen `ratatui` terminal UI.
     Tui,
 }
 
-/// Strip a leading `tui`/`--tui` (first arg only; mode is which program, not an
-/// option; `jan-klod my-session --tui` would falsely suggest the order is free).
+/// Strips a leading `tui`/`--tui`. Only the first argument selects the mode.
 fn split_mode(args: &[String]) -> (Mode, Vec<String>) {
     match args.split_first() {
         Some((first, rest)) if first == "tui" || first == "--tui" => (Mode::Tui, rest.to_vec()),
@@ -182,9 +140,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                  [--addr <host:port>] [--ascii] [session]"
             ));
         } else if looks_like_an_address(arg) {
-            // The mistake the old positional form invited. Refused rather than
-            // silently used as a session id, because a session named
-            // `127.0.0.1:8787` is not what anyone meant.
+            // Refused rather than used as a session: a session named `127.0.0.1:8787` is never meant.
             return Err(format!(
                 "jan-klod: `{arg}` looks like an address, not a session id. Use \
                  `--addr {arg}` to drive a gateway that is already running."
@@ -251,18 +207,13 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
             }
             StreamEvent::Done(text) => final_answer = text,
             StreamEvent::Tool { name, .. } => eprint!("\n  ⚙ {name}… "),
-            // Closes the line the invocation left open. The content is not
-            // printed: it is the model's input, often long, and the answer it
-            // produces arrives as `Done`.
+            // Closes the open line. The content is not printed: it is often long, and the answer arrives as `Done`.
             StreamEvent::ToolResult { .. } => eprint!("✓"),
             StreamEvent::Warning(msg) => eprint!("\n  ⚠ {msg}"),
             StreamEvent::Error(msg) => eprint!("\n  error: {msg}"),
-            // This mode has no menu and no panes to put a contribution in.
-            // Ignoring it is a valid client by the contract's own rule, and
-            // the turn is unaffected.
+            // No menu or panes here; ignoring a contribution is valid by the contract.
             StreamEvent::Contributions(_) => {}
-            // The turn is blocked until this is answered, so ask right here on
-            // the same stdin the REPL already owns.
+            // The turn blocks until answered, so ask on the stdin the REPL owns.
             StreamEvent::Prompt {
                 session: prompt_session,
                 question,
@@ -277,8 +228,7 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
                     Ok(_) if !typed.trim().is_empty() => typed.trim().to_string(),
                     _ => default,
                 };
-                // The notification's own session, not this loop's `session` —
-                // a client may be driving more than one (#103).
+                // The notification's session, not this loop's: a client may drive several (#103).
                 if let Err(err) = transport.answer(&prompt_session, &answer) {
                     eprintln!("  error sending answer: {err}");
                 }
@@ -295,8 +245,7 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Check if gateway reachable at `addr`; if not, spawn and wait (up to 10s).
-/// Returns child handle to keep alive. (stdio transport spawns its own gateway.)
+/// Spawns a gateway at `addr` unless one answers, and waits up to 10s for it.
 fn ensure_gateway(addr: &str) -> Option<Child> {
     if is_up(addr) {
         return None;
@@ -307,8 +256,7 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
         bin.display()
     );
     let child = Command::new(&bin)
-        // `--bind` rather than positional paths, so config/ext stay unnamed and
-        // the gateway resolves them itself instead of defaulting to the cwd.
+        // `--bind` keeps config/ext unnamed so the gateway resolves them itself.
         .args(["serve", "--bind", addr])
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -371,7 +319,6 @@ mod tests {
 
     #[test]
     fn a_session_id_is_the_only_positional() {
-        // The case the old form got wrong: this is a session, not a host:port.
         let (_, rest) = split_mode(&args(&["my-session"]));
         let parsed = parse_args(&rest).expect("parses");
         assert_eq!(parsed.addr, None);
@@ -390,13 +337,11 @@ mod tests {
         }
     }
 
-    /// A mode word is the first argument or it is nothing — otherwise `--tui`
-    /// would be read as an option that a session id could come before.
+    /// Only a leading mode word counts; elsewhere `--tui` is an unknown option.
     #[test]
     fn a_mode_word_that_is_not_first_is_not_a_mode() {
         let (mode, rest) = split_mode(&args(&["s1", "--tui"]));
         assert_eq!(mode, Mode::Repl);
-        // And it then fails as what it now is: an unknown option.
         let err = parse_args(&rest).expect_err("--tui is not an option");
         assert!(err.contains("--tui"), "{err}");
     }
@@ -431,8 +376,7 @@ mod tests {
 
     #[test]
     fn an_address_where_a_session_belongs_names_the_flag() {
-        // Every spelling the old positional form accepted, now refused with the
-        // fix in the message rather than treated as a session id.
+        // Every old positional spelling is refused, with the fix named.
         for typo in [
             "127.0.0.1:8787",
             "localhost:8787",
@@ -443,7 +387,6 @@ mod tests {
             let err = parse_args(&args(&[typo])).expect_err(typo);
             assert!(err.contains("--addr"), "{typo}: {err}");
         }
-        // And a session id that merely contains a colon is left alone.
         for session in ["cli", "notes:2024", "a:b"] {
             assert_eq!(
                 parse_args(&args(&[session]))

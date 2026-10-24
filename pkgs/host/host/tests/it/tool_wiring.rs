@@ -59,12 +59,8 @@ workspace: {ws}
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// #59 end-to-end: tools lazy without interceptors to advertise them.
-/// `build_agent` leaves tool uninstantiated unless an interceptor asks
-/// (via `instantiate_interceptors`). No interceptor on purpose: with
-/// `tool-selector`, `build_agent` computes tool advertisement up front
-/// (unavoidable eagerness in current design). Dropping interceptors isolates
-/// the tool fleet's own laziness.
+/// #59: with no interceptor to advertise tools, `tool.*` stays uninstantiated until asked for.
+/// `tool-selector` would make `build_agent` compute advertisement eagerly, so it is left out.
 #[test]
 fn a_tool_with_no_interceptor_to_advertise_it_stays_uninstantiated_until_asked() {
     let ext_dir = common::repo_root().join("ext");
@@ -121,9 +117,7 @@ workspace: {ws}
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Edit is confirmed before writing. Previously a denylist failed to catch
-/// `view`/`replace`/`insert`, letting edits run unasked. Tests on-disk bytes
-/// (refused = unchanged, approved = changed), with real anchor from `view`.
+/// Edits are confirmed before writing; a denylist once let `replace` and `insert` run unasked.
 #[test]
 fn an_edit_is_confirmed_before_it_touches_the_file() {
     if !common::guests_staged(&[
@@ -143,9 +137,8 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
         refused.contents, original,
         "a refused edit leaves the file untouched"
     );
-    // Print the prompt (UI copy review).
     eprintln!("PROMPT: {:?}", refused.asked);
-    // Must name the file; "approve tool `edit`" alone tells nothing.
+    // "approve tool `edit`" alone says nothing, so the file and change must appear.
     assert!(
         refused
             .asked
@@ -177,7 +170,6 @@ fn an_edit_is_confirmed_before_it_touches_the_file() {
     );
 }
 
-/// Result of one gated-edit turn.
 struct EditTurn {
     /// The file's contents afterwards.
     contents: String,
@@ -281,7 +273,7 @@ extensions:
 /// Extract first `anchor` from `anchor|lineno|text` in request body.
 fn first_anchor(body: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(body);
-    // View output JSON-encoded in request; `|` survives, newlines escaped. Scan for `<hex>|<digits>|`.
+    // View output is JSON-encoded in the request; scan for `<hex>|<digits>|`.
     let bytes: Vec<char> = text.chars().collect();
     for (i, window) in bytes.windows(12).enumerate() {
         let candidate: String = window.iter().collect();
@@ -292,7 +284,7 @@ fn first_anchor(body: &[u8]) -> Option<String> {
             && anchor.chars().all(|c| c.is_ascii_hexdigit())
             && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
         {
-            // Verify whole token (not partial).
+            // Accept only a whole token, not the tail of a longer hex run.
             let start = text[..].char_indices().nth(i).map(|(b, _)| b)?;
             let before = text[..start].chars().next_back();
             if before.is_some_and(|c| c.is_ascii_hexdigit()) {

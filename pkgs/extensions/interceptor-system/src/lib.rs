@@ -1,30 +1,12 @@
-//! `interceptor-system` — the standing instructions a turn runs under.
-//! Without it, the model gets raw conversation with no framing: it isn't told
-//! it's an agent, that paths are workspace-relative, or that writes get confirmed.
-//! For small models, that framing is critical.
-//!
-//! ## Why an extension, and why `select-model`
-//!
-//! A system prompt is policy, so it lives in a swappable guest rather than core.
-//! It runs at `select-model` (not `select-context`) because that phase runs first:
-//! the prompt must be in the message list when `interceptor-context` measures
-//! the token budget, or those tokens go uncounted.
-//!
-//! ## Idempotence
-//!
-//! Prepends only when no system message exists, so a turn that already has one
-//! (driver-set, another interceptor, replayed) doesn't accumulate copies.
-//!
-//! The assembly is pure Rust (unit-tested natively); the glue compiles for `wasm32`.
+//! `interceptor-system`: the standing instructions a turn runs under.
+//! Inserted at `select-model`, before `interceptor-context` counts the budget, and only when no
+//! system message exists, so repeat turns do not accumulate copies.
 
 // Pure logic: unit-tested natively; CM glue compiles for wasm32 only.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod prompt {
     /// The built-in instructions, used when config supplies no `prompt`.
-    ///
-    /// Each line names something the runtime actually enforces, so the model's
-    /// expectations match the sandbox's behaviour: paths are jailed, writes are
-    /// confirmed, partial edits are anchored, and output goes into the budget.
+    /// Each line names something the runtime enforces, so the model's expectations match the sandbox.
     pub const DEFAULT: &str = "\
 You are jan-klod, a coding agent working inside one workspace directory.
 
@@ -43,9 +25,7 @@ assuming you saw everything.
 files you read.";
 
     /// The system text for this turn: the configured `prompt`, else [`DEFAULT`].
-    ///
-    /// An empty or whitespace-only value means "no system prompt" — an explicit
-    /// way to switch instructions off without disabling the extension.
+    /// An empty or whitespace-only value switches instructions off.
     #[must_use]
     pub fn resolve(configured: Option<&str>) -> Option<String> {
         match configured {
@@ -55,12 +35,8 @@ files you read.";
         }
     }
 
-    /// Where this turn's instructions came from — the answer the `prompt-source`
-    /// status item shows.
-    ///
-    /// Three states rather than a bool: "off" is a deliberate configuration
-    /// (`prompt: ""`), and showing it as "not configured" would read as an
-    /// oversight rather than a choice.
+    /// Where this turn's instructions came from, for the `prompt-source` status item.
+    /// `prompt: ""` is a deliberate choice, so it is not reported as unconfigured.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Source {
         /// The built-in text, because nothing was configured.
@@ -103,11 +79,8 @@ files you read.";
         }
     }
 
-    /// What the `prompt` command answers with.
-    ///
-    /// `verbose` gives the whole text; otherwise the first line and a length,
-    /// because a client may be rendering this into a single status area and a
-    /// thousand-character answer there is not a help.
+    /// What the `prompt` command answers: the first line and a length, unless `verbose`.
+    /// A status area cannot show a long text.
     #[must_use]
     pub fn summary(resolved: Option<&str>, verbose: bool) -> String {
         let Some(text) = resolved else {
@@ -121,19 +94,13 @@ files you read.";
         format!("{first} … ({characters} characters; pass `verbose` for all of it)")
     }
 
-    /// The standing instructions plus the project's own (`AGENTS.md`), if any.
-    ///
-    /// Appended and labelled rather than merged: the standing prompt states what
-    /// the *runtime* enforces (true regardless of repo), while project instructions
-    /// are a request from the codebase — a model that can't distinguish them would
-    /// treat "you may write anywhere" in a checked-in file as a sandbox fact.
-    ///
-    /// `prompt: ""` drops the project section too — an explicit "no system message".
+    /// The standing instructions plus the project's `AGENTS.md`, labelled as a repo request.
+    /// The label matters: a model must not treat "you may write anywhere" in a checked-in file as a
+    /// sandbox fact. `prompt: ""` drops the project section too.
     #[must_use]
     pub fn resolve_with_project(configured: Option<&str>, project: Option<&str>) -> Option<String> {
         let base = resolve(configured)?;
-        // Arguments combine rather than gate each other — no AGENTS.md (the
-        // common case) must not drop the whole prompt.
+        // A missing AGENTS.md must not drop the standing prompt.
         let Some(project) = project.map(str::trim).filter(|text| !text.is_empty()) else {
             return Some(base);
         };
@@ -158,8 +125,7 @@ files you read.";
             assert_eq!(source(Some("be terse")), Source::Configured);
         }
 
-        /// `prompt: ""` is a choice, and the status line has to say that rather
-        /// than report it as an absent configuration.
+        /// `prompt: ""` is a choice, not an absent configuration; the status line must say so.
         #[test]
         fn an_empty_prompt_reads_as_off_not_as_unconfigured() {
             assert_eq!(source(Some("   ")), Source::Off);
@@ -186,28 +152,23 @@ files you read.";
             assert!(none.contains("No system message"), "{none}");
         }
 
-        /// The three combinations of configured prompt and project instructions.
         #[test]
         fn project_instructions_are_added_without_replacing_the_standing_ones() {
             use super::resolve_with_project;
 
-            // No project file: exactly the standing prompt, nothing lost.
             assert_eq!(resolve_with_project(None, None).as_deref(), Some(DEFAULT));
             assert_eq!(
                 resolve_with_project(None, Some("   ")).as_deref(),
                 Some(DEFAULT)
             );
 
-            // With one: both, and the project's is labelled and bounded in
-            // authority.
             let both = resolve_with_project(None, Some("Run cargo nextest")).expect("some");
             assert!(both.starts_with(DEFAULT), "the standing prompt still leads");
             assert!(both.contains("Run cargo nextest"));
             assert!(both.contains("from AGENTS.md"));
             assert!(both.contains("cannot grant permissions the sandbox refuses"));
 
-            // Switching the prompt off switches all of it off: honouring half of an
-            // explicit "no system message" would be worse than either answer.
+            // `prompt: ""` switches the project section off too, so half an "off" never happens.
             assert_eq!(
                 resolve_with_project(Some(""), Some("Run cargo nextest")),
                 None
@@ -216,8 +177,7 @@ files you read.";
 
         #[test]
         fn the_default_names_what_the_runtime_actually_enforces() {
-            // Each of these is a real behaviour of this runtime; a prompt that
-            // promised something else would teach the model to be surprised.
+            // Each mention must be a real runtime behaviour, or the model is misled.
             for expected in ["workspace-relative", "confirmed", "edit", "truncated"] {
                 assert!(
                     DEFAULT.contains(expected),
@@ -233,8 +193,7 @@ files you read.";
 
         #[test]
         fn an_empty_configured_prompt_switches_instructions_off() {
-            // Distinct from "no key": a deployment can silence the prompt without
-            // disabling the extension.
+            // Distinct from an absent key: the prompt can be silenced without disabling the extension.
             assert_eq!(resolve(Some("")), None);
             assert_eq!(resolve(Some("   \n ")), None);
         }
@@ -282,9 +241,7 @@ mod component {
     thread_local! {
         /// The resolved instructions, read once at `init`.
         static PROMPT: RefCell<Option<String>> = const { RefCell::new(None) };
-        /// Where they came from, for the `prompt-source` status item. Kept
-        /// beside the text because the text alone cannot say it: a configured
-        /// prompt that happens to equal the built-in one is still configured.
+        /// Where they came from, for the status item: a configured prompt equal to the built-in one is still configured.
         static SOURCE: RefCell<prompt::Source> = const { RefCell::new(prompt::Source::BuiltIn) };
     }
 
@@ -352,8 +309,7 @@ mod component {
                 .iter()
                 .any(|m| matches!(m.role, Role::System))
             {
-                // Someone already set the instructions; adding a second copy each
-                // turn would be worse than adding none.
+                // Already set by the driver or another interceptor: never duplicate it.
                 return Ok(Decision::Proceed);
             }
             request.messages.insert(
@@ -374,12 +330,7 @@ mod component {
     const VERBOSE: &str = "verbose";
 
     impl ClientSurface for Component {
-        /// What this extension offers a client to render.
-        ///
-        /// Two things, both about the instructions it already owns: a command
-        /// to read them and a status item saying where they came from. It
-        /// declares no form — there is nothing here to fill in, and a form
-        /// nobody needs is a shape three renderers would have to get right.
+        /// The command to read the instructions, and the status item showing where they came from.
         fn contribute() -> Contributions {
             let source = SOURCE.with(|slot| *slot.borrow());
             Contributions {
@@ -406,17 +357,14 @@ mod component {
             if name != PROMPT_COMMAND {
                 return Err(InvokeError::Unknown);
             }
-            // Absent means no, and so does any value that is not a plain yes —
-            // a client that sends `verbose: maybe` gets the summary rather
-            // than an error, because the argument is a convenience, not a gate.
+            // Any value other than a plain yes gets the summary: the argument is a convenience, not a gate.
             let verbose = arguments.iter().any(|argument| {
                 argument.name == VERBOSE && matches!(argument.value.trim(), "true" | "yes" | "1")
             });
             let text = PROMPT.with(|slot| prompt::summary(slot.borrow().as_deref(), verbose));
             Ok(Outcome {
                 text,
-                // Reading the prompt does not change what is contributed; the
-                // status item only moves when config does, which is a reboot.
+                // Reading does not change what is contributed; only config (a reboot) does.
                 contributions_changed: false,
             })
         }

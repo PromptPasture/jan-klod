@@ -1,27 +1,6 @@
 //! `interceptor-guardrails` — content policy, as rules an operator writes.
 //!
-//! The interceptor set covers routing, context, tool choice and permission;
-//! nothing inspected **content**. This one does: patterns from `config.yaml`
-//! decide whether a tool argument is refused, put to the user, or allowed.
-//!
-//! Rules are data, never code — see [`rules`] for the shape and for why the
-//! engine's linear-time guarantee is the point rather than a limitation.
-//!
-//! ## The four phases
-//!
-//! - `tool-call` — arguments matching a rule `block` with the rule's reason, or `ask`.
-//! - `after-response` — the model's raw output: redact, or refuse the turn.
-//! - `finalize` — the assembled answer, the last point before the transcript.
-//! - `select-context` — messages on their way out, the only place matching text
-//!   can be kept from leaving the machine at all.
-//!
-//! ## Off unless configured
-//!
-//! No rules means every call proceeds untouched. A content filter nobody asked
-//! for is a surprise, so absence of configuration is absence of opinion.
-//!
-//! The rules are pure Rust with no WIT dependency, so they are unit-tested
-//! natively; the glue compiles for `wasm32` only.
+//! Only interceptor that inspects content: `config.yaml` patterns block, ask about, or redact text; no rules means no change.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod rules;
@@ -56,10 +35,7 @@ mod component {
     use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
 
     thread_local! {
-        /// The rule set, read once from `host-config` at `init`.
-        ///
-        /// Held as a `Result` rather than resolved to a default: a malformed
-        /// rule must keep failing every dispatch, not decay into "no rules".
+        /// Read once at `init`; a `Result`, so a malformed rule keeps failing every dispatch rather than becoming "no rules".
         static RULES: RefCell<Result<Rules, RuleError>> = RefCell::new(Ok(Rules::default()));
     }
 
@@ -69,9 +45,7 @@ mod component {
 
     /// Read and cache the rule set from this extension's `config.yaml` section.
     ///
-    /// An unreadable section reads as empty — that is the same state as being
-    /// unconfigured. A section that *is* readable but holds a broken rule is
-    /// kept as the error, and every later dispatch reports it.
+    /// An unreadable section reads as empty (unconfigured); a broken rule is kept as the error and reported on every dispatch.
     fn load_rules() {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
         let section =
@@ -92,8 +66,7 @@ mod component {
 
     /// The confirmation to put to the driver when a rule asks rather than blocks.
     ///
-    /// The default is refusal, matching every other gate here: an unanswered
-    /// question must not become approval.
+    /// Defaults to refusal: an unanswered question must not become approval.
     fn prompt(tool: &str, reason: &str) -> UserPrompt {
         UserPrompt {
             question: format!("Allow `{tool}`? (a guardrail matched: {reason})"),
@@ -151,9 +124,7 @@ mod component {
 
     /// Run `read` against the rule set, or fail if the rules are broken.
     ///
-    /// The host fails closed at `tool-call` on `Err` and logs-and-proceeds
-    /// elsewhere, which is exactly the severity each phase deserves — so every
-    /// phase reports the same error and lets host policy grade it.
+    /// Every phase reports the same error and lets host policy grade it (fail closed at `tool-call`, log elsewhere).
     fn with_rules<T>(read: impl FnOnce(&Rules) -> T) -> Result<T, InterceptorError> {
         RULES.with(|r| {
             (*r.borrow())
@@ -202,9 +173,7 @@ mod component {
 
     /// `after-response` — the model's raw output, before core parses it.
     ///
-    /// Redacting here rewrites what the turn goes on to treat as the answer,
-    /// which is why the same rules run again at `finalize`: text assembled
-    /// after this point has not been through them.
+    /// Redaction here is repeated at `finalize`, since text assembled later has not been through these rules.
     fn after_response(response: RawResponse) -> Result<Decision, InterceptorError> {
         Ok(
             match with_rules(|rules| rules.review_text(&response.text))? {
@@ -223,8 +192,7 @@ mod component {
         )
     }
 
-    /// `finalize` — the assembled answer, before it reaches the transcript and
-    /// the client. The last point at which a secret can be kept out of the log.
+    /// `finalize` — the assembled answer, before the transcript and client; last chance to keep a secret out of the log.
     fn finalize(answer: &FinalAnswer) -> Result<Decision, InterceptorError> {
         Ok(match with_rules(|rules| rules.review_text(&answer.text))? {
             None => Decision::Proceed,
@@ -243,9 +211,7 @@ mod component {
 
     /// `select-context` — the messages on their way to the provider.
     ///
-    /// The only phase that can keep matching text from *leaving the machine*,
-    /// so a blocking rule here refuses the request rather than sending a
-    /// redacted version of it.
+    /// Only phase that keeps matching text from leaving the machine: a block refuses the request, not a redacted copy.
     fn select_context(request: PendingRequest) -> Result<Decision, InterceptorError> {
         let reviewed = with_rules(|rules| {
             request

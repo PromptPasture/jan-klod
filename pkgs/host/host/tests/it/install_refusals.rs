@@ -1,14 +1,5 @@
-//! What must not be possible around `ext-install` (#213).
-//!
-//! `ext_install.rs` covers `ext::install` as a function — what lands, and
-//! which malformed offers are refused. This covers the *tool*: installing is
-//! the one action that adds code to the runtime, so the interesting
-//! assertions are refusals reached the way a model would reach them.
-//!
-//! Two are existing behaviour that nothing named this path — `ext/` is
-//! outside every jail, and an unsigned artefact already needs its digest —
-//! and a test that does not name the path stops covering it the moment the
-//! path moves. The third, an operator declining, is new.
+//! Refusals a model can reach through `ext-install` (#213). `ext_install.rs` covers
+//! the function itself; this covers the tool path, which must keep its refusals.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -36,13 +27,8 @@ impl Driver for DecliningDriver {
     }
 }
 
-/// `ext/` is not somewhere a guest can write, and this names it.
-///
-/// `sandbox_boundary.rs` proves a guest has no ambient filesystem at all,
-/// which already covers this — but by accident of generality, among
-/// `/etc/passwd` and `.`. The whole install design rests on "no guest can
-/// write `ext/`", and that claim deserves a test that fails if `ext/`
-/// specifically ever becomes reachable.
+/// No guest can write `ext/`. `sandbox_boundary.rs` implies this only incidentally,
+/// so this names the directory and fails if it ever becomes reachable.
 #[test]
 fn a_guest_cannot_write_the_extension_directory() {
     if !common::guests_staged(&[PROBE]) {
@@ -84,10 +70,8 @@ fn install_turn(tag: &str, driver: &mut dyn Driver) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("jk-instref-{tag}-{}", std::process::id()));
     let ext = dir.join("ext");
     std::fs::create_dir_all(&ext).expect("creates the temp ext dir");
-    // A populated `ext/` of its own: booting against the repo's would make an
-    // install write into the working tree, and booting against an empty one
-    // would load no guests at all — the turn would never reach a tool, and
-    // "nothing was installed" would be true for the wrong reason.
+    // A populated `ext/` of its own: the repo's would take the install, and an empty one
+    // would never reach a tool, so "nothing installed" would pass for the wrong reason.
     let staged = common::repo_root().join("ext");
     for guest in [
         "provider-openai",
@@ -102,10 +86,8 @@ fn install_turn(tag: &str, driver: &mut dyn Driver) -> std::path::PathBuf {
             }
         }
     }
-    // A **signed** offer whose key this config trusts. Without it the
-    // install is refused for want of provenance whatever the operator
-    // answers — which is what made the first version of this test pass
-    // with a driver that said yes.
+    // Signed by a key this config trusts. Unsigned, the install is refused for
+    // provenance whatever the operator answers, which once made this test pass wrongly.
     let incoming = dir.join("incoming");
     std::fs::create_dir_all(&incoming).expect("creates the incoming dir");
     let signer = common::minisig::Signer::new();
@@ -172,12 +154,8 @@ extensions:
     ext
 }
 
-/// The operator says no, and nothing is installed.
-///
-/// The new refusal, and it works without anything built for it:
-/// `ext-install` is not on `interceptor-permission`'s read-only allowlist,
-/// so the gate confirms it like any other write. The approval an install
-/// needs is the one the operator already has.
+/// The operator says no, and nothing is installed. `ext-install` is not on the
+/// permission gate's read-only allowlist, so the gate confirms it like any write.
 #[test]
 fn an_install_the_operator_declines_does_not_happen() {
     if !common::guests_staged(&[

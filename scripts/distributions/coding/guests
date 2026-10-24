@@ -1,5 +1,4 @@
-# Everything a coding agent needs: models, the interceptor set, file and git
-# tools, and skills. UI client included.
+# Coding agent: models, interceptors, file and git tools, skills.
 provider-openai
 provider-anthropic
 interceptor-intent-router

@@ -7,7 +7,6 @@ publish.workspace = true
 description = "fetch tool: retrieve a URL through host-http as readable text, with an SSRF guard on the model-supplied address."
 
 [lib]
-# A reactor component: exports tool-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]
