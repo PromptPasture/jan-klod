@@ -1,4 +1,4 @@
-.PHONY: build check test clippy audit deny clean
+.PHONY: build check test clippy doc audit deny clean
 
 DENY_CONFIG := $(abspath $(CURDIR)/../../deny.toml)
 
@@ -18,6 +18,9 @@ test:
 # Every opt-in feature must be named, or its code is skipped silently.
 clippy:
 	cargo clippy --workspace --all-targets --features examples,jk-host/integration -- -D warnings
+
+doc:
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features examples,jk-host/integration
 
 audit:
 	cargo audit -f ../../Cargo.lock

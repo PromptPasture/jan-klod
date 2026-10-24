@@ -91,6 +91,8 @@ jobs:
 
       - run: make clippy-guests
 
+      - run: make doc
+
   harness:
     name: Component harness (exit gate)
     runs-on: ubuntu-latest

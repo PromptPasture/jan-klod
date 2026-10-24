@@ -16,7 +16,7 @@ LIBS := guest-fs
 # Add a guest here once it has host-target unit tests.
 TESTABLE_GUESTS := interceptor-context interceptor-guardrails interceptor-intent-router interceptor-permission interceptor-system interceptor-task-router interceptor-tool-selector test-interceptor-persona tool-edit tool-fetch tool-find tool-fs tool-git tool-memory tool-plan tool-shell tool-web-search
 
-.PHONY: all stage manifests clean test clippy audit deny go-supply-chain spike-deps spike-guest ts-guest py-guest $(GUESTS)
+.PHONY: all stage manifests clean test clippy doc audit deny go-supply-chain spike-deps spike-guest ts-guest py-guest $(GUESTS)
 
 # ts-guest is not opt-in: it skips without jco, so opting in would leave it untested.
 all: manifests ts-guest py-guest
@@ -103,6 +103,9 @@ py-guest:
 clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo clippy --workspace --target wasm32-wasip2 -- -D warnings
+
+doc:
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 # Needs `rustup target add wasm32-wasip2`.
 $(GUESTS):

@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor bundle test test-core test-guests lint-docs harness gate clippy clippy-guests audit deny sbom supply-chain npm-supply-chain supervisor-supply-chain lints-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor bundle test test-core test-guests lint-docs harness gate clippy clippy-guests doc audit deny sbom supply-chain npm-supply-chain supervisor-supply-chain lints-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -38,7 +38,8 @@ help:
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
-	@echo "  gate-commit the pre-commit gate: fmt + stage guests + core check + test"
+	@echo "  doc         build rustdoc for both workspaces (-D warnings)"
+	@echo "  gate-commit the pre-commit gate: fmt + stage guests + core check + doc + test"
 	@echo "  gate-push   the pre-push gate: stage guests + test-guests + both clippys + gate"
 	@echo "              + registry-index-drift + lockfile + supply-chain, in that order"
 	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go + npm)"
@@ -103,6 +104,10 @@ lint-docs:
 
 clippy-guests:
 	$(MAKE) -C $(EXT) clippy
+
+doc: check-spike-deps
+	$(MAKE) -C $(HOST_MK) doc
+	$(MAKE) -C $(EXT) doc
 
 # Cargo cannot share [workspace.lints] across workspaces.
 lints-drift:
@@ -221,6 +226,7 @@ gate-commit:
 	rm -rf $(EXT_DIR)
 	$(MAKE) -C $(EXT) all
 	$(MAKE) -C $(HOST_MK) check
+	$(MAKE) doc
 	$(MAKE) test
 
 # Both clippys run here, not in `gate`, which stays host-only.
