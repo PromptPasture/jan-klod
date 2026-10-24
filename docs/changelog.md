@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-24
+
+- **Security**: **Wasmtime 49.0.4 and the patched rustls stack clear 21 advisories** ([#311](https://github.com/PromptPasture/jan-klod/issues/311)). `cargo update` moved `wasmtime`/`wasmtime-wasi` 49.0.2 → 49.0.4 (with their exact-pinned `cranelift-*`, `pulley-*`, `wasmtime-internal-*` and `wiggle*` siblings), `rustls` 0.23.45 → 0.23.46, `rustls-webpki` 0.103.15 → 0.103.16 and `webpki-roots` 1.0.8 → 1.0.11. All are patch releases, and `Cargo.lock` is the only file that changed. The two that could matter here: a WASI filesystem sandbox escape (RUSTSEC-2026-0352), which guests can't reach today because they get no preopened directories, and a Cranelift wrong jump on aarch64 (RUSTSEC-2026-0379). `make audit` now passes. `make deny` still fails on tokio `AsyncFd` and `unsafe-libyaml`, which have no patched release and are tracked in [#312](https://github.com/PromptPasture/jan-klod/issues/312). `make gate`: 956 passed, 2 skipped, with the same test names as before.
+
 ## 2026-10-11
 
 - **Docs**: **wiki indexes and roadmap brought in line with the repo**. [Root index](index.md) cut to a catalog (adds Quickstart and Changelog; the vision links live in the concepts and decisions indexes). [Guides index](guides/index.md): setup no longer says TinyGo is required. [Roadmap](concepts/roadmap.md): description covers Phases 13–25; status and table mark 21 and 23 done, matching closed #172 and #174.
