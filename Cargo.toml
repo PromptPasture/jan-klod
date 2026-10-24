@@ -65,6 +65,19 @@ thiserror = "2"
 # to file:line; only step-through variable inspection in a debugger is reduced.
 [profile.dev]
 debug = "line-tables-only"
+# Line tables stay in the object files instead of being copied into every linked
+# test binary. Backtraces through our code still resolve to file:line (checked
+# with a panicking test, #309). This is already the macOS default; on Linux it
+# saves ~165 MB.
+split-debuginfo = "unpacked"
+# The incremental cache was the largest thing in `target/`: 1.6 GB after a clean
+# build + test build, `jk-wasm`'s 23 `bindgen!` worlds alone 972 MB, and it grows
+# with every edit. Turning it off costs time on each rebuild after an edit:
+# measured from editing `jk-wasm` to a finished test build, 4.7 s -> 15.9 s; from
+# editing `jk-host`, 2.7 s -> 7.5 s (#309). Turning it off only for `jk-wasm` kept
+# `jk-host` at 2.3 s but left 0.5 GB more on disk, and disk is the constraint here.
+# `CARGO_INCREMENTAL=1` turns it back on for one session.
+incremental = false
 
 # Dependencies get none at all — not even the line tables.
 #
@@ -83,6 +96,12 @@ debug = "line-tables-only"
 # `line-tables-only`.
 [profile.dev.package."*"]
 debug = 0
+# Optimised dependency code is smaller: rlibs and test binaries take ~450 MB less.
+# It costs ~35 s on a clean build, and only a clean one, because dependencies are
+# never rebuilt after an edit to our crates. Test runs get faster, a little under
+# nextest (93 s -> 87 s) and 174 s -> 52 s single-threaded, where the unoptimised
+# Wasmtime compiler is on every test's critical path (#309).
+opt-level = 1
 
 # Linting policy, declared once and inherited by every crate via `lints.workspace = true`.
 # Levels are `warn` (visible, non-blocking locally); CI denies warnings (Slice 1b gate).
