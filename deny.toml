@@ -17,19 +17,20 @@
 # here with a documented reason and an expiry plan.
 #
 # Everything below is `unmaintained`, not a vulnerability: `cargo audit` exits 0
-# on all six and would do so with this list empty. They are here because
-# cargo-deny's default `unmaintained` scope is the whole graph, and every one of
-# them is transitive through Tauri with, in cargo-deny's own words, "No safe
-# upgrade is available!" — see #141 for the measurement that put them here.
+# on all seven and would do so with this list empty. They are here because
+# cargo-deny's default `unmaintained` scope is the whole graph. Six are
+# transitive through Tauri with, in cargo-deny's own words, "No safe upgrade is
+# available!" — see #141 for the measurement that put them here. The seventh is
+# the host's YAML parser, in its own block at the end of the list.
 #
-# The expiry plan is the same for all six and it is not a date: they leave when
+# The expiry plan is the same for all seven and it is not a date: they leave when
 # the crate above them stops depending on them. `make deny` fails the day one of
 # them is fixed upstream and the ID stops matching anything, which is the signal
 # to delete the line. Nothing here may be a `vulnerability` or an `unsound` —
 # if a future entry would be, that is a different decision than this one.
 #
-# ⚠ This list is load-bearing for exactly one thing: `pkgs/clients/gui`. If the Tauri
-# shell is ever dropped, delete this block with it rather than leaving six
+# ⚠ The six Tauri entries are load-bearing for exactly one thing: `pkgs/clients/gui`.
+# If the Tauri shell is ever dropped, delete them with it rather than leaving six
 # standing exemptions for a tree nobody builds.
 ignore = [
     # proc-macro-error <- glib-macros <- glib <- atk <- gtk <- muda/tao.
@@ -43,6 +44,12 @@ ignore = [
     "RUSTSEC-2025-0081", # unic-char-property
     "RUSTSEC-2025-0098", # unic-ucd-version
     "RUSTSEC-2025-0100", # unic-ucd-ident
+
+    # Host-side, not Tauri. unsafe-libyaml <- serde_yaml_ng <- jk-config/jk-host,
+    # which parse and write config.yaml. Unmaintained, with no advisory against
+    # its code. Replacing the parser changes how every config.yaml is read, so
+    # that is its own decision, tracked in #312; this line goes with it.
+    "RUSTSEC-2024-0449", # unsafe-libyaml
 ]
 
 [licenses]
