@@ -25,8 +25,34 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-wasmtime = "49"
-wasmtime-wasi = "49"
+# Default features off: they build GC, async Component Model, threads,
+# stack-switching, profiling, coredump, debug and pooling, none of which the host
+# calls. Measured in #307: clean debug build -20%, `jan-klod-gateway` -23%, same
+# test names. Each feature kept is one the host names:
+# - `runtime`, `std`, `cranelift`: compile and run guests on this machine.
+# - `component-model`: every guest is a component (`bindgen!` in `jk-wasm`).
+# - `cache`, `parallel-compilation`: `Config::cache` in `jk-wasm/src/wasm_cache.rs`.
+# - `wat`: tests build components from WAT text (`Component::new(&engine, WAT_A)`).
+# - `backtrace`: a guest trap's error still says which wasm function trapped.
+# Left out on purpose: `addr2line` and `demangle` read DWARF and the name
+# section, which guests do not have (`strip = true` in pkgs/extensions'
+# `[profile.release]`); `anyhow` only re-exports it for `bindgen!`'s `anyhow`
+# option, which no `bindgen!` here sets.
+# `wasmtime-wasi`'s `p2` turns `async` and `component-model` back on itself.
+wasmtime = { version = "49", default-features = false, features = [
+    "std",
+    "runtime",
+    "cranelift",
+    "component-model",
+    "cache",
+    "parallel-compilation",
+    "wat",
+    "backtrace",
+] }
+# `p2` only: guests are `wasm32-wasip2` components and the linker uses
+# `wasmtime_wasi::p2::add_to_linker_sync`. `p1` would pull `wiggle`; `p3` the
+# async Component Model.
+wasmtime-wasi = { version = "49", default-features = false, features = ["p2"] }
 # `derive` adds no package to the audited tree: serde and serde_derive are both
 # already in Cargo.lock, pulled in by serde_json and serde_yaml_ng.
 serde = { version = "1", features = ["derive"] }
