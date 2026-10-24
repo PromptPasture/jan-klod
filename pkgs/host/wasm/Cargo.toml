@@ -5,8 +5,6 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# The WASM boundary: boot, linker, extension loading, guest capability hosts and sandbox.
-# No session store or agent loop; guest storage arrives as a factory.
 [dependencies]
 jk-config = { path = "../config" }
 jk-protocol = { path = "../protocol" }
@@ -16,24 +14,17 @@ serde_json.workspace = true
 toml = "0.9"
 thiserror.workspace = true
 ureq = "3"
-# SHA-256 for `ext install --sha256`. Zero new packages: sha2 0.10 is already in the lock via wasmtime-wasi.
 sha2 = "0.10"
-# Named only to enable `digest/mac`. jk-host's dev-only blake2 enables it, and dev features reach test builds only.
-# Without this line, `cargo build` and `cargo test` resolve digest differently and compile the whole Wasmtime stack twice. Zero new packages.
 digest = { version = "0.10", features = ["mac"] }
-# Verify-only: the host never signs, so a signing crate would be unused capability. `minisign` would add 10 packages.
 minisign-verify = "0.2.5"
 url = "2"
 
-# `derive` only, for the registry_index example. Runtime code derives nothing.
 [dev-dependencies]
 serde.workspace = true
 
-# Linux command sandbox (Landlock). Target-gated. A safe wrapper over the syscalls, so `unsafe_code = "deny"` still holds.
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
 
-# Off by default: this crate links wasmtime, and registry_index is a build-time generator nothing calls at runtime.
 [features]
 examples = []
 

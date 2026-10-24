@@ -9,19 +9,14 @@ members = [
     "pkgs/host/wasm",
     "pkgs/clients/tui",
 ]
-# Has its own `[workspace]`, so cargo would not adopt it as a member; excluded explicitly.
 exclude = ["pkgs/extensions"]
 
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-# Internal crates, not for crates.io. Also lets cargo-deny's `allow-wildcard-paths` exempt versionless path deps (deny.toml [bans]).
 publish = false
 
 [workspace.dependencies]
-# Default features off (GC, async, threads, profiling, debug, pooling: unused).
-# `backtrace` names the wasm function in guest traps; `wat` builds test components; `cache` is `Config::cache` in jk-wasm.
-# `addr2line` and `demangle` are omitted: guests are stripped and have no DWARF or name section.
 wasmtime = { version = "49", default-features = false, features = [
     "std",
     "runtime",
@@ -32,35 +27,26 @@ wasmtime = { version = "49", default-features = false, features = [
     "wat",
     "backtrace",
 ] }
-# `p2` only: guests are wasm32-wasip2 components. `p1` would pull in `wiggle`; `p3` the async Component Model.
 wasmtime-wasi = { version = "49", default-features = false, features = ["p2"] }
-# `derive` adds no new packages: serde_derive is already in Cargo.lock.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 thiserror = "2"
 
-# Full debug info grew the incremental cache past 15 GB. Backtraces still resolve to file:line.
 [profile.dev]
 debug = "line-tables-only"
-# Keeps line tables out of every linked test binary (~165 MB on Linux). Backtraces still resolve.
 split-debuginfo = "unpacked"
-# Off to keep target/ small (1.6 GB). Costs rebuild time after edits. `CARGO_INCREMENTAL=1` turns it on for one session.
 incremental = false
 
-# Dependencies drop their remaining line tables. Workspace members keep `line-tables-only`, so our backtraces still resolve.
 [profile.dev.package."*"]
 debug = 0
-# Optimised deps: ~450 MB smaller rlibs and faster tests (the unoptimised Wasmtime compiler dominates test time).
-# Costs ~35 s on a clean build only.
 opt-level = 1
 
-# Inherited by every crate via `lints.workspace = true`. Warns locally; CI denies warnings.
 [workspace.lints.rust]
-unsafe_code = "deny"   # generated bindings opt back in locally
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
-nursery = "warn"   # in-development; expect occasional #[allow]
+nursery = "warn"

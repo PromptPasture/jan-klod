@@ -5,7 +5,6 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# Wire contract. Performs no I/O; transports own the sockets. Picks serde_json only for the JSON-RPC envelope and per-command payloads, which need a value type.
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

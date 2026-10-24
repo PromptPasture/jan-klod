@@ -11,15 +11,11 @@ path = "src/main.rs"
 
 [dependencies]
 jk-agent = { path = "../agent" }
-# Component runtime. The surfaces name its capability and guest types directly.
 jk-wasm = { path = "../wasm" }
-# Frame types for the stdio surfaces. Both are already in Cargo.lock via jk-agent.
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
-# SHA-256 digest for detecting hand edits to config.yaml.
 sha2 = "0.10"
-# Wire contract. jk-protocol must not depend on the host crates: it stays serde-only, so clients do not pull in wasmtime.
 jk-protocol = { path = "../protocol" }
 jk-config = { path = "../config" }
 jk-session = { path = "../session" }
@@ -30,27 +26,17 @@ futures-util = { version = "0.3", default-features = false, features = ["sink"] 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "fmt", "ansi"] }
 
-# Examples and integration tests drive guests over the Component Model. None ships in the binary.
 [dev-dependencies]
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
-# Tests drive core through the real UI client library, as a user's TUI does. Test-only. Imported as `jk_tui` to avoid colliding with the provider_probe bindings namespace.
 jk-tui = { path = "../../clients/tui" }
-# Minisign fixtures for `ext install` signature tests. Valid signatures must be accepted, not only invalid ones refused.
-# `minisign` signs but costs 10 packages; ring (Ed25519) and blake2 cost one each.
-# blake2 is pinned to 0.10 so it shares digest 0.10 with sha2.
 blake2 = "0.10"
-# Ed25519 for the fixtures above. Zero new packages: already in the lock via ureq/rustls.
 ring = "0.17.14"
-# Registry-index fixtures state a digest for the bytes they describe, as a generated index does. Zero new packages.
 sha2 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio-tungstenite = { version = "0.29", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
-# Opt-in. `cargo test` builds and links every example and test target, and each links wasmtime statically (~500 MB).
-# Enable with `--features examples` or `integration`; the root Makefile's `gate` and `harness` targets pass them.
-# Clippy still type-checks both.
 [features]
 examples = []
 integration = []

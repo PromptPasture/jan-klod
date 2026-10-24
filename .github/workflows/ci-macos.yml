@@ -1,20 +1,11 @@
 name: CI (macOS sandbox)
 
-# The Seatbelt backend is #[cfg(target_os = "macos")], so ci.yml's Ubuntu jobs never run its tests (#95).
-# This job covers that half; ci.yml's harness job covers Landlock.
-#
-# Separate workflow, not a job in ci.yml: `paths` filters apply per workflow, not per job.
-# Filtered because macOS minutes bill at 10x Linux on this private repo: a full `make gate` costs
-# 150-250 billed minutes per push. So this runs only the platform-gated and core unit tests, on the
-# relevant paths, plus on demand. Widening it is a cost decision: re-decide on #95 first.
-
 on:
   push:
     branches: [main]
     paths:
       - 'pkgs/host/wasm/src/sandbox*.rs'
       - 'pkgs/host/host/tests/it/sandbox_*.rs'
-      # Boot-path confinement test (#125): the only evidence that Runtime::open_process_runner is confined.
       - 'pkgs/host/host/tests/it/execution_config.rs'
       - 'wit/host-process.wit'
       - '.github/workflows/ci-macos.yml'
@@ -22,7 +13,6 @@ on:
     paths:
       - 'pkgs/host/wasm/src/sandbox*.rs'
       - 'pkgs/host/host/tests/it/sandbox_*.rs'
-      # Boot-path confinement test (#125): the only evidence that Runtime::open_process_runner is confined.
       - 'pkgs/host/host/tests/it/execution_config.rs'
       - 'wit/host-process.wit'
       - '.github/workflows/ci-macos.yml'
@@ -45,7 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # wasm32-wasip2: the Seatbelt suite crosses the Component-Model boundary, and guests are staged below.
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
@@ -54,24 +43,18 @@ jobs:
         with:
           workspaces: .
 
-      # Pinned as in ci.yml, since the count guard parses `nextest list`.
-      # Keep in step with CARGO_NEXTEST_VERSION in versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.143
 
-      # Pinned as in ci.yml. Keep in step with WASM_TOOLS_VERSION in versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-tools@1.258.0
 
-      # Pinned as in ci.yml (#208). Missing, it failed guest staging before any Seatbelt test (#296).
       - uses: taiki-e/install-action@v2
         with:
           tool: jaq@2.3.0
 
-      # The `it` binary resolves wit/spike via bindgen!, so every test in it needs wit/spike/deps,
-      # fetched from the committed wit/wkg.lock as in ci.yml.
       - name: Install wkg
         uses: jaxxstorm/action-install-gh-release@v1
         with:
@@ -88,17 +71,11 @@ jobs:
       - name: Stage guest components
         run: make -C pkgs/extensions all
 
-      # Assert the count, not the exit code: the positive guard that `make gate` uses, for the same reason.
-      # These tests are #[cfg(target_os = "macos")], so on another OS they compile to nothing and a run would pass.
-      # Run `list` on its own line with stderr kept, and count from a file: a pipe would hide cargo's failure.
-      # `--color never` is required: CARGO_TERM_COLOR=always colours the module and test name as separate spans,
-      # so a literal grep for sandbox_seatbelt:: matches nothing.
       - name: Guard — the Seatbelt tests must exist on this runner
         run: |
           cargo nextest list -p jk-host \
             --features jk-host/integration --bins --tests \
             --color never > /tmp/nextest-list.txt
-          # Checks both filtered modules (#125): one module alone could compile to zero and still pass.
           for module in sandbox_seatbelt:: execution_config::; do
             n=$(grep -c "$module" /tmp/nextest-list.txt || true)
             echo "ci-macos: $module resolves $n test(s)"
@@ -110,9 +87,6 @@ jobs:
             fi
           done
 
-      # JK_REQUIRE_GUESTS turns a skipped test into a failure, so an unstaged component cannot pass silently.
-      # execution_config:: is filtered, not only a trigger (#125): it adds 5.5 s, while waking the job costs ~35 billed minutes.
-      # Gated at runtime by sandbox::host_backend(), not #[cfg], so Linux runs the same assertions against Landlock (ci.yml).
       - name: Seatbelt sandbox tests, and the boot path that resolves them
         run: |
           cargo nextest run -p jk-host \
@@ -120,6 +94,5 @@ jobs:
         env:
           JK_REQUIRE_GUESTS: "1"
 
-      # Unit tests for the core and wasm boundary; the backend choice in jk-wasm is per-OS (#181).
       - name: Core unit tests
         run: cargo test -p jk-agent -p jk-wasm

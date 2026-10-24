@@ -6,16 +6,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# Turn vocabulary (`Event`, `Message`, `ToolCall`). Lives here, below jk-session, so the log can name it without depending on the loop.
 jk-protocol = { path = "../protocol" }
-# Session store: log, projections and SQLite connection.
 jk-session = { path = "../session" }
-# Component runtime. This crate composes it with the store and names no wasmtime.
 jk-wasm = { path = "../wasm" }
 serde_json.workspace = true
 
 [dev-dependencies]
-# tests/migration.rs builds its pre-log SQLite fixture directly. Dev-only, so the shipped crate links no database.
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [lints]

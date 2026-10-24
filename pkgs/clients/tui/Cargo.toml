@@ -5,24 +5,17 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# A separate client process driving a core (LSP-style), over stdio or REST.
-# Depends on neither jk-agent nor Wasmtime; speaks only the wire contract.
 [[bin]]
 name = "jan-klod"
 path = "src/main.rs"
 
 [dependencies]
 serde_json.workspace = true
-# Serde-only by design, so clients do not pull in the core or Wasmtime.
 jk-protocol = { path = "../../host/protocol" }
 ratatui = "0.30"
-# Already in the tree via ratatui-core, so no new packages. Direct because wrapping needs grapheme, char, byte and display-width counts.
 unicode-width = "0.2"
 unicode-segmentation = "1"
-# Default features off: the extras are HTML output and a getopts binary a terminal client does not want.
-# tui-markdown was rejected: it pulls in syntect, which carries RUSTSEC-2025-0141 and RUSTSEC-2024-0320.
 pulldown-cmark = { version = "0.13", default-features = false }
-# Honours .gitignore for `@` path completion, so ignored paths such as target/ are not offered.
 ignore = "0.4"
 
 [dev-dependencies]

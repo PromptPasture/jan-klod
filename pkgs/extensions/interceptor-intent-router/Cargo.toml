@@ -11,7 +11,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen.workspace = true
-# Pure-Rust language detection for the tier-1 gate. Non-English input bypasses the English-only heuristics (src/router/language.rs).
 whatlang.workspace = true
 
 [lints]

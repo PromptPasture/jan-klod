@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    # Pure-Rust library, not a component; compiled into the guests below.
     "guest-fs",
     "provider-openai",
     "provider-anthropic",
@@ -47,29 +46,23 @@ whatlang = "0.16"
 regex = "1"
 chrono = "0.4"
 
-# Inherited by every guest via `lints.workspace = true`. Duplicates the root workspace's policy: cargo cannot inherit lints across workspaces.
 [workspace.lints.rust]
-unsafe_code = "deny"   # generated bindings opt back in locally
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
-nursery = "warn"   # in-development; expect occasional #[allow]
+nursery = "warn"
 
-# Same as the host workspace: line tables only, so backtraces still resolve to file:line.
 [profile.dev]
 debug = "line-tables-only"
 
-# Dependencies drop their remaining line tables. Guests keep `line-tables-only`.
-# Native test builds only; the wasm guests use `[profile.release]` below.
 [profile.dev.package."*"]
 debug = 0
 
-# All guests are wasm32-wasip2 components and share one size/LTO profile. Cargo reads [profile.*] only from the workspace root.
 [profile.release]
 opt-level = "s"
 strip = true
 lto = true
 
-# Thin LTO declined: guests ~12% larger and `make gate` ~13 s slower, for ~0.3 s saved per guest build. Do not re-propose without new numbers.
