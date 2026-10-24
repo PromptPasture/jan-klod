@@ -76,5 +76,4 @@ mod tool_proc;
 mod tool_selection;
 mod tool_wiring;
 mod wasm_cache;
-mod web_client;
 mod ws;

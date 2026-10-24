@@ -1,8 +1,8 @@
 #!/bin/sh
 # Drift check for the [workspace.lints] blocks.
 #
-# Cargo cannot inherit lints across workspaces, and this repository has three
-# (the host, the guests, the GUI shell), each declaring the same policy. Nothing
+# Cargo cannot inherit lints across workspaces, and this repository has two
+# (the host, the guests), each declaring the same policy. Nothing
 # else keeps them equal, so a lint tightened in one and forgotten in the others
 # makes "one policy for every package" a claim the tree does not back.
 #

@@ -310,8 +310,6 @@ impl Surface {
 /// Every route, with `App` behind them.
 fn router(app: App) -> Router {
     Router::new()
-        .route("/", get(index))
-        .route("/app.js", get(app_js))
         .route("/health", get(health_route))
         .route("/sessions", get(list_sessions).post(create_session))
         .route("/contributions", get(contributions))
@@ -347,14 +345,6 @@ async fn guard(
         app.served_one();
         error_reply(401, "missing or invalid bearer token").into_response()
     }
-}
-
-async fn index() -> Response {
-    asset(WEB_INDEX, "text/html; charset=utf-8")
-}
-
-async fn app_js() -> Response {
-    asset(WEB_APP_JS, "text/javascript; charset=utf-8")
 }
 
 async fn health_route() -> Response {
@@ -795,12 +785,9 @@ fn authorised(
     principals: &HashMap<String, String>,
     path: &str,
 ) -> Option<String> {
-    // `/health`, `/`, and `/app.js` are always open (no credentials required).
-    // The page and bundle are open because they carry no session data and grant
-    // nothing. `/health` is probed by the supervisor without credentials.
+    // `/health` is always open: the supervisor probes it without credentials.
     // Clients need tokens to read sessions, send messages, or answer prompts.
-    // See test `an_api_route_still_refuses_without_a_token`.
-    if matches!(path, "/health" | "/" | "/app.js") {
+    if path == "/health" {
         return Some(String::new()); // Allow, but no principal (open path)
     }
 
@@ -833,18 +820,6 @@ fn accepts_event_stream(headers: &HeaderMap) -> bool {
         .get(axum::http::header::ACCEPT)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.contains("text/event-stream"))
-}
-
-/// The web client, compiled into the binary via `include_str!`. No directory
-/// needed; resolves at **compile time**. `pkgs/clients/web/dist/` committed rather than
-/// built in CI to avoid making Node a build dependency. See
-/// `docs/concepts/architecture.md#user-interfaces-separate-clients` (#119).
-const WEB_INDEX: &str = include_str!("../../../clients/web/dist/index.html");
-const WEB_APP_JS: &str = include_str!("../../../clients/web/dist/app.js");
-
-/// A static asset, served with its content type.
-fn asset(body: &'static str, content_type: &'static str) -> Response {
-    ([(axum::http::header::CONTENT_TYPE, content_type)], body).into_response()
 }
 
 impl IntoResponse for Reply {

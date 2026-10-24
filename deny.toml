@@ -1,10 +1,9 @@
 # cargo-deny policy — the primary supply-chain gate for the Rust host workspace
 # (the repo root, whose members are pkgs/host/agent, pkgs/host/config,
-# pkgs/host/host, pkgs/host/protocol, pkgs/host/session and pkgs/clients/tui), the guest
+# pkgs/host/host, pkgs/host/protocol, pkgs/host/session and pkgs/clients/tui) and the guest
 # extensions workspace (pkgs/extensions/*, one shared Cargo.lock across all
-# guests), and the GUI shell workspace (pkgs/clients/gui, which owns the Tauri tree and is kept out of the host workspace precisely so that tree is not on
-# everyone's build). One shared policy keeps the license / advisory / source rules
-# identical across all three workspaces. Every invocation points here with
+# guests). One shared policy keeps the license / advisory / source rules
+# identical across both workspaces. Every invocation points here with
 # `--config`, so the file's location is not significant. Closes the Phase 1
 # supply-chain gate (docs/decisions/2026-06-29-extension-technologies/PLAN.md).
 #
@@ -16,36 +15,17 @@
 # RUSTSEC vulnerabilities are denied by default. Accept one only by listing its ID
 # here with a documented reason and an expiry plan.
 #
-# Everything below is `unmaintained`, not a vulnerability: `cargo audit` exits 0
-# on all seven and would do so with this list empty. They are here because
-# cargo-deny's default `unmaintained` scope is the whole graph. Six are
-# transitive through Tauri with, in cargo-deny's own words, "No safe upgrade is
-# available!" — see #141 for the measurement that put them here. The seventh is
-# the host's YAML parser, in its own block at the end of the list.
+# The entry below is `unmaintained`, not a vulnerability: `cargo audit` exits 0
+# on it and would do so with this list empty. It is here because cargo-deny's
+# default `unmaintained` scope is the whole graph.
 #
-# The expiry plan is the same for all seven and it is not a date: they leave when
-# the crate above them stops depending on them. `make deny` fails the day one of
-# them is fixed upstream and the ID stops matching anything, which is the signal
-# to delete the line. Nothing here may be a `vulnerability` or an `unsound` —
-# if a future entry would be, that is a different decision than this one.
-#
-# ⚠ The six Tauri entries are load-bearing for exactly one thing: `pkgs/clients/gui`.
-# If the Tauri shell is ever dropped, delete them with it rather than leaving six
-# standing exemptions for a tree nobody builds.
+# The expiry plan is not a date: it leaves when the crate above it stops
+# depending on it. `make deny` fails the day it is fixed upstream and the ID
+# stops matching anything, which is the signal to delete the line. Nothing here
+# may be a `vulnerability` or an `unsound` — if a future entry would be, that is
+# a different decision than this one.
 ignore = [
-    # proc-macro-error <- glib-macros <- glib <- atk <- gtk <- muda/tao.
-    # Linux only; the darwin and Windows graphs never contain it.
-    "RUSTSEC-2024-0370",
-    # The rust-unic project, retired wholesale in one advisory-db event
-    # (rustsec/advisory-db#2414). All five arrive via one crate:
-    # unic-* <- urlpattern <- tauri-utils.
-    "RUSTSEC-2025-0075", # unic-char-range
-    "RUSTSEC-2025-0080", # unic-common
-    "RUSTSEC-2025-0081", # unic-char-property
-    "RUSTSEC-2025-0098", # unic-ucd-version
-    "RUSTSEC-2025-0100", # unic-ucd-ident
-
-    # Host-side, not Tauri. unsafe-libyaml <- serde_yaml_ng <- jk-config/jk-host,
+    # unsafe-libyaml <- serde_yaml_ng <- jk-config/jk-host,
     # which parse and write config.yaml. Unmaintained, with no advisory against
     # its code. Replacing the parser changes how every config.yaml is read, so
     # that is its own decision, tracked in #312; this line goes with it.
@@ -70,35 +50,6 @@ allow = [
 ]
 # Require high confidence before a license is inferred from file text.
 confidence-threshold = 0.9
-
-# MPL-2.0, named crate by crate rather than added to `allow` above.
-#
-# The distinction is the whole point: `allow` would open MPL-2.0 for all ~660
-# crates in the three workspaces, and this opens it for five. A sixth MPL crate
-# appearing anywhere still fails the gate, which is what keeps this an exception
-# list and not a policy change.
-#
-# All five are unavoidable at the system-webview layer, measured in #141:
-# `dom_query` (cssparser, cssparser-macros, dtoa-short, selectors) and `dirs`
-# (option-ext) are non-optional dependencies of `wry`, the webview binding Tauri
-# sits on — so dropping Tauri for something thinner does not remove them. They
-# are in the darwin graph as well as the Linux one, so narrowing `[graph]
-# targets` does not either.
-#
-# Why this is an acceptable licence and copyleft generally is not: MPL-2.0 is
-# file-level copyleft. Linking these crates unmodified obliges us to make *their*
-# source available — which crates.io already does — and imposes nothing on
-# jan-klod's own Apache-2.0 code. If we ever patch one of them, that file's
-# source has to ship, and that is the obligation to remember.
-#
-# ⚠ Same scope note as the advisory block: these exist for `pkgs/clients/gui` alone.
-exceptions = [
-    { name = "cssparser", allow = ["MPL-2.0"] },
-    { name = "cssparser-macros", allow = ["MPL-2.0"] },
-    { name = "dtoa-short", allow = ["MPL-2.0"] },
-    { name = "selectors", allow = ["MPL-2.0"] },
-    { name = "option-ext", allow = ["MPL-2.0"] },
-]
 
 [bans]
 # Duplicate transitive versions are noise, not a security failure, in a young tree

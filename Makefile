@@ -1,4 +1,4 @@
-.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor gui bundle test test-core test-guests test-web test-gui lint-docs harness gate clippy clippy-gui clippy-guests audit deny sbom supply-chain web-supply-chain supervisor-supply-chain web-dist-drift lints-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-gui chat-telegram probe config clean install-hooks setup check-spike-deps
+.PHONY: help wit all core extensions self-extend-fixture ext ext-new supervisor bundle test test-core test-guests lint-docs harness gate clippy clippy-guests audit deny sbom supply-chain npm-supply-chain supervisor-supply-chain lints-drift registry-index registry-index-drift lockfile gate-commit gate-push run serve chat chat-telegram probe config clean install-hooks setup check-spike-deps
 
 .DEFAULT_GOAL := all
 
@@ -16,14 +16,6 @@ HOST_WS := .
 HOST_MK := pkgs/host
 EXT := pkgs/extensions
 SUPERVISOR := pkgs/host/supervisor
-WEB := pkgs/clients/web
-# The Tauri shell (#141, #142). Its own cargo workspace, deliberately: Tauri
-# resolves 329 packages nothing else here needs, and as a member of $(HOST_WS) they
-# would be on every `cargo test` and every CI run. Nothing on the default build
-# path reaches it — `all` does not, `gate` does not — which is the point. Its
-# supply-chain gates are *not* optional in the same way: `lockfile`, `deny` and
-# `audit` below all name it.
-GUI_DIR := pkgs/clients/gui
 
 # EXT_DIR mirrors the extensions sub-makefile's staging dir.
 CONFIG := $(abspath config.yaml)
@@ -58,36 +50,29 @@ help:
 	@echo "  core        build the host workspace"
 	@echo "  extensions  build the Rust guests, staged in ext/ (alias: ext)"
 	@echo "  ext-new     scaffold a new extension: NAME=<name> KIND=<kind> [LANG=rust|ts|py]"
-	@echo "  gui         build the Tauri shell and stage it beside jan-klod"
-	@echo "  bundle      release archive; DIST=coding|headless-chat|minimal for one,"
-	@echo "              GUI=1 to ship the window too (archive gains '-gui')"
+	@echo "  bundle      release archive; DIST=coding|headless-chat|minimal for one"
 	@echo "  test        run host-side unit tests only (core + guests + supervisor);"
 	@echo "              the integration suite needs 'gate' or 'harness' instead"
 	@echo "  test-core   run the host workspace's unit tests only (see 'test')"
 	@echo "  test-guests run the guests' native tests + the Go supervisor only"
-	@echo "  test-web    run the browser client's suite (pkgs/clients/web; needs Node, not in 'test')"
 	@echo "  lint-docs   lint every tracked .md with markdownlint-cli2 (needs Node; not in 'test')"
-	@echo "  test-gui    run the Tauri shell's suite (pkgs/clients/gui; needs a display, not in 'test')"
-	@echo "  clippy-gui  lint the Tauri shell (-D warnings)"
 	@echo "  clippy-guests lint the wasm guests, native + wasm32 (-D warnings)"
-	@echo "  web-dist-drift  check pkgs/clients/web/dist/ is still what pkgs/clients/web/src/ builds"
-	@echo "  lints-drift     check the [workspace.lints] blocks of the three cargo workspaces agree"
+	@echo "  lints-drift     check the [workspace.lints] blocks of the two cargo workspaces agree"
 	@echo "  registry-index  write the registry index for ext/ (REGISTRY_INDEX=path)"
 	@echo "  registry-index-drift  check that index generation is deterministic"
 	@echo "  harness     build guests, then verify each + the exit-gate flow offline"
 	@echo "  gate        build guests, then run the full offline integration exit gate"
 	@echo "  clippy      lint the host workspace (-D warnings)"
 	@echo "  gate-commit the pre-commit gate: fmt + stage guests + core check + test"
-	@echo "  gate-push   the pre-push gate: stage guests + test-guests + all three clippys + gate"
+	@echo "  gate-push   the pre-push gate: stage guests + test-guests + both clippys + gate"
 	@echo "              + registry-index-drift + lockfile + supply-chain, in that order"
-	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go + web)"
+	@echo "  supply-chain  run every supply-chain gate (audit + deny + sbom + go + npm)"
 	@echo "  audit       cargo-audit the host workspace + every guest (RUSTSEC)"
 	@echo "  deny        cargo-deny license/advisory/source policy (host + guests)"
 	@echo "  sbom        generate sbom.cdx.json for Rust workspace (cargo-cyclonedx)"
-	@echo "  web-supply-chain  npm lockfile sync + npm audit for pkgs/clients/web"
+	@echo "  npm-supply-chain  npm lockfile sync + npm audit for pkgs/extensions (TS guest tools)"
 	@echo "  supervisor-supply-chain  go mod verify + govulncheck for pkgs/host/supervisor"
 	@echo "  run         boot the core against config.yaml + ext/"
-	@echo "  chat-gui    open the web client in a window (builds the shell first)"
 	@echo "  probe       drive a live provider completion (needs api key + network)"
 	@echo "  config      print the resolved extension plan"
 	@echo "  wit         validate the WIT contracts"
@@ -171,62 +156,20 @@ test-guests:
 	$(MAKE) -C $(EXT) test
 	cd $(SUPERVISOR) && go vet ./... && go test ./...
 
-# The browser client's suite (#127). Deliberately **not** a prerequisite of
-# `test` above, which is what keeps it off the pre-commit path `gate-commit`
-# runs: the npm legs are CI-only here, the way `web-supply-chain` already is,
-# so a contributor without Node can still run every local gate. That is the
-# same cost #119 box 1 declined when it kept Node off the Rust build path.
-#
-# `ci.yml` calls this by name, and that is what stops it becoming the target
-# #130 describes — aggregated somewhere nothing invokes, which looks exactly
-# like a gate that passes.
-#
-# No `npm ci` first, and that is a property of the suite rather than an
-# omission: tests/turn.test.ts imports `node:test`, `node:assert` and a local
-# ./dom.ts, and nothing else, so it needs Node on PATH and no install at all.
-# package.json's `test` script runs the .ts sources directly via
-# --experimental-strip-types, which needs Node >= 22.6.
-test-web:
-	cd $(WEB) && npm test
-
 # Markdown lint (#234), rules in .markdownlint.yaml. Tracked files only:
-# a glob would also walk generated trees such as pkgs/clients/web/dist/.
+# a glob would also walk generated or vendored trees such as node_modules/.
 # Pinned like every other npm tool here, so a release cannot change the verdict.
 # The pre-commit hook runs it when a commit stages a .md file; ci.yml runs it
-# in the job that already sets up Node for `test-web`.
+# in the job that already sets up Node.
 lint-docs:
 	git ls-files -z '*.md' | xargs -0 npx --yes markdownlint-cli2@0.23.3
-
-# The Tauri shell's suite (#142). Deliberately **not** a prerequisite of `test`,
-# for the same reason `test-web` is not: it belongs to a workspace that is not
-# on the default build path, and folding it in would put a 256-package build and
-# a ~40s link on every contributor's pre-commit.
-#
-# `ci.yml` calls this by name — the rule from #130, and it bites hardest here,
-# because this is the only suite in the repository that can legitimately skip
-# itself. The skip is what JK_REQUIRE_GUI turns back into a failure, and CI sets
-# it on the jobs that actually have a display.
-test-gui:
-	$(MAKE) -C $(GUI_DIR) test
-
-clippy-gui:
-	$(MAKE) -C $(GUI_DIR) clippy
 
 # The guests are their own cargo workspace too, and declare the same strict
 # lint policy — see `pkgs/extensions/Makefile` for why this runs twice.
 clippy-guests:
 	$(MAKE) -C $(EXT) clippy
 
-# The committed bundle is still what the sources build (#127). Kept out of
-# `test-web` on cost: that leg needs Node on PATH and installs nothing, while
-# this one runs `npm ci` against the pinned toolchain, so folding them together
-# would make the cheap check pay for the expensive one. CI-only for the same
-# reason `test-web` is — see the comment above it. The script carries why the
-# rebuild happens in a temp tree and why `npm ci` is not `npm install`.
-web-dist-drift:
-	sh scripts/web-dist-drift.sh
-
-# Cargo cannot share [workspace.lints] across the three workspaces, so this is
+# Cargo cannot share [workspace.lints] across the two workspaces, so this is
 # what keeps the policy one policy (#275). Cheap: no build, no toolchain.
 lints-drift:
 	sh scripts/lints-drift.sh
@@ -276,17 +219,6 @@ registry-index-drift: extensions
 supervisor:
 	cd $(SUPERVISOR) && go build ./...
 
-# The Tauri shell, built and put where `jan-klod --gui` will look for it.
-#
-# The staging step is the whole reason this is a target rather than a `cd`:
-# `jan-klod --gui` resolves `jan-klod-gui` as a sibling of itself, which is true
-# in a bundle and false in a developer tree, because two workspaces mean two
-# `target/` directories. Copying it beside the host workspace's binaries makes
-# the developer path and the shipped path find the shell the same way, instead
-# of teaching the client a second rule that only a checkout would ever use.
-gui:
-	$(MAKE) -C $(GUI_DIR) stage
-
 # Self-contained release bundle: core binary + staged guests + config + README,
 # as dist/jan-klod-<version>-<os>-<arch>.tar.gz.
 BUNDLE_OUT ?= $(abspath dist)
@@ -298,30 +230,9 @@ BUNDLE_OUT ?= $(abspath dist)
 # left as an intention.
 DIST ?=
 
-# `make bundle GUI=1` also ships the Tauri window, and the archive name gains
-# `-gui` so it does not overwrite the one without it.
-#
-# **A second axis, not a fourth distribution**, and that is
-# scripts/distributions/README.md's rule rather than a preference: "A
-# distribution says what a jan-klod install is *for*. It is not a client choice
-# — `tui` versus `gui` is how you look at the runtime, and that is orthogonal to
-# what the runtime does." #143 asked for a `gui` distribution beside the other
-# three; taking that literally would have duplicated `coding`'s guest list into
-# a directory whose only real difference is one binary, and left two lists to
-# keep in step. So `DIST` still says what the install is for and `GUI` says
-# whether a window ships — `make bundle DIST=coding GUI=1` is both.
-#
-# Opt-in rather than always-on because it is not free: +329 packages to build,
-# ~10 MB in the archive, and on Linux a webkit2gtk build dependency the other
-# archives do not need (#141).
-GUI ?=
-GUI_BIN := $(abspath $(GUI_DIR)/target/release/jan-klod-gui)
-JK_GUI_BIN := $(if $(GUI),$(GUI_BIN),)
-
 bundle: extensions
 	cd $(HOST_WS) && cargo build --release -p jk-host -p jk-tui
-	@if [ -n "$(GUI)" ]; then $(MAKE) -C $(GUI_DIR) release; fi
-	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT) "$(abspath scripts/distributions/$(DIST)/skills)"; 	else 	  JK_GUI_BIN="$(JK_GUI_BIN)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
+	@if [ -n "$(DIST)" ]; then 	  sh scripts/dist-stage.sh "$(DIST)" "$(EXT_DIR)" "$(BUNDLE_OUT)/.staged-$(DIST)"; 	  JK_DIST="$(DIST)" sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod 	    "$(BUNDLE_OUT)/.staged-$(DIST)" "$(abspath scripts/distributions/$(DIST)/config.yaml)" $(BUNDLE_OUT) "$(abspath scripts/distributions/$(DIST)/skills)"; 	else 	  sh scripts/bundle.sh $(HOST_WS)/target/release/jan-klod-gateway $(HOST_WS)/target/release/jan-klod $(EXT_DIR) $(CONFIG) $(BUNDLE_OUT); 	fi
 
 # Lint the host workspace, then say what this platform could not lint.
 #
@@ -353,37 +264,26 @@ clippy: check-spike-deps
 # supply-chain job — the same commands typed twice, free to drift the way
 # the rest of #72 was about. Named here, both now call it.
 lockfile:
-	@for m in $(HOST_WS)/Cargo.toml $(EXT)/Cargo.toml $(GUI_DIR)/Cargo.toml; do \
+	@for m in $(HOST_WS)/Cargo.toml $(EXT)/Cargo.toml; do \
 	  cargo metadata --locked --format-version 1 --manifest-path "$$m" >/dev/null \
 	    && echo "lockfile current: $$m" \
 	    || { echo "stale lockfile: $$m (run: cargo update --manifest-path $$m)" >&2; exit 1; }; \
 	done
 
-# Each subtree owns its own audit/deny invocation; root fans out to all three.
-#
-# `pkgs/clients/gui` is here and not optional. It is the tree that made `deny.toml` grow
-# eleven named entries (#141), so a policy run that skipped it would be checking
-# every workspace except the one the policy was widened for.
+# Each subtree owns its own audit/deny invocation; root fans out to both.
 audit deny:
 	$(MAKE) -C $(HOST_MK) $@
 	$(MAKE) -C $(EXT) $@
-	$(MAKE) -C $(GUI_DIR) $@
 
 # CycloneDX SBOM for all Rust crates. Install once: cargo install cargo-cyclonedx
 #
-# `pkgs/clients/gui` is generated too, and it is not a formality: `jan-klod-gui` is a
-# binary a `-gui` archive ships, and it carries 329 packages none of the others
-# do (#141). An SBOM that describes the gateway and the client but not the third
-# binary in the same tarball answers the question it exists to answer — "what is
-# in this release?" — with two thirds of it.
-#
-# `cd` per workspace because cargo-cyclonedx writes beside each manifest; the
+# cargo-cyclonedx writes one document beside each member's manifest; the
 # results are then merged into one document by `jaq` (#208).
 #
 # **One** glob, `src/*/*.cdx.json`, and that is not a shortcut: every crate in
-# both workspaces — the seven host members (`jk-session` joined in Phase 21b,
-# `jk-wasm` in 21c) and `jk-gui` — is a direct child of `src/`, so one
-# level of wildcard reaches all eight and nothing else.
+# the workspace — the seven members (`jk-session` joined in Phase 21b,
+# `jk-wasm` in 21c) — is a direct child of `src/`, so one
+# level of wildcard reaches all seven and nothing else.
 # It has to be exactly one level. `src/**/...` is what was here before, and in
 # `sh` (no `globstar`) `**` is just `*`, so it was never recursive; when the
 # members moved out from under `pkgs/host/core/` it silently stopped matching four of
@@ -394,10 +294,9 @@ audit deny:
 SBOM_DOCS := $(HOST_MK)/*/*.cdx.json pkgs/clients/*/*.cdx.json
 sbom:
 	cd $(HOST_WS) && cargo cyclonedx --format json --quiet
-	cd $(GUI_DIR) && cargo cyclonedx --format json --quiet
 	@n=$$(ls $(SBOM_DOCS) | wc -l | tr -d ' '); \
-	  test "$$n" -eq 8 \
-	    || { echo "sbom: expected 8 per-crate documents, found $$n:" >&2; \
+	  test "$$n" -eq 7 \
+	    || { echo "sbom: expected 7 per-crate documents, found $$n:" >&2; \
 	         ls $(SBOM_DOCS) >&2; exit 1; }
 	cat $(SBOM_DOCS) | \
 	  jaq -s '{bomFormat:.[0].bomFormat,specVersion:.[0].specVersion,version:1,serialNumber:.[0].serialNumber,components:[.[].components//[]|.[]]}' \
@@ -410,8 +309,8 @@ sbom:
 # gate that passes.
 #
 # Advisories only. `npm audit` is the analogue of `cargo audit`; there is no
-# analogue here of `cargo deny`'s licence and source policy, so pkgs/clients/web's
-# dependencies are checked for known vulnerabilities and for nothing else.
+# analogue here of `cargo deny`'s licence and source policy, so pkgs/extensions'
+# npm dependencies are checked for known vulnerabilities and for nothing else.
 #
 # `npm ci --dry-run` first, and it is load-bearing rather than belt-and-braces:
 # `npm audit` reads package-lock.json and **does not notice** a package.json
@@ -421,14 +320,14 @@ sbom:
 # tree that builds. `--dry-run` because resolving the tree is the whole point;
 # installing it is not, and `npm audit` needs no node_modules.
 #
-# DO NOT add --omit=dev or --production here. Every one of pkgs/clients/web's 29
-# packages is a devDependency (esbuild + typescript; there are no runtime
-# dependencies at all), so omitting them makes this command scan an empty set,
+# DO NOT add --omit=dev or --production here. Every one of pkgs/extensions' 27
+# npm packages is a devDependency (esbuild and its per-platform binaries; there
+# are no runtime dependencies at all), so omitting them makes this command scan an empty set,
 # report "found 0 vulnerabilities" and exit 0 forever. The usual advice — audit
 # what ships, skip the build tools — inverts this gate's entire purpose: a
 # compromised build-time package runs with the privileges of whoever builds.
-web-supply-chain:
-	cd $(WEB) && npm ci --dry-run && npm audit
+npm-supply-chain:
+	cd $(EXT) && npm ci --dry-run && npm audit
 
 # The supervisor's own Go leg (#130). A named target, and the name is the whole
 # fix: this was the last line of `supply-chain` below, and CI calls the legs by
@@ -456,7 +355,7 @@ supervisor-supply-chain:
 
 # License/advisory/source policy + RUSTSEC audit (host + guests), Go vuln
 # scan (guests + supervisor), the npm advisory scan, and the SBOM.
-supply-chain: deny audit sbom web-supply-chain supervisor-supply-chain
+supply-chain: deny audit sbom npm-supply-chain supervisor-supply-chain
 	$(MAKE) -C $(EXT) go-supply-chain
 
 # --- Integration (host + staged extensions; spans both subtrees) ---
@@ -591,12 +490,9 @@ gate-commit:
 # unit tests once --features jk-host/integration is added, so running
 # `test-core` a second time here would just repeat it for no extra coverage.
 #
-# All three clippys run here and none of them runs in `gate`, which stays
-# inside the host workspace. `clippy-guests` came with #205 and `clippy-gui`
-# with #207, both filed for the same reason: a strict lint policy that only
-# CI runs is a policy a developer meets after pushing. `clippy-gui` compiles
-# the Tauri workspace, which is 329 packages nothing else here needs — that
-# cost belongs on a push and not on a commit.
+# Both clippys run here and neither runs in `gate`, which stays inside the
+# host workspace. `clippy-guests` came with #205: a strict lint policy that
+# only CI runs is a policy a developer meets after pushing.
 #
 # **This does not make a green push imply a green CI**, and it is worth
 # knowing why. `pkgs/host/host/tests/it/sandbox_landlock.rs` is
@@ -611,7 +507,6 @@ gate-push:
 	$(MAKE) test-guests
 	$(MAKE) clippy
 	$(MAKE) clippy-guests
-	$(MAKE) clippy-gui
 	$(MAKE) gate
 	$(MAKE) registry-index-drift
 	$(MAKE) lints-drift
@@ -638,12 +533,6 @@ ADDR ?= 127.0.0.1:8787
 SESSION ?= cli
 chat:
 	cd $(HOST_WS) && cargo run --quiet -p jk-tui -- $(ADDR) $(SESSION)
-
-# The same client, in a window. `gui` first so the shell is staged beside the
-# binary `cargo run` produces — without it `--gui` correctly reports that the
-# shell is not installed, which is accurate and unhelpful as a dev loop.
-chat-gui: gui
-	cd $(HOST_WS) && cargo run --quiet -p jk-tui -- --gui --addr $(ADDR)
 
 # Telegram bot (headless). Needs TELEGRAM_BOT_TOKEN + network.
 chat-telegram:
@@ -689,5 +578,4 @@ install-hooks:
 clean:
 	$(MAKE) -C $(HOST_MK) clean
 	$(MAKE) -C $(EXT) clean
-	$(MAKE) -C $(GUI_DIR) clean
 	rm -rf $(CACHE_DIR)

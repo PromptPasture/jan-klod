@@ -30,8 +30,8 @@ use std::time::Duration;
 
 /// Resolve one repository binary: sibling exe first, then `PATH`.
 ///
-/// Shared rule for gateway (stdio spawns it) and GUI (`--gui`); "sibling, else PATH"
-/// works for bundles (all together) and dev trees (different `target/` dirs).
+/// "Sibling, else PATH" works for bundles (all together) and dev trees
+/// (different `target/` dirs).
 #[must_use]
 pub fn sibling_bin(name: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
@@ -47,13 +47,6 @@ pub fn sibling_bin(name: &str) -> PathBuf {
 #[must_use]
 pub fn gateway_bin() -> PathBuf {
     sibling_bin("jan-klod-gateway")
-}
-
-/// Resolve `jan-klod-gui` (Tauri shell in separate `pkgs/clients/gui` workspace—see [`sibling_bin`]).
-/// Optional: `cargo build` doesn't produce it; `--gui` checks and reports if missing.
-#[must_use]
-pub fn gui_bin() -> PathBuf {
-    sibling_bin("jan-klod-gui")
 }
 
 /// `Authorization` header line (read per-request, not cached, so token changes take effect).

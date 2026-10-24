@@ -401,15 +401,15 @@ fn principal_resolves_from_credentials_in_the_guard() {
         "/health should be open with token: {health_with_auth}"
     );
 
-    // / (index) stays open without credentials
+    // `/` and `/app.js` served the removed web client and were exempt from
+    // the token (#318). With the client gone, `/health` is the only open path,
+    // so these are refused like any other route rather than falling through.
     assert!(
-        index_no_auth.contains("200 OK"),
-        "/ should be open without token: {index_no_auth}"
+        index_no_auth.contains("401"),
+        "/ is no longer exempt from the token: {index_no_auth}"
     );
-
-    // /app.js stays open without credentials
     assert!(
-        app_js_no_auth.contains("200 OK"),
-        "/app.js should be open without token: {app_js_no_auth}"
+        app_js_no_auth.contains("401"),
+        "/app.js is no longer exempt from the token: {app_js_no_auth}"
     );
 }

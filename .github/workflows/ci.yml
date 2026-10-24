@@ -25,7 +25,7 @@ env:
 
 jobs:
   lint-test:
-    name: Lint + test (host workspace + web client)
+    name: Lint + test (host workspace)
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 2 for `make wit`'s version check, which compares `wit/`
@@ -153,55 +153,19 @@ jobs:
         env:
           JK_REQUIRE_GUESTS: "1"
 
-      # The browser client's suite (#127). It ran nowhere until this step: the
-      # tests existed and passed, but no Makefile target and no workflow named
-      # them, so every frame kind, the `ask` roundtrip and cancel were unguarded
-      # — which is why pkgs/host/host/tests/it/web_client.rs does not lean on them.
-      #
-      # Here rather than in a job of its own: `make test-web` is one command
-      # that needs Node and nothing else, and a separate job would pay another
-      # checkout and another runner for it — the same trade #120 made for the
-      # npm supply-chain leg. Here rather than in the `supply-chain` job for the
-      # plainer reason that this is a test, not a supply-chain gate.
-      #
-      # node-version pinned, and pinned to the same string the `supply-chain`
-      # job uses; keep the two in step. Quoted, because an unquoted 22.23.2
-      # would be fine but an unquoted 22.10 parses as a float and silently
+      # Node for the markdown lint below (`npx markdownlint-cli2`). Pinned to
+      # the same string the `supply-chain` job uses; keep the two in step.
+      # Quoted, because an unquoted 22.10 parses as a float and silently
       # selects 22.1.
-      #
-      # `cache: npm` here and deliberately not in the `supply-chain` job: that
-      # job's leg resolves without installing and leaves 8 KB behind, which is
-      # why its comment says to add a cache the day a step installs. The drift
-      # check below is that day — it runs `npm ci`, which fetches esbuild's
-      # platform binary on every run.
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.2'
-          cache: npm
-          cache-dependency-path: pkgs/clients/web/package-lock.json
 
-      - name: Web client tests (pkgs/clients/web)
-        run: make test-web
-
-      # Markdown lint (#234). Here because this job already has Node.
+      # Markdown lint (#234).
       - name: Markdown lint
         run: make lint-docs
 
-      # The committed `pkgs/clients/web/dist/` is still what `pkgs/clients/web/src/` builds
-      # (#127). #119 box 1 committed the bundle on the argument that this
-      # repository's other generated artifacts — protocol.schema.json,
-      # ext/*.manifest.toml, wit/wkg.lock — each carry a drift check; dist/ was
-      # the first one without. `serve.rs` embeds it with include_str!, so
-      # without this an edit to pkgs/clients/web/src/*.ts that is never rebuilt makes the
-      # core serve a stale client with the whole of CI green.
-      #
-      # Rebuilds in a temp tree and diffs, so the step cannot "fix" the drift by
-      # leaving a rebuilt dist/ in the runner's checkout. The script says why it
-      # uses `npm ci` rather than `npm install`.
-      - name: Web dist drift (pkgs/clients/web/dist is what src builds)
-        run: make web-dist-drift
-
-      # The three cargo workspaces cannot inherit one [workspace.lints] block, so
+      # The two cargo workspaces cannot inherit one [workspace.lints] block, so
       # this fails when they stop declaring the same policy.
       - name: Lint policy drift ([workspace.lints] in every workspace)
         run: make lints-drift
@@ -303,58 +267,6 @@ jobs:
         run: make registry-index
       - run: make gate
 
-  gui:
-    name: GUI shell (pkgs/clients/gui)
-    runs-on: ubuntu-latest
-    # A job of its own, unlike `test-web`, and the reason is the tree rather
-    # than a preference: `pkgs/clients/gui` is a separate cargo workspace with 256
-    # packages the host workspace does not have (#141). Folding it into
-    # `lint-test` would put that build and a distinct `rust-cache` workspace key
-    # on the job every other check waits for; here it runs in parallel on a
-    # runner that bills at 1x.
-    #
-    # Nothing else in CI covers it: `make gate` and `make clippy` are the host
-    # workspace, and `pkgs/clients/gui` is not a member. Without this job the shell would
-    # compile nowhere and its tests would run nowhere, which is the #130 failure
-    # — a check that does not run looks exactly like one that passes. The
-    # supply-chain job *does* cover it already, because the root `lockfile`,
-    # `deny` and `audit` targets name all three workspaces.
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: pkgs/clients/gui
-
-      # The build-time half of what #141 measured. `xvfb` is the other half:
-      # a webview needs a display server, and without one `make test-gui` skips
-      # itself — which is exactly the silent no-op JK_REQUIRE_GUI exists to
-      # forbid, so the display has to be real before that flag means anything.
-      - name: Install the webview build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev xvfb
-
-      - name: Format
-        run: make -C pkgs/clients/gui fmt
-
-      - name: Lint
-        run: make clippy-gui
-
-      # `JK_REQUIRE_GUI=1` turns "no display, skipping" into a failure. Paired
-      # with `xvfb-run` rather than set on its own: the flag asserts that a skip
-      # here would be a lie, and xvfb is what makes that true.
-      - name: Test (unit + webview smoke, under xvfb)
-        env:
-          JK_REQUIRE_GUI: "1"
-        run: xvfb-run -a make test-gui
-
   supply-chain:
     name: Supply-chain gates
     runs-on: ubuntu-latest
@@ -368,11 +280,6 @@ jobs:
       # that builds. This used to be a loop inlined here and, separately, in
       # `.github/hooks/pre-push` — the same commands typed twice, free to drift.
       # Both now call the one target (#72).
-      #
-      # Three workspaces since #142: the host, the guests, and `pkgs/clients/gui`. The
-      # last is not built by any other job in this file, so this is the only
-      # place its lock and its licences are checked — and it is the tree that
-      # `deny.toml`'s eleven named entries exist for (#141).
       - name: Verify lockfiles (--locked)
         run: make lockfile
 
@@ -428,8 +335,9 @@ jobs:
       - name: Supervisor supply-chain (mod verify + govulncheck)
         run: make supervisor-supply-chain
 
-      # The npm tree under pkgs/clients/web — the repository's third ecosystem, joining
-      # this job rather than becoming an exception to it (#120).
+      # The npm tree under pkgs/extensions (esbuild, for the TypeScript guests)
+      # — the repository's third ecosystem, joining this job rather than
+      # becoming an exception to it (#120).
       #
       # node-version is pinned for the reason the three cargo tools above are:
       # an unpinned version is what failed main for days. The asymmetry worth
@@ -441,7 +349,7 @@ jobs:
       # CLI surface rather than which advisories are found.
       #
       # No `cache: npm`, deliberately, and this is measured rather than assumed:
-      # `make web-supply-chain` resolves and audits without installing, so the
+      # `make npm-supply-chain` resolves and audits without installing, so the
       # whole run leaves 8 KB across 3 files in the npm cache. Restoring and
       # saving that costs more than it saves. `setup-go` above caches because it
       # downloads modules for a real build; this leg downloads nothing. Add a
@@ -455,8 +363,8 @@ jobs:
       # only in package.json, so audit alone would leave a newly added package
       # unscanned while reporting "found 0 vulnerabilities". The Makefile
       # comment carries the rest, including why --omit=dev must never be added.
-      - name: Web supply-chain (npm lockfile sync + npm audit)
-        run: make web-supply-chain
+      - name: npm supply-chain (npm lockfile sync + npm audit)
+        run: make npm-supply-chain
 
       # SBOM for the Rust workspace (CycloneDX JSON). cargo-cyclonedx installed
       # above via taiki-e/install-action alongside cargo-deny and cargo-audit.
