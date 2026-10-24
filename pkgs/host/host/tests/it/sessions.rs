@@ -90,24 +90,28 @@ fn two_sessions_run_turns_at_the_same_time() {
 
     let slow_done: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let fast_done: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let (started, slow_running) = std::sync::mpsc::channel();
 
     std::thread::scope(|scope| {
         let slow = agents.of("slow");
         let at = Arc::clone(&slow_done);
         scope.spawn(move || {
-            let _ = slow.run(|agent: &mut AgentSession| {
+            let _ = slow.run(move |agent: &mut AgentSession| {
+                let _ = started.send(());
                 agent.run("slow", "take your time with this one");
             });
             *at.lock().expect("not poisoned") = Some(Instant::now());
         });
 
-        // Far enough behind that the slow turn is certainly in flight,
-        // and far short of the 1.5 s it takes.
-        std::thread::sleep(Duration::from_millis(300));
-
         let fast = agents.of("fast");
         let at = Arc::clone(&fast_done);
         scope.spawn(move || {
+            // Only once the slow turn is in flight, so finishing first means
+            // finishing *during* it. A fixed sleep stood in for this, and
+            // under load the slow turn could still be unstarted (#315).
+            slow_running
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the slow turn starts");
             let _ = fast.run(|agent: &mut AgentSession| {
                 agent.run("fast", "answer now");
             });
@@ -143,26 +147,37 @@ fn one_agent_makes_the_same_two_turns_wait() {
     let factory = paced_factory(&calls);
     let (jobs, queued) = jk_host::session_thread::queue::<AgentSession>();
 
-    let fast_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
-    let slow_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    // Both stamped inside the jobs, on the thread that serves them. Stamped
+    // by the callers after their answers, a slow caller descheduled under
+    // load could stamp after the fast one had finished (#315).
+    let slow_ended: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let fast_started: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let (started, slow_running) = std::sync::mpsc::channel();
 
     std::thread::scope(|scope| {
         let slow = jobs.clone();
-        let at = Arc::clone(&slow_at);
+        let at = Arc::clone(&slow_ended);
         scope.spawn(move || {
-            let _ = slow.run(|agent: &mut AgentSession| {
+            let _ = slow.run(move |agent: &mut AgentSession| {
+                let _ = started.send(());
                 agent.run("slow", "take your time with this one");
+                *at.lock().expect("not poisoned") = Some(Instant::now());
             });
-            *at.lock().expect("not poisoned") = Some(Instant::now());
         });
-        std::thread::sleep(Duration::from_millis(300));
         let fast = jobs.clone();
-        let at = Arc::clone(&fast_at);
+        let at = Arc::clone(&fast_started);
         scope.spawn(move || {
-            let _ = fast.run(|agent: &mut AgentSession| {
+            // Queued only once the slow turn is running, so the queue order
+            // is the one the test means rather than whichever thread the
+            // scheduler ran first. Bounded so a boot failure below ends the
+            // test instead of hanging it.
+            slow_running
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the slow turn starts");
+            let _ = fast.run(move |agent: &mut AgentSession| {
+                *at.lock().expect("not poisoned") = Some(Instant::now());
                 agent.run("fast", "answer now");
             });
-            *at.lock().expect("not poisoned") = Some(Instant::now());
         });
         drop(jobs);
 
@@ -172,11 +187,14 @@ fn one_agent_makes_the_same_two_turns_wait() {
         jk_host::session_thread::serve(&mut agent, &queued);
     });
 
-    let slow = slow_at.lock().expect("not poisoned").expect("slow ran");
-    let fast = fast_at.lock().expect("not poisoned").expect("fast ran");
+    let slow = slow_ended.lock().expect("not poisoned").expect("slow ran");
+    let fast = fast_started
+        .lock()
+        .expect("not poisoned")
+        .expect("fast ran");
     assert!(
-        fast > slow,
-        "one agent served both turns at once, which it cannot do"
+        fast >= slow,
+        "one agent started the fast turn while the slow one was still running"
     );
 }
 
