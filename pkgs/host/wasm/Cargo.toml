@@ -23,6 +23,15 @@ ureq = "3"
 # so this only makes a transitive crate a direct one. Measured before adding,
 # the way `schemars` was measured and rejected at 7.
 sha2 = "0.10"
+# Nothing here calls `digest`; it is named only to switch on `mac` (#308).
+# `jk-host`'s dev-only `blake2` enables `digest/mac`, and dev-dependency features
+# reach test builds only, so without this line `cargo build` and `cargo test`
+# resolve `digest` differently. That gives `sha2` a second hash, and through it
+# `cranelift-codegen`, `wasmtime-environ`, `wasmtime-internal-cache` and every
+# crate above them: the whole Wasmtime stack compiled twice. **Zero new
+# packages**: `digest` 0.10 is already in the tree under `sha2`, and the `subtle`
+# that `mac` adds is already a normal dependency via `rustls`.
+digest = { version = "0.10", features = ["mac"] }
 # Signature verification for `ext install` (Slice 16c-1). **One package, no
 # transitive dependencies** — measured before adding. Verify-only on purpose:
 # the host never signs anything, so a signing crate would be capability this

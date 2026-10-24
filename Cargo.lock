@@ -1468,6 +1468,7 @@ dependencies = [
 name = "jk-wasm"
 version = "0.1.0"
 dependencies = [
+ "digest",
  "jk-config",
  "jk-protocol",
  "landlock",
