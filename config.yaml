@@ -1,26 +1,13 @@
-# jan-klod configuration.
-#
-# Extensions are grouped by category (`provider`, `interceptor`, `tool`, ...).
-# Each named entry under a category is one configured extension instance.
-#
-# The host reads only two keys from an entry:
-#   enabled  — load the instance (omit or false to skip).
-#   type     — the wasm component, ext/<category>-<type>.wasm. Defaults to the entry name
-#              (`provider.openai` means `type: openai`). Instances sharing a `type` share one wasm.
-#
-# Every other key is opaque to the core and passed to the instance through the host-config interface.
-# ${VAR} is expanded from the environment.
+# Each entry under a category is one extension instance. `type` names the wasm component
+# (ext/<category>-<type>.wasm) and defaults to the entry name. Other keys pass through to the
+# instance. ${VAR} is expanded from the environment.
 
-# REST and WebSocket auth. If absent and JAN_KLOD_TOKEN is set, defaults to `operator: ${JAN_KLOD_TOKEN}`.
-# If both are absent, the surface is open. An unset variable fails at boot.
-#
 # serve:
 #   principals:
 #     operator: ${JAN_KLOD_TOKEN}
 
 extensions:
 
-  # Each entry is one configured endpoint. Any OpenAI-compatible endpoint uses `type: openai`.
   provider:
     openai:
       enabled: true
@@ -30,13 +17,11 @@ extensions:
       model: gpt-4o-mini
     anthropic:
       enabled: false
-      type: anthropic   # own wasm: different payload and headers
+      type: anthropic
       api-key: ${ANTHROPIC_API_KEY}
       model: claude-sonnet-4-6
     ollama:
       enabled: false
-      # Ollama serves an OpenAI-compatible API at /v1, so use `type: openai` (there is no provider-ollama.wasm).
-      # No api-key: an Authorization header is sent only when one is set.
       type: openai
       base-url: http://localhost:11434/v1
       model: qwen2.5:7b
@@ -52,76 +37,38 @@ extensions:
       api-key: ${GROQ_API_KEY}
       model: llama-3.3-70b
 
-  # Interceptors are sandboxed decision hooks the core loop runs by phase. Configure enabled/disabled only;
-  # order is structural (phase, then load order). See pkgs/host/config/docs/configuration.md#interceptors.
-  #
-  # `persist: true` lets an instance's host-storage writes reach the session store instead of a map that dies
-  # with the process. Off by default: the permission gate keeps standing grants there and must not become
-  # permanently open. Grant it only to an interceptor that should remember across restarts. Instances cannot
-  # read each other's keys or the transcript.
+  # `persist: true` lets an instance's host-storage writes survive restarts; off by default.
   interceptor:
     intent-router:
-      enabled: true            # before-loop: simple vs agentic classification
+      enabled: true
     task-router:
-      enabled: false           # select-model: applies the `routing:` table below. Off by default: one extra model call per turn.
+      enabled: false           # one extra model call per turn
     context:
-      enabled: true            # select-context: trims the replayed history to the model's window, oldest non-system messages first. On by default: without it long sessions fail at the provider.
-      # context-tokens: 8000   # token budget (default suits a small local model)
+      enabled: true
+      # context-tokens: 8000
     system:
-      enabled: true            # select-model: prepends the standing instructions. On by default: without it no system message reaches the model.
-      # prompt: |              # replaces the built-in text; empty string = none
+      enabled: true
+      # prompt: |
       #   You are a terse reviewer. Never write files.
     persona:
-      enabled: false           # select-model: injects per-turn personality data as context. Off by default.
-      # personalities:         # map of named personas; optional.
+      enabled: false
+      # personalities:
       #   helpful: "You are helpful, concise and focused on solving the problem."
-      #   expert: "You are a technical expert with deep knowledge of the domain."
-      # default: helpful       # persona when none is selected (default: helpful)
+      # default: helpful
     tool-selector:
-      enabled: true            # select-tools: exposes the enabled tool.* entries. On by default: without it no tool is offered.
+      enabled: true
     permission:
-      enabled: true            # tool-call: confirms any call not on the safe-calls allowlist. On by default: file tools can write.
-                               # `always` or `never` decides a whole kind of action (`fs:write`, `shell:cargo`) for the run only;
-                               # a restart asks again. A decision never covers an argument outside the workspace.
-      # Three refusals of the same kind of call make it standing for the run; the model is told to stop trying.
-      # Counted per kind of call and per run.
-      #
-      # Allowlist: anything not named in safe-calls is confirmed. A denylist of risky verbs missed tool-edit's
-      # `replace` and `insert` ops.
-      #
-      #   safe-calls             — `name` or `name:op` that runs unasked. Replaces the default list; `[]` confirms everything.
-      #   allow-absolute-paths   — true lets absolute-path arguments skip the scope gate.
-      #   allow-parent-traversal — true lets `..` skip the scope gate.
-      # Commented values are the defaults.
+      enabled: true
       # safe-calls: [find, fs:read, fs:grep, git, edit:view, proc-probe]
       # allow-absolute-paths: false
       # allow-parent-traversal: false
     guardrails:
-      enabled: false           # content policy on tool-call, after-response, finalize and select-context. Off by default; with no rules it does nothing.
-      #
-      # Rules are DATA (patterns and a decision), never code. Matching uses the `regex` crate: linear time, no
-      # backtracking. Lookaround and backreferences are refused when the rules load. A malformed rule invalidates
-      # the whole set, and tool calls then fail closed until it is fixed.
-      #
-      # Reference: pkgs/extensions/interceptor-guardrails/README.md
-      #
-      #   deny-tool-arguments   — matched against a call's arguments
-      #       pattern    (required)  the expression to match
-      #       tool       (optional)  limit to one tool; every tool when absent
-      #       reason     (optional)  shown to whoever is refused
-      #       decision   (optional)  `block` or `ask`; default `block`
-      #   redact                — matched against model output, the final answer,
-      #                           and messages on their way to the provider
-      #       pattern    (required)
-      #       with       (optional)  replacement; default `[redacted]`
-      #       reason     (optional)  shown when the rule refuses
-      #       decision   (optional)  `replace` or `block`; default `replace`
-      #
-      # Both lists are optional. A blocking rule wins over redaction where both match. Examples, commented out:
+      enabled: false
       # deny-tool-arguments:
       #   - pattern: "rm +-rf +/"
       #     tool: shell
       #     reason: "a recursive delete of a root path"
+      #     decision: block
       # redact:
       #   - pattern: "sk-[A-Za-z0-9]{16,}"
       #     with: "[redacted api key]"
@@ -132,168 +79,71 @@ extensions:
     mcp:
       enabled: false
 
-  # File tools are jailed to the workspace (`workspace:` below, or $PWD when unset). Their writes are gated by interceptor.permission.
-  #
-  # Credential files (.env, *.pem, id_rsa, .netrc, .npmrc, ...) are skipped by `find` and tree-wide `grep`. An explicit
-  # read of one is always confirmed and never covered by an "always". A pattern naming such a file (`**/.env`)
-  # still lists it. Other reads and greps are unprompted, but everything a tool returns is sent to the model provider.
+  # File tools are jailed to `workspace:` (or $PWD); everything a tool returns reaches the model provider.
   tool:
     fs:
-      enabled: true            # read, write and grep workspace files
+      enabled: true
     edit:
-      enabled: true            # hash-anchored partial edits (view, then replace or insert)
+      enabled: true
     find:
-      enabled: true            # glob the workspace tree
+      enabled: true
     git:
-      enabled: false           # read-only repo inspection (status, diff, log, show, branch) via host-process. Needs `execution:`. Cannot modify the repo.
+      enabled: false           # needs `execution:`
     shell:
-      enabled: false           # runs any command via host-process. Needs `execution:`. Off by default: the model supplies the command.
+      enabled: false           # needs `execution:`; the model supplies the command
     fetch:
-      enabled: false           # GET a public http(s) URL as text. Off by default: the URL can carry data out, so a prompt-injected turn could exfiltrate the workspace.
-                               # Private, loopback and link-local addresses are refused unless `allow-private: true`.
-      network: true            # outbound HTTP. Tools get no egress unless their entry says so.
+      enabled: false           # the URL can carry data out
+      network: true
       # allow-private: false
     web-search:
-      enabled: false           # search via a configured provider API. Off by default: the query discloses what the model is working on, and the api-key is a credential.
-      network: true            # outbound HTTP to the search provider
+      enabled: false           # the query discloses what the model is working on
+      network: true
       base-url: https://api.serpapi.com/search
       api-key: ${SERPAPI_API_KEY}
 
-  # NOTE: inert. `Runtime::build_agent` never instantiates the `agent` category, and no `agent-*` component is built.
-  # Enabling an entry fails `verify` with a missing ext/agent-claude-code.wasm. The outbound seam exists (`delegate.rs`)
-  # but needs a transport and wiring. Inbound works today by POSTing a turn to the REST surface.
+  # No `agent` or `api` entries: the agent category is inert and the REST surface is built in (`jan-klod-gateway serve`).
 
-  # NOTE: there is no `api.*` extension. The REST surface is built into the gateway and started with
-  # `jan-klod-gateway serve --bind <addr>`. An entry here would resolve to a missing ext/api-rest.wasm.
-  #
-  # Auth is off unless JAN_KLOD_TOKEN is set in the gateway's environment. When set, every route except /health requires
-  # `Authorization: Bearer <token>`, and the TUI sends the same variable. Unset is fine on the default loopback bind;
-  # the gateway warns on other binds. Keep the token in the environment, not in this file.
-
-  # NOTE: the Telegram bot is host-side, started with `jan-klod-gateway telegram`. It reads TELEGRAM_BOT_TOKEN from the
-  # environment; a `token:` key here would be inert.
-
-# Agent behaviour, consumed by the loop and its interceptors. Provider names refer to instances under extensions.provider.
-
-# The directory the file and execution tools are jailed to. Paths that escape it are denied.
-#
-# Omit the key to adopt the directory the gateway started in. Unlike `execution:` below, this is a grant with a
-# default, so file tools work out of the box. Your home directory and a filesystem root are never adopted silently:
-# there, file tools are denied and the reason is printed. Name the root explicitly if you mean it. The adopted root
-# is printed at boot.
 # workspace: /path/to/your/repo
 
-# Commands get a rebuilt environment: only PATH, HOME, CARGO_HOME, RUSTUP_HOME, TMPDIR and LANG/LC_* locale variables.
-# The gateway's own environment holds OPENAI_API_KEY and JAN_KLOD_TOKEN, and one `env` through tool.shell would leak
-# both into tool output and the next model request. Add variables one at a time, only as a command needs them:
-#
-#   env-passthrough: [GITHUB_TOKEN]
+# env-passthrough: [GITHUB_TOKEN]
 
-# The execution substrate (host-process), used by tool.git and tool.shell. Default-deny: with this block absent or
-# `enabled: false`, every exec is denied and those tools fail closed. Enabling it alone does not allow arbitrary
-# commands; that also takes `tool.shell`. `tool.git` alone runs only read-only git subcommands.
-# The cycle cap stops a model that keeps emitting tool calls from looping, and from spending on a metered endpoint.
-# Eight is enough for coding work: view, edit, test, read the failure, fix, rerun is six. A capped turn says so in its answer.
-#
 # limits:
 #   max-iterations: 8
 
-# A component granted `host-http` reaches public destinations and every endpoint this file already names (a provider's
-# `base-url`, an MCP server's `endpoint`). Loopback, private, link-local and unique-local addresses are otherwise refused,
-# including 127.0.0.1 (this gateway's own port too), 169.254.169.254 (cloud metadata, which issues IAM credentials) and the LAN.
-#
-# Allow-listing is per origin, so allowing a local Ollama on 127.0.0.1:11434 does not open the database on 5432.
-# List anything config does not already name, one origin at a time.
-#
 # network:
 #   allow:
 #     - http://127.0.0.1:11434
 
-# A SQLite file owned by the core holds the transcript and every interceptor's granted `host-storage`. It is not a
-# component: the sandbox has no filesystem, and the transcript is too sensitive to hand to another party. Guests reach
-# it only through `host-storage`, namespaced to themselves, and only with `persist: true`.
-#
-# Omit `path` (or the whole block) for an in-memory store: nothing survives a restart.
-#
-# `cache-dir` holds Wasmtime's compiled-component cache, so a second boot skips recompiling guests. Omit it for the
-# default, `wasmtime-cache` beside this file. The directory is created user-private (0700 on unix): a cache hit runs
-# as native code without re-verification, so a writable cache would let someone run code on this host.
 storage:
   path: ./jan-klod.db
   # cache-dir: ./wasmtime-cache
 
-# Who may vouch for a component that `jan-klod-gateway ext install` puts into `ext/`. Minisign public keys, as minisign
-# prints them. An empty list trusts nothing, rather than skipping the check: an install needs a key here that verifies
-# both the component and its manifest. Nothing first-party is signed yet, so installs need `--allow-unsigned --sha256 <hex>`.
-#
-# This is the top-level `registry`, not `extensions.registry`, which holds the skills and mcp catalogues.
 registry:
   trusted-keys: []
-  # Index read by `ext search`, `ext list --remote` and `ext install <name>`. It states what each component asks the host
-  # for before anything is downloaded.
-  #
-  # A URL is fetched under the install egress policy (public addresses only, every redirect re-checked). A value that is not
-  # http(s) is a file path, so an air-gapped operator can work offline.
-  #
-  # Reading an index grants nothing: `trusted-keys` still decides what lands in `ext/`.
   url: https://promptpasture.github.io/jan-klod/index.json
 
-# Load a component that ships no `<name>.manifest.toml` beside it. Off by default: a component nobody can inspect before
-# running is what manifests exist to prevent. `make ext` generates one per guest. Top-level, because `extensions:` accepts
-# only categories of named instances.
 # allow-unmanifested: true
 
 execution:
   enabled: false
-  timeout-secs: 30            # seconds; a command that runs longer is killed
-  output-cap: 65536           # bytes of captured stdout/stderr per run
-
-  # The caller is bounded above (cwd jailed, environment rebuilt, time and output capped). None of that bounds the command,
-  # which runs with your privileges and can read or write anywhere you can.
-  #
-  # `mode: os` confines the command with the OS: Seatbelt on macOS, Landlock on Linux. Reads are allowed, writes only under
-  # `writable`, and the network only if `network` is true. Elsewhere there is no backend and the mode falls back to
-  # `approval-only`, where the confirmation prompt is the only barrier. The fallback is printed at boot whenever execution
-  # is enabled. It is never silent.
-  #
-  # `/dev/null` and a `TMPDIR` inside the workspace are granted to every confined command regardless of `writable`.
-  # See docs/concepts/security-model.md.
+  timeout-secs: 30
+  output-cap: 65536           # bytes per run
   sandbox:
     mode: os                  # `os` or `approval-only`
-    writable: ["."]           # workspace-relative roots a command may write to
-    network: false            # whether a command may reach the network
-    require: false            # true: deny host-process instead of falling back to approval-only.
-                              # On a platform with no backend, nothing runs.
+    writable: ["."]
+    network: false
+    require: false            # true: deny instead of falling back to approval-only
 
-
-# Log output on stderr: `human` (default) for terminals, or `json` for newline-delimited JSON.
 observability:
   output-format: human
 
-# Provider for interceptors' model calls (intent-router classification). Must name an `extensions.provider` instance.
-# Omit to use the head of the `providers:` chain. A two-token question, so a small local model is enough.
-# An unknown name warns and falls back to the conservative label. A classifier failure never fails the turn.
 # classifier: ollama
 
-# Provider fallback chain: enabled providers are tried in this order. On error the next is tried; when the chain is
-# exhausted the error surfaces. Entries name `extensions.provider` instances.
-#
-# A name with no enabled instance is skipped with a warning. An enabled provider missing from this list still runs,
-# after the listed ones. Omit the key to accept boot order (alphabetical by instance name).
-#
-# Not yet honoured: per-provider `models:` lists. Each provider serves one `model`; use a second instance with the same
-# `type` instead.
 providers:
   - provider: openai
-  - provider: ollama          # local last resort, skipped until enabled above
+  - provider: ollama
 
-# Task routing: task type -> model. The classifier picks the closest key at runtime, and that model answers the turn.
-#
-# Inert unless `interceptor.task-router` is enabled. Enabling it costs one extra model call per turn.
-#
-# Values are model names, not providers. The fallback chain is fixed at boot, so routing cannot pick a different endpoint:
-# `groq/llama-3.3-70b` applies `llama-3.3-70b` to whichever provider answers. The `provider/` form still parses but warns.
-# To prefer an endpoint, order `providers:` instead.
+# Inert unless `interceptor.task-router` is enabled.
 routing:
   code-generation:  gpt-4o
   code-review:      gpt-4o
@@ -305,5 +155,3 @@ routing:
   chat:             gpt-4o-mini
   clarification:    gpt-4o-mini
   agent-delegation: gpt-4o
-  # user-defined example:
-  # data-analysis:  gpt-4o-mini
