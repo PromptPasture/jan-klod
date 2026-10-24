@@ -1,10 +1,6 @@
-//! `tool-plan` — the session's plan, as something the model can write down.
-//!
-//! Working memory for a model too small to keep its intent in context.
-//! [`plan`] holds the pure logic; this file is the wasm32-only glue.
-//! The instance must be configured `scope: session`, so sessions do not share a plan.
+//! `tool-plan`: the session's plan as model-writable working memory; the instance must be `scope: session`.
 
-/// The plan and its operations, pure and host-testable.
+/// The plan and its operations.
 pub mod plan;
 
 #[cfg(target_arch = "wasm32")]
@@ -34,7 +30,6 @@ mod component {
 
     use crate::plan::Plan;
 
-    /// Where the plan lives. One key, rewritten whole: the plan is small.
     const NAMESPACE: &str = "plan";
     const KEY: &str = "steps";
 

@@ -1,6 +1,4 @@
 //! Transport to the core: over stdio to a spawned gateway, or over REST.
-//!
-//! A trait because a stdio pipe cannot be shared between threads; REST handles can.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -24,7 +22,7 @@ pub struct SessionSummary {
     pub preview: String,
 }
 
-/// One way to drive a core. `Send + Sync`, since turn and answer threads share it.
+/// One way to drive a core.
 pub trait Transport: Send + Sync {
     /// Allocate a new session and return its id.
     ///
@@ -38,18 +36,16 @@ pub trait Transport: Send + Sync {
     /// A human-readable message if the connection fails or the core refuses.
     fn session_list(&self) -> Result<Vec<SessionSummary>, String>;
 
-    /// One session's transcript. **Only safe when no turn streams**: it reads the pipe a turn reader holds.
+    /// One session's transcript.
     ///
     /// # Errors
-    /// A human-readable message if the connection fails or the session does
-    /// not exist.
+    /// A human-readable message if the connection fails or the session does not exist.
     fn session_get(&self, session: &str) -> Result<SessionGetResult, String>;
 
-    /// Stop the running turn. Over stdio: `turn/cancel`. Over REST: drop the SSE connection.
+    /// Stop the running turn.
     ///
     /// # Errors
-    /// A human-readable message if the cancellation cannot be sent or acted on
-    /// — see each implementation for what that means on its transport.
+    /// A human-readable message if the cancellation cannot be sent or acted on.
     fn cancel(&self, session: &str) -> Result<(), String>;
 
     /// Drive one turn, calling `on_event` as the core reports.
@@ -63,24 +59,19 @@ pub trait Transport: Send + Sync {
         on_event: &mut dyn FnMut(StreamEvent),
     ) -> Result<(), String>;
 
-    /// Answer a [`StreamEvent::Prompt`] that is holding a turn open. Called
-    /// while [`Transport::stream_turn`] is still running, from another thread.
+    /// Answer a [`StreamEvent::Prompt`] that is holding a turn open.
     ///
     /// # Errors
     /// A human-readable message if the answer cannot be sent.
     fn answer(&self, session: &str, answer: &str) -> Result<(), String>;
 
-    /// Steer a running turn (not cancel). Called from another thread during
-    /// [`Transport::stream_turn`].
+    /// Steer a running turn (not cancel).
     ///
     /// # Errors
-    ///
-    /// Over REST, always: shown to the user, since a silently dropped keystroke misleads.
+    /// Always over REST, which cannot steer; shown so a dropped keystroke is not silent.
     fn follow_up(&self, session: &str, message: &str) -> Result<(), String>;
 
     /// What the extensions contributed, as reported at connect.
-    ///
-    /// Defaults to none: contributions travel on a notification only the stdio transport carries.
     fn contributions(&self) -> Vec<jk_protocol::Contributions> {
         Vec::new()
     }
@@ -88,8 +79,7 @@ pub trait Transport: Send + Sync {
     /// Run a command an extension contributed, returning what it answered.
     ///
     /// # Errors
-    /// A human-readable message if the call cannot be sent or the extension
-    /// refuses it. Over REST, always: that projection carries no contributions.
+    /// A human-readable message if the call cannot be sent or the extension refuses it.
     fn invoke_contribution(&self, extension: &str, name: &str) -> Result<String, String> {
         let _ = (extension, name);
         Err("contributions are not available over this connection".to_owned())
@@ -98,13 +88,12 @@ pub trait Transport: Send + Sync {
     /// How to describe this connection in a status line.
     fn describe(&self) -> String;
 
-    /// Whether the transport is alive, checked between turns. Defaults to `true`; stdio
-    /// overrides it because its child can exit silently.
+    /// Whether the transport is alive, checked between turns.
     fn alive(&self) -> bool {
         true
     }
 
-    /// Whether the gateway is a child that dies with this client (stdio), not an `--addr` one. Defaults to `false`.
+    /// Whether the gateway is a child that dies with this client (stdio), not an `--addr` one.
     fn is_stdio(&self) -> bool {
         false
     }
@@ -113,7 +102,7 @@ pub trait Transport: Send + Sync {
 /// REST + SSE gateway surface.
 pub struct Rest {
     addr: String,
-    /// The running turn's socket. `cancel` takes and shuts it down; an empty slot tells the reader that a cancel, not a failure, closed it.
+    /// `cancel` takes and shuts it down; an empty slot tells the reader that a cancel, not a failure, closed it.
     live: Arc<Mutex<Option<TcpStream>>>,
 }
 
@@ -193,8 +182,7 @@ pub enum Logs {
     Discard,
 }
 
-/// Spawned gateway, driven over stdin/stdout. `stream_turn` holds the reader for the
-/// turn; `answer` takes the writer briefly. Separate locks prevent a deadlock on confirmation.
+/// Spawned gateway, driven over stdin/stdout.
 pub struct Stdio {
     child: Mutex<Child>,
     writer: Mutex<ChildStdin>,
@@ -214,7 +202,7 @@ impl Stdio {
         Self::spawn_from(&crate::gateway_bin(), &[], logs)
     }
 
-    /// Spawn the gateway at `bin` with `args` after `rpc`. Separate from `spawn` so tests can use a built binary.
+    /// Spawn the gateway at `bin` with `args` after `rpc`.
     ///
     /// # Errors
     /// As `spawn`.
@@ -252,8 +240,7 @@ impl Stdio {
         }
     }
 
-    /// Turn a handshake failure into an actionable message. If the gateway exited,
-    /// its stderr says why, which a bare "connection closed" does not.
+    /// If the gateway exited, its stderr says why, which a bare "connection closed" does not.
     fn explain(&self, err: String, logs: Logs) -> String {
         let exited = self
             .child
@@ -272,7 +259,6 @@ impl Stdio {
         })
     }
 
-    /// Agree on the protocol version first: the core closes on a mismatch.
     fn handshake(&self) -> Result<(), String> {
         let id = self.send(&Rpc::Hello {
             version: PROTOCOL_VERSION.to_owned(),
@@ -298,7 +284,6 @@ impl Stdio {
         }
     }
 
-    /// Frame `command` and write it. Returns the id to expect an answer against.
     fn send(&self, command: &Rpc) -> Result<jsonrpc::Id, String> {
         let id = jsonrpc::Id::Number(self.next_id.fetch_add(1, Ordering::Relaxed));
         let frame = jsonrpc::Request::new(id.clone(), command.clone());
@@ -313,7 +298,6 @@ impl Stdio {
         Ok(id)
     }
 
-    /// Read frames until answer to `id`, handing notifications to `on_event`.
     #[allow(clippy::significant_drop_tightening)]
     fn read_until(
         &self,
@@ -360,10 +344,6 @@ impl Stdio {
 
 impl Stdio {
     /// Only safe when no turn streams: `stream_turn` holds the reader, so a racing call could steal its frame.
-    ///
-    /// # Errors
-    /// A human-readable message if the request cannot be sent, the response
-    /// cannot be read, or it carries no `id`.
     fn create_session_over_stdio(&self) -> Result<String, String> {
         let id = self.send(&Rpc::SessionCreate)?;
         let result = self.read_until(&id, &mut |_| {})?;
@@ -492,8 +472,7 @@ impl Transport for Stdio {
         self.described.clone()
     }
 
-    /// `try_wait`, not `wait`: polled between turns; blocking would hang the
-    /// event loop on a healthy child.
+    /// `try_wait`, not `wait`: polled between turns; blocking would hang the event loop on a healthy child.
     fn alive(&self) -> bool {
         self.child
             .lock()
@@ -508,7 +487,6 @@ impl Transport for Stdio {
 }
 
 impl Drop for Stdio {
-    /// Kill the child rather than close its stdin: a turn in flight would hold `wait` on the model.
     fn drop(&mut self) {
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
@@ -517,9 +495,7 @@ impl Drop for Stdio {
     }
 }
 
-/// Notification → `StreamEvent`, or `None` when unmapped. Exhaustive (no
-/// `_ =>` arm): new protocol notifications must be decided here, not silently
-/// ignored.
+/// Notification → `StreamEvent`, or `None` when unmapped.
 #[must_use]
 pub fn event_for(notification: &Notification) -> Option<StreamEvent> {
     match notification {
@@ -569,7 +545,6 @@ mod tests {
     use crate::StreamEvent;
     use jk_protocol::{Notification, PROTOCOL_VERSION};
 
-    /// A contributions notification is not a turn event, but it must reach the client, not be dropped.
     #[test]
     fn a_contributions_notification_becomes_an_event() {
         let event = event_for(&Notification::SurfaceContributions {
@@ -587,7 +562,6 @@ mod tests {
         assert_eq!(sets[0].extension, "interceptor.system");
     }
 
-    /// Stdio half of #154: the call id and arguments reach the client.
     #[test]
     fn the_stdio_mapping_carries_the_call_id_and_its_arguments() {
         let event = event_for(&Notification::ToolInvoked {
@@ -606,7 +580,6 @@ mod tests {
         );
     }
 
-    /// Every notification is shown or deliberately dropped; only `session/updated` is dropped.
     #[test]
     fn every_notification_is_decided_about() {
         let cases = [
@@ -677,7 +650,6 @@ mod tests {
         );
     }
 
-    /// Answer with the notification's session, not the client's current one (#103).
     #[test]
     fn an_ask_carries_the_session_it_was_asked_on() {
         let event = event_for(&Notification::Ask {
@@ -693,7 +665,6 @@ mod tests {
         assert_eq!(session, "the-turns-session");
     }
 
-    /// A missing gateway gives a message that names the alternative, not a panic or hang.
     #[test]
     fn a_missing_gateway_says_what_to_do_instead() {
         let outcome = Stdio::spawn_from(
@@ -707,7 +678,6 @@ mod tests {
         assert!(err.contains("--addr"), "names the alternative: {err}");
     }
 
-    /// REST refuses to steer, and the refusal says why and what to do instead.
     #[test]
     fn rest_refuses_to_steer_and_says_why_rather_than_how() {
         let rest = Rest::new("127.0.0.1:9".to_owned());
@@ -724,7 +694,6 @@ mod tests {
         );
     }
 
-    /// The method name is the contract: a wrong one looks like an ignored message.
     #[test]
     fn steering_frames_as_the_method_the_core_matches_on() {
         let framed = serde_json::to_value(jk_protocol::Command::TurnFollowUp {
@@ -747,8 +716,6 @@ mod tests {
         );
     }
 
-    /// Checks the frame `follow_up` writes, which the protocol test cannot see. Drives a
-    /// fake gateway script: `spawn_from` puts `rpc` before the caller's args, so a file, not `sh -c`.
     #[cfg(unix)]
     #[test]
     fn steering_over_stdio_writes_a_follow_up_frame() {
@@ -803,7 +770,6 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
         );
     }
 
-    /// Checks the frame `/cancel` writes over stdio, which the protocol test cannot see. Drives a fake gateway.
     #[cfg(unix)]
     #[test]
     fn cancel_over_stdio_writes_a_turn_cancel_frame() {
@@ -858,7 +824,6 @@ while IFS= read -r line; do printf '%s\n' "$line" >> "{path}"; done
         );
     }
 
-    /// The script blocks after the handshake, so `alive()` is true before the exit. The exit is polled against a deadline, not raced.
     #[cfg(unix)]
     #[test]
     fn alive_reports_false_once_the_child_has_exited() {
@@ -900,7 +865,6 @@ IFS= read -r goodbye
         assert!(seen_dead, "alive() never reported the child had exited");
     }
 
-    /// `create_session` reads its own answer, unlike `answer`/`follow_up`.
     #[cfg(unix)]
     #[test]
     fn create_session_over_stdio_reads_the_new_id() {
@@ -934,8 +898,6 @@ while IFS= read -r line; do :; done
         assert_eq!(id, "sess-42");
     }
 
-    /// `create_session` over REST: `POST /sessions`, and the id in the body
-    /// comes back out.
     #[test]
     fn create_session_over_rest_posts_and_reads_the_id() {
         let server = tiny_http::Server::http("127.0.0.1:0").expect("binds ephemeral port");
@@ -957,7 +919,6 @@ while IFS= read -r line; do :; done
         server_thread.join().unwrap();
     }
 
-    /// `session_list` and `session_get` read their own answers; only safe when nothing streams.
     #[cfg(unix)]
     #[test]
     fn session_list_and_session_get_over_stdio_read_their_own_answers() {
@@ -1010,7 +971,6 @@ while IFS= read -r line; do :; done
         assert_eq!(result.messages[0].content, "hi");
     }
 
-    /// `session_list` and `session_get` over REST: `GET /sessions` and `GET /session/:id`, parsed.
     #[test]
     fn session_list_and_session_get_over_rest_get_and_parse() {
         let server = tiny_http::Server::http("127.0.0.1:0").expect("binds ephemeral port");
@@ -1055,7 +1015,6 @@ while IFS= read -r line; do :; done
         server_thread.join().unwrap();
     }
 
-    /// Cancelling with no turn running is an error, not a no-op that looks like it worked.
     #[test]
     fn rest_cancel_with_nothing_running_is_a_clear_error() {
         let rest = Rest::new("127.0.0.1:9".to_owned());

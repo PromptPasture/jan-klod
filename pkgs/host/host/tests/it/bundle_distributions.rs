@@ -1,6 +1,4 @@
-//! Every distribution under `scripts/distributions/` boots offline with its own
-//! config (#114), and its guest list agrees with that config. Distributions are
-//! discovered from disk, so new ones are covered automatically.
+//! Every distribution under `scripts/distributions/` boots offline and its guest list agrees with its config.
 
 use std::path::{Path, PathBuf};
 
@@ -8,7 +6,6 @@ use jk_agent::Runtime;
 
 use crate::common;
 
-/// Every distribution under `scripts/distributions/`, by name.
 fn distributions() -> Vec<String> {
     let dir = common::repo_root().join("scripts/distributions");
     let mut names: Vec<String> = std::fs::read_dir(&dir)
@@ -27,7 +24,6 @@ fn distributions() -> Vec<String> {
     names
 }
 
-/// Stages a distribution's guests with the same script `make bundle` uses.
 fn stage(name: &str, into: &Path) {
     let root = common::repo_root();
     let status = std::process::Command::new("sh")
@@ -40,7 +36,6 @@ fn stage(name: &str, into: &Path) {
     assert!(status.success(), "dist-stage.sh failed for {name}");
 }
 
-/// Placeholder keys as `bundle.sh` sets them; `verify` never calls a provider.
 fn set_placeholder_keys() {
     for var in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] {
         if std::env::var(var).is_err() {
@@ -55,7 +50,6 @@ fn scratch(tag: &str) -> (PathBuf, common::TempDir) {
     (dir.clone(), common::TempDir(dir))
 }
 
-/// One test over all distributions, since the set is read from disk; the assertion names the failing one.
 #[test]
 fn every_distribution_boots_with_its_own_config() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-system.wasm"]) {
@@ -97,7 +91,6 @@ fn every_distribution_boots_with_its_own_config() {
     }
 }
 
-/// `headless-chat` runs no commands: its config disables execution and it ships no machine-touching tools (#114).
 #[test]
 fn headless_chat_does_not_run_commands() {
     let config = common::repo_root().join("scripts/distributions/headless-chat/config.yaml");

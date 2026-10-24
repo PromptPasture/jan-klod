@@ -1,5 +1,4 @@
-//! `jan-klod` core entrypoint: boots the runtime from `config.yaml`, resolves enabled extensions against `ext/`, and prints the plan or serves a surface.
-//! All behaviour lives in the extensions; `--help` lists subcommands and defaults.
+//! `jan-klod` core entrypoint; `--help` lists subcommands and defaults.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,11 +13,9 @@ use jk_wasm::route::HttpFn;
 use tracing::Level;
 use tracing_subscriber::fmt::time::SystemTime;
 
-/// Where the installed copies of `config.yaml` and `ext/` live, relative to the
-/// gateway binary: `<prefix>/bin/jan-klod-gateway` → `<prefix>/share/jan-klod/`.
+/// Installed data dir relative to the gateway binary: `<prefix>/bin/jan-klod-gateway` to `<prefix>/share/jan-klod/`.
 const INSTALLED_DATA: &str = "../share/jan-klod";
 
-/// What `--help` prints: every subcommand an operator runs.
 const USAGE: &str = "\
 Usage: jan-klod-gateway [command] [args]
 
@@ -39,7 +36,7 @@ Options:
   --help                        print this help
 ";
 
-/// Resolve a default config/ext path: the working directory wins (a coding agent works in *your* repository), else the copy installed beside the binary.
+/// The working directory wins (a coding agent works in *your* repository), else the installed copy.
 fn resolve_default(name: &str) -> String {
     let in_cwd = PathBuf::from(name);
     if in_cwd.exists() {
@@ -54,7 +51,6 @@ fn resolve_default(name: &str) -> String {
     }
 }
 
-/// Initialize the tracing subscriber from config.yaml; call before any extensions load.
 fn init_tracing(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_path(config_path)?;
 
@@ -108,7 +104,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// Serve the Agent Client Protocol on stdin/stdout, agent side. Boots the same runtime `ask` does, since `session/prompt` runs a real turn.
 fn acp() -> ExitCode {
     let config_path = resolve_default("config.yaml");
     let ext_dir = resolve_default("ext");
@@ -151,8 +146,7 @@ fn acp() -> ExitCode {
     }
 }
 
-/// Serve the Model Context Protocol on stdin/stdout. Boots the same runtime `ask` does; the driver is headless (`jk_agent::HeadlessDriver`)
-/// because stdin carries frames. Stdout is frames only; logs go to stderr.
+/// Stdout is frames only (logs go to stderr); the driver is headless because stdin carries frames.
 fn mcp() -> ExitCode {
     let config_path = resolve_default("config.yaml");
     let ext_dir = resolve_default("ext");
@@ -195,9 +189,7 @@ fn mcp() -> ExitCode {
     }
 }
 
-/// What is staged in `ext/`, and unmaking it.
-/// `install` verifies before it copies (digest, signature, component validity, manifest consistency): the build pipeline is outside
-/// the runtime sandbox, so whatever lands in `ext/` runs with host privileges.
+/// `install` verifies before it copies: the build pipeline is outside the runtime sandbox, so whatever lands in `ext/` runs with host privileges.
 fn ext(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("list") => ext_list(&args[1..]),
@@ -217,7 +209,6 @@ fn ext(args: &[String]) -> ExitCode {
     }
 }
 
-/// The index `registry.url` names, and where it came from; both are returned so refusals can say which index they mean.
 fn configured_index() -> Result<(String, Vec<ext_index::Entry>), ext_index::IndexError> {
     let config_path = resolve_default("config.yaml");
     let source = ext_index::url_from_config_path(std::path::Path::new(&config_path))?;
@@ -226,8 +217,7 @@ fn configured_index() -> Result<(String, Vec<ext_index::Entry>), ext_index::Inde
     Ok((source, entries))
 }
 
-/// Print one index entry: what it is, then **what it asks the host for**. The capability line gets its own line:
-/// until an interactive Configurator exists this is the capability view, and a table-truncated list gets skimmed.
+/// The capability line gets its own line: a table-truncated list gets skimmed.
 fn show_entry(entry: &ext_index::Entry) {
     let provenance = if entry.signature.is_empty() {
         "unsigned"
@@ -248,8 +238,6 @@ fn show_entry(entry: &ext_index::Entry) {
     }
 }
 
-/// Search the registry index for components whose name, kind or description
-/// matches, and print what each one asks for.
 fn ext_search(args: &[String]) -> ExitCode {
     let term = args.first().map_or("", String::as_str);
     let (source, entries) = match configured_index() {
@@ -273,11 +261,7 @@ fn ext_search(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Install from a URL (fetch), a `.wasm` path, or a **name** resolved through the registry index.
-///
-/// The `.wasm` test is `Path::extension`, as in [`jk_wasm::ext::install`], so the two cannot disagree. The name case is last since it
-/// cannot be settled locally; the index's refusal is the more useful message for a mistyped path.
-/// Every fetch uses the host's policy-bound client, which re-checks redirects per hop.
+/// Fetches use the policy-bound client (redirects re-checked per hop); `.wasm` detection matches [`jk_wasm::ext::install`].
 fn install_from_source(
     dir: &str,
     source: &str,
@@ -297,7 +281,6 @@ fn install_from_source(
     ext_index::install(dir, &entries, source, &index_source, checks, &http)
 }
 
-/// Install a component after checking it, or refuse and change nothing.
 fn ext_install(args: &[String]) -> ExitCode {
     let mut sha256: Option<String> = None;
     let mut allow_unsigned = false;
@@ -379,8 +362,6 @@ fn ext_install(args: &[String]) -> ExitCode {
     }
 }
 
-/// Each staged component with the capabilities its manifest declares — or,
-/// with `--remote`, everything the configured registry index publishes.
 fn ext_list(args: &[String]) -> ExitCode {
     let remote = args.iter().any(|arg| arg == "--remote");
     let positional: Vec<String> = args
@@ -432,7 +413,6 @@ fn ext_list(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Delete a component and its manifest together.
 fn ext_remove(args: &[String]) -> ExitCode {
     let Some(name) = args.first() else {
         eprintln!("usage: jan-klod-gateway ext remove <name> [ext-dir]");
@@ -461,7 +441,6 @@ fn ext_remove(args: &[String]) -> ExitCode {
     }
 }
 
-/// One question, one answer, on stdout, with no server: `jan-klod-gateway ask "…"` in a shell or CI step.
 /// Confirmations are asked on the terminal; headless defaults would deny every write and command.
 fn ask(args: &[String]) -> ExitCode {
     let question = args.join(" ");
@@ -512,8 +491,6 @@ fn ask(args: &[String]) -> ExitCode {
     }
 }
 
-/// Asks the person at the keyboard, which is the only reason `ask` can use tools
-/// that write.
 struct TerminalDriver;
 
 impl jk_protocol::turn::Driver for TerminalDriver {
@@ -534,8 +511,7 @@ impl jk_protocol::turn::Driver for TerminalDriver {
     }
 }
 
-/// Check that an install is complete: every enabled extension resolves to a component that is present and instantiates.
-/// Prints the plan and exits non-zero otherwise. Otherwise a missing component is a silent degradation: the runtime skips it and starts, less capable than it claims.
+/// Exits non-zero when a component is missing; otherwise the runtime skips it and starts less capable than it claims.
 fn verify(args: &[String]) -> ExitCode {
     let live = args.iter().any(|arg| arg == "--live");
     let has_chain = args.iter().any(|arg| arg == "--chain");
@@ -608,7 +584,6 @@ fn verify(args: &[String]) -> ExitCode {
     }
 }
 
-/// Verify event chain integrity for one or multiple sessions.
 #[allow(clippy::too_many_lines)]
 fn verify_event_chain(config_path: &str, session_id: Option<String>) -> ExitCode {
     let config = match Config::from_path(config_path) {
@@ -711,7 +686,6 @@ fn verify_event_chain(config_path: &str, session_id: Option<String>) -> ExitCode
     }
 }
 
-/// Get the N most recent sessions, ordered by the timestamp of their last event.
 fn get_recent_sessions(store: &Store, limit: usize) -> Result<Vec<String>, String> {
     let all_sessions = store
         .event_sessions()
@@ -743,8 +717,7 @@ fn get_recent_sessions(store: &Store, limit: usize) -> Result<Vec<String>, Strin
         .collect())
 }
 
-/// Ask the configured model one question, and report what happened. `verify`'s checks are offline and say nothing about a wrong API key,
-/// dead endpoint, bad model name, or egress refusing `base-url`.
+/// `verify`'s checks are offline and miss a wrong API key, dead endpoint, bad model name, or egress refusing `base-url`.
 fn verify_live(runtime: &Runtime) -> ExitCode {
     let policy = runtime.egress_policy();
     let factory = move || -> HttpFn {
@@ -778,8 +751,6 @@ fn verify_live(runtime: &Runtime) -> ExitCode {
     }
 }
 
-/// Boot the runtime and print the plan, running each present component's
-/// lifecycle. This is the default (no subcommand) mode.
 fn boot_plan(args: &[String]) -> ExitCode {
     let config_path = arg_or(args, 0, "config.yaml");
     let ext_dir = arg_or(args, 1, "ext");
@@ -813,9 +784,7 @@ fn boot_plan(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Serve the client protocol over stdin/stdout (newline-delimited JSON-RPC) for a client that spawned this process.
-/// **Stdout is the protocol:** nothing else may be written there (a client would read it as a frame); diagnostics go to stderr,
-/// and guests get `inherit_stderr`, not `inherit_stdio`.
+/// Stdout is the protocol: nothing else may be written there; diagnostics go to stderr and guests get `inherit_stderr`, not `inherit_stdio`.
 fn rpc(args: &[String]) -> ExitCode {
     let config_path = arg_or(args, 0, "config.yaml");
     let ext_dir = arg_or(args, 1, "ext");
@@ -857,10 +826,7 @@ fn rpc(args: &[String]) -> ExitCode {
     }
 }
 
-/// Restrict this process with Landlock, then become the command.
-/// A subcommand because Landlock restricts the calling process and `pre_exec` is `unsafe` (forbidden by workspace lints); restricting
-/// ourselves then calling the safe `exec` reaches the same place (see `jk_wasm::sandbox_landlock`).
-/// Exits `126` when it cannot confine or exec, so a wrapper failure is not mistaken for the command's exit code.
+/// A subcommand because `pre_exec` is `unsafe`; exits `126` if it cannot confine or exec, distinguishable from the command's own code.
 #[cfg(target_os = "linux")]
 fn confine(args: &[String]) -> ExitCode {
     use jk_wasm::sandbox_landlock;
@@ -888,7 +854,7 @@ fn confine(args: &[String]) -> ExitCode {
     ExitCode::from(CANNOT_EXECUTE)
 }
 
-/// The same subcommand where there is no Landlock to apply; reachable only by hand, since `sandbox::host_backend` hands out Landlock on Linux alone.
+/// Reachable only by hand, since `sandbox::host_backend` hands out Landlock on Linux alone.
 #[cfg(not(target_os = "linux"))]
 fn confine(_args: &[String]) -> ExitCode {
     eprintln!(
@@ -898,8 +864,7 @@ fn confine(_args: &[String]) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// Load principals from config or `JAN_KLOD_TOKEN` fallback.
-/// Reads `serve.principals` (expanding `${VAR}`); else `operator: ${JAN_KLOD_TOKEN}` if set; else an empty map (unauthenticated surface).
+/// Reads `serve.principals`, else `operator: ${JAN_KLOD_TOKEN}` if set, else an empty map (unauthenticated surface).
 fn load_principals(config_path: &str) -> Result<std::collections::HashMap<String, String>, String> {
     use jk_config::Config;
 
@@ -944,7 +909,6 @@ fn load_principals(config_path: &str) -> Result<std::collections::HashMap<String
     Ok(std::collections::HashMap::new())
 }
 
-/// Boot the agent and serve turns over the host-side REST surface until killed.
 fn serve(args: &[String]) -> ExitCode {
     let (positional, flagged_bind) = split_serve_args(args);
     if let Some(message) = misplaced_address(&positional) {
@@ -1009,8 +973,6 @@ fn serve(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Boot the agent and drive it from a Telegram bot (long-poll) until killed. The
-/// bot token comes from the `TELEGRAM_BOT_TOKEN` environment variable.
 fn telegram(args: &[String]) -> ExitCode {
     const MAX_CONSECUTIVE_ERRORS: u32 = 10;
     let config_path = arg_or(args, 0, "config.yaml");
@@ -1150,16 +1112,13 @@ fn setup(args: &[String]) -> ExitCode {
     }
 }
 
-/// Positional arg `index` (0-based within the subcommand's args), or `default`.
 fn arg(args: &[String], index: usize, default: &str) -> String {
     args.get(index)
         .cloned()
         .unwrap_or_else(|| default.to_string())
 }
 
-/// A warning when `bind` exposes the surface with nothing guarding it; silent once a token is set (a persistent warning gets ignored).
-/// Anyone who can reach an unauthenticated surface can start a turn. Fine on `127.0.0.1`; a warning rather than a refusal
-/// because an authenticating reverse proxy is legitimate.
+/// Silent once a token is set; a warning rather than a refusal because an authenticating reverse proxy is legitimate.
 fn exposure_warning(bind: &str, has_token: bool) -> Option<String> {
     if has_token {
         return None;
@@ -1186,7 +1145,6 @@ fn exposure_warning(bind: &str, has_token: bool) -> Option<String> {
     )
 }
 
-/// Split `serve`'s arguments into positionals and an optional `--bind <addr>`, which lets a caller name the address without claiming the config/ext slots.
 fn split_serve_args(args: &[String]) -> (Vec<String>, Option<String>) {
     let mut positional = Vec::new();
     let mut bind = None;
@@ -1201,8 +1159,7 @@ fn split_serve_args(args: &[String]) -> (Vec<String>, Option<String>) {
     (positional, bind)
 }
 
-/// Refuse a positional that is plainly an address in a *path* slot. In `serve [config] [ext] [addr]` only the first two are paths.
-/// Returns the message to print, or `None`.
+/// In `serve [config] [ext] [addr]` only the first two are paths.
 fn misplaced_address(positional: &[String]) -> Option<String> {
     let offender = positional
         .iter()
@@ -1215,7 +1172,7 @@ fn misplaced_address(positional: &[String]) -> Option<String> {
     ))
 }
 
-/// Whether a positional looks like a bind address: `host:port` with a numeric port, or `:port`. Deliberately narrow, since a real path can contain a colon.
+/// Deliberately narrow, since a real path can contain a colon.
 fn looks_like_an_address(arg: &str) -> bool {
     let Some((host, port)) = arg.rsplit_once(':') else {
         return false;
@@ -1229,8 +1186,7 @@ fn looks_like_an_address(arg: &str) -> bool {
         || host.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
-/// Like [`arg`], but a missing config/ext argument falls back to the installed
-/// copy next to the binary rather than to a bare relative name.
+/// Falls back to the installed copy next to the binary rather than a bare relative name.
 fn arg_or(args: &[String], index: usize, default: &str) -> String {
     args.get(index)
         .cloned()

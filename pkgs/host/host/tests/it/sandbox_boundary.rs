@@ -1,6 +1,4 @@
 //! A component with no grants gets no ambient authority. `tool-escape-probe`
-//! calls sockets, stdin, the filesystem and env directly, and each attempt must
-//! be refused. Skips when guests are not staged.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -17,8 +15,6 @@ use crate::common;
 
 const PROBE: &str = "tool-escape-probe.wasm";
 
-/// Loopback server that counts connections, so refusal is judged by what arrived,
-/// not by the guest's error text.
 struct Sentinel {
     port: u16,
     hits: Arc<AtomicU32>,
@@ -58,7 +54,6 @@ impl Drop for Sentinel {
     }
 }
 
-/// Instantiates the probe with nothing granted: no workspace, runner or `host-http`.
 fn probe(engine: &Engine) -> Option<ToolExtension> {
     if !common::guests_staged(&[PROBE]) {
         return None;
@@ -106,7 +101,6 @@ fn a_guest_cannot_open_its_own_socket() {
     );
 }
 
-/// Same, aimed off-box: a guest that reaches the internet has no sandbox, only a firewall rule.
 #[test]
 fn a_guest_cannot_open_a_socket_to_a_public_address() {
     let engine = Engine::default();
@@ -137,8 +131,6 @@ fn a_guest_cannot_read_the_hosts_filesystem() {
     }
 }
 
-/// No environment: `inherit_env` is never called. Secrets are set first, so an
-/// empty environment is not mistaken for the boundary.
 #[test]
 fn a_guest_cannot_read_the_hosts_environment() {
     std::env::set_var("OPENAI_API_KEY", "sk-guest-env-must-not-leak");
@@ -167,12 +159,8 @@ fn a_guest_cannot_read_the_hosts_environment() {
     }
 }
 
-/// The parent re-executes itself with a secret piped to stdin and checks the child
-/// cannot read it. Empty stdin would look like a boundary even without one.
 const SECRET: &str = "TOPSECRET-USER-KEYSTROKES";
-/// Set on the re-executed child so it runs the probe instead of the parent half.
 const CHILD: &str = "JK_STDIN_PROBE_CHILD";
-/// This test's own function name, for the `--exact` filter it re-executes with.
 const TEST_NAME: &str = "a_guest_gets_no_standard_input";
 
 #[test]

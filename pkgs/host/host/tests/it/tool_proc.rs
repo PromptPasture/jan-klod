@@ -1,6 +1,4 @@
-//! The model drives a long-lived child across turns (#220): one turn starts it,
-//! the next reads it, a third stops it. Runs config -> fleet -> `tool-proc` ->
-//! `host-process` through a booted `Runtime` with a canned provider.
+//! The model drives a long-lived child across turns: one turn starts it, the next reads it, a third stops it.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,17 +8,12 @@ use jk_agent::Runtime;
 use crate::common;
 use crate::execution_config::pid_alive;
 
-/// The guests a turn through `tool-proc` needs.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "tool-proc.wasm"];
 
-/// Prints once and stays up. `tool-proc` cannot write to a child, so output must
-/// come unprompted; `exec` makes the printed pid the one that stays alive.
 const TICKER: &str = "execution:\n  enabled: true\n  long-lived:\n    - name: ticker\n      \
                       command: sh\n      args: [\"-c\", \"echo hello-from-child; exec sleep 30\"]\n";
 
-/// What the model saw, one entry per turn.
 struct Turns {
-    /// The tool result carried into each turn's follow-up completion.
     results: Vec<String>,
 }
 
@@ -32,7 +25,6 @@ impl Turns {
     }
 }
 
-/// Runs one turn per entry in `calls`, in one session and one fleet, so the turn boundary is tested.
 fn run_turns(execution: &str, calls: &[serde_json::Value]) -> Turns {
     let dir = std::env::temp_dir().join(format!(
         "jk-toolproc-{}-{:?}",
@@ -108,7 +100,6 @@ workspace: {ws}
     Turns { results }
 }
 
-/// Started in one turn, read in the next, stopped in a third: the turn boundary is the point.
 #[test]
 fn a_child_starts_in_one_turn_is_read_in_the_next_and_stops_in_a_third() {
     if !common::guests_staged(&GUESTS) {
@@ -145,7 +136,6 @@ fn a_child_starts_in_one_turn_is_read_in_the_next_and_stops_in_a_third() {
     );
 }
 
-/// An ungranted name is refused, and the refusal lists what is granted so the model can correct itself.
 #[test]
 fn an_ungranted_name_is_refused_and_the_refusal_names_what_is_granted() {
     if !common::guests_staged(&GUESTS) {
@@ -167,7 +157,6 @@ fn an_ungranted_name_is_refused_and_the_refusal_names_what_is_granted() {
     );
 }
 
-/// The `list` op shows granted children before the model names one.
 #[test]
 fn a_granted_name_is_listed_before_the_model_asks_for_it() {
     if !common::guests_staged(&GUESTS) {
@@ -186,7 +175,6 @@ fn a_granted_name_is_listed_before_the_model_asks_for_it() {
     );
 }
 
-/// A child the model started and never stopped is still reaped by the host, with no guest help.
 #[test]
 fn a_child_the_model_forgot_does_not_outlive_the_runtime() {
     if !common::guests_staged(&GUESTS) {

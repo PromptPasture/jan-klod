@@ -1,5 +1,4 @@
 //! A turn writes its own history. Events are read back through a second `Store`
-//! handle on the same file, since reading through the writer only proves it remembers.
 
 use jk_agent::Runtime;
 use jk_protocol::turn::Event;
@@ -10,7 +9,6 @@ use rusqlite::params;
 
 use crate::common;
 
-/// A file-backed store, so the log outlives the session and a second handle can read it.
 fn config_with_store(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("config.yaml");
     std::fs::write(
@@ -93,7 +91,6 @@ fn a_turn_appends_its_events_in_order() {
     assert_eq!(text, "pong", "and carries the answer the caller got");
 }
 
-/// Two sessions through one agent keep separate logs, asserted against a real turn where the session id originates.
 #[test]
 fn each_session_logs_only_its_own_turn() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
@@ -128,7 +125,6 @@ fn each_session_logs_only_its_own_turn() {
     );
 }
 
-/// `transcript` and `list_sessions` answer from the log, not the `entries` transcript (what `GET /session/:id` and `GET /sessions` serve).
 #[test]
 fn the_read_surfaces_answer_from_the_log() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
@@ -165,8 +161,6 @@ fn the_read_surfaces_answer_from_the_log() {
     );
 }
 
-/// Acceptance line 2: a fork at seq *N* runs its own turn without touching the parent's log.
-/// Independence is checked in both directions; a branch-pointer fork would pass the first check and fail this one.
 #[test]
 fn a_fork_runs_its_own_turn_and_leaves_the_parent_alone() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
@@ -235,7 +229,6 @@ fn a_fork_runs_its_own_turn_and_leaves_the_parent_alone() {
     );
 }
 
-/// Forking a session with no log copies nothing and creates no fork.
 #[test]
 fn forking_nothing_is_refused() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -261,9 +254,6 @@ fn forking_nothing_is_refused() {
     );
 }
 
-/// An install attempt is in the session log (#213). `tool-invoked` and `tool-result` already record it,
-/// so no new event kind is added: a second record would be two entries for one decision.
-/// The install is refused on purpose, since a failed attempt that leaves no trace is the gap.
 #[test]
 fn an_attempted_install_is_recorded_in_the_session_log() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-tool-selector.wasm"]) {

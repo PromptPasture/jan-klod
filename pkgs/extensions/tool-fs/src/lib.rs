@@ -1,16 +1,11 @@
-//! `tool-fs` — the single filesystem tool, routed through `host-fs`.
-//!
-//! One tool, `fs`; `op` selects `read`, `write` or `grep`. Tree grep hits are `path:lineno:line`.
-//! Output is capped at [`guest_fs::MAX_OUTPUT_BYTES`]. The matching logic is pure Rust; the glue compiles for `wasm32` only.
+//! `tool-fs`: the single filesystem tool (`op` is `read`, `write` or `grep`) routed through `host-fs`.
 
-/// Most matching lines a tree-wide grep reports; past this the caller should narrow the search.
 const MAX_MATCHES: usize = 400;
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod fs {
     use crate::MAX_MATCHES;
 
-    /// Return `lineno:line` for every 1-based line of `haystack` containing `pattern`.
     pub fn matches(haystack: &str, pattern: &str) -> String {
         haystack
             .lines()
@@ -21,16 +16,12 @@ mod fs {
             .join("\n")
     }
 
-    /// A tree-wide grep result: `path:lineno:line` per hit, and whether the cap stopped it early.
     pub struct Hits {
-        /// One `path:lineno:line` entry per matching line.
         pub lines: Vec<String>,
         /// Set when [`MAX_MATCHES`] cut the search short, so a partial result is not read as complete.
         pub capped: bool,
     }
 
-    /// Collect matches across `files`, reading each through `read`.
-    ///
     /// An unreadable file (binary, gone, not UTF-8) is skipped, not fatal.
     pub fn grep_tree(
         files: &[String],
@@ -58,8 +49,7 @@ mod fs {
         }
     }
 
-    /// Format a tree grep. Bounds are stated **before** the hits, not after: the
-    /// output is cut from the tail, and a trailing caveat is the one a reader skips.
+    /// Bounds go before the hits: output is cut from the tail, and a trailing caveat is skipped.
     pub fn render(pattern: &str, hits: &Hits, walk_bound: Option<&str>) -> String {
         if hits.lines.is_empty() {
             return format!("no matches for {pattern}");
@@ -82,7 +72,6 @@ mod fs {
         use super::{grep_tree, matches, render, Hits};
         use crate::MAX_MATCHES;
 
-        /// A fake workspace: path → contents. Unknown paths are unreadable.
         fn files<'a>(entries: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
             move |path: &str| {
                 entries
@@ -144,7 +133,6 @@ mod fs {
             assert_eq!(render("zzz", &hits, None), "no matches for zzz");
         }
 
-        /// Bounds lead the hits: a caveat after the data is one a reader has already acted past.
         #[test]
         fn a_bounded_walk_is_reported_before_the_hits() {
             let hits = Hits {
@@ -159,7 +147,6 @@ mod fs {
             assert!(rendered.ends_with("\na.rs:1:x"), "{rendered}");
         }
 
-        /// A leading marker survives `truncate`, which cuts the tail at `MAX_OUTPUT_BYTES`.
         #[test]
         fn a_marker_survives_the_output_cap_that_would_have_cut_a_trailing_one() {
             let line = "src/some/quite/long/path/to/a/file.rs:1234:some matching line of code";
@@ -297,8 +284,7 @@ mod component {
         }
     }
 
-    /// Grep a file or a whole tree: a path that lists is a directory, anything else is a file.
-    /// `host-fs` has no `is-dir`, and widening the contract for this dispatch was not worth it.
+    /// `host-fs` has no `is-dir`, so a path that lists is a directory, anything else a file.
     fn grep(path: &str, pattern: &str, glob: &str) -> Result<String, ToolError> {
         if host_fs::list_dir(path).is_err() {
             let content = host_fs::read(path).map_err(|_| ToolError::ExecutionFailed)?;

@@ -1,12 +1,10 @@
-//! Two independent readers must agree on each staged guest's capabilities: `scripts/manifests.sh` (build time) and
-//! `Runtime::boot` (load time). They share no code, so agreement means both are right. Skips when the guests are not staged.
+//! `scripts/manifests.sh` and `Runtime::boot` share no code, so agreeing on each guest's capabilities means both are right.
 
 use jk_agent::Runtime;
 use jk_wasm::LoadState;
 
 use crate::common;
 
-/// Every guest compared, not a chosen few.
 const GUESTS: [&str; 6] = [
     "provider-openai.wasm",
     "tool-fs.wasm",
@@ -16,7 +14,6 @@ const GUESTS: [&str; 6] = [
     "interceptor-permission.wasm",
 ];
 
-/// `capabilities` from a generated manifest, sorted.
 fn declared(ext_dir: &std::path::Path, guest: &str) -> Vec<String> {
     let path = ext_dir.join(format!("{guest}.manifest.toml"));
     let text = std::fs::read_to_string(&path)
@@ -38,8 +35,6 @@ fn declared(ext_dir: &std::path::Path, guest: &str) -> Vec<String> {
     found
 }
 
-/// A config enabling one instance per guest under test, so `boot` compiles each
-/// and records what it imports.
 fn config_for(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("config.yaml");
     std::fs::write(
@@ -126,7 +121,6 @@ fn what_a_component_imports_matches_what_its_manifest_declares() {
     );
 }
 
-/// Pins specific values, so both readers agreeing on something wrong still fails.
 #[test]
 fn the_capability_sets_are_the_ones_expected() {
     if !common::guests_staged(&GUESTS) {
@@ -160,9 +154,6 @@ fn the_capability_sets_are_the_ones_expected() {
     );
 }
 
-/// A manifest that omits an imported capability is refused, naming the interface.
-///
-/// Uses a real guest's manifest with one capability deleted, so the test covers the shipped artifact.
 #[test]
 fn a_component_importing_more_than_it_declares_is_refused() {
     if !common::guests_staged(&["tool-fetch.wasm"]) {
@@ -215,8 +206,6 @@ fn a_component_importing_more_than_it_declares_is_refused() {
     );
 }
 
-/// Declaring a capability the config does not grant still boots; the capability
-/// is denied at the call. Refusing it would force authors to track every operator's config.
 #[test]
 fn declaring_a_capability_the_config_does_not_grant_still_boots() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -268,8 +257,6 @@ fn declaring_a_capability_the_config_does_not_grant_still_boots() {
     );
 }
 
-/// A component with no manifest beside it is refused by default. Otherwise the
-/// `allow-unmanifested` grant below would be a formality rather than a grant.
 #[test]
 fn a_component_with_no_manifest_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -306,8 +293,6 @@ fn a_component_with_no_manifest_is_refused() {
     );
 }
 
-/// `allow-unmanifested: true` is the named widening — top-level, because every
-/// key under `extensions:` must be a category of named instances.
 #[test]
 fn allow_unmanifested_loads_a_component_that_declares_nothing() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -343,9 +328,6 @@ fn allow_unmanifested_loads_a_component_that_declares_nothing() {
     );
 }
 
-/// The grant is off unless written. A config that does not mention it must
-/// behave as the refusing one above, so the earlier test cannot be passing for
-/// some other reason.
 #[test]
 fn the_grant_is_off_by_default() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -374,8 +356,6 @@ fn the_grant_is_off_by_default() {
     }
 }
 
-/// `manifest::API_VERSION` is a constant that can drift from `wit/`; this asserts
-/// they agree. It is a constant, not a runtime read, because an installed gateway has no `wit/`.
 #[test]
 fn the_hosts_api_version_matches_the_wit_package() {
     let wit = common::repo_root().join("wit");
@@ -409,8 +389,6 @@ fn the_hosts_api_version_matches_the_wit_package() {
     );
 }
 
-/// A component built against another interface version is refused, naming both
-/// versions, rather than failing later as a missing import.
 #[test]
 fn a_component_built_against_another_api_version_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -458,11 +436,6 @@ fn a_component_built_against_another_api_version_is_refused() {
     );
 }
 
-/// A `make ext-new` crate boots, so its generated manifest passes the boot
-/// cross-check (#111, acceptance line 3). The manifest cannot under-declare, but
-/// that is not the same as boot accepting it; this asserts the latter.
-///
-/// `tool-hello` is the committed generator output, byte-identical per `scripts/ext-new-selftest.sh`.
 #[test]
 fn a_generated_crate_boots() {
     if !common::guests_staged(&["tool-hello.wasm"]) {

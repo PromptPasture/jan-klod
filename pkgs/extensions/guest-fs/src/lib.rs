@@ -1,13 +1,12 @@
-//! Shared helpers for `host-fs`-routed guests (`tool-fs`, `tool-find`, `tool-edit`).
-//! Plain library (no WIT bindings); enforces output, glob, and walk bounds.
+//! Shared helpers for `host-fs` guests (`tool-fs`, `tool-find`, `tool-edit`): output, glob and walk bounds.
 
 /// Max output bytes per call.
 pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
-/// Max paths from a single walk.
+/// Max paths from one walk.
 pub const MAX_RESULTS: usize = 500;
 /// Max directory entries examined per walk.
 pub const MAX_VISITS: usize = 20_000;
-/// Max directory depth relative to search root.
+/// Max directory depth below the search root.
 pub const MAX_DEPTH: usize = 24;
 
 /// Build/vendor trees are pruned unless the pattern names them explicitly.
@@ -22,9 +21,9 @@ pub const PRUNED_DIRS: [&str; 6] = [
 
 /// One directory entry.
 pub struct Entry {
-    /// File or directory name (not a path).
+    /// Name, not a path.
     pub name: String,
-    /// True if directory.
+    /// Whether it is a directory.
     pub is_dir: bool,
 }
 
@@ -32,11 +31,11 @@ pub struct Entry {
 pub struct Outcome {
     /// Matching paths, workspace-relative and sorted.
     pub paths: Vec<String>,
-    /// Reason the walk stopped, if bounded before exhausting the tree.
+    /// Why the walk stopped early, if it did.
     pub bounded_by: Option<&'static str>,
 }
 
-/// Truncate `output` at [`MAX_OUTPUT_BYTES`] on a UTF-8 boundary, appending a marker.
+/// Truncates at [`MAX_OUTPUT_BYTES`] on a UTF-8 boundary, appending a marker.
 #[must_use]
 pub fn truncate(output: String) -> String {
     if output.len() <= MAX_OUTPUT_BYTES {
@@ -53,7 +52,7 @@ pub fn truncate(output: String) -> String {
     )
 }
 
-/// Expand slash-less patterns to match at any depth (`*.rs` alone is top-level only).
+/// Expands slash-less patterns to match at any depth.
 #[must_use]
 pub fn normalize(pattern: &str) -> String {
     if pattern.contains('/') {
@@ -63,8 +62,6 @@ pub fn normalize(pattern: &str) -> String {
     }
 }
 
-/// Test if `path` matches glob `pattern`.
-///
 /// `*` and `?` match one segment; `**` matches any segments including none.
 #[must_use]
 pub fn matches(pattern: &str, path: &str) -> bool {
@@ -109,23 +106,16 @@ fn match_name(pattern: &str, name: &str) -> bool {
     pat[pi..].iter().all(|c| *c == '*')
 }
 
-/// Pruned unless the pattern names them explicitly.
 fn should_descend(name: &str, pattern: &str) -> bool {
     !PRUNED_DIRS.contains(&name) || pattern.split('/').any(|segment| segment == name)
 }
 
-/// Withheld unless the pattern names it: `**/*` skips `.env`, `**/.env` does not.
-/// Names are not secret; contents stay read-gated.
+/// `**/*` skips `.env`, `**/.env` does not; contents stay read-gated.
 fn hidden_credential(name: &str, pattern: &str) -> bool {
     is_credential_file(name) && !pattern.split('/').any(|segment| segment == name)
 }
 
-/// Test if filename marks it as holding credentials (name heuristic).
-///
-/// Walks skip these, since a grep over `.env` would leak secrets into the transcript;
-/// explicit path reads stay gated.
-///
-/// Name-only: misses semantic cases such as `config/production.yaml`.
+/// Name-only heuristic; walks skip these so a grep over `.env` cannot leak secrets.
 #[must_use]
 pub fn is_credential_file(name: &str) -> bool {
     const NAMES: [&str; 8] = [
@@ -148,11 +138,7 @@ pub fn is_credential_file(name: &str) -> bool {
         || lower.starts_with("id_ecdsa")
 }
 
-/// Walk `root` collecting files matching `pattern`.
-///
-/// `list` returns None for unreadable dirs; those are skipped, not fatal.
-///
-/// Every dimension is bounded ([`MAX_VISITS`], [`MAX_DEPTH`], [`MAX_RESULTS`]), so cost follows the tree.
+/// Walks `root` for files matching `pattern`; unreadable dirs are skipped, not fatal.
 pub fn walk(root: &str, pattern: &str, list: &dyn Fn(&str) -> Option<Vec<Entry>>) -> Outcome {
     let pattern = normalize(pattern);
     let mut paths = Vec::new();
@@ -191,7 +177,7 @@ pub fn walk(root: &str, pattern: &str, list: &dyn Fn(&str) -> Option<Vec<Entry>>
     Outcome { paths, bounded_by }
 }
 
-/// Join workspace-relative fragments, treating `""` and `"."` as here.
+/// Joins workspace-relative fragments, treating `""` and `"."` as here.
 #[must_use]
 pub fn join(base: &str, rest: &str) -> String {
     let base = if base == "." { "" } else { base };
@@ -204,7 +190,6 @@ pub fn join(base: &str, rest: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    /// Naming a credential file opts back in; broad patterns don't.
     #[test]
     fn a_pattern_that_names_a_credential_file_gets_it() {
         assert!(super::hidden_credential(".env", "**/*"));
@@ -249,7 +234,6 @@ mod tests {
     use super::{join, matches, normalize, truncate, walk, Entry, MAX_OUTPUT_BYTES, MAX_RESULTS};
     use crate::PRUNED_DIRS;
 
-    /// Mock tree: path → entries. Root is `""`.
     fn tree<'a>(
         dirs: &'a [(&'a str, &'a [(&'a str, bool)])],
     ) -> impl Fn(&str) -> Option<Vec<Entry>> + 'a {

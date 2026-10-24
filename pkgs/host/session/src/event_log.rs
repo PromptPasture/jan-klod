@@ -1,7 +1,4 @@
 //! The stored form of a turn's events: one [`Event`] becomes one row, a `kind` plus a versioned JSON envelope.
-//!
-//! [`EVENT_LOG_VERSION`] is separate from the client protocol version, because a stored log outlives the clients that wrote it.
-//! [`decode`] returns events only; [`decode_record`] returns everything a row can hold.
 
 use std::sync::Mutex;
 
@@ -10,55 +7,48 @@ use serde_json::{json, Value};
 use crate::store::{Store, StoreError};
 use jk_protocol::turn::{Driver, Event, EventSink, Flow, ToolCall, ToolOutcome, UserPrompt};
 
-/// The envelope format this build writes, and the highest it can read.
-///
-/// Bump only when an older reader would misinterpret a payload; a new `kind` does not need a bump.
+/// The envelope version written, and the highest readable; bump only when an older reader would misread.
 pub const EVENT_LOG_VERSION: u32 = 1;
 
-/// Why a stored row could not be turned back into a [`Record`] or an [`Event`].
+/// Why a stored row could not be decoded.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DecodeError {
-    /// A `kind` this build does not know at all — written by a newer one.
+    /// A `kind` unknown to this build, likely written by a newer one.
     #[error("unknown event kind `{0}`")]
     UnknownKind(String),
-    /// A kind this build knows, asked of [`decode`], which only returns events.
-    ///
-    /// Distinct from [`Self::UnknownKind`]: "this is a record, not an event" is a different fact from "never heard of it".
+    /// A known kind that is a record, not an event, asked of [`decode`].
     #[error("`{0}` is a record, not an event")]
     NotAnEvent(String),
-    /// Written by a newer build, in a shape this one cannot be trusted to read.
+    /// Written by a newer build; unreadable here.
     #[error("event log version {found} is newer than this build's {EVENT_LOG_VERSION}")]
     UnsupportedVersion {
         /// The version the row carries.
         found: u32,
     },
-    /// The payload is not an envelope, or a field is missing or the wrong type.
+    /// Not an envelope, or a field is missing or mistyped.
     #[error("malformed payload: {0}")]
     Malformed(String),
 }
 
-/// The `kind` of a record that is not an [`Event`]: the message that started the turn.
+/// The `kind` of the message that started the turn.
 pub const KIND_USER_MESSAGE: &str = "user-message";
 /// The `kind` of the prompt an interceptor blocked the turn on.
 pub const KIND_ASK: &str = "ask";
-/// The `kind` of the answer that unblocked it, including the default taken when nobody answered.
+/// The `kind` of the answer that unblocked it, including a default.
 pub const KIND_ANSWER: &str = "answer";
-/// The `kind` of a steering message injected mid-turn via `Driver::follow_up`.
+/// The `kind` of a steering message injected mid-turn.
 pub const KIND_FOLLOW_UP: &str = "follow-up";
 
-/// A component adopted into the running runtime, or refused (#214). A `Record`, not an [`Event`]: loads happen
-/// between turns, so no turn can own them.
+/// The `kind` of a component adopted into the runtime or refused; a record, as loads happen between turns.
 pub const KIND_EXTENSION_LOADED: &str = "extension-loaded";
 
-/// Wrap `data` in the versioned envelope every row shares. One function, so a version bump cannot miss a row.
+/// Wraps `data` in the versioned envelope every row shares.
 #[must_use]
 pub fn envelope(data: &Value) -> String {
     json!({ "v": EVENT_LOG_VERSION, "data": data }).to_string()
 }
 
-/// The row one event becomes: its `kind` and its JSON envelope.
-///
-/// The `match` has no wildcard arm: a new [`Event`] variant must be given a kind here, not silently dropped.
+/// The `kind` and JSON envelope of one event; no wildcard arm, so a new variant needs a kind.
 #[must_use]
 pub fn encode(event: &Event) -> (&'static str, String) {
     let (kind, data) = match event {
@@ -82,7 +72,6 @@ pub fn encode(event: &Event) -> (&'static str, String) {
 }
 
 /// Anything a row can hold: a turn event, or a record that never passed through an `EventSink`.
-/// Rebuilding a turn needs all of them, so the log cannot store only events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Record {
     /// The message that started the turn.
@@ -96,14 +85,11 @@ pub enum Record {
         /// What was taken if nobody answered.
         default: String,
     },
-    /// The answer that unblocked the turn — the user's, or the default.
+    /// The answer that unblocked the turn, the user's or the default.
     Answer(String),
     /// A steering message injected mid-turn.
     FollowUp(String),
-    /// A component adopted into the running runtime after boot, or the reason it was not (#214).
-    ///
-    /// Recorded even when refused: an install says "callable from the next turn", which can turn out false
-    /// after the manifest cross-check, and a log of only installs would assert something untrue.
+    /// A component adopted after boot, or the reason it was refused; refusals are logged too.
     ExtensionLoaded {
         /// The component stem, e.g. `tool-greet`.
         stem: String,
@@ -116,7 +102,6 @@ pub enum Record {
     Event(Event),
 }
 
-/// The `data` object of a row, once the envelope has been checked.
 fn open_envelope(payload: &str) -> Result<Value, DecodeError> {
     let envelope: Value =
         serde_json::from_str(payload).map_err(|e| DecodeError::Malformed(e.to_string()))?;
@@ -134,7 +119,6 @@ fn open_envelope(payload: &str) -> Result<Value, DecodeError> {
         .ok_or_else(|| DecodeError::Malformed("no `data` in the envelope".to_owned()))
 }
 
-/// A required string field.
 fn text(kind: &str, data: &Value, field: &str) -> Result<String, DecodeError> {
     data.get(field)
         .and_then(Value::as_str)
@@ -142,8 +126,7 @@ fn text(kind: &str, data: &Value, field: &str) -> Result<String, DecodeError> {
         .ok_or_else(|| DecodeError::Malformed(format!("`{kind}` has no string `{field}`")))
 }
 
-/// A required list-of-strings field. A non-string entry is an error, not skipped: a silently shortened prompt
-/// would be answered against options the user never saw.
+/// A non-string entry is an error, not skipped, so a prompt is never answered against unseen options.
 fn strings(kind: &str, data: &Value, field: &str) -> Result<Vec<String>, DecodeError> {
     data.get(field)
         .and_then(Value::as_array)
@@ -157,10 +140,10 @@ fn strings(kind: &str, data: &Value, field: &str) -> Result<Vec<String>, DecodeE
         .collect()
 }
 
-/// Rebuild whatever a row was written from.
+/// Rebuilds whatever a row was written from.
 ///
 /// # Errors
-/// [`DecodeError`] when the kind is unknown, the version is newer than this build, or a field is missing or mistyped.
+/// [`DecodeError`] when the kind is unknown, the version is newer, or a field is missing or mistyped.
 pub fn decode_record(kind: &str, payload: &str) -> Result<Record, DecodeError> {
     let data = open_envelope(payload)?;
     match kind {
@@ -202,14 +185,10 @@ pub fn decode_record(kind: &str, payload: &str) -> Result<Record, DecodeError> {
     }
 }
 
-/// Rebuild the event a row was written from, for a caller that only handles events.
-///
-/// Separate from [`decode_record`] because "the events" and "everything that happened" are different questions.
-/// Both share one parser, so they cannot disagree about an envelope.
+/// Rebuilds the event a row was written from, for callers that only handle events.
 ///
 /// # Errors
-/// [`DecodeError::NotAnEvent`] for a record that is not an event, plus
-/// everything [`decode_record`] can return.
+/// [`DecodeError::NotAnEvent`] for a non-event record, plus anything [`decode_record`] returns.
 pub fn decode(kind: &str, payload: &str) -> Result<Event, DecodeError> {
     match decode_record(kind, payload)? {
         Record::Event(event) => Ok(event),
@@ -217,24 +196,16 @@ pub fn decode(kind: &str, payload: &str) -> Result<Event, DecodeError> {
     }
 }
 
-/// An [`EventSink`] that appends every event to a session's log, then forwards it to the inner sink.
-///
-/// A fan-out, not a replacement: clients still get every event. Two rules:
-///
-/// * **A store failure never affects the turn.** [`Self::emit`] returns the inner sink's answer, always;
-///   cancelling because the log failed would let a full disk stop a conversation.
-/// * **The lock is held per append only.** The core shares one `Mutex<Store>` with guest `host-storage`
-///   calls, so holding it across the inner sink (which runs guest code) would deadlock.
+/// An [`EventSink`] that logs each event, then forwards it; never holds the store lock across the inner sink (deadlock).
 pub struct PersistingSink<'a> {
     inner: &'a mut dyn EventSink,
     store: &'a Mutex<Store>,
     session: String,
-    /// Whether a failure has already been reported. One warning per turn, not one per event.
     warned: bool,
 }
 
 impl<'a> PersistingSink<'a> {
-    /// Wrap `inner`, logging each event against `session`.
+    /// Wraps `inner`, logging each event against `session`.
     pub fn new(inner: &'a mut dyn EventSink, store: &'a Mutex<Store>, session: &str) -> Self {
         Self {
             inner,
@@ -253,10 +224,7 @@ impl EventSink for PersistingSink<'_> {
     }
 }
 
-/// An [`jk_protocol::turn::Driver`] that logs each prompt and its answer, then behaves exactly as the driver it wraps.
-///
-/// A wrapper, not a trait change. The answer is logged whatever its provenance, including the default taken on
-/// timeout: a replay cannot otherwise tell "the user approved" from "the prompt timed out and was denied".
+/// A `Driver` that logs each prompt and its answer, defaults included, then defers to the wrapped driver.
 pub struct PersistingDriver<'a> {
     inner: &'a mut dyn Driver,
     store: &'a Mutex<Store>,
@@ -265,7 +233,7 @@ pub struct PersistingDriver<'a> {
 }
 
 impl<'a> PersistingDriver<'a> {
-    /// Wrap `inner`, logging its exchanges against `session`.
+    /// Wraps `inner`, logging its exchanges against `session`.
     pub fn new(inner: &'a mut dyn Driver, store: &'a Mutex<Store>, session: &str) -> Self {
         Self {
             inner,
@@ -315,14 +283,11 @@ impl Driver for PersistingDriver<'_> {
     }
 }
 
-/// Append one record, wrapping `data` in the shared envelope.
 fn append(store: &Mutex<Store>, session: &str, warned: &mut bool, kind: &str, data: &Value) {
     append_encoded(store, session, warned, kind, &envelope(data));
 }
 
-/// Append an already-enveloped record. A store failure is warned once per turn and then swallowed.
-///
-/// The one place store failures are interpreted, so sink and driver agree on their meaning.
+/// Warns once per turn on a store failure, then swallows it; sink and driver share this meaning.
 fn append_encoded(
     store: &Mutex<Store>,
     session: &str,
@@ -349,23 +314,18 @@ fn append_encoded(
     }
 }
 
-/// Turn transcripts written before the log existed into events. Returns how many sessions were converted.
-///
-/// Idempotent: a session that already has events is left alone. This is a one-time migration, not a fallback
-/// read of `entries`, which would keep two formats alive forever.
-///
-/// Indicates whether a chain is intact or broken.
+/// Whether a chain is intact or broken.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainStatus {
-    /// The chain is intact: every row's `prev_digest` matches the digest of the row before it.
+    /// Every row's `prev_digest` matches the digest of the row before it.
     Intact,
-    /// The chain breaks at a row: the event was edited, reordered, or a row was deleted.
+    /// The event was edited, reordered, or a row was deleted.
     Broken {
-        /// The `seq` of the event where the chain breaks.
+        /// The `seq` where the chain breaks.
         seq: u64,
-        /// The `kind` of the event where the chain breaks.
+        /// The `kind` where the chain breaks.
         kind: String,
-        /// Why the chain is broken at this point.
+        /// Why the chain breaks.
         reason: String,
     },
 }
@@ -375,7 +335,7 @@ pub enum ChainStatus {
 pub struct ChainVerification {
     /// The session that was verified.
     pub session: String,
-    /// Whether the chain is intact or where it broke.
+    /// Whether the chain is intact or broken.
     pub status: ChainStatus,
 }
 
@@ -399,8 +359,7 @@ impl From<StoreError> for VerifyError {
     }
 }
 
-/// Verify that a session's event chain is intact: each row's `prev_digest` matches the digest of the row
-/// before it, and the first row's is NULL.
+/// Verifies a session's `prev_digest` chain; the first row's is NULL.
 ///
 /// # Errors
 /// [`VerifyError::NotFound`] if the session does not exist, or [`VerifyError::Backend`] on a storage error.
@@ -408,11 +367,7 @@ pub fn verify_chain(store: &Store, session: &str) -> Result<ChainVerification, V
     store.verify_chain_internal(session)
 }
 
-/// # What is lost
-///
-/// A transcript row is `{user, answer}`, so a migrated turn becomes exactly two events. Tool calls, warnings, and
-/// asks were never recorded in the old format and cannot be recovered. The migrated `done` carries
-/// `agentic: false`, since the old transcript did not record it and `false` claims less.
+/// Converts pre-log transcripts into events, two per turn, skipping sessions that already have events.
 ///
 /// # Errors
 /// [`StoreError`] if the store cannot be read or written.
@@ -461,12 +416,7 @@ pub fn migrate_transcripts(store: &Store) -> Result<u64, StoreError> {
     Ok(migrated)
 }
 
-/// Log the message that starts a turn, before any of its events.
-///
-/// Called by the turn runner, not a wrapper, since the message never passes through a `Driver` or `EventSink`.
-///
-/// `message` must be what the model received, which a `before-loop` interceptor may `replace`. The log must record
-/// that, or a resumed session would replay a history the model never had (#84).
+/// Logs the message that starts a turn; must be what the model received, after any `before-loop` replace.
 pub fn log_user_message(store: &Mutex<Store>, session: &str, message: &str) {
     let mut warned = false;
     append(
@@ -482,8 +432,6 @@ pub fn log_user_message(store: &Mutex<Store>, session: &str, message: &str) {
 mod tests {
     use super::*;
 
-    /// The kind each event must encode to. No wildcard arm: `decode` has a catch-all, so a variant missing from
-    /// [`every_event`] would otherwise pass unnoticed.
     const fn expected_kind(event: &Event) -> &'static str {
         match event {
             Event::TextDelta(_) => "text-delta",
@@ -494,7 +442,6 @@ mod tests {
         }
     }
 
-    /// One of each variant, with distinguishable field values so a misplaced field fails.
     fn every_event() -> Vec<Event> {
         vec![
             Event::TextDelta("the answer is".to_owned()),
@@ -542,7 +489,6 @@ mod tests {
         assert_eq!(kinds.len(), total, "two events share a kind: {kinds:?}");
     }
 
-    /// A `tool-result` row written before #162 has no `failed` key at all, and must stay readable.
     #[test]
     fn a_tool_result_written_before_the_failed_field_existed_decodes_as_not_failed() {
         let payload = envelope(&json!({ "id": "call-1", "content": "# Jan-Klod" }));
@@ -566,7 +512,6 @@ mod tests {
         }
     }
 
-    /// Two deltas are two rows; neither is merged into the other.
     #[test]
     fn text_deltas_are_not_coalesced() {
         let first = encode(&Event::TextDelta("the ".to_owned()));
@@ -579,7 +524,6 @@ mod tests {
         );
     }
 
-    /// Refuses a row this build cannot read, rather than reading it wrongly.
     #[test]
     fn a_newer_version_is_refused_rather_than_guessed_at() {
         let payload = json!({ "v": EVENT_LOG_VERSION + 1, "data": { "text": "x" } }).to_string();
@@ -601,7 +545,6 @@ mod tests {
         );
     }
 
-    /// The example kind must be one this build does not know, or the test asserts the opposite of its name.
     #[test]
     fn an_unknown_kind_names_itself() {
         let payload = json!({ "v": EVENT_LOG_VERSION, "data": {} }).to_string();
@@ -614,7 +557,6 @@ mod tests {
         );
     }
 
-    /// A known kind asked of the event-only decoder is `NotAnEvent`, not `UnknownKind`.
     #[test]
     fn a_record_asked_of_the_event_decoder_says_so() {
         let payload = envelope(&json!({ "message": "hello" }));
@@ -656,7 +598,6 @@ mod tests {
 mod sink_tests {
     use super::*;
 
-    /// Records what it was given, and can be told to cancel.
     struct Recorder {
         seen: Vec<Event>,
         answer: Flow,
@@ -720,7 +661,6 @@ mod sink_tests {
         );
     }
 
-    /// The inner sink owns cancellation: a `Stop` from it must still reach the conductor.
     #[test]
     fn the_inner_sinks_stop_still_propagates() {
         let store = Mutex::new(Store::open_in_memory().unwrap());
@@ -729,7 +669,6 @@ mod sink_tests {
         assert_eq!(sink.emit(&Event::TextDelta("x".to_owned())), Flow::Stop);
     }
 
-    /// The event is logged even when the client has gone: what happened stays happened.
     #[test]
     fn an_event_is_logged_even_when_the_inner_sink_cancels() {
         let store = Mutex::new(Store::open_in_memory().unwrap());
@@ -741,7 +680,6 @@ mod sink_tests {
         assert_eq!(store.lock().unwrap().session_events("s1").unwrap().len(), 1);
     }
 
-    /// A poisoned lock stands in for a broken store, exercising the same swallow-and-continue path.
     #[test]
     fn a_broken_store_does_not_cancel_the_turn() {
         let store = Mutex::new(Store::open_in_memory().unwrap());
@@ -766,7 +704,6 @@ mod sink_tests {
         assert_eq!(inner.seen.len(), 3, "and the inner sink is unaffected");
     }
 
-    /// Separate sessions keep separate sequences.
     #[test]
     fn sessions_do_not_share_a_sequence() {
         let store = Mutex::new(Store::open_in_memory().unwrap());
@@ -789,7 +726,6 @@ mod sink_tests {
 mod driver_tests {
     use super::*;
 
-    /// Answers whatever it was told to, and reports a follow-up once.
     struct Stub {
         answer: String,
         follow_ups: Vec<String>,
@@ -855,7 +791,6 @@ mod driver_tests {
         );
     }
 
-    /// A timed-out prompt and a user's answer look identical unless the default is recorded too.
     #[test]
     fn a_defaulted_answer_is_logged_like_any_other() {
         let store = Mutex::new(Store::open_in_memory().unwrap());
@@ -921,7 +856,6 @@ mod driver_tests {
 mod record_tests {
     use super::*;
 
-    /// Answers yes and steers once, so one pass produces every non-event kind.
     struct Stub;
     impl Driver for Stub {
         fn ask(&mut self, _: &UserPrompt) -> String {
@@ -932,7 +866,6 @@ mod record_tests {
         }
     }
 
-    /// Round-trips every non-event kind from what its writer produces, so a change on either side shows up.
     #[test]
     fn the_non_event_records_round_trip_from_what_is_written() {
         let store = Mutex::new(Store::open_in_memory().unwrap());
@@ -974,7 +907,6 @@ mod record_tests {
         );
     }
 
-    /// An `ask` with no options is free text, and the empty list must survive as an empty list.
     #[test]
     fn a_free_text_ask_keeps_its_empty_option_list() {
         let payload = envelope(&json!({
@@ -992,7 +924,6 @@ mod record_tests {
         );
     }
 
-    /// A non-string option is an error, not skipped, for the same reason as the field check.
     #[test]
     fn an_option_that_is_not_a_string_is_malformed() {
         let payload = envelope(&json!({
@@ -1018,7 +949,6 @@ mod record_tests {
         );
     }
 
-    /// The envelope check applies to every kind, not only to events.
     #[test]
     fn a_newer_version_is_refused_for_records_too() {
         let payload = json!({ "v": EVENT_LOG_VERSION + 1, "data": { "message": "x" } }).to_string();
@@ -1030,7 +960,6 @@ mod record_tests {
         );
     }
 
-    /// Events still decode through the wider decoder, so both decoders describe the same logs.
     #[test]
     fn events_read_through_the_record_decoder_as_well() {
         let (kind, payload) = encode(&Event::Warning("careful".to_owned()));
@@ -1046,7 +975,6 @@ mod migration_tests {
     use super::*;
     use crate::projection;
 
-    /// Writes a transcript in the historical shape, so the migration test uses the real format.
     fn old_transcript(store: &Store, session: &str, turns: &[(&str, &str)]) {
         for (index, (user, answer)) in turns.iter().enumerate() {
             store
@@ -1089,7 +1017,7 @@ mod migration_tests {
         );
     }
 
-    /// `turn-10` sorts before `turn-9` as text; the bug only shows once a session reaches ten turns.
+    /// `turn-10` sorts before `turn-9` as text; the bug only shows at ten turns.
     #[test]
     fn turns_are_ordered_by_number_not_by_key() {
         let store = Store::open_in_memory().unwrap();
@@ -1113,7 +1041,6 @@ mod migration_tests {
         assert_eq!(contents, expected, "in turn order, not lexical key order");
     }
 
-    /// Safe on every open, which is the property that lets it run at boot.
     #[test]
     fn migrating_twice_changes_nothing() {
         let store = Store::open_in_memory().unwrap();
@@ -1133,7 +1060,6 @@ mod migration_tests {
         );
     }
 
-    /// A session that already logged natively is left alone, even with old transcript rows.
     #[test]
     fn a_session_with_events_is_left_alone() {
         let store = Store::open_in_memory().unwrap();
@@ -1152,7 +1078,6 @@ mod migration_tests {
         assert!(log[0].payload.contains("live"));
     }
 
-    /// Migrated events are dated when the turn happened, not when the upgrade ran.
     #[test]
     fn migrated_events_keep_the_transcripts_timestamps() {
         let store = Store::open_in_memory().unwrap();
@@ -1170,7 +1095,6 @@ mod migration_tests {
         );
     }
 
-    /// Interceptor storage shares this database under `ext/<id>/…` but is not a conversation.
     #[test]
     fn interceptor_namespaces_are_not_sessions() {
         let store = Store::open_in_memory().unwrap();
@@ -1184,7 +1108,6 @@ mod migration_tests {
         );
     }
 
-    /// Keys that are not turns (anything host-storage wrote) have no transcript to convert.
     #[test]
     fn a_namespace_without_turn_rows_is_skipped() {
         let store = Store::open_in_memory().unwrap();

@@ -1,10 +1,7 @@
-//! `interceptor-system`: the standing instructions a turn runs under.
-//! Inserted at `select-model`, before `interceptor-context` counts the budget, and only when no
-//! system message exists, so repeat turns do not accumulate copies.
+//! `interceptor-system`: standing instructions inserted at `select-model` only when no system message exists.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod prompt {
-    /// The built-in instructions, used when config supplies no `prompt`.
     /// Each line names something the runtime enforces, so the model's expectations match the sandbox.
     pub const DEFAULT: &str = "\
 You are jan-klod, a coding agent working inside one workspace directory.
@@ -23,7 +20,6 @@ assuming you saw everything.
 - Answer concisely; the conversation shares the model's context window with the \
 files you read.";
 
-    /// The system text for this turn: the configured `prompt`, else [`DEFAULT`].
     /// An empty or whitespace-only value switches instructions off.
     #[must_use]
     pub fn resolve(configured: Option<&str>) -> Option<String> {
@@ -34,20 +30,15 @@ files you read.";
         }
     }
 
-    /// Where this turn's instructions came from, for the `prompt-source` status item.
-    /// `prompt: ""` is a deliberate choice, so it is not reported as unconfigured.
+    /// `prompt: ""` is deliberate, so it is not reported as unconfigured.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Source {
-        /// The built-in text, because nothing was configured.
         BuiltIn,
-        /// An operator wrote a `prompt`.
         Configured,
-        /// `prompt: ""` — no system message at all.
         Off,
     }
 
     impl Source {
-        /// Short label for a status line.
         #[must_use]
         pub const fn label(self) -> &'static str {
             match self {
@@ -57,7 +48,6 @@ files you read.";
             }
         }
 
-        /// One line of why, for a client with room for it.
         #[must_use]
         pub const fn detail(self) -> &'static str {
             match self {
@@ -68,7 +58,6 @@ files you read.";
         }
     }
 
-    /// Classify what the configured value means.
     #[must_use]
     pub fn source(configured: Option<&str>) -> Source {
         match configured {
@@ -78,7 +67,6 @@ files you read.";
         }
     }
 
-    /// What the `prompt` command answers: the first line and a length, unless `verbose`.
     /// A status area cannot show a long text.
     #[must_use]
     pub fn summary(resolved: Option<&str>, verbose: bool) -> String {
@@ -93,9 +81,7 @@ files you read.";
         format!("{first} … ({characters} characters; pass `verbose` for all of it)")
     }
 
-    /// The standing instructions plus the project's `AGENTS.md`, labelled as a repo request.
-    /// The label matters: a model must not treat "you may write anywhere" in a checked-in file as a
-    /// sandbox fact. `prompt: ""` drops the project section too.
+    /// Labelled as a repo request: a checked-in file's claims are not sandbox facts.
     #[must_use]
     pub fn resolve_with_project(configured: Option<&str>, project: Option<&str>) -> Option<String> {
         let base = resolve(configured)?;
@@ -123,7 +109,6 @@ files you read.";
             assert_eq!(source(Some("be terse")), Source::Configured);
         }
 
-        /// `prompt: ""` is a choice, not an absent configuration; the status line must say so.
         #[test]
         fn an_empty_prompt_reads_as_off_not_as_unconfigured() {
             assert_eq!(source(Some("   ")), Source::Off);
@@ -234,9 +219,8 @@ mod component {
     use bindings::jan_klod::interfaces::llm_types::{Message, Role};
 
     thread_local! {
-        /// The resolved instructions, read once at `init`.
         static PROMPT: RefCell<Option<String>> = const { RefCell::new(None) };
-        /// Where they came from, for the status item: a configured prompt equal to the built-in one is still configured.
+        /// A configured prompt equal to the built-in one is still configured.
         static SOURCE: RefCell<prompt::Source> = const { RefCell::new(prompt::Source::BuiltIn) };
     }
 
@@ -317,13 +301,10 @@ mod component {
         }
     }
 
-    /// The name a client invokes to see the standing instructions.
     const PROMPT_COMMAND: &str = "prompt";
-    /// The argument that asks for the whole text rather than a summary.
     const VERBOSE: &str = "verbose";
 
     impl ClientSurface for Component {
-        /// The command to read the instructions, and the status item showing where they came from.
         fn contribute() -> Contributions {
             let source = SOURCE.with(|slot| *slot.borrow());
             Contributions {

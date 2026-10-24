@@ -1,9 +1,6 @@
-//! `tool-memory` — store and recall facts across sessions.
-//!
-//! Facts are shared by every session in a run. [`memory`] holds the pure logic;
-//! this file is the wasm32-only glue that reads, applies and writes it back.
+//! `tool-memory`: facts shared across sessions in a run; `memory` holds the logic, this file the wasm32 glue.
 
-/// The memory and its operations, pure and host-testable.
+/// The memory and its operations.
 pub mod memory;
 
 #[cfg(target_arch = "wasm32")]
@@ -33,7 +30,6 @@ mod component {
 
     use crate::memory::{Memory, MemoryError};
 
-    /// Where the memory lives. One key stores all facts as a JSON array.
     const NAMESPACE: &str = "memory";
     const KEY: &str = "facts";
 

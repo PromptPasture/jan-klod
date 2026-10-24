@@ -12,7 +12,6 @@ use jk_wasm::route::HttpFn;
 
 pub mod minisig;
 
-/// Removes test temp directory on drop, even on panic
 pub struct TempDir(pub PathBuf);
 impl Drop for TempDir {
     fn drop(&mut self) {
@@ -20,7 +19,6 @@ impl Drop for TempDir {
     }
 }
 
-/// Get repo root from crate manifest directory
 pub fn repo_root() -> PathBuf {
     [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."]
         .iter()
@@ -30,7 +28,6 @@ pub fn repo_root() -> PathBuf {
 /// Set to fail instead of skip when guests not staged. `make gate` exports it.
 const REQUIRE: &str = "JK_REQUIRE_GUESTS";
 
-/// Whether every named guest is staged in `ext/`. Panics instead of skipping when `JK_REQUIRE_GUESTS` is set.
 pub fn guests_staged(guests: &[&str]) -> bool {
     let ext_dir = repo_root().join("ext");
     let absent: Vec<&str> = guests
@@ -51,7 +48,6 @@ pub fn guests_staged(guests: &[&str]) -> bool {
     false
 }
 
-/// Whether the program answers a `--version` or `version` query.
 fn runnable(program: &str) -> bool {
     ["--version", "version"].iter().any(|flag| {
         std::process::Command::new(program)
@@ -63,7 +59,6 @@ fn runnable(program: &str) -> bool {
     })
 }
 
-/// Whether an optional developer toolchain is present; a skip is announced.
 pub fn optional_tool(program: &str) -> bool {
     if runnable(program) {
         return true;
@@ -72,7 +67,6 @@ pub fn optional_tool(program: &str) -> bool {
     false
 }
 
-/// Whether an external program is on `PATH`. Panics when `JK_REQUIRE_GUESTS` is set.
 pub fn tool_available(program: &str) -> bool {
     if runnable(program) {
         return true;
@@ -86,7 +80,6 @@ pub fn tool_available(program: &str) -> bool {
     false
 }
 
-/// Canned chat-completions reply for offline provider completion
 pub fn canned_http(content: &'static str) -> HttpFn {
     Box::new(move |_m, _u, _h, _b, _t| {
         let body = serde_json::json!({
@@ -103,7 +96,6 @@ pub fn canned_http(content: &'static str) -> HttpFn {
     })
 }
 
-/// Reads a full request: headers plus the Content-Length bytes of body.
 pub fn read_request(socket: &mut TcpStream) -> std::io::Result<String> {
     let mut raw: Vec<u8> = Vec::new();
     let mut chunk = [0_u8; 1024];
@@ -129,9 +121,7 @@ pub fn read_request(socket: &mut TcpStream) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&raw).into_owned())
 }
 
-/// Loopback server whose hit count can be asserted race-free.
 pub struct Countable {
-    /// Loopback port this server listens on
     pub port: u16,
     hits: Arc<AtomicU32>,
 }
@@ -162,7 +152,6 @@ impl Countable {
         Self { port, hits }
     }
 
-    /// Probes the server once and asserts that the probe was the only hit.
     pub fn only_hit(&self) {
         let before = self.hits.load(Ordering::SeqCst);
         let mut probe =

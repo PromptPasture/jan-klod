@@ -1,6 +1,4 @@
-//! Host-side state and capability implementations.
-//!
-//! Each extension instance gets its own [`HostState`] and Wasmtime store.
+//! Host-side state and capability implementations; each instance gets its own [`HostState`] and store.
 
 use std::fmt::Write as _;
 
@@ -9,8 +7,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::bindings::jan_klod::interfaces::{host_config, host_http, host_log, host_secrets};
 
-/// Extension instance's slice of `config.yaml`, served via `host-config`.
-/// Keys are dot-separated paths into the (env-expanded) config.
+/// An instance's slice of `config.yaml`, served via `host-config`; keys are dot-separated paths.
 #[derive(Debug, Clone)]
 pub struct ConfigSection {
     root: Value,
@@ -55,12 +52,9 @@ impl ConfigSection {
 pub struct HostState {
     wasi: WasiCtx,
     table: ResourceTable,
-    /// Extension id (e.g., `provider.openai`) — tags log lines.
     component_id: String,
-    /// Instance config section.
     section: ConfigSection,
-    /// Outbound destinations via `host-http`. Per-state so the boundary
-    /// is visible: guest calls consult the policy built for them.
+    /// Per-state so guest calls consult the policy built for them.
     egress: crate::egress::EgressPolicy,
 }
 
@@ -132,7 +126,7 @@ impl host_config::Host for HostState {
 }
 
 impl host_http::Host for HostState {
-    /// Outbound HTTP via the blocking client; the only network access an extension gets.
+    /// The only network access an extension gets.
     fn fetch(
         &mut self,
         request: host_http::HttpRequest,
@@ -165,7 +159,6 @@ impl host_http::Host for HostState {
     }
 }
 
-/// Translate [`crate::http::WireError`] to generated `host-http` error.
 const fn to_http_error(err: &crate::http::WireError) -> host_http::HttpError {
     use crate::http::WireError;
     match err {
@@ -180,7 +173,6 @@ const fn to_http_error(err: &crate::http::WireError) -> host_http::HttpError {
 }
 
 impl host_secrets::Host for HostState {
-    /// Secret from the environment; `denied` unless the instance has `secrets: true`.
     fn get(&mut self, name: String) -> Result<String, host_secrets::SecretsError> {
         match self.section.get("secrets") {
             Some(s) => {

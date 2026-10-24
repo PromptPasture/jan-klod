@@ -1,17 +1,15 @@
-//! Session operations shared by every transport (REST, JSON-RPC, ACP, MCP), so
-//! id schemes, payload shapes and timeouts cannot drift between them.
+//! Session operations shared by every transport, so ids, payloads and timeouts cannot drift.
 
 use std::time::Duration;
 
 use crate::AgentSession;
 use jk_protocol::turn::{Message, Role};
 
-/// How long a turn waits for a confirmation before taking the prompt's default
-/// answer. Short enough that a client that vanished mid-prompt cannot pin the server open.
+/// Short enough that a client that vanished mid-prompt cannot pin the server open.
 #[allow(clippy::duration_suboptimal_units)]
 const DEFAULT_ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Overrides [`DEFAULT_ANSWER_TIMEOUT`], in seconds. Read per wait so tests can set it.
+/// Read per wait so tests can set it.
 const TIMEOUT_ENV: &str = "JK_ANSWER_TIMEOUT_SECS";
 
 /// The configured confirmation timeout, shared so every transport waits the same span.
@@ -23,7 +21,7 @@ pub fn answer_timeout() -> Duration {
         .map_or(DEFAULT_ANSWER_TIMEOUT, Duration::from_secs)
 }
 
-/// Every session with a preview, in the one shape every transport serves.
+/// Every session with a preview, in the shape every transport serves.
 #[must_use]
 pub fn sessions_payload(agent: &AgentSession) -> serde_json::Value {
     let sessions: Vec<serde_json::Value> = agent
@@ -53,8 +51,7 @@ pub fn session_payload(agent: &AgentSession, id: &str) -> serde_json::Value {
     serde_json::json!({ "id": id, "messages": messages })
 }
 
-/// One message as a transport serves it. Messages, not turns: the projection
-/// includes tool results, which a user/answer pair cannot hold.
+/// The projection includes tool results, which a user/answer pair cannot hold.
 fn as_json(seq: u64, message: &Message) -> serde_json::Value {
     let role = match message.role {
         Role::System => "system",
@@ -69,7 +66,7 @@ fn as_json(seq: u64, message: &Message) -> serde_json::Value {
     object
 }
 
-/// What a fork did. Kept distinct so a mistyped `at-seq` (404) is not reported as a broken store (500).
+/// What a fork did; distinct so a mistyped `at-seq` (404) is not reported as a broken store (500).
 pub enum Forked {
     /// The child session, as `{"id": …, "copied": …}`.
     Created(serde_json::Value),
@@ -79,7 +76,7 @@ pub enum Forked {
     Failed(String),
 }
 
-/// Fork `id` at `at_seq` into a generated child id, so client ids cannot collide with live sessions.
+/// Forks `id` at `at_seq` into a generated child id, so client ids cannot collide with live sessions.
 #[must_use]
 pub fn fork(agent: &AgentSession, id: &str, at_seq: u64) -> Forked {
     let child = new_session_id();
@@ -92,8 +89,7 @@ pub fn fork(agent: &AgentSession, id: &str, at_seq: u64) -> Forked {
     }
 }
 
-/// Generates a 16-hex-char session id without `rand`. Every transport must mint
-/// ids this way, or they could collide in the store.
+/// Generates a 16-hex-char session id without `rand`; every transport must mint ids this way.
 #[must_use]
 pub fn new_session_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -133,7 +129,6 @@ mod tests {
         }
     }
 
-    /// Absent rather than null, so clients do not read it as sometimes-empty.
     #[test]
     fn only_a_tool_result_carries_a_call_id() {
         let plain = as_json(

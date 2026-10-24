@@ -1,5 +1,4 @@
 //! Mid-turn confirmation over HTTP. Permission gate parks, asking via SSE.
-//! Answer arrives on separate connection. `AgentSession` !Send on main thread.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -16,7 +15,6 @@ use jk_wasm::route::HttpFn;
 use crate::common;
 use std::collections::HashMap;
 
-/// Set short answer timeout for fast failure
 fn short_answer_timeout() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "5");
 }
@@ -28,7 +26,6 @@ const GUESTS: [&str; 4] = [
     "interceptor-permission.wasm",
 ];
 
-/// First completion calls dangerous tool (gate asks), then final answer
 fn tool_then_answer_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -87,7 +84,6 @@ extensions:
     config
 }
 
-/// POST `answer` for `session`, return HTTP response.
 fn post_answer(port: u16, session: &str, answer: &str) -> String {
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(
@@ -103,7 +99,6 @@ fn post_answer(port: u16, session: &str, answer: &str) -> String {
     response
 }
 
-/// A plain GET, returning the raw response.
 fn get(port: u16, path: &str) -> String {
     let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
@@ -219,8 +214,6 @@ fn an_answer_with_nothing_pending_is_refused() {
     );
 }
 
-/// A bystander is served while another session is confirming (#225). Previously
-/// the parked turn owned the socket and refused every other caller with 409.
 #[test]
 fn a_bystander_is_served_while_another_session_is_confirming() {
     short_answer_timeout();
@@ -276,7 +269,6 @@ fn a_bystander_is_served_while_another_session_is_confirming() {
     );
 }
 
-/// A request needing the busy session queues behind the turn; it is not refused.
 #[test]
 fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
     short_answer_timeout();

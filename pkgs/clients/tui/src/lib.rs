@@ -1,5 +1,4 @@
-//! `jan-klod-ui`: a thin client for a spawned or running core, over stdio or REST + SSE
-//! (see [`transport::Transport`]). Depends only on the `jk-protocol` wire contract.
+//! `jan-klod-ui`: thin client for a spawned or running core, over stdio or REST + SSE.
 
 pub mod app;
 pub mod blocks;
@@ -24,9 +23,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// Resolve one repository binary: sibling exe first, then `PATH`.
-///
-/// "Sibling, else PATH" works for bundles (all together) and dev trees
-/// (different `target/` dirs).
 #[must_use]
 pub fn sibling_bin(name: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
@@ -38,7 +34,7 @@ pub fn sibling_bin(name: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Resolve the `jan-klod-gateway` binary. See [`sibling_bin`].
+/// Resolve the `jan-klod-gateway` binary.
 #[must_use]
 pub fn gateway_bin() -> PathBuf {
     sibling_bin("jan-klod-gateway")
@@ -54,13 +50,12 @@ fn auth_header() -> String {
         })
 }
 
-/// One event streamed back over SSE as a turn runs (mirrors the core's
-/// `conductor::Event`, parsed from `event:/data:` frames).
+/// One event streamed back as a turn runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEvent {
     /// A chunk of assistant text (preview).
     Delta(String),
-    /// Tool about to run. `arguments` is `None` when the data did not arrive, not when the call took none.
+    /// Tool about to run.
     Tool {
         /// Call id, matched by the [`StreamEvent::ToolResult`] that answers it.
         id: String,
@@ -69,8 +64,7 @@ pub enum StreamEvent {
         /// JSON-encoded arguments, where the transport carries them.
         arguments: Option<String>,
     },
-    /// A tool returned. `id` is the call this answers, and matches the
-    /// [`StreamEvent::Tool`] that opened it.
+    /// A tool returned.
     ToolResult {
         /// The call this answers.
         id: String,
@@ -83,30 +77,24 @@ pub enum StreamEvent {
     Warning(String),
     /// The turn finished with the authoritative answer.
     Done(String),
-    /// The turn stopped to ask the user something and is blocked until answered
-    /// (see [`answer_prompt`]). An unanswered prompt eventually times out on the
-    /// core side and takes `default`.
+    /// The turn stopped to ask the user something and is blocked until answered (see [`answer_prompt`]).
     Prompt {
-        /// The session the question was asked on, not necessarily the client's
-        /// current one. `turn/answer` must name it (#103).
+        /// The session the question was asked on, not necessarily the client's current one.
         session: String,
         /// What the interceptor wants to know.
         question: String,
-        /// Answers to offer, in order. Empty means free text.
+        /// Answers to offer, in order.
         options: Vec<String>,
         /// What core assumes if nobody answers — a denial, for the permission gate.
         default: String,
     },
     /// The turn failed.
     Error(String),
-    /// What the extensions contribute to this client's interface, as a whole
-    /// set (`wit/client-surface.wit`). Not a turn event: sent at the handshake
-    /// and whenever the set changes.
+    /// Full set of extension contributions, resent whenever it changes.
     Contributions(Vec<jk_protocol::Contributions>),
 }
 
 /// Parse an SSE frame (event kind + data JSON) into a [`StreamEvent`], or `None`.
-/// Mirrors [`transport::event_for`]. Unparseable JSON is an error; an unknown kind is dropped.
 #[must_use]
 pub fn parse_frame(kind: &str, data: &str) -> Option<StreamEvent> {
     let value: serde_json::Value = match serde_json::from_str(data) {
@@ -174,8 +162,7 @@ impl Drop for ClearLiveOnDrop<'_> {
     }
 }
 
-/// Drive one turn with **streaming**: `POST` with `Accept: text/event-stream` and
-/// invoke `on_event` for each SSE frame as it arrives (a live transcript).
+/// Drives one turn over SSE, calling `on_event` for each frame as it arrives.
 ///
 /// # Errors
 /// Returns a human-readable error if the connection or read fails.
@@ -188,11 +175,6 @@ pub fn stream_turn(
     stream_turn_cancellable(addr, session, message, on_event, &Mutex::new(None))
 }
 
-/// [`stream_turn`], plus a slot that parks the connection so another thread can cancel it.
-/// Crate-private: only [`transport::Rest`] has a socket to cancel.
-///
-/// # Errors
-/// Returns a human-readable error if the connection or read fails.
 pub(crate) fn stream_turn_cancellable(
     addr: &str,
     session: &str,
@@ -261,12 +243,8 @@ pub(crate) fn stream_turn_cancellable(
 
 /// Answer a [`StreamEvent::Prompt`] that is holding a turn open.
 ///
-/// This opens a **second connection** while the turn's SSE stream is still open;
-/// the turn blocks until this request arrives. Core answers other requests with `409` mid-turn.
-///
 /// # Errors
-/// Returns a human-readable error if the connection fails or core rejects the
-/// answer (e.g. nothing was actually pending).
+/// Returns a human-readable error if the connection fails or core rejects the answer.
 pub fn answer_prompt(addr: &str, session: &str, answer: &str) -> Result<(), String> {
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(
@@ -308,12 +286,10 @@ pub fn answer_prompt(addr: &str, session: &str, answer: &str) -> Result<(), Stri
     }
 }
 
-/// Allocate a new session on the core at `addr` (`host:port`): `POST /sessions`
-/// and return its id.
+/// Allocate a new session on the core at `addr` (`host:port`): `POST /sessions` and return its id.
 ///
 /// # Errors
-/// Returns a human-readable error if the connection fails or the response
-/// carries no `id`.
+/// Returns a human-readable error if the connection fails or the response carries no `id`.
 pub fn create_session(addr: &str) -> Result<String, String> {
     let request = format!(
         "POST /sessions HTTP/1.1\r\nHost: {addr}\r\n{}Content-Length: 0\r\nConnection: close\r\n\r\n",
@@ -345,12 +321,6 @@ pub fn create_session(addr: &str) -> Result<String, String> {
         .ok_or_else(|| format!("unexpected response: {body}"))
 }
 
-/// Send a pre-framed `GET` request and parse the body as JSON. Shared by
-/// [`list_sessions`] and [`get_session`].
-///
-/// # Errors
-/// Returns a human-readable error if the connection fails or the body is not
-/// well-formed JSON.
 fn get_json(addr: &str, request: &str) -> Result<serde_json::Value, String> {
     let mut stream =
         TcpStream::connect(addr).map_err(|err| format!("connecting to {addr}: {err}"))?;
@@ -376,8 +346,7 @@ fn get_json(addr: &str, request: &str) -> Result<serde_json::Value, String> {
 /// List every session on the core at `addr` (`host:port`), with a preview.
 ///
 /// # Errors
-/// Returns a human-readable error if the connection fails or the response is
-/// not well-formed.
+/// Returns a human-readable error if the connection fails or the response is not well-formed.
 pub fn list_sessions(addr: &str) -> Result<Vec<transport::SessionSummary>, String> {
     let request = format!(
         "GET /sessions HTTP/1.1\r\nHost: {addr}\r\n{}Connection: close\r\n\r\n",
@@ -409,8 +378,7 @@ pub fn list_sessions(addr: &str) -> Result<Vec<transport::SessionSummary>, Strin
 /// One session's transcript and metadata.
 ///
 /// # Errors
-/// Returns a human-readable error if the connection fails or the response is
-/// not well-formed.
+/// Returns a human-readable error if the connection fails or the response is not well-formed.
 pub fn get_session(addr: &str, session: &str) -> Result<jk_protocol::SessionGetResult, String> {
     let request = format!(
         "GET /session/{session} HTTP/1.1\r\nHost: {addr}\r\n{}Connection: close\r\n\r\n",
@@ -420,12 +388,10 @@ pub fn get_session(addr: &str, session: &str) -> Result<jk_protocol::SessionGetR
     serde_json::from_value(value).map_err(|err| format!("malformed session/get response: {err}"))
 }
 
-/// Drive one turn against the core at `addr` (`host:port`): `POST` the message and
-/// return the answer text.
+/// Drive one turn against the core at `addr` (`host:port`): `POST` the message and return the answer text.
 ///
 /// # Errors
-/// Returns a human-readable error if the connection fails, the response is not
-/// well-formed, or core reports a turn failure (`{"error": …}`).
+/// Returns a human-readable error if the connection fails, the response is malformed, or the turn fails.
 pub fn send_turn(addr: &str, session: &str, message: &str) -> Result<String, String> {
     let body = serde_json::json!({ "message": message }).to_string();
     let request = format!(
@@ -454,7 +420,6 @@ pub fn send_turn(addr: &str, session: &str, message: &str) -> Result<String, Str
     parse_answer(&raw)
 }
 
-/// Extract the answer from a raw HTTP response (headers + JSON body).
 fn parse_answer(raw: &str) -> Result<String, String> {
     let body = raw
         .split_once("\r\n\r\n")

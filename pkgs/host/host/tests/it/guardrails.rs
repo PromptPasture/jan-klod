@@ -1,5 +1,4 @@
-//! `interceptor-guardrails` through the real loop. Unit tests prove matching; these prove a match reaches the
-//! transcript or stops a tool (the acceptance of #177). Skips if guests are not staged in `ext/`; build with `make ext`.
+//! `interceptor-guardrails` through the real loop: a match reaches the transcript or stops a tool.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
@@ -9,7 +8,6 @@ use crate::common;
 /// A fake API key in the shape the rules match. Never a real credential.
 const SECRET: &str = "sk-abcdefghijklmnop0123";
 
-/// Writes `body` to `dir/config.yaml` and returns its path.
 fn write_config(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let config = dir.join("config.yaml");
@@ -17,10 +15,6 @@ fn write_config(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
     config
 }
 
-/// The model answers with a credential; the session must record only the redacted text.
-///
-/// Asserted against the **transcript**, not the stream: `finalize` edits the
-/// message after the streamed preview has gone out, as `wit/interceptor.wit` documents.
 #[test]
 fn a_secret_in_the_model_output_never_reaches_the_transcript() {
     let ext_dir = common::repo_root().join("ext");
@@ -87,7 +81,6 @@ extensions:
     );
 }
 
-/// A tool call whose arguments match a deny rule never runs, and the operator's reason reaches the caller.
 #[test]
 fn a_denied_tool_argument_blocks_with_the_reason_surfaced() {
     let ext_dir = common::repo_root().join("ext");

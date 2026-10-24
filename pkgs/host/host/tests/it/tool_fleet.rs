@@ -1,5 +1,4 @@
-//! Tool dispatch via `ToolFleet`: dispatch `ToolCall` by name, unknown tools
-//! return `None`. Skips when guests not staged.
+//! `ToolFleet` dispatches `ToolCall` by name; unknown tools return `None`.
 
 use jk_protocol::intercept::ToolInvoker;
 use jk_protocol::turn::ToolCall;
@@ -190,7 +189,6 @@ fn shell_tool_runs_a_command_through_the_fleet() {
     );
 }
 
-/// Tree grep skips credential files itself: the gate sees only the pattern, and results reach the provider.
 #[test]
 fn a_tree_grep_skips_credential_files() {
     let engine = Engine::default();

@@ -1,6 +1,4 @@
-//! `GET /ws` — the client protocol over one connection (#226, closing #43).
-//! Reuses `rpc::command` per frame, so answers match stdio. The frame receiver is moved into each job and returned,
-//! so exactly one reader exists at any moment and nothing is locked.
+//! `GET /ws`: the client protocol over one connection, answering as stdio does via `rpc::command`.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -17,7 +15,6 @@ use jk_agent::AgentSession;
 use crate::rpc::{self, Incoming, Served, Wire};
 use crate::sessions::Agents;
 
-/// Where a wire's bytes go: whole lines sent as text frames (`rpc` newline-terminates each frame).
 struct Frames {
     lines: UnboundedSender<String>,
     partial: Vec<u8>,
@@ -77,8 +74,7 @@ pub async fn serve_socket(socket: WebSocket, agents: Arc<Agents>) {
     let _ = writing.await;
 }
 
-/// Dispatch frames until the client leaves or the handshake is refused.
-/// Blocking so a running turn is the only reader of the queue.
+/// Blocking, so a running turn is the only reader of the queue.
 fn connection(mut incoming: Receiver<Incoming>, outbox: &UnboundedSender<String>, agents: &Agents) {
     let mut negotiated = false;
     while let Ok(frame) = incoming.recv() {

@@ -1,5 +1,4 @@
-//! The outbound surfaces the `jan-klod-gateway` binary serves: transports over a kernel `AgentSession` (#179).
-//! The modules are public so integration tests can drive a surface without a subprocess.
+//! Outbound transports over a kernel `AgentSession`, public so tests can drive them in-process.
 
 pub mod acp;
 pub mod config_write;

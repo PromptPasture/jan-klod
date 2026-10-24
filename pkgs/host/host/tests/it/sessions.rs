@@ -1,5 +1,4 @@
 //! Two sessions run turns at the same time through the agent registry (#229).
-//! A fast turn must finish while a slow turn in another session is still running.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,8 +9,6 @@ use jk_host::sessions::{Agents, Factory};
 
 use crate::common;
 
-/// A provider that sleeps when the request asks it to. The delay comes from the
-/// request, not the agent, so both sessions get an identical provider.
 fn paced_factory(calls: &Arc<AtomicU32>) -> Factory {
     let calls = Arc::clone(calls);
     Arc::new(move || -> jk_wasm::route::HttpFn {
@@ -64,8 +61,6 @@ extensions:
     Some((guard, runtime))
 }
 
-/// A turn in one session does not wait for a turn in another. Asserted on
-/// overlap, not order: a single agent could finish the fast turn first by luck.
 #[test]
 fn two_sessions_run_turns_at_the_same_time() {
     let Some((_guard, runtime)) = booted("concurrent") else {
@@ -116,7 +111,6 @@ fn two_sessions_run_turns_at_the_same_time() {
     );
 }
 
-/// Control for the test above: one agent serialises the same two turns.
 #[test]
 fn one_agent_makes_the_same_two_turns_wait() {
     let Some((_guard, runtime)) = booted("serialised") else {
@@ -170,7 +164,6 @@ fn one_agent_makes_the_same_two_turns_wait() {
     );
 }
 
-/// Dropping the registry stops every agent loop.
 #[test]
 fn dropping_the_registry_stops_every_agent() {
     let Some((_guard, runtime)) = booted("shutdown") else {
@@ -192,9 +185,6 @@ fn dropping_the_registry_stops_every_agent() {
     );
 }
 
-/// Agents share one store even with no `storage.path` (#233). Before the fix each
-/// agent had its own in-memory DB, and REST reads through the housekeeping agent,
-/// so sessions went missing silently.
 #[test]
 fn a_session_written_by_one_agent_is_visible_to_another() {
     if !common::guests_staged(&["provider-openai.wasm"]) {

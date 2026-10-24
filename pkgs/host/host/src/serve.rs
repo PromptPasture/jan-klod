@@ -1,7 +1,4 @@
-//! REST API surface: /health, /sessions, /session/:id (message as SSE or JSON, answer, fork), /contributions, /contributions/invoke.
-//!
-//! One thread accepts; the `!Send` session lives on another reached by job (`session_thread`). Session-free routes (assets, `/health`, the answer route) run on the accepting thread; the rest go to a short-lived worker that blocks on the session's queue; streaming turns are queued and write from the session's thread.
-//! Mid-turn confirmations register a one-shot in [`crate::pending`] completed by the accepting thread, never a job. `409` means nothing is pending; unanswered prompts time out at [`answer_timeout`] with the prompt's default.
+//! REST API surface over the `!Send` session thread; mid-turn confirmations bypass the job queue via [`crate::pending`].
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -29,7 +26,7 @@ use jk_protocol::turn::{Event, EventSink, Flow};
 use crate::pending::{Parked, Pending};
 use crate::sessions::Agents;
 
-/// How often the wait pokes the event stream while parked: each tick writes an SSE comment (a protocol no-op), so dead peers surface as write errors within one interval.
+/// Each tick writes an SSE comment (a no-op), so dead peers surface as write errors within one interval.
 const HEARTBEAT: Duration = Duration::from_secs(5);
 
 /// A ready HTTP reply: status code + JSON body.
@@ -40,28 +37,24 @@ pub struct Reply {
     pub body: String,
 }
 
-/// A bound port, ready to serve. Binding is separate from serving because a test needs the port before anything is served on it.
+/// A bound port, ready to serve; separate from serving so a test can learn the port first.
 pub struct Surface {
     listener: std::net::TcpListener,
 }
 
-/// What every handler shares. The registry (since #229), because which agent serves a request depends on its session.
 #[derive(Clone)]
 struct App {
     agents: Arc<Agents>,
     pending: Arc<Pending>,
     principals: HashMap<String, String>,
-    /// Responses completed so far, against `limit`.
     served: Arc<AtomicUsize>,
     /// How many responses to complete before shutting down; `usize::MAX` is the production loop.
     limit: usize,
-    /// Raised when the surface should stop.
     stop: Arc<tokio::sync::Notify>,
 }
 
 impl App {
-    /// Run `handler` on the session's thread and answer with what it returns.
-    /// `spawn_blocking`: the session's queue blocks, and blocking a runtime worker for a whole turn would stall other requests on it.
+    /// Runs `handler` on the session's thread; `spawn_blocking` because blocking a runtime worker for a whole turn would stall other requests.
     async fn on_session<F>(&self, session: Option<&str>, handler: F) -> Response
     where
         F: FnOnce(&mut AgentSession) -> Reply + Send + 'static,
@@ -80,7 +73,6 @@ impl App {
         }
     }
 
-    /// Count a completed response and stop once the bound is reached.
     fn served_one(&self) {
         if self.limit == usize::MAX {
             return;
@@ -105,15 +97,13 @@ impl Surface {
     /// The port it is listening on.
     ///
     /// # Panics
-    /// If the listener has no local address, which cannot happen for a
-    /// bound socket.
+    /// If the listener has no local address, which a bound socket always has.
     #[must_use]
     pub fn port(&self) -> u16 {
         self.listener.local_addr().expect("a bound listener").port()
     }
 
-    /// Serve one request, then return.
-    /// One per surface lifetime: a stopping surface can accept the next connection and drop it unanswered. Several go through [`Surface::serve_while`] (#246).
+    /// Serves one request then returns; a stopping surface may drop the next connection, so use [`Surface::serve_while`] for several.
     ///
     /// # Errors
     /// Whatever the server failed with.
@@ -121,8 +111,7 @@ impl Surface {
         self.run(agents, HashMap::new(), 1, None::<fn(u16)>)
     }
 
-    /// Serve one request, requiring `Bearer <token>` when one is set. The
-    /// same one-request limit as [`Surface::serve_once`] applies.
+    /// Serves one request, requiring `Bearer <token>` when one is set.
     ///
     /// # Errors
     /// Whatever the server failed with.
@@ -182,7 +171,7 @@ impl Surface {
         self.run(agents, principals, usize::MAX, None::<fn(u16)>)
     }
 
-    /// The one loop all four entry points are; `alongside` is what the caller wants doing while it serves.
+    /// The loop all four entry points share; `alongside` runs while it serves.
     fn run<F>(
         &self,
         agents: &Arc<Agents>,
@@ -231,7 +220,6 @@ impl Surface {
     }
 }
 
-/// Every route, with `App` behind them.
 fn router(app: App) -> Router {
     Router::new()
         .route("/health", get(health_route))
@@ -302,8 +290,7 @@ async fn fork_session(State(app): State<App>, Path(id): Path<String>, body: Stri
         .await
 }
 
-/// `POST /session/{id}/answer` — hand the answer to the turn parked on it.
-/// Answered here, not on the session's thread: as a job it would queue behind the parked turn (#225).
+/// `POST /session/{id}/answer`, handled off the session thread, where it would queue behind the parked turn.
 async fn answer(State(app): State<App>, Path(id): Path<String>, body: String) -> Response {
     match parse_answer_body(&body) {
         Err(err) => error_reply(400, &err).into_response(),
@@ -321,13 +308,12 @@ async fn answer(State(app): State<App>, Path(id): Path<String>, body: String) ->
     }
 }
 
-/// `GET /ws` — the client protocol over one connection (#226), upgraded after `guard` so token rules match REST.
+/// `GET /ws`, upgraded after `guard` so token rules match REST.
 async fn socket(State(app): State<App>, upgrade: axum::extract::ws::WebSocketUpgrade) -> Response {
     let agents = Arc::clone(&app.agents);
     upgrade.on_upgrade(move |socket| crate::ws::serve_socket(socket, agents))
 }
 
-/// `POST /session/{id}/message` — JSON, or a stream when asked for one.
 async fn message(
     State(app): State<App>,
     Path(id): Path<String>,
@@ -363,9 +349,6 @@ pub fn health() -> Reply {
     }
 }
 
-/// `GET /contributions` — what the loaded extensions offer a client.
-/// A route, not an SSE frame: stdio pushes the set at handshake and on change, but nothing streams here outside a turn,
-/// so the set is read and `contributions/invoke` reports changes in its answer ([`handle_invoke`]).
 fn handle_contributions(agent: &mut AgentSession) -> Reply {
     Reply {
         status: 200,
@@ -373,7 +356,6 @@ fn handle_contributions(agent: &mut AgentSession) -> Reply {
     }
 }
 
-/// `POST /contributions/invoke` — run one, as `{"extension":…,"name":…}`.
 /// The answer carries `contributions-changed`, the only moment the set can move while a session is up.
 fn handle_invoke(agent: &mut AgentSession, body: &str) -> Reply {
     let value: serde_json::Value = match serde_json::from_str(body) {
@@ -423,7 +405,6 @@ fn handle_invoke(agent: &mut AgentSession, body: &str) -> Reply {
     }
 }
 
-/// `GET /sessions` — list all session ids with a preview of the first turn.
 fn handle_list_sessions(agent: &AgentSession) -> Reply {
     Reply {
         status: 200,
@@ -431,7 +412,6 @@ fn handle_list_sessions(agent: &AgentSession) -> Reply {
     }
 }
 
-/// `POST /sessions` — allocate a new session id.
 fn handle_create_session() -> Reply {
     let id = new_session_id();
     Reply {
@@ -440,7 +420,7 @@ fn handle_create_session() -> Reply {
     }
 }
 
-/// `POST /session/:id/fork` — start a new session from a prefix. The child id is generated here so client-picked ids cannot collide with live sessions.
+/// The child id is generated here so client-picked ids cannot collide with live sessions.
 fn handle_fork_session(agent: &AgentSession, id: &str, body: &str) -> Reply {
     let at_seq = match parse_at_seq(body) {
         Ok(at_seq) => at_seq,
@@ -456,7 +436,6 @@ fn handle_fork_session(agent: &AgentSession, id: &str, body: &str) -> Reply {
     }
 }
 
-/// Extract `at-seq` from a `POST /session/:id/fork` body (`{"at-seq":3}`).
 fn parse_at_seq(body: &str) -> Result<u64, String> {
     let value: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("invalid JSON body: {e}"))?;
@@ -467,7 +446,6 @@ fn parse_at_seq(body: &str) -> Result<u64, String> {
         .ok_or_else(|| "`at-seq` must be a non-negative whole number".to_owned())
 }
 
-/// `GET /session/:id` — return transcript + metadata.
 fn handle_get_session(agent: &AgentSession, id: &str) -> Reply {
     Reply {
         status: 200,
@@ -475,7 +453,6 @@ fn handle_get_session(agent: &AgentSession, id: &str) -> Reply {
     }
 }
 
-/// `POST /session/:id/message` — blocking (non-SSE) turn.
 fn handle_message(
     agent: &mut AgentSession,
     session: &str,
@@ -496,21 +473,13 @@ fn handle_message(
     }
 }
 
-/// One SSE frame on its way to a client, as a message because the turn producing frames runs on another thread.
-/// A closed receiver is how a vanished client is noticed.
+/// One SSE frame headed to a client; a closed receiver is how a vanished client is noticed.
 enum Frame {
-    /// `event: <kind>` with a JSON `data:` line.
-    Named {
-        /// The `event:` name.
-        kind: &'static str,
-        /// Its JSON payload.
-        data: String,
-    },
-    /// A `:` comment, which the protocol treats as a no-op keepalive.
+    Named { kind: &'static str, data: String },
     Comment,
 }
 
-/// The frames of one turn, as a stream `axum` can serve. Hand-written to avoid a `tokio-stream` dependency; `futures_core` is already in the tree.
+/// Hand-written to avoid a `tokio-stream` dependency.
 struct Frames(UnboundedReceiver<Frame>);
 
 impl futures_core::Stream for Frames {
@@ -531,7 +500,6 @@ impl futures_core::Stream for Frames {
     }
 }
 
-/// Run a turn, streaming its events, on the session's own thread.
 fn run_turn_streaming(
     agent: &mut AgentSession,
     frames: &UnboundedSender<Frame>,
@@ -576,7 +544,7 @@ fn run_turn_streaming(
     }
 }
 
-/// Puts an interceptor's question to the client over the open SSE stream and waits for the answer to arrive as its own request via [`Pending`]; it does not read the socket.
+/// Puts a question to the client over the open SSE stream; the answer arrives as its own request via [`Pending`].
 struct PromptDriver<'a> {
     pending: &'a Pending,
     frames: UnboundedSender<Frame>,
@@ -605,8 +573,7 @@ impl Driver for PromptDriver<'_> {
 }
 
 impl PromptDriver<'_> {
-    /// Wait for this session's answer, writing a heartbeat between slices.
-    /// The deadline lives here, not in [`Pending`], because the heartbeat is a write: waking every `HEARTBEAT` notices a vanished client before the deadline.
+    /// The deadline lives here, not in [`Pending`]: the heartbeat is a write, so waking every `HEARTBEAT` notices a vanished client early.
     fn wait_for_answer(&self, parked: &Parked<'_>) -> Option<String> {
         let deadline = Instant::now() + answer_timeout();
         loop {
@@ -625,9 +592,7 @@ impl PromptDriver<'_> {
     }
 }
 
-/// Whether a request may proceed.
-/// `None` means no token is configured: allowed (the default bind is loopback). A configured token is required everywhere except
-/// `/health`, which the supervisor probes and which leaks nothing.
+/// A `None` token allows all (default bind is loopback); a set token is required everywhere except `/health`, which the supervisor probes.
 fn authorised(
     headers: &HeaderMap,
     principals: &HashMap<String, String>,
@@ -657,7 +622,6 @@ fn authorised(
         })
 }
 
-/// Whether the client asked for an SSE stream (`Accept: text/event-stream`).
 fn accepts_event_stream(headers: &HeaderMap) -> bool {
     headers
         .get(axum::http::header::ACCEPT)
@@ -679,15 +643,12 @@ impl IntoResponse for Reply {
     }
 }
 
-/// An [`EventSink`] that writes each event as an SSE frame to the socket.
 struct SseSink {
     frames: UnboundedSender<Frame>,
     live: bool,
 }
 
-/// The SSE frame one turn event projects to: its `event:` kind and `data` JSON.
-///
-/// Separate from [`SseSink::emit`] so the projection is assertable without a socket; `protocol_events.rs` checks it loses nothing the client protocol keeps.
+/// The SSE frame a turn event projects to: its `event:` kind and `data` JSON.
 #[must_use]
 pub fn sse_frame(event: &Event) -> (&'static str, serde_json::Value) {
     match event {
@@ -712,7 +673,7 @@ pub fn sse_frame(event: &Event) -> (&'static str, serde_json::Value) {
     }
 }
 
-/// The `prompt` frame: an interceptor's question; extracted like [`sse_frame`] for testing without a `Server`.
+/// The `prompt` frame: an interceptor's question.
 #[must_use]
 pub fn prompt_frame(prompt: &UserPrompt, session: &str) -> (&'static str, serde_json::Value) {
     (
@@ -726,8 +687,7 @@ pub fn prompt_frame(prompt: &UserPrompt, session: &str) -> (&'static str, serde_
     )
 }
 
-/// The `error` frame. Named so both call sites don't drift apart and the
-/// compatibility test can see the shape.
+/// The `error` frame, shared so call sites cannot drift.
 #[must_use]
 pub fn error_frame(message: &str) -> (&'static str, serde_json::Value) {
     ("error", serde_json::json!({ "error": message }))
@@ -754,7 +714,6 @@ impl EventSink for SseSink {
     }
 }
 
-/// Extract `answer` from a `POST /session/:id/answer` body (`{"answer":"yes"}`).
 fn parse_answer_body(body: &str) -> Result<String, String> {
     let value: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("invalid JSON body: {e}"))?;
@@ -765,7 +724,6 @@ fn parse_answer_body(body: &str) -> Result<String, String> {
     Ok(answer.to_string())
 }
 
-/// Extract `message` from a `POST /session/:id/message` body (`{"message":"..."}`).
 fn parse_message_body(body: &str) -> Result<String, String> {
     let value: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("invalid JSON body: {e}"))?;
@@ -783,7 +741,7 @@ fn error_reply(status: u16, message: &str) -> Reply {
     }
 }
 
-/// What the extensions contribute, as this surface reports it: one object per extension in load order, with the same field names as the protocol's `surface/contributions`.
+/// One object per extension in load order, with the protocol's `surface/contributions` field names.
 fn contributions_payload(agent: &mut AgentSession) -> serde_json::Value {
     let extensions: Vec<serde_json::Value> = agent
         .contributions()
@@ -829,8 +787,7 @@ mod tests {
     use super::{health, unbounded_channel, Frame, Pending, PromptDriver};
     use jk_protocol::turn::{Driver, UserPrompt};
 
-    /// #290: the frame was sent before the turn parked, so an answering client could find nothing pending and get `409`.
-    /// The window was microseconds wide (~1% per try), so the test tries many.
+    /// The frame was sent before the turn parked, so an answering client could find nothing pending and get `409`.
     #[test]
     fn a_prompt_is_answerable_as_soon_as_its_frame_can_be_read() {
         for _ in 0..200 {

@@ -1,31 +1,22 @@
-//! Egress policy: sandboxed components may reach public destinations only.
-//!
-//! Checked host-side (guest checks guard a confused model, not the host). Private,
-//! loopback, link-local and unique-local are refused unless the operator named the
-//! origin; per-origin grants (not an allow-local flag) let a configured Ollama through
-//! without opening other local ports. Resolved addresses are returned so the caller
-//! connects to what was checked, preventing DNS rebinding (#108).
+//! Egress policy: components reach public destinations only, checked host-side, with resolved addresses returned against DNS rebinding.
 
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
 use crate::http::WireError;
 
-/// Where a permitted request may go — what [`EgressPolicy::check`] decided.
+/// What [`EgressPolicy::check`] decided.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Destination {
-    /// Hostname resolved; every answer was public. Connect to these addresses
-    /// (prevents re-resolution).
+    /// Hostname resolved, every answer public; connect to these addresses.
     Resolved(Vec<SocketAddr>),
-    /// No resolution needed: either the URL named an address literal, or the
-    /// operator granted this origin.
+    /// An address literal or an operator-granted origin; no resolution needed.
     AsNamed,
 }
 
 /// Destinations a component may reach.
 #[derive(Clone, Debug, Default)]
 pub struct EgressPolicy {
-    /// Origins (`scheme://host:port`, lowercased) allowed despite resolving private.
     allowed: HashSet<String>,
 }
 
@@ -36,8 +27,7 @@ impl EgressPolicy {
         Self::default()
     }
 
-    /// Allow `url`'s origin (scheme, host, port) regardless of where it resolves.
-    /// Path is ignored.
+    /// Allow `url`'s origin (scheme, host, port) regardless of where it resolves; path is ignored.
     #[must_use]
     pub fn allowing(mut self, url: &str) -> Self {
         if let Some(origin) = origin_of(url) {
@@ -55,10 +45,7 @@ impl EgressPolicy {
     /// Decide if a request to `url` may leave the host.
     ///
     /// # Errors
-    /// [`WireError::InvalidUrl`] if the URL has no usable host. [`WireError::ConnectionFailed`]
-    /// when the destination is private and unallowed — intentionally the same error as a
-    /// refused connection, so components cannot scan ports by distinguishing "blocked" from
-    /// "nothing listening".
+    /// [`WireError::InvalidUrl`] without a host; `ConnectionFailed` for a private unallowed target, identical to a refusal so ports cannot be scanned.
     pub fn check(&self, url: &str) -> Result<Destination, WireError> {
         let Some(origin) = origin_of(url) else {
             return Err(WireError::InvalidUrl);
@@ -95,7 +82,6 @@ impl EgressPolicy {
     }
 }
 
-/// `scheme://host:port` for `url` (lowercased, scheme's default port filled in).
 fn origin_of(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_lowercase();
@@ -111,7 +97,6 @@ fn origin_of(url: &str) -> Option<String> {
     Some(format!("{scheme}://{host}:{port}"))
 }
 
-/// The host and port a URL names.
 fn host_port(url: &str) -> Option<(String, u16)> {
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_lowercase();
@@ -120,7 +105,6 @@ fn host_port(url: &str) -> Option<(String, u16)> {
     split_authority(authority, &scheme)
 }
 
-/// Split `host[:port]` (handles `[::1]:8080` bracket form, defaults port from scheme).
 fn split_authority(authority: &str, scheme: &str) -> Option<(String, u16)> {
     let default_port = if scheme == "https" { 443 } else { 80 };
     if let Some(rest) = authority.strip_prefix('[') {
@@ -136,10 +120,7 @@ fn split_authority(authority: &str, scheme: &str) -> Option<(String, u16)> {
     }
 }
 
-/// Whether an address is reachable without a grant.
-///
-/// Rejects loopback, private, link-local, and reserved ranges. Link-local
-/// exclusion prevents access to cloud metadata (`169.254.169.254`).
+/// Link-local is excluded to block cloud metadata (`169.254.169.254`).
 fn is_public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_public_v4(v4),

@@ -1,16 +1,12 @@
-//! Context trimming — pure Rust, unit-tested.
-//!
-//! Keeps system messages and the current turn; recent messages fill the remaining budget.
+//! Context trimming: keeps system messages and the current turn, then fills the budget with recent messages.
 
-/// Estimate tokens (~4 chars/token).
+/// ~4 chars per token.
 #[must_use]
 pub const fn estimate_tokens(char_len: usize) -> usize {
     char_len / 4
 }
 
-/// Return message indices to keep within `budget` tokens, in conversation order.
-///
-/// `tokens[i]` is message i's estimated cost; `is_system[i]` marks system messages.
+/// `tokens[i]` and `is_system[i]` describe message i; the result is in conversation order.
 #[must_use]
 pub fn keep_indices(tokens: &[usize], is_system: &[bool], budget: usize) -> Vec<usize> {
     debug_assert_eq!(

@@ -1,5 +1,4 @@
-//! Jan-Klod core: composes the component runtime ([`jk_wasm`]) with the session
-//! store ([`jk_session`]) and runs turns on them. Nothing here names `wasmtime` (#181).
+//! Composes the component runtime and session store, and runs turns on them.
 
 pub mod conductor;
 pub mod delegate;
@@ -12,22 +11,18 @@ use jk_wasm::{egress, route, BootReport, CombinedFleet, CoreError, LoadedExtensi
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// A booted core: the component runtime, and the one session store every
-/// agent it builds shares.
+/// A booted core: the component runtime plus the session store every agent shares.
 pub struct Runtime {
-    /// Engine, linker and every enabled instance resolved against `ext/`.
     components: jk_wasm::Runtime,
-    /// One store per runtime, not per agent: sessions must agree on what was said (#233).
+    /// One store per runtime, not per agent, so sessions agree on what was said.
     store: Arc<Mutex<store::Store>>,
 }
 
 impl Runtime {
-    /// Boots the components ([`jk_wasm::Runtime::boot`]) and opens the session
-    /// store. A bad `storage.path` fails the boot here, not the first request.
+    /// Boots the components and opens the session store; a bad `storage.path` fails here.
     ///
     /// # Errors
-    /// Whatever [`jk_wasm::Runtime::boot`] returns, or [`CoreError::Store`]
-    /// if the store cannot be opened.
+    /// Whatever [`jk_wasm::Runtime::boot`] returns, or [`CoreError::Store`].
     pub fn boot(
         config_path: impl AsRef<Path>,
         ext_dir: impl AsRef<Path>,
@@ -41,7 +36,7 @@ impl Runtime {
         Ok(Self { components, store })
     }
 
-    /// The component runtime this core was booted on.
+    /// The underlying component runtime.
     #[must_use]
     pub const fn components(&self) -> &jk_wasm::Runtime {
         &self.components
@@ -94,9 +89,7 @@ impl Runtime {
         self.components.start_all_eager()
     }
 
-    /// See [`jk_wasm::Runtime::adopt_installed`]. The next
-    /// [`Self::build_agent`] serves what it adopted; a running
-    /// [`AgentSession`] is not touched.
+    /// Adopts an installed component; the next [`Self::build_agent`] serves it.
     ///
     /// # Errors
     /// As [`jk_wasm::Runtime::adopt_installed`].
@@ -110,12 +103,10 @@ impl Runtime {
         self.components.egress_policy()
     }
 
-    /// Builds the thin-loop agent from config, ready for turns via [`conductor`].
-    /// Guests with `persist: true` write to the same store as the log.
+    /// Builds the thin-loop agent from config.
     ///
     /// # Errors
-    /// Returns a [`CoreError`] if any interceptor or provider fails to instantiate
-    /// or start.
+    /// Returns a [`CoreError`] if an interceptor or provider fails to instantiate or start.
     pub fn build_agent(
         &self,
         http_factory: &dyn Fn() -> route::HttpFn,
@@ -137,10 +128,7 @@ impl Runtime {
         })
     }
 
-    /// Bounds a turn runs under, from the top-level `limits:` block.
-    ///
-    /// The iteration cap stops a model that keeps calling tools forever. The
-    /// default is a real limit for coding work, so `limits:` must be able to raise it.
+    /// The iteration cap stops a model that calls tools forever; `limits:` can raise it.
     fn limits(&self) -> conductor::Limits {
         let configured = self
             .components
@@ -155,15 +143,7 @@ impl Runtime {
         }
     }
 
-    /// Opens the host-side store: a durable `SQLite` file at `storage.path`, or
-    /// in-memory when unset.
-    ///
-    /// Storage is not an extension: a store guest would need `host-fs`, and the
-    /// transcript is the most sensitive thing the runtime holds. Guests reach it
-    /// only through `host-storage`, namespaced to themselves.
-    ///
-    /// A relative `path` resolves against the config directory, not the working
-    /// directory. Called once at boot and shared by every agent (#233).
+    /// Storage is not an extension: a store guest would need `host-fs` and see the transcript.
     fn open_store(
         agent: &serde_json::Value,
         config_dir: &Path,
@@ -199,18 +179,12 @@ pub struct AgentSession {
     dispatcher: jk_protocol::intercept::Dispatcher,
     providers: Vec<Box<dyn jk_protocol::intercept::Completer>>,
     store: Arc<Mutex<store::Store>>,
-    /// Bounds this session's turns run under, from top-level `limits:`.
     limits: conductor::Limits,
-    /// The enabled tool + registry extensions, dispatched by the loop as a `ToolInvoker`.
     tools: CombinedFleet,
 }
 
 impl AgentSession {
-    /// Records whether a component adopted from [`Self::take_installed`] loaded.
-    ///
-    /// Written as a record, not a turn event, since loads happen between turns
-    /// (see [`event_log::KIND_EXTENSION_LOADED`]). Best-effort: an unwritable
-    /// store must not stop a session.
+    /// Records whether an adopted component loaded; best-effort, since loads happen between turns.
     pub fn record_load(&self, session: &str, stem: &str, outcome: Result<&str, &str>) {
         let (loaded, detail) = match outcome {
             Ok(id) => (true, id),
@@ -226,28 +200,13 @@ impl AgentSession {
         }
     }
 
-    /// Drains the components installed by turns on this session.
-    ///
-    /// The seam between installing and loading (#214). `ext-install` runs inside
-    /// a turn and cannot reach the [`Runtime`], so the driver adopts the stems
-    /// between turns:
-    ///
-    /// ```ignore
-    /// for stem in agent.take_installed() {
-    ///     runtime.adopt_installed(&stem)?;
-    ///     agent = runtime.build_agent(&factory)?;
-    /// }
-    /// ```
-    ///
-    /// Between turns, not during one, so a turn never runs half-reconfigured.
-    /// Draining, so a caller that ignores this does not re-adopt on every turn.
+    /// Drains installed stems; adopt them between turns so a turn never runs half-reconfigured.
     #[must_use]
     pub fn take_installed(&mut self) -> Vec<String> {
         self.tools.take_installed()
     }
 
-    /// Run one turn headless, using the session's tool fleet. An interceptor
-    /// `ask` resolves to its `default-answer`.
+    /// Runs one turn headless; an interceptor `ask` takes its `default-answer`.
     pub fn run(&mut self, session: &str, message: &str) -> conductor::RunResult {
         run_and_persist(
             &mut self.dispatcher,
@@ -264,7 +223,6 @@ impl AgentSession {
     }
 
     /// Runs one turn with an explicit `driver` and `tools`, overriding the fleet.
-    /// The seam a test injects stub tools through.
     pub fn run_with(
         &mut self,
         driver: &mut dyn turn::Driver,
@@ -286,7 +244,7 @@ impl AgentSession {
         )
     }
 
-    /// Runs one turn on the session's tool fleet, with `driver` answering interceptor `ask`s.
+    /// Runs one turn on the fleet, with `driver` answering interceptor `ask`s.
     pub fn run_driven(
         &mut self,
         driver: &mut dyn turn::Driver,
@@ -307,7 +265,7 @@ impl AgentSession {
         )
     }
 
-    /// Like [`Self::run_with`], but streams [`jk_protocol::turn::Event`]s to `sink` as the turn runs.
+    /// Like [`Self::run_with`], but streams [`jk_protocol::turn::Event`]s to `sink`.
     pub fn run_streaming(
         &mut self,
         driver: &mut dyn turn::Driver,
@@ -330,7 +288,7 @@ impl AgentSession {
         )
     }
 
-    /// Non-streaming turn on the session's tool fleet, with `driver` answering interceptor `ask`s.
+    /// Non-streaming turn on the fleet; `driver` answers interceptor `ask`s.
     pub fn run_with_driver(
         &mut self,
         driver: &mut dyn turn::Driver,
@@ -373,8 +331,7 @@ impl AgentSession {
         )
     }
 
-    /// Streaming turn on the session's tool fleet, with `driver` answering interceptor `ask`s.
-    /// Borrows `self.tools`, which [`Self::run_streaming`] cannot do under `&mut self`.
+    /// Streaming counterpart of [`Self::run_with_driver`].
     pub fn run_streaming_with_driver(
         &mut self,
         driver: &mut dyn turn::Driver,
@@ -419,8 +376,7 @@ impl AgentSession {
         )
     }
 
-    /// Headless streaming turn on the session's tool fleet; an `ask` takes the
-    /// prompt's default answer. Used by non-interactive surfaces.
+    /// Headless streaming turn; an `ask` takes the prompt's default answer.
     pub fn run_streaming_headless(
         &mut self,
         sink: &mut dyn turn::EventSink,
@@ -441,31 +397,27 @@ impl AgentSession {
         )
     }
 
-    /// Advertised names of the tools the loop can call. `&mut self` since #59:
-    /// a pending fleet instantiates on this call.
+    /// Advertised tool names; `&mut self` because a pending fleet instantiates here.
     #[must_use]
     pub fn tool_names(&mut self) -> Vec<String> {
         self.tools.tool_names()
     }
 
-    /// Whether the fleet has instantiated its pending `tool-*` guests (#59).
-    /// Never goes back to `false`.
+    /// Whether the fleet has instantiated its pending `tool-*` guests; never reverts.
     #[must_use]
     pub const fn tools_instantiated(&self) -> bool {
         self.tools.tools_instantiated()
     }
 
-    /// All tool + registry metadata as JSON (used in tests).
+    /// All tool and registry metadata as JSON.
     ///
     /// # Errors
-    /// Returns a [`CoreError`] if a pending tool or registry fails to
-    /// instantiate or start on this, its first use.
+    /// Returns a [`CoreError`] if a pending tool or registry fails to instantiate or start.
     pub fn all_metas_json(&mut self) -> Result<serde_json::Value, CoreError> {
         self.tools.all_metas_json()
     }
 
-    /// The durable transcript for `session`, oldest turn first. Reads from the
-    /// host-side store, so it survives a `Runtime` restart against the same DB.
+    /// The durable transcript for `session`, oldest first, read from the store.
     #[must_use]
     pub fn transcript(&self, session: &str) -> Vec<turn::Message> {
         let events = self
@@ -476,8 +428,7 @@ impl AgentSession {
         projection::transcript(&events)
     }
 
-    /// [`Self::transcript`], with each message paired to the log seq it was
-    /// projected from, which [`Self::fork_session`] takes as `at_seq` (#106).
+    /// [`Self::transcript`] with each message's log seq, the `at_seq` for [`Self::fork_session`].
     #[must_use]
     pub fn placed_transcript(&self, session: &str) -> Vec<(u64, turn::Message)> {
         let events = self
@@ -488,12 +439,10 @@ impl AgentSession {
         projection::placed_transcript(&events)
     }
 
-    /// Copies `from`'s log up to and including `at_seq` into `into`. The copy is
-    /// a prefix, not a branch pointer, so nothing links the two sessions.
+    /// Copies `from`'s log up to and including `at_seq` into `into`, as a prefix.
     ///
     /// # Errors
-    /// Returns the store's error if `into` already has a log, or on a SQL failure.
-    /// Copying nothing (`at_seq` 0, or no log) is `Ok(0)`; the REST surface decides if that is a mistake.
+    /// If `into` already has a log, or on a SQL failure; copying nothing is `Ok(0)`.
     pub fn fork_session(
         &self,
         from: &str,
@@ -508,17 +457,15 @@ impl AgentSession {
             .fork_events(from, at_seq, into)
     }
 
-    /// What the loaded extensions contribute to a client's interface. Read fresh
-    /// each call, since an invocation may change the set.
+    /// What loaded extensions contribute to a client's interface, read fresh each call.
     pub fn contributions(&mut self) -> Vec<jk_protocol::contributions::Contributions> {
         self.dispatcher.contributions()
     }
 
-    /// Run a contribution, routed to the extension that declared it.
+    /// Runs a contribution, routed to the extension that declared it.
     ///
     /// # Errors
-    /// [`jk_protocol::contributions::InvokeError`] when no such extension or name is
-    /// contributed, the arguments are unusable, or the extension fails.
+    /// [`jk_protocol::contributions::InvokeError`] if the contribution is unknown, unusable or fails.
     pub fn invoke_contribution(
         &mut self,
         extension: &str,
@@ -548,8 +495,7 @@ impl AgentSession {
     }
 }
 
-/// Drives one turn through the conductor. A free function so callers can pass
-/// disjoint `&mut` borrows of session fields in one call.
+/// Free function so callers can pass disjoint `&mut` borrows of session fields.
 #[allow(clippy::too_many_arguments)]
 fn run_and_persist(
     dispatcher: &mut jk_protocol::intercept::Dispatcher,
@@ -586,13 +532,10 @@ fn run_and_persist(
     )
 }
 
-/// How many past turns are replayed into a new one. Token-aware trimming is the
-/// context interceptor's job. The bound is applied in SQL by `Store::recent_turns`,
-/// since a turn is variable rows and a plain `LIMIT` cannot express it (#85).
+/// Token-aware trimming is the context interceptor's job; `Store::recent_turns` bounds this in SQL.
 const REPLAYED_TURNS: u32 = 20;
 
-/// The conversation so far, oldest first, as loop messages. An unreadable row
-/// is skipped rather than failing the turn.
+/// The conversation so far, oldest first; an unreadable row is skipped, not fatal.
 fn replay(store: &store::Store, session: &str) -> Vec<turn::Message> {
     let events = store
         .recent_turns(session, REPLAYED_TURNS)
@@ -601,9 +544,6 @@ fn replay(store: &store::Store, session: &str) -> Vec<turn::Message> {
 }
 
 /// Headless driver: an `ask` takes the prompt's `default-answer`.
-///
-/// Public because `mcp` needs it. An MCP server owns stdin for protocol frames,
-/// so a terminal prompt would read a frame as an answer.
 pub struct HeadlessDriver;
 impl turn::Driver for HeadlessDriver {
     fn ask(&mut self, prompt: &turn::UserPrompt) -> String {
@@ -615,15 +555,12 @@ impl turn::Driver for HeadlessDriver {
 mod tests {
     use super::*;
 
-    /// `Runtime` must be `Send + Sync`: each session builds its own agent (#228).
     #[test]
     fn a_runtime_can_be_shared_across_threads() {
         const fn needs<T: Send + Sync>() {}
         needs::<Runtime>();
     }
 
-    /// A `before-loop` interceptor that always `replace`s the user message. Duplicates
-    /// the stub in `pkgs/host/protocol/tests/intercept.rs`, which cannot reach `run_and_persist`.
     struct RewriteBeforeLoop {
         replacement: String,
     }
@@ -649,7 +586,6 @@ mod tests {
         }
     }
 
-    /// Its answer is irrelevant here; present only so the turn completes.
     struct FixedAnswer;
     impl jk_protocol::intercept::Completer for FixedAnswer {
         fn id(&self) -> &'static str {
@@ -667,9 +603,6 @@ mod tests {
         }
     }
 
-    /// #84: the log must hold the message a `before-loop` interceptor produced,
-    /// not the caller's `message`. Drives the private `run_and_persist` and reads
-    /// back the first log row.
     #[test]
     fn the_log_holds_the_message_a_before_loop_rewrite_produced() {
         let store = Mutex::new(store::Store::open_in_memory().unwrap());

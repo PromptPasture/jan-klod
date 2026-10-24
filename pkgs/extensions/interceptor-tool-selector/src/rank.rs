@@ -1,14 +1,8 @@
-//! Which tools the model is shown, and in what order.
-//!
-//! Pure: text in, indices out, so every rule is tested on the host target.
-//! Returns an order, not a filter: a tool the model needed but was not shown cannot be asked for back.
+//! Which tools the model is shown: an order, not a filter, since an unshown tool cannot be asked for.
 
-/// Term-frequency saturation. Standard BM25 default.
 const K1: f64 = 1.2;
-/// Length normalisation. Standard BM25 default.
 const B: f64 = 0.75;
 
-/// Split text into lowercase terms, dropping single characters.
 fn terms(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|word| word.chars().count() > 1)
@@ -16,16 +10,14 @@ fn terms(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// One tool as this module sees it.
+/// One tool as ranked by this module.
 pub struct Doc {
-    /// Lowercased, for [`Doc::named_in`].
     name: String,
-    /// Terms from name and description; a terse description still leaves the name findable.
     terms: Vec<String>,
 }
 
 impl Doc {
-    /// Build a document from a tool's name and description.
+    /// Builds a document from a tool's name and description.
     #[must_use]
     pub fn new(name: &str, description: &str) -> Self {
         let mut terms = terms(name);
@@ -40,8 +32,7 @@ impl Doc {
         self.terms.iter().filter(|t| *t == term).count()
     }
 
-    /// Whether `lowered` (already lowercased) names this tool as a whole word.
-    /// A term match would split names like `tool-fs` into words that ordinary sentences contain.
+    /// A term match would split names like `tool-fs` into words ordinary sentences contain.
     fn named_in(&self, lowered: &str) -> bool {
         if self.name.is_empty() {
             return false;
@@ -54,10 +45,7 @@ impl Doc {
     }
 }
 
-/// Order `docs` by relevance to `query`, most relevant first.
-///
-/// Returns indices into `docs`. **Ties keep their original order**, so the advertised set does not churn between turns.
-/// An empty result means nothing matched, not "everything matched equally".
+/// Indices of `docs` by relevance to `query`, best first; ties keep their original order.
 #[must_use]
 #[allow(
     clippy::cast_precision_loss,
@@ -103,19 +91,13 @@ pub fn rank(docs: &[Doc], query: &str) -> Vec<usize> {
 /// How many tools to advertise, at most and at least.
 #[derive(Clone, Copy)]
 pub struct Cut {
-    /// The bound. **`0` means no bound**: advertise the whole fleet; off by default.
+    /// The bound; `0` means no bound.
     pub most: usize,
-    /// The floor: how many to advertise when the ranking is thin or empty.
-    /// Filled from the fleet's first tools, in configured order.
+    /// The floor, filled from the fleet's first tools in configured order.
     pub least: usize,
 }
 
-/// Which tools to advertise, as indices in the fleet's own order.
-/// Order is the fleet's own, not the ranking's, so the advertised list does not churn.
-/// Two rules outrank `most`, and both are deliberate:
-///
-/// * a tool named anywhere in the conversation is always advertised: withdrawing it strands the model;
-/// * `least` is topped up even past `most`, since the floor bounds the damage.
+/// Fleet-order indices to advertise; a tool named in the conversation always stays, and `least` outranks `most`.
 #[must_use]
 pub fn select(docs: &[Doc], asked: &str, conversation: &str, cut: Cut) -> Vec<usize> {
     if cut.most == 0 || cut.most >= docs.len() {
@@ -176,7 +158,6 @@ mod tests {
         assert_eq!(rank(&docs, "use plan").first(), Some(&3));
     }
 
-    /// Idf: a term every tool uses must not decide the order.
     #[test]
     fn a_term_common_to_every_tool_does_not_decide_the_order() {
         let docs = vec![
@@ -191,7 +172,6 @@ mod tests {
         );
     }
 
-    /// Empty, not an arbitrary prefix: guessing would hide that nothing was understood.
     #[test]
     fn a_query_matching_nothing_ranks_nothing() {
         assert_eq!(rank(&fleet(), "xylophone marzipan"), [] as [usize; 0]);
@@ -265,7 +245,6 @@ mod tests {
         assert_eq!(select(&docs, "", conversation, cut(1, 1)), vec![2, 3]);
     }
 
-    /// A name must match a whole word, or every tool would be permanently mid-use.
     #[test]
     fn a_name_inside_a_longer_word_is_not_a_mention() {
         let doc = Doc::new("fs", "unrelated wording");
@@ -297,7 +276,6 @@ mod tests {
         );
     }
 
-    /// When they conflict the floor wins: it bounds the damage; the bound is only an economy.
     #[test]
     fn the_floor_outranks_the_bound() {
         let docs = named_fleet();

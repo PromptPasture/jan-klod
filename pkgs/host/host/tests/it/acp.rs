@@ -1,6 +1,4 @@
-//! The ACP port driven as an editor drives it: real turns that stream
-//! `session/update` and end with a stop reason. Frames are fed one at a time
-//! because the agent mints the session id.
+//! The ACP port driven as an editor drives it, with frames fed one at a time because the agent mints the session id.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -40,7 +38,6 @@ extensions:
     Some((dir, agent))
 }
 
-/// An editor: one connection, frames fed in order, everything written captured.
 struct Editor {
     connection: Connection,
     writer: Rc<RefCell<Vec<u8>>>,
@@ -63,7 +60,6 @@ impl Editor {
         self.send_with(agent, line, &jk_host::acp::NoAsker)
     }
 
-    /// The same, with a chosen [`jk_host::acp::Asker`].
     fn send_with<A: jk_host::acp::Asker>(
         &mut self,
         agent: &mut jk_agent::AgentSession,
@@ -75,7 +71,6 @@ impl Editor {
             .map(|response| serde_json::to_value(response).expect("it serializes"))
     }
 
-    /// All notifications the agent wrote to the pipe, in order.
     fn notifications(&self) -> Vec<serde_json::Value> {
         let bytes = self.writer.borrow().clone();
         String::from_utf8(bytes)
@@ -88,7 +83,6 @@ impl Editor {
             .collect()
     }
 
-    /// Handshake, then a session, returning its id.
     fn opened(&mut self, agent: &mut jk_agent::AgentSession) -> String {
         let hello = self
             .send(
@@ -110,7 +104,6 @@ impl Editor {
     }
 }
 
-/// A prompt runs a turn, streams an update, and answers `end_turn`.
 #[test]
 fn a_prompt_streams_an_update_and_ends_the_turn() {
     let Some((_dir, mut agent)) = booted("prompt", "the model's reply") else {
@@ -155,7 +148,6 @@ fn a_prompt_streams_an_update_and_ends_the_turn() {
     );
 }
 
-/// A prompt naming an unminted session is refused, not turned into a new conversation.
 #[test]
 fn a_prompt_for_an_unknown_session_is_refused() {
     let Some((_dir, mut agent)) = booted("unknown", "unused") else {
@@ -179,7 +171,6 @@ fn a_prompt_for_an_unknown_session_is_refused() {
     );
 }
 
-/// A prompt with no text is refused; `initialize` declared the other content types unsupported.
 #[test]
 fn a_prompt_with_no_text_content_is_refused() {
     let Some((_dir, mut agent)) = booted("empty", "unused") else {
@@ -205,13 +196,10 @@ fn a_prompt_with_no_text_content_is_refused() {
     );
 }
 
-/// An editor that answers every permission request with `answer`, recording
-/// what it was asked.
 struct Answering {
     answer: String,
     /// `RefCell` because `Asker::ask` takes `&self`.
     asked: RefCell<Vec<String>>,
-    /// What `cancelled()` reports, so a test can cancel a turn.
     cancel: bool,
 }
 
@@ -241,7 +229,6 @@ impl jk_host::acp::Asker for Answering {
     }
 }
 
-/// Boot an agent whose provider asks for a real workspace write, then answers.
 fn booted_writing(
     tag: &str,
 ) -> Option<(common::TempDir, jk_agent::AgentSession, std::path::PathBuf)> {
@@ -313,9 +300,6 @@ extensions:
     Some((dir, agent, target))
 }
 
-/// An editor that grants permission gets the write.
-///
-/// Asserts the **file**: being asked only proves a question was posed.
 #[test]
 fn an_editor_that_grants_permission_gets_the_write() {
     let Some((_dir, mut agent, target)) = booted_writing("grant") else {
@@ -355,7 +339,6 @@ fn an_editor_that_grants_permission_gets_the_write() {
     );
 }
 
-/// The same turn, refused: the answer, not the tool, decides whether the write happens.
 #[test]
 fn an_editor_that_refuses_permission_prevents_the_write() {
     let Some((_dir, mut agent, target)) = booted_writing("refuse") else {
@@ -388,7 +371,6 @@ fn an_editor_that_refuses_permission_prevents_the_write() {
     );
 }
 
-/// A cancelled turn is answered `cancelled`, not left hanging.
 #[test]
 fn a_cancelled_turn_is_answered_cancelled() {
     let Some((_dir, mut agent, target)) = booted_writing("cancel") else {
@@ -428,7 +410,6 @@ fn a_cancelled_turn_is_answered_cancelled() {
     );
 }
 
-/// Uncancelled, the same refusal ends the turn with `end_turn`, so `cancelled` must come from cancellation.
 #[test]
 fn a_refusal_without_a_cancel_still_ends_the_turn() {
     let Some((_dir, mut agent, _target)) = booted_writing("nocancel") else {

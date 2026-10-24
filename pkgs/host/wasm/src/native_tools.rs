@@ -1,8 +1,4 @@
-//! Tools the host implements itself rather than as components: install (#213) and `ext-search`.
-//!
-//! Installing needs write access to `ext/`, the trust boundary, so no guest may hold it. Default-deny:
-//! [`NativeTools::disabled`] advertises nothing; `registry: install-tool: true` enables it. Still gated
-//! by `interceptor-permission` confirmation and by [`crate::ext::install`] with the CLI's [`Checks`].
+//! Tools the host implements itself (`ext-install`, `ext-search`); default-deny, off unless `registry: install-tool: true`.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -11,23 +7,18 @@ use crate::ext::{install, Checks};
 use jk_protocol::intercept::{ToolInvocation, ToolInvoker};
 use jk_protocol::turn::ToolCall;
 
-/// The name the model calls to install.
 const INSTALL: &str = "ext-install";
 
-/// The name the model calls to see what the registry offers (#218).
 const SEARCH: &str = "ext-search";
 
-/// What the model is told `ext-search` does.
 const SEARCH_DESCRIPTION: &str = "Search the configured extension registry. \
     Returns each match with the host capabilities it declares, so you can see \
     what a component asks for before proposing it. Read-only: it installs \
     nothing.";
 
-/// `ext-search`'s arguments.
 const SEARCH_SCHEMA: &str = r#"{"type":"object","properties":{
 "term":{"type":"string","description":"match against name, kind or description; omit for everything"}}}"#;
 
-/// What the model is told this does.
 const DESCRIPTION: &str = "Install a WebAssembly extension into the runtime's \
     extension directory, either by `name` from the registry or from a local \
     `path`. The operator is asked before it happens. From the registry the \
@@ -35,7 +26,6 @@ const DESCRIPTION: &str = "Install a WebAssembly extension into the runtime's \
     path an unsigned component requires its sha256. The extension is callable \
     from the next turn.";
 
-/// The argument schema, matching [`Checks`] rather than inventing a shape.
 const SCHEMA: &str = r#"{"type":"object","properties":{
 "name":{"type":"string","description":"a component from the registry, as `ext-search` lists it"},
 "path":{"type":"string","description":"a local .wasm; use `name` for anything from the registry"},
@@ -43,18 +33,14 @@ const SCHEMA: &str = r#"{"type":"object","properties":{
 "sha256":{"type":"string","description":"expected digest, for a local unsigned component"},
 "reason":{"type":"string","description":"why you want it, shown to the operator when they are asked; required with `name`"}}}"#;
 
-/// The host's own tools. Empty unless the operator asked for them.
+/// The host's own tools; empty unless the operator enabled them.
 pub struct NativeTools {
-    /// Where components are installed, and `None` when this is off.
     ext_dir: Option<PathBuf>,
-    /// Minisign keys from `registry.trusted-keys`; empty trusts nothing.
     trusted_keys: Vec<String>,
-    /// Registry fetch client; `None` is the policy-bound production client, tests inject a canned one.
     http: Option<crate::route::HttpFn>,
-    /// Registry index location (`registry.url`); `None` makes `ext-search` say so, not report no matches.
+    /// `None` makes `ext-search` say so rather than report no matches.
     index_source: Option<String>,
-    /// Stems installed this session awaiting adoption (#214); shared because the tool runs inside a
-    /// turn and cannot reach the `Runtime` that loads it.
+    /// Shared because the tool runs inside a turn and cannot reach the `Runtime` that loads it.
     installed: Arc<Mutex<Vec<String>>>,
 }
 
@@ -94,7 +80,6 @@ impl NativeTools {
         self
     }
 
-    /// Run `f` with the client registry fetches go through (lent: `HttpFn` is not `Clone`).
     fn with_client<T>(&self, f: impl FnOnce(&crate::route::HttpFn) -> T) -> T {
         match &self.http {
             Some(http) => f(http),
@@ -102,7 +87,7 @@ impl NativeTools {
         }
     }
 
-    /// Take the stems installed since last asked; draining so the same component is not re-adopted every turn.
+    /// Take the stems installed since last asked, so none is re-adopted every turn.
     #[must_use]
     pub fn take_installed(&self) -> Vec<String> {
         self.installed
@@ -131,10 +116,7 @@ impl NativeTools {
         ]
     }
 
-    /// Search the configured registry index.
-    ///
-    /// Not on `interceptor-permission`'s `safe-calls`: the index is usually remote, so this is egress
-    /// and is confirmed like any other call.
+    /// Not on `safe-calls`: the index is usually remote, so this is egress and is confirmed.
     fn run_search(&self, arguments: &str) -> (String, bool) {
         let Some(source) = self.index_source.as_deref() else {
             return (
@@ -173,10 +155,7 @@ impl NativeTools {
         )
     }
 
-    /// Install a component the registry lists, by name.
-    ///
-    /// Always `allow_unsigned: false`: a digest from the party serving the artefact does not establish
-    /// trust in it. Passing the flag is an error, not a no-op, so a waiver never silently appears to work.
+    /// Never allows unsigned: a digest from the serving party is no trust; passing the flag errors.
     fn install_from_index(
         &self,
         dir: &Path,
@@ -242,9 +221,7 @@ impl NativeTools {
         }
     }
 
-    /// Run the install, or say why not.
-    ///
-    /// Errors are returned as the tool's text so the model can act on them (e.g. supply a digest) instead of retrying.
+    /// Errors are returned as tool text so the model can act on them instead of retrying.
     fn run_install(&self, arguments: &str) -> (String, bool) {
         let Some(dir) = self.ext_dir.as_deref() else {
             return ("refused: the install tool is not enabled".to_string(), true);
@@ -331,7 +308,6 @@ mod tests {
         }
     }
 
-    /// Off by default and absent rather than refusing.
     #[test]
     fn disabled_advertises_nothing() {
         assert_eq!(
@@ -340,7 +316,6 @@ mod tests {
         );
     }
 
-    /// A call that is not ours is `None`, so the fleet's next link sees it.
     #[test]
     fn another_tools_call_is_passed_on_rather_than_claimed() {
         let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
@@ -349,7 +324,6 @@ mod tests {
         assert!(tools.invoke(&other).is_none());
     }
 
-    /// The one refusal this module owns: the tool is wired but off.
     #[test]
     fn a_call_while_disabled_installs_nothing_and_says_so() {
         let mut tools = NativeTools::disabled();
@@ -359,8 +333,6 @@ mod tests {
         assert!(out.content.starts_with("refused"), "{}", out.content);
     }
 
-    /// A bad name is refused with text listing what names may be (#222); the component is empty
-    /// because the stem is read before its bytes.
     #[test]
     fn a_stem_naming_no_category_is_refused_through_the_tool() {
         let dir = std::env::temp_dir().join(format!("jk-native-cat-{}", std::process::id()));
@@ -385,7 +357,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Self-authored is not a trust exemption: `ext::install`'s refusal reaches the model as text.
     #[test]
     fn unsigned_without_a_digest_is_refused_through_the_tool() {
         let dir = std::env::temp_dir().join(format!("jk-native-{}", std::process::id()));
@@ -404,7 +375,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Both tools are offered when enabled, and neither when not.
     #[test]
     fn enabling_offers_search_as_well_as_install() {
         let names: Vec<String> = NativeTools::installing_into(std::env::temp_dir(), vec![], None)
@@ -415,7 +385,6 @@ mod tests {
         assert_eq!(names, vec!["ext-install", "ext-search"]);
     }
 
-    /// Searching with no registry configured says so rather than reporting no matches.
     #[test]
     fn searching_with_no_registry_configured_says_so() {
         let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
@@ -430,7 +399,6 @@ mod tests {
         );
     }
 
-    /// The waiver is refused on the registry path, not ignored.
     #[test]
     fn allow_unsigned_is_refused_for_a_registry_install() {
         let mut tools = NativeTools::installing_into(
@@ -449,7 +417,6 @@ mod tests {
         );
     }
 
-    /// `name` and `path` together is an error, not a preference.
     #[test]
     fn naming_both_a_registry_component_and_a_path_is_refused() {
         let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
@@ -460,7 +427,6 @@ mod tests {
         assert!(out.content.contains("not both"), "{}", out.content);
     }
 
-    /// Neither is also an error, naming both ways in.
     #[test]
     fn naming_neither_says_what_is_missing() {
         let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);
@@ -470,7 +436,6 @@ mod tests {
         assert!(out.content.contains("`path`"), "{}", out.content);
     }
 
-    /// Bad arguments are answered, not dropped.
     #[test]
     fn arguments_that_are_not_an_install_say_what_is_wrong() {
         let mut tools = NativeTools::installing_into(std::env::temp_dir(), vec![], None);

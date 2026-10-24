@@ -1,5 +1,4 @@
 //! Drives the agent over the REST surface on an ephemeral port. `AgentSession`
-//! is !Send, so the client runs on a spawned thread.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;

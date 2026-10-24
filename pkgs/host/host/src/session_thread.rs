@@ -1,19 +1,13 @@
-//! One thread owns the session (`AgentSession` is `!Send`); everything else reaches it by message (#223).
-//!
-//! Generic over the owned `T` with no `Send` bound. A job is `FnOnce(&mut T)`, not a command enum, so handlers keep their signatures.
-//! The queue is opaque: pending jobs cannot be inspected, prioritised or cancelled.
+//! One thread owns the session (`AgentSession` is `!Send`); everything else reaches it through a job queue.
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-/// Work for the thread that owns a `T`.
-/// Returns how to deliver its answer so the loop can run its between-jobs hook first; otherwise a caller races the hook (#231).
+/// Returns how to deliver its answer so the loop can run its between-jobs hook first; otherwise a caller races the hook.
 type Job<T> = Box<dyn FnOnce(&mut T) -> Deliver + Send>;
 
-/// Hands a finished job's answer to whoever is waiting.
 type Deliver = Box<dyn FnOnce() + Send>;
 
-/// What arrives on the queue: work, or the end of it.
-/// Stopping is a message, not a refcount: an outstanding clone would otherwise keep the thread alive and hang shutdown (#229).
+/// Queue message: work, or stop (a message, so an outstanding clone cannot hang shutdown).
 pub enum Task<T> {
     /// Run this against the owned value.
     Work(Job<T>),
@@ -21,12 +15,12 @@ pub enum Task<T> {
     Stop,
 }
 
-/// Why a job produced no answer. Distinguished because a stopped loop is final while a panicked job says nothing about the next one.
+/// Why a job produced no answer; a stopped loop is final, a panicked job says nothing about the next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoAnswer {
     /// The owning loop is gone; every later call fails the same way.
     Stopped,
-    /// The job panicked. The loop survived, but **the owned value may have been left mid-change**, so it is not retried.
+    /// The job panicked and the owned value may be left mid-change, so it is not retried.
     Panicked,
 }
 
@@ -41,9 +35,7 @@ impl std::fmt::Display for NoAnswer {
 
 impl std::error::Error for NoAnswer {}
 
-/// A handle to the thread owning a `T`. Cheap to clone, safe to send, and `&Jobs` is shareable across threads.
-///
-/// The `Mutex` makes it `Sync` (`mpsc::Sender` is not), which HTTP handler state needs; it is held only for a non-blocking `send`.
+/// A cloneable, `Sync` handle to the thread owning a `T`; its `Mutex` is held only for a non-blocking `send`.
 pub struct Jobs<T> {
     hand: std::sync::Mutex<Sender<Task<T>>>,
 }
@@ -56,7 +48,7 @@ impl<T> Clone for Jobs<T> {
     }
 }
 
-/// A handle and the queue its loop reads; `T` is supplied later by the owning thread so a `!Send` value never moves.
+/// A handle plus the queue its loop reads; `T` is supplied later so a `!Send` value never moves.
 #[must_use]
 pub fn queue<T>() -> (Jobs<T>, Receiver<Task<T>>) {
     let (hand, jobs) = channel();
@@ -77,11 +69,10 @@ impl<T> Jobs<T> {
             .clone()
     }
 
-    /// Run `job` on the owning thread and wait for what it returns.
-    /// Blocks the caller, so other requests are served meanwhile.
+    /// Runs `job` on the owning thread and waits for its result; only the caller blocks.
     ///
     /// # Errors
-    /// [`NoAnswer::Stopped`] if the loop is gone, [`NoAnswer::Panicked`] if the job panicked; the reply channel closes in both cases, so this never blocks forever.
+    /// [`NoAnswer::Stopped`] if the loop is gone, [`NoAnswer::Panicked`] if the job panicked.
     pub fn run<R, F>(&self, job: F) -> Result<R, NoAnswer>
     where
         F: FnOnce(&mut T) -> R + Send + 'static,
@@ -101,7 +92,7 @@ impl<T> Jobs<T> {
         wait.recv().unwrap_or(Err(NoAnswer::Stopped))
     }
 
-    /// Queue `job` without waiting, for work nobody reads. A panic is still contained by [`Self::run`]'s guard.
+    /// Queues `job` without waiting, for work nobody reads.
     ///
     /// # Errors
     /// [`NoAnswer::Stopped`] if the loop is gone.
@@ -118,20 +109,18 @@ impl<T> Jobs<T> {
             .map_err(|_| NoAnswer::Stopped)
     }
 
-    /// Tell the loop to return once it reaches this point. Queued work still runs; later callers get [`NoAnswer::Stopped`].
+    /// Tells the loop to return once it reaches this point; queued work still runs.
     pub fn stop(&self) {
         let _ = self.sender().send(Task::Stop);
     }
 }
 
-/// Serve jobs against `owned` until told to stop or every handle drops.
-/// The caller keeps the `T`, which is why this works for a `!Send` session.
+/// Serves jobs against `owned` until told to stop or every handle drops.
 pub fn serve<T>(owned: &mut T, jobs: &Receiver<Task<T>>) {
     serve_each(owned, jobs, |_| {});
 }
 
 /// [`serve`], with `after` run on the owned value once per job.
-/// For work between jobs (#231); putting it here means no transport can forget it.
 pub fn serve_each<T, F>(owned: &mut T, jobs: &Receiver<Task<T>>, mut after: F)
 where
     F: FnMut(&mut T),
@@ -152,7 +141,6 @@ where
 mod tests {
     use super::{queue, serve, NoAnswer};
 
-    /// A job runs where the value lives; its result comes back to a thread that never touched it.
     #[test]
     fn a_job_runs_on_the_owning_thread_and_its_answer_comes_back() {
         let (jobs, queued) = queue::<Vec<String>>();
@@ -174,7 +162,6 @@ mod tests {
         assert_eq!(owned, vec!["from the job".to_string()]);
     }
 
-    /// What is owned never has to be `Send`: `Rc` is not, so a `T: Send` bound would stop this building.
     #[test]
     fn the_owned_value_need_not_be_send() {
         let (jobs, queued) = queue::<std::rc::Rc<std::cell::RefCell<u32>>>();
@@ -192,7 +179,6 @@ mod tests {
         assert_eq!(caller.join().expect("finished"), Ok(42));
     }
 
-    /// A caller must never wait on a loop that will not answer; a request thread blocked forever on a dead session would go unreported.
     #[test]
     fn a_handle_whose_loop_has_stopped_says_so_rather_than_blocking() {
         let (jobs, queued) = queue::<u32>();
@@ -204,8 +190,7 @@ mod tests {
         );
     }
 
-    /// A panicking job does not take the loop down, and its caller is told which happened; reporting every failure as "stopped"
-    /// would make surfaces abandon live sessions.
+    /// Reporting a panic as "stopped" would make surfaces abandon live sessions.
     #[test]
     fn a_panicking_job_is_contained_and_the_next_one_still_runs() {
         let (jobs, queued) = queue::<u32>();
@@ -228,7 +213,6 @@ mod tests {
         assert_eq!(owned, 8);
     }
 
-    /// Two threads queue work against one owner.
     #[test]
     fn two_threads_queue_work_without_either_holding_the_value() {
         let (jobs, queued) = queue::<Vec<u32>>();

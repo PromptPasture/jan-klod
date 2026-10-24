@@ -1,5 +1,4 @@
-//! Install in one turn, call it in the next, in one session with no restart (#214). The only test of the whole seam:
-//! the tool advertisement is injected at instantiation, so a rebuild must refresh the selector too.
+//! Install in one turn, call in the next with no restart: a rebuild must refresh the tool selector too.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,15 +13,10 @@ const NEEDED: [&str; 3] = [
     "tool-hello.wasm",
 ];
 
-/// What the model does on each turn, and what came back.
 struct Script {
-    /// Tool-call arguments per turn, popped in order.
     calls: Mutex<Vec<String>>,
-    /// Tool names called, in order.
     named: Mutex<Vec<String>>,
-    /// Request bodies carrying a tool result.
     results: Mutex<Vec<String>>,
-    /// Whether the advertisement offered `hello` on each request.
     advertised_hello: Mutex<Vec<bool>>,
     calls_seen: AtomicU32,
 }
@@ -94,8 +88,6 @@ fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
     }
 }
 
-/// A runtime whose `ext/` holds the provider and selector, with a signed
-/// `tool-hello` waiting outside it. Returns the temp root, config and offer.
 fn fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("jk-install-call-{tag}-{}", std::process::id()));
     let ext = dir.join("ext");
@@ -236,10 +228,6 @@ fn a_tool_installed_in_one_turn_answers_in_the_next() {
     );
 }
 
-/// A session that installed nothing can call a tool another session installed (#231).
-///
-/// Any "only the installing session" implementation gets this wrong. Driven through
-/// the registry, so the adoption is what a surface does, not what the test does.
 #[test]
 fn a_session_that_installed_nothing_can_call_what_another_installed() {
     if !common::guests_staged(&NEEDED) {

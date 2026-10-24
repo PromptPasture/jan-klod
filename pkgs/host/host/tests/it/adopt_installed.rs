@@ -1,11 +1,9 @@
-//! `adopt_installed` admits components installed after boot (#214), through
-//! the same compile path as boot. The refusals matter more than the success.
+//! `adopt_installed` admits components installed after boot through the boot compile path; refusals matter most.
 
 use jk_agent::Runtime;
 
 use crate::common;
 
-/// A runtime over a temp `ext/` holding only what the config enables.
 fn runtime_over(tag: &str, staged: &[&str]) -> Option<(common::TempDir, Runtime)> {
     if !common::guests_staged(&["provider-openai.wasm", "tool-hello.wasm"]) {
         return None;
@@ -40,7 +38,6 @@ extensions:
     Some((common::TempDir(dir), runtime))
 }
 
-/// A component absent from `config.yaml` at boot becomes part of the runtime.
 #[test]
 fn a_component_that_arrived_after_boot_is_adopted() {
     let Some((guard, mut runtime)) = runtime_over("adopts", &["provider-openai"]) else {
@@ -59,7 +56,6 @@ fn a_component_that_arrived_after_boot_is_adopted() {
     assert_eq!(id, "tool.hello", "the naming rule is the one boot uses");
 }
 
-/// Adopting something that is not there changes nothing.
 #[test]
 fn adopting_a_component_that_is_not_there_is_refused() {
     let Some((_guard, mut runtime)) = runtime_over("absent", &["provider-openai"]) else {
@@ -80,7 +76,6 @@ fn adopting_a_component_that_is_not_there_is_refused() {
     );
 }
 
-/// A stem that is not `<category>-<kind>` is refused before reading anything.
 #[test]
 fn a_stem_without_a_category_is_refused() {
     let Some((_guard, mut runtime)) = runtime_over("stem", &["provider-openai"]) else {
@@ -92,7 +87,6 @@ fn a_stem_without_a_category_is_refused() {
     assert!(err.to_string().contains("<category>-<kind>"), "{err}");
 }
 
-/// A stem naming an undispatched category is refused with the valid ones listed (#222).
 #[test]
 fn a_stem_naming_a_category_nothing_dispatches_is_refused() {
     let Some((_guard, mut runtime)) = runtime_over("category", &["provider-openai"]) else {
@@ -108,7 +102,6 @@ fn a_stem_naming_a_category_nothing_dispatches_is_refused() {
     );
 }
 
-/// Adopting something already loaded is refused; two instances of one id would make dispatch order-dependent.
 #[test]
 fn adopting_what_is_already_loaded_is_refused() {
     let Some((_guard, mut runtime)) = runtime_over("dup", &["provider-openai"]) else {
@@ -120,8 +113,6 @@ fn adopting_what_is_already_loaded_is_refused() {
     assert!(err.to_string().contains("already loaded"), "{err}");
 }
 
-/// A component rewritten on disk is not reloaded (#214). This holds by absence
-/// (no watcher, no rescan), so the test guards against a later feature adding one.
 #[test]
 fn a_component_rewritten_on_disk_is_not_picked_up() {
     let Some((guard, mut runtime)) = runtime_over("rewritten", &["provider-openai"]) else {
@@ -155,7 +146,6 @@ fn a_component_rewritten_on_disk_is_not_picked_up() {
     );
 }
 
-/// Adoption is not a back door: an under-declared component is refused as at boot.
 #[test]
 fn a_component_the_boot_path_would_refuse_is_refused_here_too() {
     let Some((guard, mut runtime)) = runtime_over("under", &["provider-openai"]) else {

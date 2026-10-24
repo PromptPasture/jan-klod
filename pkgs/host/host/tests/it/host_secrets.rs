@@ -10,7 +10,6 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::common;
 
-/// `tool-world`: for testing host-secrets-probe.
 mod tool_bind {
     wasmtime::component::bindgen!({
         path: "../../../wit",
@@ -18,7 +17,6 @@ mod tool_bind {
     });
 }
 
-/// Host backing the guest's imports: config section and host-secrets.
 struct TestHost {
     wasi: WasiCtx,
     table: ResourceTable,
@@ -209,7 +207,6 @@ impl tool_bind::jan_klod::interfaces::host_secrets::Host for TestHost {
     }
 }
 
-/// Load a staged component (must be built first via `make extensions`).
 fn staged_component(engine: &Engine, filename: &str) -> Option<Component> {
     let mut path = common::ext_path();
     path.push(filename);
@@ -219,7 +216,6 @@ fn staged_component(engine: &Engine, filename: &str) -> Option<Component> {
     Component::from_file(engine, &path).ok()
 }
 
-/// Without the grant, a guest calling host-secrets gets `denied` every time.
 #[test]
 fn a_guest_without_the_grant_is_denied_every_secret() {
     let engine = Engine::default();
@@ -258,12 +254,10 @@ fn a_guest_without_the_grant_is_denied_every_secret() {
     }
 }
 
-/// The WIT has no enumeration method, so there is nothing to call; the grant test covers access.
 #[test]
 fn an_ungranted_guest_cannot_enumerate_secrets() {
 }
 
-/// When granted but a secret name is absent, `not-found` is returned.
 #[test]
 fn an_absent_secret_returns_not_found() {
     let engine = Engine::default();
@@ -302,7 +296,6 @@ fn an_absent_secret_returns_not_found() {
     }
 }
 
-/// When granted and the secret exists, the value is returned.
 #[test]
 fn a_granted_guest_reading_an_extant_secret_returns_the_value() {
     let engine = Engine::default();

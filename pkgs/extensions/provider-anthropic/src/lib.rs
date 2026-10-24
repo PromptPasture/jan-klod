@@ -1,5 +1,4 @@
-//! `provider-anthropic` — Anthropic Messages API implementation.
-//! Posts to `/v1/messages` via `host-http`. Never logs `api-key`.
+//! `provider-anthropic`: Anthropic Messages API over `host-http`; never logs `api-key`.
 
 #[allow(
     unsafe_code,
@@ -32,9 +31,8 @@ use bindings::jan_klod::interfaces::host_http::{self, HttpError, HttpHeader, Htt
 use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
 use bindings::jan_klod::interfaces::host_secrets;
 
-/// Anthropic API version header value.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Fallback max-tokens when the request omits it (Anthropic requires the field).
+/// Fallback when the request omits max-tokens, which Anthropic requires.
 const DEFAULT_MAX_TOKENS: u32 = 8192;
 
 #[derive(Clone, Default)]
@@ -71,7 +69,6 @@ fn next_handle() -> StreamHandle {
     })
 }
 
-/// Read `obj[key]` as an owned string, defaulting to empty.
 fn str_field(obj: &Value, key: &str) -> String {
     obj.get(key)
         .and_then(Value::as_str)
@@ -79,7 +76,6 @@ fn str_field(obj: &Value, key: &str) -> String {
         .to_owned()
 }
 
-/// Convert a WIT message to Anthropic API JSON.
 fn message_to_json(msg: &Message) -> Value {
     match msg.role {
         Role::System => {
@@ -101,7 +97,6 @@ fn message_to_json(msg: &Message) -> Value {
     }
 }
 
-/// Convert a WIT `ToolDefinition` to Anthropic's `{name, description, input_schema}`.
 fn tool_to_json(tool: &ToolDefinition) -> Value {
     let input_schema: Value =
         serde_json::from_str(&tool.parameters_schema).unwrap_or_else(|_| json!({}));
@@ -112,7 +107,6 @@ fn tool_to_json(tool: &ToolDefinition) -> Value {
     })
 }
 
-/// Build the Anthropic `/v1/messages` request body.
 fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     let mut obj = Map::new();
     obj.insert("model".to_owned(), json!(model));
@@ -151,7 +145,6 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     Value::Object(obj)
 }
 
-/// Parse an Anthropic `/v1/messages` response into a chunk queue.
 fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| ProviderError::Transient)?;
 
@@ -216,7 +209,6 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     Ok(chunks)
 }
 
-/// Describe a `host-http` error in words, not a Rust identifier (e.g. `HttpError::ConnectionFailed`).
 const fn describe_http(err: HttpError) -> &'static str {
     match err {
         HttpError::ConnectionFailed => {

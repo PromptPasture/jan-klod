@@ -1,16 +1,13 @@
-//! The plan itself: a list of steps and the mutations a model can make to it.
-//!
-//! Pure: [`Plan`] goes in and out as JSON. Every call returns the whole plan, because a
-//! small model told only "ok" would otherwise rebuild the list from its transcript.
+//! The plan: a list of steps; every call returns the whole plan so a small model need not rebuild it.
 
 use serde_json::{json, Value};
 
-/// Where a step is. Three states, not more: choosing among more costs the model tokens.
+/// Where a step is; three states, since more choices cost the model tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     /// Not started.
     Todo,
-    /// Being worked on now.
+    /// Being worked on.
     Doing,
     /// Finished.
     Done,
@@ -19,21 +16,20 @@ pub enum State {
 /// One step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Step {
-    /// Stable within a plan. Assigned here, because a model that invents ids reuses them.
+    /// Stable within a plan; assigned here, because a model that invents ids reuses them.
     pub id: u32,
-    /// What the step is, in the model's own words.
+    /// The step text.
     pub text: String,
-    /// Where it is.
+    /// Current state.
     pub state: State,
 }
 
 /// The whole plan for a session.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Plan {
-    /// In the order they were added. Order is the model's; nothing sorts it.
+    /// In insertion order; nothing sorts them.
     pub steps: Vec<Step>,
-    /// The highest id ever issued. Deriving it from the steps present would reuse
-    /// the id of a removed step, silently retargeting the model's old references.
+    /// Highest id ever issued, so a removed step's id is never reused.
     issued: u32,
 }
 
@@ -42,9 +38,9 @@ pub struct Plan {
 pub enum PlanError {
     /// The arguments were not a recognised operation.
     BadArguments(String),
-    /// No step with that id. Named rather than ignored, so a bad number is not repeated.
+    /// No step has that id.
     NoSuchStep(u32),
-    /// An empty step is a step the model cannot act on later.
+    /// An empty step is one the model cannot act on later.
     EmptyText,
 }
 
@@ -59,7 +55,6 @@ impl std::fmt::Display for PlanError {
 }
 
 impl State {
-    /// The wire spelling, which is also what the model writes.
     const fn as_str(self) -> &'static str {
         match self {
             Self::Todo => "todo",
@@ -79,9 +74,7 @@ impl State {
 }
 
 impl Plan {
-    /// Parse a stored plan, treating absence and corruption alike as empty.
-    ///
-    /// Lenient one way only: an unreadable plan is replaced, or the model could never clear it.
+    /// Treats absence and corruption alike as empty, or the model could never clear a bad plan.
     #[must_use]
     pub fn parse(stored: Option<&str>) -> Self {
         let Some(steps) = stored
@@ -109,11 +102,10 @@ impl Plan {
         Self { steps, issued }
     }
 
-    /// Apply one operation in place.
+    /// Applies one operation in place.
     ///
     /// # Errors
-    /// [`PlanError`] when the arguments are not an operation, name a step
-    /// that is not there, or would add an empty one.
+    /// [`PlanError`] if the arguments are not an operation, name a missing step, or add an empty one.
     pub fn apply(&mut self, arguments: &str) -> Result<(), PlanError> {
         let call: Value = serde_json::from_str(arguments)
             .map_err(|err| PlanError::BadArguments(err.to_string()))?;
@@ -216,7 +208,6 @@ mod tests {
         assert_eq!(plan.steps[0].state, State::Doing);
     }
 
-    /// Naming a missing step must fail: silence would teach the model the number was right.
     #[test]
     fn naming_a_step_that_is_not_there_is_an_error_not_a_no_op() {
         let mut plan = plan_with(&[r#"{"op":"add","text":"a"}"#]);

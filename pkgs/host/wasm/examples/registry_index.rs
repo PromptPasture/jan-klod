@@ -1,20 +1,11 @@
 //! Generate `index.json`: what a registry says about a directory of staged components.
-//!
-//! Usage: `registry_index <ext-dir> <base-url> <author> <out-file>`, normally via `make registry-index`.
-//! Entries are read with [`jk_wasm::ext::list`] so the capability line is the one the host enforces;
-//! `sha256` and `signature` describe the individual `.wasm`/`.minisig`, never an archive. Output is
-//! deterministic: no clock, env or fs ordering, and JSON key order is struct field order.
 
 use std::path::Path;
 
 use jk_wasm::ext::{list, Declaration};
 
-/// The index format's own version, so a reader can refuse one it doesn't
-/// understand rather than guessing at missing keys.
 const INDEX_VERSION: u32 = 1;
 
-/// One published component, as a registry describes it.
-///
 /// Field order is the serialized key order.
 #[derive(serde::Serialize)]
 struct Entry {
@@ -32,7 +23,6 @@ struct Entry {
     size: u64,
 }
 
-/// The whole document.
 #[derive(serde::Serialize)]
 struct Index {
     #[serde(rename = "index-version")]
@@ -45,7 +35,6 @@ fn fail(message: &str) -> ! {
     std::process::exit(1)
 }
 
-/// A SHA-256 digest as lowercase hex, as `ext install --sha256` spells it.
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes.iter().fold(String::new(), |mut out, byte| {
@@ -54,10 +43,7 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Where the component will be served from.
-///
-/// A base with a query or fragment is refused (`ext::ExtError::OpaqueUrl`): relative resolution drops
-/// queries, so companions would 404.
+/// A base with a query or fragment is refused: relative resolution drops queries, so companions would 404.
 fn component_url(base: &str, name: &str) -> String {
     let parsed =
         url::Url::parse(base).unwrap_or_else(|err| fail(&format!("{base} is not a URL: {err}")));
@@ -71,10 +57,7 @@ fn component_url(base: &str, name: &str) -> String {
     format!("{}/{name}.wasm", base.trim_end_matches('/'))
 }
 
-/// The detached signature over the component, when there is one.
-///
-/// Empty until first-party components are signed (#93); `""` says nothing vouches for the bytes yet.
-/// Holds the whole `.minisig` text, which `minisign_verify::Signature::decode` takes.
+/// Empty until first-party components are signed; `""` says nothing vouches for the bytes.
 fn signature_beside(component: &Path) -> String {
     let mut name = component.as_os_str().to_os_string();
     name.push(".minisig");

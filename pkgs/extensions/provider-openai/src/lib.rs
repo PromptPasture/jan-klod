@@ -1,5 +1,4 @@
-//! `provider-openai` — OpenAI-compatible implementation of `llm-provider`.
-//! Reference network extension; one build serves every OpenAI-compatible endpoint via `base-url`, `api-key` and `model`.
+//! `provider-openai`: OpenAI-compatible `llm-provider`; one build serves any endpoint via `base-url`.
 
 #[allow(
     unsafe_code,
@@ -32,23 +31,18 @@ use bindings::jan_klod::interfaces::host_http::{self, HttpError, HttpHeader, Htt
 use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
 use bindings::jan_klod::interfaces::host_secrets;
 
-/// Resolved endpoint settings, read once at `init`.
 #[derive(Clone, Default)]
 struct ProviderConfig {
-    /// API root, e.g. `https://api.openai.com/v1`.
     base_url: String,
-    /// Bearer token; empty for keyless local endpoints.
     api_key: String,
-    /// Default model when a request omits one.
     model: String,
 }
 
 thread_local! {
     static CONFIG: RefCell<ProviderConfig> = RefCell::new(ProviderConfig::default());
-    /// Open streams: handle -> chunks.
     static STREAMS: RefCell<HashMap<StreamHandle, VecDeque<CompletionChunk>>> =
         RefCell::new(HashMap::new());
-    /// Stream handle source (starts at 1; 0 reserved).
+    /// Starts at 1; 0 is reserved.
     static NEXT_HANDLE: RefCell<StreamHandle> = const { RefCell::new(1) };
 }
 
@@ -56,7 +50,6 @@ fn log(level: LogLevel, message: &str) {
     host_log::log(level, "provider-openai", message, &[]);
 }
 
-/// Read a string field out of the parsed config section (absent -> empty).
 fn config_str(section: &Value, key: &str) -> String {
     section
         .get(key)
@@ -65,7 +58,6 @@ fn config_str(section: &Value, key: &str) -> String {
         .to_owned()
 }
 
-/// Wire name for a conversation role.
 const fn role_str(role: Role) -> &'static str {
     match role {
         Role::System => "system",
@@ -75,7 +67,6 @@ const fn role_str(role: Role) -> &'static str {
     }
 }
 
-/// One conversation message in `OpenAI` wire shape.
 fn message_to_json(msg: &Message) -> Value {
     let mut obj = Map::new();
     obj.insert("role".to_owned(), json!(role_str(msg.role)));
@@ -86,7 +77,6 @@ fn message_to_json(msg: &Message) -> Value {
     Value::Object(obj)
 }
 
-/// Convert a tool to `OpenAI`'s `{type:"function", function:{…}}` shape.
 fn tool_to_json(tool: &ToolDefinition) -> Value {
     let parameters: Value =
         serde_json::from_str(&tool.parameters_schema).unwrap_or_else(|_| json!({}));
@@ -100,7 +90,7 @@ fn tool_to_json(tool: &ToolDefinition) -> Value {
     })
 }
 
-/// Build the Chat Completions body. `stream` is false: `host-http` buffers the whole response anyway.
+/// `stream` is false: `host-http` buffers the whole response anyway.
 fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     let mut obj = Map::new();
     obj.insert("model".to_owned(), json!(model));
@@ -131,7 +121,6 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     Value::Object(obj)
 }
 
-/// Parse a Chat Completions response into an ordered chunk stream.
 fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| ProviderError::Transient)?;
     let choice = value
@@ -166,7 +155,6 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     Ok(chunks)
 }
 
-/// Read `obj[key]` as an owned string, defaulting to empty.
 fn str_field(obj: &Value, key: &str) -> String {
     obj.get(key)
         .and_then(Value::as_str)
@@ -174,7 +162,6 @@ fn str_field(obj: &Value, key: &str) -> String {
         .to_owned()
 }
 
-/// Describe a `host-http` error in words, not a Rust identifier (e.g. `HttpError::ConnectionFailed`).
 const fn describe_http(err: HttpError) -> &'static str {
     match err {
         HttpError::ConnectionFailed => {
@@ -209,7 +196,7 @@ const fn map_http_error(err: HttpError) -> ProviderError {
     }
 }
 
-/// Allocate the next stream handle; wrapping is accepted.
+/// Wrapping is accepted.
 fn next_handle() -> StreamHandle {
     NEXT_HANDLE.with(|h| {
         let mut n = h.borrow_mut();
@@ -219,7 +206,6 @@ fn next_handle() -> StreamHandle {
     })
 }
 
-/// The single type implementing every interface `provider-world` exports.
 struct Component;
 
 impl Lifecycle for Component {

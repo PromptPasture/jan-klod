@@ -1,6 +1,4 @@
-//! Host-side `host-process` backend: bounded command execution.
-//!
-//! Default-deny, cwd jailed to the workspace, timeout and output cap per run. Output is read after exit, so a child filling the pipe buffer blocks until timeout.
+//! Bounded command execution for `host-process`: cwd jailed, timeout and output cap; output is read after exit.
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -9,9 +7,7 @@ use std::time::{Duration, Instant};
 use crate::host_fs::Workspace;
 use crate::sandbox::{SandboxBackend, SandboxPolicy};
 
-/// Environment variables a child inherits by default; the rest of the host env (secrets) is cleared.
-///
-/// `TMPDIR` is listed but overridden, see [`ProcessRunner::scratch_dir`]. `TERM` is excluded: ANSI escapes cost tokens.
+/// Env vars a child inherits; the rest of the host env (secrets) is cleared and `TMPDIR` is overridden.
 pub const BASE_ENV: [&str; 8] = [
     "PATH",
     "HOME",
@@ -45,25 +41,19 @@ pub struct Exit {
     pub stderr: String,
 }
 
-/// Runs commands under a workspace, bounded by a timeout and output cap.
-/// Default-deny: [`ProcessRunner::disabled`] rejects every exec.
+/// Runs bounded commands under a workspace; default-deny via [`ProcessRunner::disabled`].
 #[derive(Clone)]
 pub struct ProcessRunner {
     workspace: Option<Workspace>,
     timeout: Duration,
     output_cap: usize,
-    /// Extra environment names the operator granted (see [`BASE_ENV`]).
     env_passthrough: Vec<String>,
-    /// What confines the command itself; `None` is approval-only (bounds still apply, runs with user privileges).
-    /// Boot sets this only after reporting the mode as `Os`.
+    /// `None` is approval-only; boot sets this only after reporting the mode as `Os`.
     confinement: Option<Confinement>,
-    /// Long-lived children an operator named in `execution.long-lived`; empty means none (#109).
     long_lived: Vec<LongLived>,
 }
 
-/// A long-lived child an operator named in `execution.long-lived`.
-///
-/// The grant names processes, it does not permit spawning: the host supplies `command` and `args`, so a guest can only start what the operator wrote down.
+/// A long-lived child an operator named in `execution.long-lived`; a guest can only start what is written down.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LongLived {
     /// What a guest asks for.
@@ -74,8 +64,6 @@ pub struct LongLived {
     pub args: Vec<String>,
 }
 
-/// A backend and the policy to hand it, paired because neither confines anything alone.
-/// `Arc` because [`ProcessRunner`] is `Clone` and a backend is stateless.
 #[derive(Clone)]
 struct Confinement {
     backend: std::sync::Arc<dyn SandboxBackend>,
@@ -96,8 +84,7 @@ impl ProcessRunner {
         }
     }
 
-    /// A runner rooted at `workspace`, with per-command `timeout` and
-    /// `output_cap` (bytes) applied to each captured stream.
+    /// A runner rooted at `workspace`, with per-command `timeout` and `output_cap` (bytes) per captured stream.
     #[must_use]
     pub const fn new(workspace: Workspace, timeout: Duration, output_cap: usize) -> Self {
         Self {
@@ -110,9 +97,7 @@ impl ProcessRunner {
         }
     }
 
-    /// Confine every command with `backend` under `policy`.
-    ///
-    /// Boot calls this only when the effective mode is [`SandboxMode::Os`](crate::sandbox::SandboxMode::Os), so the boot line cannot claim unwired confinement.
+    /// Confine every command with `backend` under `policy`; boot calls this only for effective mode `Os`.
     #[must_use]
     pub fn with_sandbox(
         mut self,
@@ -123,7 +108,7 @@ impl ProcessRunner {
         self
     }
 
-    /// Additionally pass these environment variables through to child processes (a grant per name, like `network.allow`).
+    /// Pass these environment variables through to children (a grant per name).
     #[must_use]
     pub fn with_env_passthrough(mut self, names: Vec<String>) -> Self {
         self.env_passthrough = names;
@@ -137,7 +122,7 @@ impl ProcessRunner {
         self
     }
 
-    /// The names an operator granted, in configured order. Names only: what a name runs stays here (#220).
+    /// The names an operator granted, in configured order; what a name runs stays here.
     #[must_use]
     pub fn long_lived_names(&self) -> Vec<String> {
         self.long_lived
@@ -146,13 +131,13 @@ impl ProcessRunner {
             .collect()
     }
 
-    /// The grant for `name`, or `None`. The entire admission decision: no path turns a guest string into a program.
+    /// The entire admission decision: no path turns a guest string into a program.
     #[must_use]
     pub fn long_lived_grant(&self, name: &str) -> Option<&LongLived> {
         self.long_lived.iter().find(|child| child.name == name)
     }
 
-    /// The environment a child gets: [`BASE_ENV`] plus operator grants. `TMPDIR` is overridden, see [`Self::scratch_dir`].
+    /// `TMPDIR` is overridden, see [`Self::scratch_dir`].
     fn environment(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = BASE_ENV
             .iter()
@@ -175,9 +160,7 @@ impl ProcessRunner {
         out
     }
 
-    /// The temp dir a child is told to use: `.jan-klod/tmp` inside the workspace, created on demand; `None` without a workspace.
-    ///
-    /// Not the host's `TMPDIR`: a confined command may write only under `writable`, which cannot name anything outside the workspace, so an inherited path would be told and then denied (#212: `cargo build` failed). This grants nothing outside the workspace; the cost is temp files under the project, in a dot-directory.
+    /// Not the host's `TMPDIR`: a confined command may write only under the workspace, so an inherited path would be denied.
     fn scratch_dir(&self) -> Option<String> {
         let root = self
             .workspace
@@ -189,12 +172,7 @@ impl ProcessRunner {
         root.to_str().map(str::to_owned)
     }
 
-    /// A `Command` confined and configured, ready to spawn; shared by [`Self::exec`] and [`Self::spawn_long_lived`] so confinement is decided in one place.
-    ///
-    /// Confined before configured: a backend can only carry program and arguments across, so cwd, scrubbed env and pipes are applied to whatever it returns (a wrapper process).
-    ///
-    /// # Errors
-    /// [`ProcError::Denied`] if the backend refuses to confine the command.
+    /// Confined before configured: a backend carries only program and arguments, so cwd, env and pipes are applied afterwards.
     fn prepared(
         &self,
         command: &str,
@@ -227,13 +205,10 @@ impl ProcessRunner {
         Ok(spawnable)
     }
 
-    /// Start the long-lived child granted under `name`, confined as a one-shot command is.
-    /// Command and args come from the grant, never the caller (see [`LongLived`]).
+    /// Start the long-lived child granted under `name`; command and args come from the grant, never the caller.
     ///
     /// # Errors
-    /// [`ProcError::Denied`] when no grant carries `name`, when there is no
-    /// workspace to run in, or when the backend refuses to confine it;
-    /// [`ProcError::SpawnFailed`] if it cannot be started.
+    /// [`ProcError::Denied`] with no grant, no workspace or a refused confinement; [`ProcError::SpawnFailed`] if it cannot start.
     pub fn spawn_long_lived(&self, name: &str) -> Result<LiveChild, ProcError> {
         let Some(workspace) = &self.workspace else {
             return Err(ProcError::Denied);
@@ -251,12 +226,10 @@ impl ProcessRunner {
         Ok(LiveChild::new(child, self.output_cap, name.to_string()))
     }
 
-    /// Run `command` with `args`, an optional workspace-relative `cwd`, and
-    /// optional `stdin`.
+    /// Run `command` with `args`, an optional workspace-relative `cwd` and optional `stdin`.
     ///
     /// # Errors
-    /// [`ProcError::Denied`] (disabled or `cwd` escape), [`ProcError::SpawnFailed`],
-    /// or [`ProcError::Timeout`].
+    /// [`ProcError::Denied`] (disabled or `cwd` escape), [`ProcError::SpawnFailed`], or [`ProcError::Timeout`].
     pub fn exec(
         &self,
         command: &str,
@@ -307,36 +280,26 @@ impl ProcessRunner {
     }
 }
 
-/// How long the death report waits for the stderr tail to arrive (#133).
 const STDERR_DRAIN: Duration = Duration::from_millis(200);
 
-/// A long-lived child the host holds open for a guest (#109).
-///
-/// One reader thread per pipe (stdout, stderr) does the blocking read and hands chunks over, so a silent child cannot hang the turn thread and `read` is a `recv_timeout` that always returns. The thread ends when the pipe closes.
+/// A long-lived child the host holds open; reader threads keep a silent child from hanging the turn thread.
 pub struct LiveChild {
     child: std::process::Child,
     stdin: Option<std::process::ChildStdin>,
-    /// Unread stdout, bounded by the runner's output cap with the oldest dropped (#220).
-    ///
-    /// A condvar lets a read wait for the first byte without the reader thread blocking on a bounded channel; an undrained pipe would stop the child (#133).
+    /// Bounded by the output cap, oldest dropped; an undrained pipe would stop the child.
     stdout: std::sync::Arc<(
         std::sync::Mutex<std::collections::VecDeque<u8>>,
         std::sync::Condvar,
     )>,
-    /// The tail of stderr, sent once at pipe EOF (#133).
-    ///
-    /// A channel, not a shared buffer: a child writes then exits, so a buffer read on exit detection can be empty.
+    /// A channel, not a buffer: a child writes then exits, so a buffer read on exit detection can be empty.
     stderr: std::sync::mpsc::Receiver<String>,
-    /// The runner's output cap, applied per read.
     cap: usize,
-    /// The grant this child was started under, so logs can name it.
     name: String,
-    /// Whether the death has been reported (#133); `is_running` is polled, so without this exit is logged per poll.
+    /// Without this, exit is logged on every `is_running` poll.
     exit_reported: bool,
 }
 
 impl LiveChild {
-    /// Take the pipes and start the reader threads.
     fn new(mut child: std::process::Child, cap: usize, name: String) -> Self {
         let stdin = child.stdin.take();
         let stdout = std::sync::Arc::new((
@@ -407,8 +370,7 @@ impl LiveChild {
     /// Write to the child's stdin.
     ///
     /// # Errors
-    /// [`ProcError::SpawnFailed`] if the pipe is gone or the write fails — the
-    /// child is not listening, whatever the reason.
+    /// [`ProcError::SpawnFailed`] if the pipe is gone or the write fails.
     pub fn write_stdin(&mut self, data: &str) -> Result<(), ProcError> {
         let Some(pipe) = self.stdin.as_mut() else {
             return Err(ProcError::SpawnFailed);
@@ -418,9 +380,7 @@ impl LiveChild {
             .map_err(|_| ProcError::SpawnFailed)
     }
 
-    /// Read at most `max_bytes`, waiting up to `timeout` for the first chunk.
-    ///
-    /// Empty means nothing arrived, not that the child finished: see [`Self::is_running`].
+    /// Read at most `max_bytes`, waiting up to `timeout`; empty means nothing arrived, not that the child finished.
     pub fn read_stdout(&mut self, max_bytes: usize, timeout: Duration) -> String {
         let (lock, arrived) = &*self.stdout;
         let Ok(unread) = lock.lock() else {
@@ -435,9 +395,7 @@ impl LiveChild {
         String::from_utf8_lossy(&taken).into_owned()
     }
 
-    /// Whether the child is still alive.
-    ///
-    /// The first observed exit status goes to the host log (#133). `Err` is left alone: it means unanswerable, not dead.
+    /// Whether the child is still alive; the first observed exit goes to the host log.
     pub fn is_running(&mut self) -> bool {
         match self.child.try_wait() {
             Ok(None) => true,
@@ -454,9 +412,6 @@ impl LiveChild {
         }
     }
 
-    /// What the host log says about a gone child: the status, plus its last words if any.
-    ///
-    /// Built as lines so a test can read them (#133); capturing process stderr would need `dup2` and the workspace denies `unsafe`.
     fn death_report(&self, status: std::process::ExitStatus) -> Vec<String> {
         let mut lines = vec![format!(
             "WARN [core] host-process: long-lived child `{}` {}",
@@ -474,9 +429,7 @@ impl LiveChild {
         lines
     }
 
-    /// The last words the child wrote to stderr, once its pipe has closed.
-    ///
-    /// Empty if none or the pipe is still open after [`STDERR_DRAIN`]. Consuming: the thread sends one message.
+    /// Consuming: the thread sends one message.
     fn stderr_tail(&self) -> String {
         self.stderr.recv_timeout(STDERR_DRAIN).unwrap_or_default()
     }
@@ -489,20 +442,17 @@ impl LiveChild {
 }
 
 impl Drop for LiveChild {
-    /// **Lifetime guarantee:** a child must not outlive its instance; this drop runs however the instance goes.
+    /// A child must not outlive its instance; this drop runs however the instance goes.
     fn drop(&mut self) {
         self.kill();
     }
 }
 
-/// The long-lived children one extension instance holds open.
-///
-/// Shared by `tool_host::ToolHost` and `registry_host::McpHost` so the #109 guarantee (a child dies with its instance) is implemented once. Dropping this kills every child in it.
+/// The long-lived children one extension instance holds; dropping this kills every child in it.
 #[derive(Default)]
 pub struct Children {
     live: std::collections::HashMap<u32, LiveChild>,
-    /// Monotonic, so a killed handle is never reissued and a stale one fails
-    /// rather than addressing somebody else's child.
+    /// Monotonic, so a killed handle is never reissued and a stale one cannot address another's child.
     next: u32,
 }
 
@@ -510,8 +460,7 @@ impl Children {
     /// Start the child `runner` grants under `name`.
     ///
     /// # Errors
-    /// Whatever [`ProcessRunner::spawn_long_lived`] refuses with — including
-    /// [`ProcError::Denied`] for a name the operator never wrote down.
+    /// Whatever [`ProcessRunner::spawn_long_lived`] refuses with.
     pub fn spawn(&mut self, runner: &ProcessRunner, name: &str) -> Result<u32, ProcError> {
         let live = runner.spawn_long_lived(name)?;
         self.next += 1;
@@ -531,8 +480,7 @@ impl Children {
             .write_stdin(data)
     }
 
-    /// Read from a child's stdout. See [`LiveChild::read_stdout`] for what an
-    /// empty answer means.
+    /// Read from a child's stdout; see [`LiveChild::read_stdout`].
     ///
     /// # Errors
     /// [`ProcError::Denied`] for an unknown handle.
@@ -549,8 +497,7 @@ impl Children {
             .read_stdout(max_bytes, timeout))
     }
 
-    /// Whether a child is alive. `false` for an unknown handle, so a caller
-    /// polling one it does not have terminates rather than erroring forever.
+    /// Whether a child is alive; `false` for an unknown handle so pollers terminate.
     pub fn is_running(&mut self, handle: u32) -> bool {
         self.live
             .get_mut(&handle)
@@ -563,8 +510,6 @@ impl Children {
     }
 }
 
-/// Read a captured stream to a UTF-8 string, truncated to `cap` bytes.
-/// How a child died: a signal is not an exit code (`status.code()` is `None` when killed).
 fn describe_exit(status: std::process::ExitStatus) -> String {
     #[cfg(unix)]
     {
@@ -597,9 +542,6 @@ fn read_capped(stream: Option<impl Read>, cap: usize) -> String {
 mod tests {
     use super::*;
 
-    /// The shared table refuses a name no grant carries, the path both `tool_host` and `registry_host` use (#110).
-    ///
-    /// Asserted here, not across the component boundary: no guest calls `spawn` yet.
     #[test]
     fn a_name_no_grant_carries_is_refused_by_the_shared_table() {
         let mut children = Children::default();
@@ -616,7 +558,6 @@ mod tests {
         assert!(!children.is_running(41));
     }
 
-    /// A death is described in the platform's terms (#133): the signal arm matters since `status.code()` is `None` when killed.
     #[test]
     fn an_exit_is_described_by_code_and_a_kill_by_signal() {
         let clean = Command::new("sh")
@@ -650,7 +591,6 @@ mod tests {
         }
     }
 
-    /// The four deaths #133 tabulates read differently in the log, pairwise.
     #[test]
     fn the_four_deaths_are_four_different_reports() {
         let (ws, _) = runner();
@@ -726,9 +666,6 @@ mod tests {
         );
     }
 
-    /// A child nobody reads does not grow the host without bound (#220).
-    ///
-    /// The child floods then stays up; more than the cap drained afterwards means it was all held.
     #[test]
     fn an_unread_childs_stdout_is_bounded_by_the_output_cap() {
         let cap = 512;
@@ -771,9 +708,6 @@ mod tests {
         );
     }
 
-    /// A child's last words survive it, and the runner's cap bounds them (#133).
-    ///
-    /// The size assertion matters: an undrained stderr would block a chatty child on write.
     #[test]
     fn a_dead_childs_last_stderr_is_kept_and_bounded_by_the_output_cap() {
         let cap = 256;
@@ -837,7 +771,6 @@ mod tests {
         (ws, runner)
     }
 
-    /// A command's `TMPDIR` is inside the workspace, not the host's (#212): a confined command can write there.
     #[test]
     fn a_commands_temp_directory_is_inside_the_workspace() {
         let (ws, runner) = runner();
@@ -859,7 +792,6 @@ mod tests {
         assert!(seen.exists(), "and it was created: {}", seen.display());
     }
 
-    /// A command that writes a temp file leaves it in the workspace (the variable alone could be re-inherited).
     #[test]
     fn a_command_writing_to_its_temp_directory_stays_in_the_workspace() {
         let (ws, runner) = runner();
@@ -880,7 +812,6 @@ mod tests {
         );
     }
 
-    /// The environment is a credential store; commands must not receive all of it.
     #[test]
     fn a_command_does_not_inherit_the_hosts_secrets() {
         std::env::set_var("OPENAI_API_KEY", "sk-test-must-not-leak");
@@ -898,7 +829,6 @@ mod tests {
         );
     }
 
-    /// …but the commands a coding agent exists to run still have to work.
     #[test]
     fn a_command_keeps_what_it_needs_to_run() {
         let (_ws, runner) = runner();

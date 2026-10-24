@@ -1,5 +1,4 @@
 //! Compile, install, load, call in one session with no restart (#221); each link is tested alone elsewhere.
-//! Runs in the shipped `self-extend` posture. Skips until `make self-extend-fixture` has prepared the crate.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,7 +8,6 @@ use jk_agent::Runtime;
 use crate::common;
 use crate::self_extend::shipped_execution_block;
 
-/// The guests the chain needs staged before any of it can run.
 const NEEDED: [&str; 4] = [
     "provider-openai.wasm",
     "interceptor-tool-selector.wasm",
@@ -17,13 +15,10 @@ const NEEDED: [&str; 4] = [
     "tool-fs.wasm",
 ];
 
-/// The compiled tool's answer, which reaches the model only if every link ran.
 const PHRASE: &str = "compiled-in-session";
 
-/// Where turn 5's digest is spliced in.
 const DIGEST: &str = "{{sha256}}";
 
-/// The scripted model: queued `name|arguments` calls and what came back.
 struct Script {
     calls: Mutex<std::collections::VecDeque<String>>,
     named: Mutex<Vec<String>>,
@@ -32,8 +27,6 @@ struct Script {
     completions: AtomicU32,
 }
 
-/// The first 64-hex-character run in `text`, which is what `shasum -a 256`
-/// prints before the filename.
 fn sha256_in(text: &str) -> Option<String> {
     text.split(|c: char| !c.is_ascii_hexdigit())
         .find(|run| run.len() == 64)
@@ -114,7 +107,6 @@ fn reply(value: &serde_json::Value) -> jk_wasm::http::WireResponse {
     }
 }
 
-/// The prepared crate, or a loud skip naming how to get it.
 fn fixture_crate() -> Option<std::path::PathBuf> {
     let fixture = common::repo_root().join(".fixtures/self-extend-guest");
     if fixture.join("Cargo.lock").exists() {
@@ -127,8 +119,6 @@ fn fixture_crate() -> Option<std::path::PathBuf> {
     None
 }
 
-/// A workspace holding the crate to compile, an `ext/` holding the fleet,
-/// and a config in `self-extend`'s posture.
 fn fixture() -> Option<(common::TempDir, std::path::PathBuf, std::path::PathBuf)> {
     let source = fixture_crate()?;
     let dir = std::env::temp_dir().join(format!("jk-chain-{}", std::process::id()));
@@ -197,8 +187,6 @@ extensions:
     Some((guard, config, ws))
 }
 
-/// The manifest the installer requires. `capabilities = []` is checked by the
-/// host against the component's real imports.
 fn manifest_toml() -> String {
     format!(
         "name = \"tool-selfbuilt\"\nversion = \"0.0.0\"\napi-version = \"{api}\"\n\
@@ -207,7 +195,6 @@ fn manifest_toml() -> String {
     )
 }
 
-/// The six calls, in order, as the scripted model makes them.
 fn chain_script(component: &std::path::Path) -> Arc<Script> {
     Arc::new(Script {
         calls: Mutex::new(std::collections::VecDeque::from(vec![

@@ -1,5 +1,4 @@
-//! Load TinyGo `spike` component, call `complete`, echo result.
-//! Runnable by hand; automated check via `tests/it/polyglot.rs`.
+//! Loads the TinyGo `spike` component, calls `complete` and echoes the result.
 
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 

@@ -1,6 +1,4 @@
-//! `tool-proc` — start, read and stop long-lived children, by granted name only.
-//!
-//! Commands come only from `execution.long-lived`, and handles stay in this instance. Refusals are `Ok` results because `tool-error` carries no message.
+//! `tool-proc`: start, read and stop long-lived children by granted name; refusals are `Ok` since `tool-error` has no message.
 
 #[cfg(target_arch = "wasm32")]
 mod component {
@@ -29,17 +27,11 @@ mod component {
     use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
     use bindings::jan_klod::interfaces::host_process;
 
-    /// Most bytes one `output` call returns; the host's output cap bounds it further.
     const READ_BYTES: u32 = 8192;
-    /// How long `output` waits for the first byte.
-    ///
     /// Short on purpose: an empty read means "nothing yet", and blocking a turn is worse.
-    /// `running` answers whether the child has finished.
     const READ_WAIT_MS: u32 = 200;
 
     thread_local! {
-        /// `name -> handle` for children this instance started.
-        /// A `Vec` is enough: at most one entry per granted name, and it keeps start order.
         static STARTED: RefCell<Vec<(String, u32)>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -47,7 +39,6 @@ mod component {
         host_log::log(level, "tool-proc", message, &[]);
     }
 
-    /// The handle for `name`, if this instance started it.
     fn handle(name: &str) -> Option<u32> {
         STARTED.with_borrow(|started| {
             started
@@ -57,12 +48,11 @@ mod component {
         })
     }
 
-    /// A refusal the model can act on.
     fn refused(reason: &str) -> String {
         serde_json::json!({ "refused": reason }).to_string()
     }
 
-    /// A refusal for an ungranted name. Lists the granted names, since a model that cannot see them cannot correct itself.
+    /// Lists the granted names, since a model that cannot see them cannot correct itself.
     fn no_such_child(name: &str) -> String {
         serde_json::json!({
             "refused": format!("no long-lived child named `{name}` is granted"),
@@ -71,7 +61,6 @@ mod component {
         .to_string()
     }
 
-    /// Every granted name, and whether this session has it running.
     fn list() -> String {
         let children: Vec<serde_json::Value> = host_process::granted()
             .into_iter()
@@ -83,7 +72,6 @@ mod component {
         serde_json::json!({ "children": children }).to_string()
     }
 
-    /// Start a granted child, or report the one already running.
     fn start(name: &str) -> String {
         if handle(name).is_some_and(host_process::is_running) {
             return serde_json::json!({ "name": name, "started": false, "running": true })
@@ -106,7 +94,6 @@ mod component {
         }
     }
 
-    /// Whatever the child has printed since the last call.
     fn output(name: &str) -> String {
         let Some(child) = handle(name) else {
             return not_started(name);
@@ -120,7 +107,6 @@ mod component {
         .to_string()
     }
 
-    /// Stop a child this session started.
     fn stop(name: &str) -> String {
         let Some(child) = handle(name) else {
             return not_started(name);
@@ -133,7 +119,6 @@ mod component {
         serde_json::json!({ "name": name, "stopped": true }).to_string()
     }
 
-    /// A granted name this session has not started, which needs a different next move from an ungranted one.
     fn not_started(name: &str) -> String {
         if host_process::granted()
             .iter()

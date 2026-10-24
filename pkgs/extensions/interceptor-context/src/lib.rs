@@ -1,6 +1,4 @@
-//! Default `select-context` interceptor.
-//!
-//! Budget comes from `host-config` `context-tokens`, else [`component::DEFAULT_BUDGET`]. Trim logic is in `context`; glue builds for `wasm32` only.
+//! Default `select-context` interceptor; budget from `context-tokens`, else `DEFAULT_BUDGET`.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod context;
@@ -33,7 +31,6 @@ mod component {
     use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
     use bindings::jan_klod::interfaces::llm_types::Role;
 
-    /// Budget used when `context-tokens` is unset or unparseable.
     pub const DEFAULT_BUDGET: usize = 8192;
 
     fn log(level: LogLevel, message: &str) {

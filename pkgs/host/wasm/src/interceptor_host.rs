@@ -1,6 +1,4 @@
-//! Wasm-guest adapter for the interceptor dispatch engine: adapts a sandboxed component to [`jk_protocol::intercept::Interceptor`].
-//!
-//! `host-storage` is an in-memory map and `llm-provider` an injected closure so interceptors run offline; `host-event` is observation-only.
+//! Adapts a sandboxed component to [`jk_protocol::intercept::Interceptor`]; `host-event` is observation-only.
 
 use jk_protocol::turn;
 use std::collections::{HashMap, VecDeque};
@@ -42,22 +40,17 @@ use bind::jan_klod::interfaces::llm_provider as g_llm;
 use bind::jan_klod::interfaces::llm_types as g_types;
 use surface_bind::exports::jan_klod::interfaces::client_surface as g_surface;
 
-/// The completion backend an interceptor's `llm-provider` resolves to: the guest's whole request in, assistant text out.
-///
-/// Takes the whole request, not the prompt: the intent router's grammar constraint would be dropped otherwise.
+/// Backs `llm-provider`; takes the whole request so the intent router's grammar is not dropped.
 pub type ProviderFn = Box<dyn Fn(&jk_protocol::intercept::PendingRequest) -> String + Send + Sync>;
 
-/// Host state for one interceptor guest.
 struct InterceptorHost {
     wasi: WasiCtx,
     table: ResourceTable,
     component_id: String,
     section: ConfigSection,
     provider: ProviderFn,
-    /// Open completion streams: handle -> the chunks left to drain.
     streams: HashMap<u32, VecDeque<g_llm::CompletionChunk>>,
     next_handle: u32,
-    /// Where this guest's `host-storage` calls land: the core's durable store if open, else an ephemeral map ([`GuestStorage`](crate::guest_storage::GuestStorage)).
     storage: crate::guest_storage::GuestStorage,
 }
 
@@ -103,7 +96,6 @@ impl g_config::Host for InterceptorHost {
 }
 
 impl g_event::Host for InterceptorHost {
-    /// One-way: the host records what an extension reports; no delivery side (`wit/host-event.wit`).
     fn publish(&mut self, topic: String, payload: String) {
         eprintln!("EVENT [{}] {topic}: {payload}", self.component_id);
     }
@@ -161,7 +153,6 @@ impl g_storage::Host for InterceptorHost {
     }
 }
 
-/// This world's `entry`, from the world-neutral one.
 fn entry(stored: crate::guest_storage::StoredEntry) -> g_storage::Entry {
     g_storage::Entry {
         id: stored.id,
@@ -173,7 +164,6 @@ fn entry(stored: crate::guest_storage::StoredEntry) -> g_storage::Entry {
     }
 }
 
-/// This world's `store-error`, from the world-neutral one.
 const fn fault(err: &crate::guest_storage::StorageFault) -> g_storage::StoreError {
     match err {
         crate::guest_storage::StorageFault::NotFound => g_storage::StoreError::NotFound,
@@ -181,7 +171,6 @@ const fn fault(err: &crate::guest_storage::StorageFault) -> g_storage::StoreErro
     }
 }
 
-/// Convert the guest's request into the core's neutral shape, preserving model, grammar and full message list.
 fn to_pending_request(
     request: &g_llm::CompletionRequest,
 ) -> jk_protocol::intercept::PendingRequest {
@@ -244,18 +233,15 @@ pub struct WasmInterceptor {
     id: String,
     store: Store<InterceptorHost>,
     world: bind::InterceptorWorld,
-    /// Present only when the component also exports `client-surface`.
     surface: Option<surface_bind::ClientSurfaceView>,
     phases: Vec<Phase>,
 }
 
 impl WasmInterceptor {
-    /// Instantiate `component` as an interceptor, run its lifecycle to `start`, and cache subscribed phases.
-    /// `provider` backs its `llm-provider` import.
+    /// Instantiate `component` as an interceptor and run its lifecycle to `start`; `provider` backs `llm-provider`.
     ///
     /// # Errors
-    /// Returns a [`CoreError`] if a capability cannot be wired, the component
-    /// cannot be instantiated, or a lifecycle call traps or is rejected.
+    /// [`CoreError`] if wiring, instantiation or a lifecycle call fails.
     pub fn instantiate(
         engine: &Engine,
         id: &str,
@@ -266,8 +252,7 @@ impl WasmInterceptor {
         Self::instantiate_with_storage(engine, id, component, section, provider, None)
     }
 
-    /// As [`Self::instantiate`], with the core's store backing `host-storage` (so standing grants outlive the process).
-    /// `None` keeps the private map, for offline tests.
+    /// As [`Self::instantiate`], with the core's store backing `host-storage`; `None` keeps a private map.
     ///
     /// # Errors
     /// As [`Self::instantiate`].
@@ -361,9 +346,7 @@ impl Interceptor for WasmInterceptor {
         self.phases.clone()
     }
 
-    /// Ask the component what it contributes, if it exports the interface.
-    ///
-    /// A trap is logged and read as "nothing": a declaration costs a menu entry, never a turn (unlike fail-closed `tool-call`).
+    /// A trap is logged and read as "nothing": a declaration costs a menu entry, never a turn.
     fn contributions(&mut self) -> Option<jk_protocol::contributions::Contributions> {
         let surface = self.surface.as_ref()?;
         match surface
@@ -445,9 +428,7 @@ impl Interceptor for WasmInterceptor {
     }
 }
 
-/// Restore `tool-result`'s `failed` flag across a guest's `Replace` (#162).
-///
-/// `tool-outcome` has no `failed` field, so `from_gen_state` always yields `false`; the host already knows the real value.
+/// `tool-outcome` has no `failed` field, so a guest `Replace` must not lose the host's value.
 fn preserve_tool_result_failed(decision: Decision, dispatched: &HookState) -> Decision {
     match (decision, dispatched) {
         (Decision::Replace(HookState::ToolResult(mut outcome)), HookState::ToolResult(before)) => {
@@ -458,7 +439,6 @@ fn preserve_tool_result_failed(decision: Decision, dispatched: &HookState) -> De
     }
 }
 
-/// Collapse a lifecycle call's nested result into a [`CoreError`].
 fn drive(
     id: &str,
     result: wasmtime::Result<Result<(), String>>,
@@ -675,8 +655,6 @@ const fn from_gen_error(err: g_icept::InterceptorError) -> InterceptorError {
     }
 }
 
-/// Generated contributions to host shape, tagged with who declared them.
-///
 /// The extension id comes from the host: a self-named component could claim another's contributions.
 fn from_gen_contributions(
     extension: &str,
@@ -747,7 +725,6 @@ mod tests {
             .collect()
     }
 
-    /// #162: a guest `tool-result` rewrite of `content` must not lose `failed`, which `tool-outcome` does not carry.
     #[test]
     fn a_guest_replace_cannot_flip_the_failed_flag() {
         let dispatched = HookState::ToolResult(turn::ToolOutcome {
@@ -771,7 +748,6 @@ mod tests {
         );
     }
 
-    /// A decision that is not a `tool-result` `Replace` passes through unchanged.
     #[test]
     fn other_decisions_are_left_alone() {
         let dispatched = HookState::ToolResult(turn::ToolOutcome {
@@ -785,7 +761,6 @@ mod tests {
         ));
     }
 
-    /// A driver that never expects to be asked (the intent router does not `ask`).
     struct NoDriver;
     impl Driver for NoDriver {
         fn ask(&mut self, _prompt: &UserPrompt) -> String {
@@ -822,7 +797,6 @@ mod tests {
         })
     }
 
-    /// A driver that answers every `ask` with a fixed response.
     struct FixedDriver(&'static str);
     impl Driver for FixedDriver {
         fn ask(&mut self, _prompt: &UserPrompt) -> String {
@@ -886,8 +860,6 @@ mod tests {
         ));
     }
 
-    /// Counts how many times it was asked, so a test can prove a second call did
-    /// *not* reach the user.
     struct CountingDriver {
         answer: &'static str,
         asked: std::cell::Cell<usize>,
@@ -962,9 +934,6 @@ mod tests {
         assert_eq!(driver.asked.get(), 2, "a scope escape is asked every time");
     }
 
-    /// A model that ignores a refusal cannot keep prompting the user.
-    ///
-    /// A denial ends the call, so a model that re-asks puts a dialog in front of a person each time; prompt fatigue defeats the gate.
     #[test]
     fn repeated_refusal_becomes_a_standing_refusal() {
         let Some(p) = load_permission() else { return };
@@ -1054,7 +1023,6 @@ mod tests {
         );
     }
 
-    /// An allowlisted read runs untouched.
     #[test]
     fn permission_ignores_a_known_read_only_call() {
         let Some(p) = load_permission() else { return };
@@ -1066,7 +1034,6 @@ mod tests {
         ));
     }
 
-    /// A tool nobody classified does not run: under an allowlist it is the one to stop.
     #[test]
     fn permission_asks_about_a_tool_nobody_has_classified() {
         let Some(p) = load_permission() else { return };

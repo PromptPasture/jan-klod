@@ -53,7 +53,6 @@ mod component {
         text
     }
 
-    /// Classify message into built-in task via constrained-decoding call.
     fn classify(user_message: &str) -> Option<String> {
         let grammar = routing::classifier_grammar(routing::BUILT_IN_TASKS);
         let request = CompletionRequest {

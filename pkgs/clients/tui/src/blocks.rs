@@ -1,7 +1,4 @@
-//! Transcript and pane width to rendered lines, with no drawing: lines are data,
-//!
-//! so tests can assert on them. Under [`Mode::Mono`](crate::theme::Mode::Mono)
-//! the gutter glyph and role label carry every distinction, since colour is absent.
+//! Transcript and pane width to rendered lines, with no drawing.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -11,12 +8,10 @@ use crate::keymap;
 use crate::theme::{Glyph, Theme};
 use crate::wrap::wrap;
 
-/// Gutter width: glyph + space. Wrapping must leave room or rendered lines overflow.
 fn gutter_width(theme: Theme) -> usize {
     crate::wrap::width(theme.glyph(Glyph::MessageGutter)) + 1
 }
 
-/// Role label and gutter colour. Speakers use border roles so accents stay meaningful (#97).
 const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
     match who {
         Who::You => ("you", theme.border_active()),
@@ -27,7 +22,6 @@ const fn role(who: Who, theme: Theme) -> (&'static str, ratatui::style::Color) {
 }
 
 /// One-line summary of what the call did: its path if it has one, never raw JSON.
-/// The sidebar's CHANGED list reads this too.
 pub(crate) fn summary(tool: &ToolBlock) -> String {
     let Some(raw) = tool.arguments.as_deref() else {
         return "arguments not sent over this transport".to_string();
@@ -43,7 +37,6 @@ pub(crate) fn summary(tool: &ToolBlock) -> String {
     String::new()
 }
 
-/// Status glyph and colour.
 fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
     match &tool.status {
         ToolStatus::Running => (
@@ -60,9 +53,7 @@ fn mark(tool: &ToolBlock, theme: Theme) -> (String, ratatui::style::Color) {
     }
 }
 
-/// One scannable line, or that line plus the expanded work. Not routed through
-/// [`block`]'s message path: `wrap` collapses whitespace and would flatten the
-/// indents of pretty-printed arguments.
+/// Not routed through [`block`]'s message path: `wrap` collapses whitespace and would flatten the indents of pretty-printed arguments.
 fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> Vec<Line<'static>> {
     let (glyph, rail) = if selected {
         (
@@ -148,7 +139,6 @@ fn tool_block(tool: &ToolBlock, selected: bool, width: usize, theme: Theme) -> V
     lines
 }
 
-/// Arguments pretty-printed for reading. No syntax highlighting.
 fn pretty(raw: &str) -> String {
     serde_json::from_str::<serde_json::Value>(raw)
         .as_ref()
@@ -158,7 +148,6 @@ fn pretty(raw: &str) -> String {
         )
 }
 
-/// Cut to `max` cells from the left behind `mark`, one grapheme at a time so no glyph is split.
 fn elide(text: &str, max: usize, mark: &str) -> String {
     if crate::wrap::width(text) <= max {
         return text.to_string();
@@ -182,7 +171,6 @@ fn elide(text: &str, max: usize, mark: &str) -> String {
     format!("{mark}{}", kept.concat())
 }
 
-/// Put the gutter back in front of an already-styled row.
 fn prefix(rail: Span<'static>, row: Line<'static>) -> Line<'static> {
     let mut spans = vec![rail];
     spans.extend(row.spans);
@@ -245,9 +233,6 @@ pub fn transcript(
 }
 
 /// Where entry `index` starts in [`transcript`]'s output, and how many rows it takes.
-///
-/// Measured unselected, which is exact: the cursor swaps one one-cell glyph for
-/// another, so it cannot change where the body wraps.
 #[must_use]
 pub fn span_of(entries: &[Entry], index: usize, width: usize, theme: Theme) -> (usize, usize) {
     let mut start = 0;
@@ -260,15 +245,7 @@ pub fn span_of(entries: &[Entry], index: usize, width: usize, theme: Theme) -> (
     (start, height)
 }
 
-/// The ask dialog's content, as lines (#103). A pure function of the model, so
-/// tests can assert on the rendered cells.
-///
-/// `selected` and `queue_len` come from [`crate::app::App`], not `prompt`: a
-/// queued question does not know its position. `input` is shown only when
-/// `prompt.options` is empty (free text).
-///
-/// The default is marked in text as well as colour (` default` and
-/// [`Glyph::Warning`]), since every colour is absent under `Mode::Mono`.
+/// The ask dialog's content, as lines.
 #[must_use]
 pub fn prompt_dialog(
     prompt: &Prompt,
@@ -345,8 +322,7 @@ pub fn prompt_dialog(
     lines
 }
 
-/// The session switcher's content (#105): the filter line, then the matching
-/// sessions, with the current and highlighted ones marked.
+/// Session switcher lines: the filter, then the matching sessions.
 #[must_use]
 pub fn sessions_dialog(
     query: &str,
@@ -423,8 +399,7 @@ pub fn sessions_dialog(
     lines
 }
 
-/// The help overlay's content (#105): every binding in
-/// [`crate::keymap::BINDINGS`], grouped by [`crate::keymap::Context`].
+/// Help overlay lines, grouped by keymap context.
 #[must_use]
 pub fn help_dialog(width: usize, theme: Theme) -> Vec<Line<'static>> {
     const GROUPS: [(keymap::Context, &str); 5] = [
@@ -466,10 +441,7 @@ pub fn help_dialog(width: usize, theme: Theme) -> Vec<Line<'static>> {
     lines
 }
 
-/// The quit confirm's content (#105): the session id, what a running turn means
-/// (worded differently for stdio and `--addr`), and the cancel/quit options.
-///
-/// Four `bool`s, not an enum per axis: each is independent and no combination is invalid.
+/// Quit confirm lines: session id, running-turn warning, cancel/quit options.
 #[must_use]
 #[allow(clippy::fn_params_excessive_bools)]
 pub fn quit_dialog(
@@ -566,7 +538,6 @@ mod tests {
         }
     }
 
-    /// A failed result. Since #162 only the `failed` flag decides, never the content.
     fn failure(content: &str) -> ToolStatus {
         ToolStatus::Done {
             content: content.to_string(),
@@ -609,7 +580,6 @@ mod tests {
         }
     }
 
-    /// With colour gone, the block is still readable and attributed.
     #[test]
     fn monochrome_keeps_the_glyph_and_the_label() {
         let theme = Theme::new(Mode::Mono, Depth::TrueColor, GlyphSet::Unicode);
@@ -634,7 +604,6 @@ mod tests {
         }
     }
 
-    /// The gutter is part of the line, so the wrap has to leave room for it.
     #[test]
     fn no_rendered_line_exceeds_the_pane_including_the_gutter() {
         for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
@@ -699,7 +668,6 @@ mod tests {
         Entry::Tool(tool)
     }
 
-    /// The collapsed line names what the call did, not its JSON.
     #[test]
     fn the_collapsed_line_names_the_path_and_never_the_json() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -733,7 +701,6 @@ mod tests {
         );
     }
 
-    /// Missing arguments must say so, not read as an empty call (#161).
     #[test]
     fn missing_arguments_say_so_instead_of_reading_as_none() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -744,7 +711,6 @@ mod tests {
         );
     }
 
-    /// A failure opens itself, and its reason is in the block.
     #[test]
     fn a_failed_call_shows_its_reason_without_a_keystroke() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -765,8 +731,6 @@ mod tests {
         );
     }
 
-    /// The `failed` flag decides, never the wording (#162). The fixtures point
-    /// the opposite way to the content on purpose: a prose matcher gets both wrong.
     #[test]
     fn what_the_content_looks_like_no_longer_decides_whether_a_call_failed() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -787,7 +751,6 @@ mod tests {
         );
     }
 
-    /// Pretty-printed arguments keep their shape, which `wrap` would collapse.
     #[test]
     fn expanded_arguments_keep_their_shape_and_the_result_follows() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -820,8 +783,6 @@ mod tests {
         );
     }
 
-    /// With colour gone, done and failed still differ. A tool block has no role
-    /// label to fall back on, so the status glyph must carry the difference.
     #[test]
     fn monochrome_still_separates_a_done_call_from_a_failed_one() {
         for set in [GlyphSet::Unicode, GlyphSet::Ascii] {
@@ -847,7 +808,6 @@ mod tests {
         }
     }
 
-    /// A result that is a diff renders as one, even when the call failed (#156).
     #[test]
     fn a_result_that_is_a_diff_renders_as_one_even_when_the_call_failed() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -884,7 +844,6 @@ mod tests {
         assert!(head.contains(theme.glyph(Glyph::ToolFailed)), "{head:?}");
     }
 
-    /// A selection nobody can see is not a selection.
     #[test]
     fn the_selected_block_is_marked_by_a_glyph_so_monochrome_keeps_it() {
         for mode in [Mode::Dark, Mode::Mono] {
@@ -910,7 +869,6 @@ mod tests {
         }
     }
 
-    /// What the scroll is told, so it has to agree with what was drawn.
     #[test]
     fn span_of_finds_each_block_where_the_transcript_actually_put_it() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -961,7 +919,6 @@ mod tests {
         }
     }
 
-    /// The closing line says what silence means and names the default.
     #[test]
     fn the_dialog_says_what_silence_means_and_names_the_default() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -978,7 +935,6 @@ mod tests {
         );
     }
 
-    /// Under `Mode::Mono` the default is named in the row's text, since every colour is reset.
     #[test]
     fn monochrome_still_marks_the_default_option_in_text() {
         let theme = Theme::new(Mode::Mono, Depth::TrueColor, GlyphSet::Unicode);
@@ -1007,7 +963,6 @@ mod tests {
         }
     }
 
-    /// The selected row renders differently from the rest.
     #[test]
     fn the_selected_option_renders_differently_from_the_rest() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1024,7 +979,6 @@ mod tests {
         );
     }
 
-    /// A free-text prompt shows an input line and names the default an empty answer sends.
     #[test]
     fn an_empty_options_list_renders_free_text_input() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1051,7 +1005,6 @@ mod tests {
         }
     }
 
-    /// The current session is marked in text, not only colour (see `Mode::Mono`).
     #[test]
     fn the_current_session_is_marked_in_text_under_monochrome() {
         let theme = Theme::new(Mode::Mono, Depth::TrueColor, GlyphSet::Unicode);
@@ -1078,7 +1031,6 @@ mod tests {
         assert!(rendered.iter().any(|r| r.contains("no session matches")));
     }
 
-    /// The help overlay lists every binding under its context heading.
     #[test]
     fn the_help_overlay_lists_every_binding_grouped_by_context() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1112,7 +1064,6 @@ mod tests {
         }
     }
 
-    /// stdio and `--addr` must word a lost turn differently.
     #[test]
     fn the_quit_dialog_wording_differs_between_stdio_and_addr() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1131,7 +1082,6 @@ mod tests {
         assert!(!addr.contains("lost"), "{addr:?}");
     }
 
-    /// Not mid-turn: no warning at all, and cancel is the default selection.
     #[test]
     fn a_quit_with_no_turn_running_carries_no_warning() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1148,7 +1098,6 @@ mod tests {
         );
     }
 
-    /// The escalation notice only appears once asked for.
     #[test]
     fn escalating_adds_a_second_warning() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1164,7 +1113,6 @@ mod tests {
         assert!(second.iter().any(|r| r.contains("again")));
     }
 
-    /// `1 of 2` only appears once a second prompt is actually queued.
     #[test]
     fn the_queue_count_only_shows_when_more_than_one_is_waiting() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);

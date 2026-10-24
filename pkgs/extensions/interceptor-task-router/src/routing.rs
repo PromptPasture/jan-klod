@@ -1,7 +1,5 @@
-//! Task classification and route resolution: pure Rust, unit-tested natively.
-//! [`parse_task`] reads back the classifier's constrained output; [`model_from_route`] takes the model from a route.
+//! Task classification and route resolution, pure Rust.
 
-/// Built-in task types — the default `routing:` keys.
 pub const BUILT_IN_TASKS: &[&str] = &[
     "code-generation",
     "code-review",
@@ -15,10 +13,9 @@ pub const BUILT_IN_TASKS: &[&str] = &[
     "agent-delegation",
 ];
 
-/// Default task when classification fails: plain chat is the safe, cheapest route.
+/// Plain chat is the safe, cheapest route when classification fails.
 pub const DEFAULT_TASK: &str = "chat";
 
-/// `GBNF` grammar constraining the classifier to exactly one of `tasks`.
 #[must_use]
 pub fn classifier_grammar(tasks: &[&str]) -> String {
     let alternatives = tasks
@@ -29,7 +26,7 @@ pub fn classifier_grammar(tasks: &[&str]) -> String {
     format!("root ::= {alternatives}")
 }
 
-/// Read the classifier's output into one of `tasks` (exact match first, else substring).
+/// Exact match first, else substring.
 #[must_use]
 pub fn parse_task(text: &str, tasks: &[&str]) -> Option<String> {
     let lowered = text.trim().to_lowercase();
@@ -40,7 +37,6 @@ pub fn parse_task(text: &str, tasks: &[&str]) -> Option<String> {
         .map(|task| (*task).to_string())
 }
 
-/// Pull the model out of a `<provider-instance>/<model>` routing entry.
 #[must_use]
 pub fn model_from_route(route: &str) -> Option<&str> {
     let model = route
@@ -49,8 +45,7 @@ pub fn model_from_route(route: &str) -> Option<&str> {
     Some(model.trim()).filter(|model| !model.is_empty())
 }
 
-/// The provider a route names but the runtime cannot honour. The fallback chain is fixed at boot,
-/// so the model goes to whichever provider answers, not necessarily the named one.
+/// The fallback chain is fixed at boot, so the model goes to whichever provider answers.
 #[must_use]
 pub fn unhonoured_provider(route: &str) -> Option<&str> {
     route

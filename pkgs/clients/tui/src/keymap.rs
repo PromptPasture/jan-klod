@@ -1,9 +1,9 @@
-//! The one keybinding table. The status bar hint and the help overlay both derive from it.
+//! The one keybinding table.
 
-/// The state a binding applies in. Mirrors [`crate::app::Turn`], plus `DialogClosed`.
+/// The state a binding applies in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Context {
-    /// Nothing running. The composer's text is a new message.
+    /// Nothing running.
     Idle,
     /// A turn is running and text is arriving.
     Streaming,
@@ -18,7 +18,7 @@ pub enum Context {
 /// One row of [`BINDINGS`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Binding {
-    /// The key or chord, e.g. `"Ctrl+C"`. Empty for a state row, which [`hint`] renders as the action alone.
+    /// The key or chord, e.g. `"Ctrl+C"`; empty for a state row.
     pub keys: &'static str,
     /// What the key does, in the words the status bar shows.
     pub action: &'static str,
@@ -26,7 +26,7 @@ pub struct Binding {
     pub context: Context,
 }
 
-/// One row per binding, in status-bar order. The only text the status bar and help overlay may show.
+/// One row per binding, in status-bar order.
 pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Enter",
@@ -100,7 +100,7 @@ pub const BINDINGS: &[Binding] = &[
     },
 ];
 
-/// The hint for `context` from `table`, joined with " · ". Takes the table so tests can substitute one.
+/// The hint for `context` from `table`, joined with " · ".
 #[must_use]
 pub fn hint(table: &[Binding], context: Context) -> String {
     table
@@ -148,7 +148,6 @@ pub fn status_hint_narrow(context: Context) -> String {
 mod tests {
     use super::{hint, hint_narrow, status_hint, Binding, Context, BINDINGS};
 
-    /// Editing a table entry must move the hint, since the hint derives from the table.
     #[test]
     fn the_hint_changes_when_the_table_entry_changes() {
         const ORIGINAL: &[Binding] = &[Binding {

@@ -1,11 +1,9 @@
 //! Docs can drift from the shipped config with no compiler to catch it; these tests compare the two.
-//! Needs no staged guests: it only reads repository files.
 
 use std::collections::BTreeSet;
 
 use crate::common;
 
-/// Every shipped config (root and per distribution) as `(label, contents)`, so a failure names the config.
 fn shipped_configs() -> Vec<(String, String)> {
     let root = common::repo_root();
     let mut out = vec![(
@@ -31,8 +29,6 @@ fn shipped_configs() -> Vec<(String, String)> {
     out
 }
 
-/// The `${VAR}` names the *enabled* providers in one config expand.
-/// Parsed so the list can't drift from the config.
 fn required_key_vars_in(config: &str) -> BTreeSet<String> {
     let config = config.to_owned();
 
@@ -89,9 +85,6 @@ fn required_key_vars_in(config: &str) -> BTreeSet<String> {
     vars
 }
 
-/// Every `export SOMETHING=` a document tells the reader to run.
-///
-/// Matched anywhere in a line — the installer wraps it in an `echo`.
 fn exported_vars(doc: &str) -> BTreeSet<String> {
     let text = std::fs::read_to_string(common::repo_root().join(doc))
         .unwrap_or_else(|err| panic!("{doc} is readable: {err}"));
@@ -112,8 +105,6 @@ fn exported_vars(doc: &str) -> BTreeSet<String> {
     vars
 }
 
-/// A document that tells a reader to set a key must name at least the one the
-/// shipped config asks for (it may name alternatives too).
 fn assert_names_a_required_key(doc: &str) {
     let exported = exported_vars(doc);
     assert!(
@@ -148,13 +139,11 @@ fn the_quickstart_names_the_key_the_shipped_config_needs() {
     assert_names_a_required_key("docs/quickstart.md");
 }
 
-/// The installer's own quick-start printout is checked the same way.
 #[test]
 fn the_installer_names_the_key_the_shipped_config_needs() {
     assert_names_a_required_key("scripts/install.sh");
 }
 
-/// The installer's arch names must match what the release publishes; `aarch64` vs `arm64` is an easy 404.
 #[test]
 fn the_installer_asks_for_arch_names_the_release_actually_builds() {
     let workflow =
@@ -181,7 +170,6 @@ fn the_installer_asks_for_arch_names_the_release_actually_builds() {
     }
 }
 
-/// Distributions defined, offered by the installer, and built by the release must be one set; a mismatch is a 404 for the user.
 #[test]
 fn the_installer_offers_the_distributions_the_release_builds() {
     let root = common::repo_root();
@@ -234,7 +222,6 @@ fn the_installer_offers_the_distributions_the_release_builds() {
     );
 }
 
-/// Every key in the shipped config must be read by code. The whitelist makes a new key fail until it is wired or removed.
 #[test]
 fn every_config_key_is_one_the_runtime_reads() {
     const CONSUMED_CATEGORIES: [&str; 4] = jk_wasm::CATEGORIES;
@@ -307,7 +294,6 @@ fn every_config_key_is_one_the_runtime_reads() {
     }
 }
 
-/// No test may skip except through the shared policy, so `JK_REQUIRE_GUESTS` can turn skips into failures.
 #[test]
 fn every_test_that_skips_does_so_through_the_shared_policy() {
     let tests = common::repo_root().join("pkgs/host/host/tests");
@@ -347,7 +333,6 @@ fn every_test_that_skips_does_so_through_the_shared_policy() {
     );
 }
 
-/// The parser must distinguish enabled from disabled, or the checks above pass for the wrong reason.
 #[test]
 fn only_enabled_providers_count_as_required() {
     let root = std::fs::read_to_string(common::repo_root().join("config.yaml"))
@@ -367,7 +352,6 @@ fn only_enabled_providers_count_as_required() {
     );
 }
 
-/// Every test cited by `docs/concepts/security-model.md` exists under that name. A renamed test breaks this until the page is updated.
 #[test]
 fn the_security_model_cites_tests_that_exist() {
     let root = common::repo_root();
@@ -426,8 +410,6 @@ fn the_security_model_cites_tests_that_exist() {
     );
 }
 
-/// Every wire command in `jk_protocol::COMMAND_METHODS` has a row in the Commands table in `docs/concepts/contracts.md`.
-/// `pkgs/host/protocol/tests/wire.rs` checks the code side; this guards the hand-written table.
 #[test]
 fn the_commands_table_lists_every_wire_command() {
     let root = common::repo_root();
@@ -449,7 +431,6 @@ fn the_commands_table_lists_every_wire_command() {
     );
 }
 
-/// Every declared instance, including unenabled ones, resolves to an existing component. Uses the real parser, not hand-rolled YAML.
 #[test]
 fn every_declared_instance_resolves_to_a_component() {
     let root = common::repo_root();
@@ -478,7 +459,6 @@ fn every_declared_instance_resolves_to_a_component() {
     );
 }
 
-/// Doc pages covered by these checks: `docs/` and each package's `docs/`, excluding the changelog.
 fn doc_pages(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut dirs: Vec<std::path::PathBuf> = ["docs", "docs/concepts", "docs/guides"]
         .iter()
@@ -508,7 +488,6 @@ fn doc_pages(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     pages
 }
 
-/// Every command the docs tell a user to run exists. The changelog is excluded because it records history.
 #[test]
 fn every_documented_command_exists() {
     let root = common::repo_root();
@@ -570,7 +549,6 @@ fn every_documented_command_exists() {
     );
 }
 
-/// No shell block passes positional paths to `serve`/`verify`/`telegram`; that overrides the lookup beside the installed binary.
 #[test]
 fn no_shell_block_recommends_positional_serve_paths() {
     let root = common::repo_root();
@@ -614,7 +592,6 @@ fn no_shell_block_recommends_positional_serve_paths() {
     }
 }
 
-/// The release publishes the registry where `config.yaml`'s `registry.url` says it is (#139).
 #[test]
 fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
     let root = common::repo_root();
@@ -661,7 +638,6 @@ fn the_release_publishes_the_registry_where_config_yaml_says_it_is() {
     );
 }
 
-/// Every tool pin in a workflow matches `versions.mk` (#131, #166). Only a different version fails; an omitted tool does not.
 #[test]
 fn every_tool_a_workflow_pins_matches_versions_mk() {
     let root = common::repo_root();

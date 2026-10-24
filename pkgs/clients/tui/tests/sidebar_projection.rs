@@ -1,7 +1,5 @@
 #![allow(missing_docs)]
-//! #104: the sidebar is projection only, so `sidebar.rs` must not mention `Command` or `Transport`.
-//!
-//! Lives in `tests/` so the grep never reads its own assertion text back.
+//! The sidebar is projection only: `sidebar.rs` must not mention `Command` or `Transport`.
 
 use std::fs;
 use std::path::Path;

@@ -1,12 +1,9 @@
-//! The Wasmtime compile cache (#60) through `Runtime::boot`: a second boot skips
-//! Cranelift, and changed guest bytes miss instead of hitting a stale entry.
-//! Skips when the guest is not staged in `ext/`.
+//! The Wasmtime compile cache through `Runtime::boot`: a second boot skips Cranelift, changed guest bytes miss.
 
 use jk_agent::Runtime;
 
 use crate::common;
 
-/// Private copy of `tool-fs.wasm` and its manifest, so a test can mutate it without racing others.
 fn copy_tool_fs(dir: &std::path::Path) -> std::path::PathBuf {
     let real_ext = common::repo_root().join("ext");
     let ext = dir.join("ext");
@@ -31,8 +28,6 @@ fn config_for(dir: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
-/// Appends a custom wasm section: changes the bytes without touching imports or exports,
-/// so the manifest cross-check still passes.
 fn append_custom_section(path: &std::path::Path) {
     let mut bytes = std::fs::read(path).expect("reads the staged component");
     let name = b"jk-cache-test";

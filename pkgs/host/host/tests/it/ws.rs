@@ -1,6 +1,4 @@
 //! `GET /ws` is token-guarded and negotiates the protocol (#226, closes #43).
-//! The answers' content is tested in `rpc.rs`; these tests show that WebSocket
-//! frames reach the shared `rpc::command` dispatch and come back.
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use jk_agent::Runtime;
@@ -14,7 +12,6 @@ use std::collections::HashMap;
 
 const TOKEN: &str = "ws-token";
 
-/// An agent with nothing but a provider: this is about the socket.
 fn booted(tag: &str) -> Option<(common::TempDir, std::sync::Arc<Agents>)> {
     if !common::guests_staged(&["provider-openai.wasm"]) {
         return None;
@@ -47,7 +44,6 @@ extensions:
     Some((guard, agents))
 }
 
-/// Connects, sends `frames`, and collects the answers. Each call gets its own runtime.
 fn talk(port: u16, token: Option<&str>, frames: Vec<String>) -> Result<Vec<String>, String> {
     let token = token.map(str::to_owned);
     tokio::runtime::Builder::new_current_thread()
@@ -90,12 +86,10 @@ fn talk(port: u16, token: Option<&str>, frames: Vec<String>) -> Result<Vec<Strin
         })
 }
 
-/// A JSON-RPC request frame.
 fn frame(id: u32, method: &str) -> String {
     serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method }).to_string()
 }
 
-/// [`talk`], for frames that are not all text.
 fn talk_mixed(port: u16, frames: Vec<Message>) -> Result<Vec<String>, String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -121,8 +115,6 @@ fn talk_mixed(port: u16, frames: Vec<Message>) -> Result<Vec<String>, String> {
         })
 }
 
-/// Sends `frames` and reads until `done` appears, collecting notifications too.
-/// Unlike [`talk`], answers are not counted one-to-one with frames: a turn emits notifications mid-run.
 fn talk_until(port: u16, frames: Vec<String>, gap: std::time::Duration, done: &str) -> Vec<String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -169,7 +161,6 @@ fn hello() -> String {
     .to_string()
 }
 
-/// One frame in produces one frame out over the socket.
 #[test]
 fn a_client_connects_and_negotiates_the_protocol() {
     let Some((_guard, agents)) = booted("hello") else {
@@ -193,8 +184,6 @@ fn a_client_connects_and_negotiates_the_protocol() {
     );
 }
 
-/// The token rule applies to the upgrade. The test above is the control: without it,
-/// "refused" could mean the socket does not exist.
 #[test]
 fn the_socket_is_refused_without_the_token() {
     let Some((_guard, agents)) = booted("token") else {
@@ -226,8 +215,6 @@ fn the_socket_is_refused_without_the_token() {
     );
 }
 
-/// A session verb is answered over the socket, and the handshake is remembered across frames.
-/// The negotiated flag lives in the connection loop; if it were lost, only the first command would work.
 #[test]
 fn a_session_verb_is_answered_and_the_handshake_is_remembered() {
     let Some((_guard, agents)) = booted("verbs") else {
@@ -261,7 +248,6 @@ fn a_session_verb_is_answered_and_the_handshake_is_remembered() {
     );
 }
 
-/// A command before the handshake is refused, by the protocol's rule shared with stdio.
 #[test]
 fn a_command_before_the_handshake_is_refused() {
     let Some((_guard, agents)) = booted("premature") else {
@@ -278,7 +264,6 @@ fn a_command_before_the_handshake_is_refused() {
     );
 }
 
-/// A bad frame is answered and the connection continues (`rpc::serve`'s rule).
 #[test]
 fn a_bad_frame_is_answered_and_the_connection_survives_it() {
     let Some((_guard, agents)) = booted("bad-frames") else {
@@ -313,7 +298,6 @@ fn a_bad_frame_is_answered_and_the_connection_survives_it() {
     );
 }
 
-/// An agent whose first completion calls a gated tool, parking the turn on an `ask`.
 fn booted_asking(tag: &str) -> Option<(common::TempDir, std::sync::Arc<Agents>)> {
     let needed = [
         "provider-openai.wasm",
@@ -377,7 +361,6 @@ extensions:
     Some((guard, agents))
 }
 
-/// The ask is answered on the same socket it arrived on, which REST would need a second connection for.
 #[test]
 fn a_turn_streams_and_its_ask_is_answered_in_band() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");
@@ -420,8 +403,6 @@ fn a_turn_streams_and_its_ask_is_answered_in_band() {
     );
 }
 
-/// A `turn/cancel` is read while the turn runs. `cancelling: true` shows it was read mid-turn,
-/// and the missing "all done" shows it changed the outcome.
 #[test]
 fn a_turn_is_cancelled_over_the_same_socket_while_it_runs() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");

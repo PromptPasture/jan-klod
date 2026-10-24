@@ -1,5 +1,4 @@
-//! Blocking outbound HTTP, the host half of `host-http`, over plain types so every bindgen surface
-//! shares it. [`ureq`] keeps Wasmtime sync; 4xx/5xx surface as errors per the `host-http` contract.
+//! Blocking outbound HTTP, the host half of `host-http`, over plain types shared by every bindgen surface.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -7,7 +6,7 @@ use std::time::Duration;
 use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::DefaultConnector;
 
-/// Timeout applied when the caller passes `0` (`host-http`'s documented 30 s).
+/// Applied when the caller passes `0`.
 const DEFAULT_TIMEOUT_MS: u32 = 30_000;
 
 /// A completed HTTP exchange, free of generated types.
@@ -39,7 +38,6 @@ pub enum WireError {
     Backend,
 }
 
-/// Classify a completed status: `4xx`/`5xx` become errors.
 const fn status_error(status: u16) -> Option<WireError> {
     match status {
         400..=499 => Some(WireError::ClientError(status)),
@@ -48,12 +46,10 @@ const fn status_error(status: u16) -> Option<WireError> {
     }
 }
 
-/// Perform one blocking HTTP request and read the full response into memory.
-///
-/// A `timeout_ms` of `0` selects [`DEFAULT_TIMEOUT_MS`].
+/// One blocking HTTP request, read fully into memory; a `timeout_ms` of `0` selects the default.
 ///
 /// # Errors
-/// A [`WireError`]: a transport failure or, for a non-2xx/3xx status, `ClientError`/`ServerError`.
+/// A [`WireError`]: transport failure, or `ClientError`/`ServerError` for a non-2xx/3xx status.
 pub fn fetch(
     method: &str,
     url: &str,
@@ -71,31 +67,15 @@ pub fn fetch(
     )
 }
 
-/// How many redirects to follow before giving up (ureq's former default).
 const MAX_REDIRECTS: usize = 10;
 
-/// Headers that must not survive a redirect.
-///
-/// Forwarding the caller's headers verbatim would leak a provider's API key to the redirect target;
-/// ureq stripped `Authorization` itself, so the hand-rolled loop must. Dropped on every hop.
+/// Dropped on every hop: forwarding them would leak a provider's API key to the redirect target.
 const STRIPPED_ON_REDIRECT: [&str; 3] = ["authorization", "cookie", "proxy-authorization"];
 
 /// As [`fetch`], but every destination, including redirect hops, must satisfy `policy`.
 ///
-/// This is what guests get; [`fetch`] applies the default public-only rule for the host's own calls,
-/// so no spelling of "send anywhere" exists.
-///
-/// Redirects are followed here (`max_redirects(0)` on the agent) so policy is checked per hop: ureq
-/// would otherwise follow a permitted origin's `302` to cloud metadata unchecked
-/// ([#107](https://github.com/PromptPasture/jan-klod/issues/107)). Relative `Location`s resolve via
-/// `url::Url` so the checked URL is the fetched one.
-///
-/// Each hop connects to the addresses the policy classified, so the name is resolved once
-/// ([#108](https://github.com/PromptPasture/jan-klod/issues/108)).
-///
 /// # Errors
-/// The policy's refusal for any hop, [`WireError::InvalidUrl`] for an unresolvable `Location`,
-/// [`WireError::Backend`] beyond [`MAX_REDIRECTS`], or any [`WireError`] from an exchange.
+/// The policy's refusal for any hop, or a [`WireError`] from an exchange or too many redirects.
 pub fn fetch_within(
     policy: &crate::egress::EgressPolicy,
     method: &str,
@@ -148,7 +128,6 @@ pub fn fetch_within(
     Err(WireError::Backend)
 }
 
-/// The `Location` of a redirect response, if it is one.
 fn redirect_location(response: &WireResponse) -> Option<String> {
     if !matches!(response.status, 301 | 302 | 303 | 307 | 308) {
         return None;
@@ -161,7 +140,6 @@ fn redirect_location(response: &WireResponse) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// `location` resolved against `base`, absolute or relative.
 fn resolve(base: &str, location: &str) -> Result<String, WireError> {
     let base = url::Url::parse(base).map_err(|_| WireError::InvalidUrl)?;
     base.join(location)
@@ -169,14 +147,10 @@ fn resolve(base: &str, location: &str) -> Result<String, WireError> {
         .map_err(|_| WireError::InvalidUrl)
 }
 
-/// ureq's cap on resolver addresses (`unversioned::resolver::MAX_ADDRS`, not exported; exceeding it
-/// panics). Truncating is safe: the policy approves only if every address is public.
+/// ureq's cap on resolver addresses (not exported; exceeding it panics).
 const MAX_PINNED_ADDRS: usize = 16;
 
-/// A resolver that answers with the addresses the egress policy already classified, ignoring the name.
-///
-/// Fixes [#108](https://github.com/PromptPasture/jan-klod/issues/108): otherwise the host is looked up
-/// twice and a rebinding name is checked as public, connected as private.
+/// Resolves to the addresses the policy classified, so a rebinding name cannot change between check and connect.
 #[derive(Debug)]
 struct Pinned(Vec<SocketAddr>);
 
@@ -198,7 +172,6 @@ impl Resolver for Pinned {
     }
 }
 
-/// One request, no policy or redirect handling, sent to what `destination` says the policy approved.
 fn exchange(
     method: &str,
     url: &str,
@@ -252,7 +225,7 @@ fn exchange(
     })
 }
 
-/// Map a non-status `ureq` error onto [`WireError`]; unmodelled variants (it is `#[non_exhaustive]`) fold into `Backend`.
+/// Unmodelled variants (`ureq::Error` is `#[non_exhaustive]`) fold into `Backend`.
 const fn map_transport(err: &ureq::Error) -> WireError {
     match err {
         ureq::Error::Timeout(_) => WireError::Timeout,

@@ -1,5 +1,4 @@
 //! #59: a `tool-*` guest is compiled at boot but not instantiated until first use. Checked via a flag on the fleet.
-//! Skips when `tool-fs.wasm` is not staged in `ext/`.
 
 use jk_protocol::intercept::ToolInvoker;
 use jk_protocol::turn::ToolCall;
@@ -19,7 +18,6 @@ fn call(name: &str, arguments: &str) -> ToolCall {
     }
 }
 
-/// A workspace opened in a fresh temp dir, cleaned up on drop.
 fn workspace(tag: &str) -> (Workspace, common::TempDir) {
     let dir = std::env::temp_dir().join(format!("jk-lazyfleet-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

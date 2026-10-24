@@ -1,13 +1,10 @@
-//! A TypeScript component, built against today's `wit/`, answers a real tool
-//! call in an ordinary turn. It skips when not staged (#187): the component is
-//! 12.7 MB and needs `jco`. `JK_REQUIRE_GUESTS` does not force it.
+//! A TypeScript component answers a real tool call in an ordinary turn; skipped when not staged, even under `JK_REQUIRE_GUESTS`.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
 
 use crate::common;
 
-/// Staged by `make -C pkgs/extensions ts-guest`.
 const TS_COMPONENT: &str = "tool-hello-ts.wasm";
 
 #[test]

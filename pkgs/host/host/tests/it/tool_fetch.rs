@@ -1,5 +1,4 @@
-//! Fetch reduces HTML to text over a canned client, and the SSRF guard refuses
-//! internal addresses before any request. Skips when the guest is not staged.
+//! Fetch reduces HTML to text over a canned client, and the SSRF guard refuses internal addresses before any request.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;

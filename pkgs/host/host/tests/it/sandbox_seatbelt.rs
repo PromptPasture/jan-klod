@@ -1,5 +1,4 @@
 //! Seatbelt confinement on macOS: escape writes denied, in-workspace writes allowed, network refused. Not run on Linux CI (#95).
-//! The in-workspace write is the canary: Seatbelt matches resolved paths, and temp dirs sit under a symlink.
 #![cfg(target_os = "macos")]
 
 use std::io::Read;
@@ -18,7 +17,6 @@ use wasmtime::Engine;
 
 use crate::common;
 
-/// A workspace directory and a sibling that is outside it, removed on drop.
 struct Sandboxed {
     root: PathBuf,
     workspace: PathBuf,
@@ -44,7 +42,6 @@ fn dirs(tag: &str) -> Sandboxed {
     }
 }
 
-/// Policy for `workspace`: `os` mode, one directory writable, no network.
 fn policy(workspace: &Path) -> SandboxPolicy {
     SandboxPolicy {
         mode: SandboxMode::Os,
@@ -54,7 +51,6 @@ fn policy(workspace: &Path) -> SandboxPolicy {
     }
 }
 
-/// A runner over `workspace`, confined by the host backend.
 fn confined(workspace: &Path) -> ProcessRunner {
     let backend = sandbox::host_backend().expect("macOS has a backend; see sandbox.rs's own test");
     ProcessRunner::new(
@@ -65,7 +61,6 @@ fn confined(workspace: &Path) -> ProcessRunner {
     .with_sandbox(std::sync::Arc::from(backend), policy(workspace))
 }
 
-/// Unconfined control for each case, so a failure is attributable to the sandbox.
 fn unconfined(workspace: &Path) -> ProcessRunner {
     ProcessRunner::new(
         Workspace::open(workspace).expect("the workspace opens"),
@@ -74,7 +69,6 @@ fn unconfined(workspace: &Path) -> ProcessRunner {
     )
 }
 
-/// `sh -c "echo x > <target>"`, as a guest would request.
 fn write_to(runner: &ProcessRunner, target: &Path) -> i32 {
     let args = vec!["-c".to_owned(), format!("echo x > {}", target.display())];
     runner
@@ -104,7 +98,6 @@ fn a_confined_command_cannot_write_outside_the_workspace() {
     );
 }
 
-/// The canary for canonicalization bugs (see module docs).
 #[test]
 fn a_confined_command_can_still_write_inside_the_workspace() {
     let dirs = dirs("inside");
@@ -118,8 +111,6 @@ fn a_confined_command_can_still_write_inside_the_workspace() {
     assert!(target.exists());
 }
 
-/// `2>/dev/null` works, which it did not before #212. A denied `/dev/null` would
-/// surface as a missing `clang` via `xcode-select`, which hides the sandbox.
 #[test]
 fn a_confined_command_can_redirect_to_dev_null() {
     let dirs = dirs("devnull");
@@ -138,8 +129,6 @@ fn a_confined_command_can_redirect_to_dev_null() {
     );
 }
 
-/// Granting `/dev/null` must not grant `/dev`. Widening the rule to a subpath
-/// would otherwise pass the test above unchanged.
 #[test]
 fn granting_dev_null_does_not_grant_the_device_directory() {
     let dirs = dirs("devdir");
@@ -157,8 +146,6 @@ fn granting_dev_null_does_not_grant_the_device_directory() {
     );
 }
 
-/// Network denial, judged by what the listener did not see. A closed port fails
-/// the same way a denied connection does, so curl's exit code proves nothing.
 #[test]
 fn a_confined_command_cannot_reach_the_network() {
     if !common::tool_available("curl") {
@@ -197,7 +184,6 @@ fn a_confined_command_cannot_reach_the_network() {
     );
 }
 
-/// The same denial, reached through a guest rather than the runner alone.
 #[test]
 fn a_guest_running_a_command_is_confined_too() {
     let engine = Engine::default();

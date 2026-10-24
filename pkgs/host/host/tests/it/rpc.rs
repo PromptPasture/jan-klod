@@ -1,5 +1,4 @@
-//! Drives the core over newline-delimited JSON-RPC through `rpc::serve`, using
-//! in-memory streams.
+//! Drives the core over newline-delimited JSON-RPC through `rpc::serve` with in-memory streams.
 
 use std::io::{BufRead, BufReader, Cursor, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -14,12 +13,10 @@ use jk_wasm::route::HttpFn;
 
 use crate::common;
 
-/// Offline agent with canned "pong" provider.
 fn booted(tag: &str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     booted_with(tag, || common::canned_http("pong"))
 }
 
-/// Offline agent with custom provider.
 fn booted_with(
     tag: &str,
     http: impl Fn() -> HttpFn,
@@ -52,14 +49,12 @@ extensions:
     Some((dir, agent))
 }
 
-/// One line the core wrote: an answer to a request, or an unprompted report.
 #[derive(Debug)]
 enum Frame {
     Response(jsonrpc::Response),
     Notification(jsonrpc::Notification),
 }
 
-/// Parse output as frames (response has id, notification doesn't).
 fn frames(output: Vec<u8>) -> Vec<Frame> {
     String::from_utf8(output)
         .expect("frames are utf-8")
@@ -75,7 +70,6 @@ fn frames(output: Vec<u8>) -> Vec<Frame> {
         .collect()
 }
 
-/// Feeds the script as one input and returns every frame the core wrote.
 fn exchange(agent: &mut jk_agent::AgentSession, script: &[&str]) -> Vec<Frame> {
     let input = Cursor::new(script.join("\n").into_bytes());
     let mut output = Vec::new();
@@ -83,7 +77,6 @@ fn exchange(agent: &mut jk_agent::AgentSession, script: &[&str]) -> Vec<Frame> {
     frames(output)
 }
 
-/// Extract response frames in order.
 fn responses(frames: &[Frame]) -> Vec<&jsonrpc::Response> {
     frames
         .iter()
@@ -94,7 +87,6 @@ fn responses(frames: &[Frame]) -> Vec<&jsonrpc::Response> {
         .collect()
 }
 
-/// Extract notification methods in order.
 fn reported(frames: &[Frame]) -> Vec<String> {
     frames
         .iter()
@@ -110,7 +102,6 @@ fn reported(frames: &[Frame]) -> Vec<String> {
         .collect()
 }
 
-/// Error code or None for result.
 const fn code(response: &jsonrpc::Response) -> Option<i64> {
     match &response.outcome {
         jsonrpc::Outcome::Error(error) => Some(error.code),
@@ -118,7 +109,6 @@ const fn code(response: &jsonrpc::Response) -> Option<i64> {
     }
 }
 
-/// Extract result or panic with error.
 fn result(response: &jsonrpc::Response) -> &serde_json::Value {
     match &response.outcome {
         jsonrpc::Outcome::Result(value) => value,
@@ -182,7 +172,6 @@ fn a_client_negotiates_then_drives_the_read_only_commands() {
     assert_eq!(code(responses[5]), Some(jsonrpc::INVALID_PARAMS));
 }
 
-/// Incompatible version ends connection (not just error).
 #[test]
 fn an_incompatible_client_is_refused_and_hung_up_on() {
     let Some((_dir, mut agent)) = booted("version") else {
@@ -211,7 +200,6 @@ fn an_incompatible_client_is_refused_and_hung_up_on() {
     );
 }
 
-/// Minor version difference also incompatible (protocol rule).
 #[test]
 fn a_client_one_minor_behind_is_refused() {
     let Some((_dir, mut agent)) = booted("minor") else {
@@ -230,7 +218,6 @@ fn a_client_one_minor_behind_is_refused() {
     assert_eq!(code(responses[0]), Some(jsonrpc::INCOMPATIBLE_VERSION));
 }
 
-/// Guests for the permission-gated turns.
 const GATED: [&str; 4] = [
     "provider-openai.wasm",
     "interceptor-intent-router.wasm",
@@ -239,7 +226,6 @@ const GATED: [&str; 4] = [
 ];
 
 /// Answers by request content, not call count: the intent classifier runs first.
-/// Counts post-tool completions, which a cancelled turn never makes.
 fn tool_then_answer() -> (Arc<AtomicU32>, impl Fn() -> HttpFn) {
     let resumed = Arc::new(AtomicU32::new(0));
     let shared = Arc::clone(&resumed);
@@ -286,7 +272,6 @@ fn tool_then_answer() -> (Arc<AtomicU32>, impl Fn() -> HttpFn) {
     (resumed, factory)
 }
 
-/// Boot with the permission gate enabled and a provider of the caller's choice.
 fn booted_gated(
     tag: &str,
     http: impl Fn() -> HttpFn,
@@ -323,7 +308,6 @@ extensions:
     Some((dir, agent))
 }
 
-/// A turn streams its events and also answers the request that started it.
 #[test]
 fn a_turn_streams_its_events_and_answers_the_request() {
     let Some((_dir, mut agent)) = booted("turn") else {
@@ -377,9 +361,6 @@ fn a_turn_streams_its_events_and_answers_the_request() {
     assert!(forked["id"].as_str().is_some_and(|id| !id.is_empty()));
 }
 
-/// A client can fork at a seq it read from `session/get`, and nothing else (#106).
-/// Every number comes off the wire; the test does not read the store. `at-seq` is
-/// inclusive, so the child's transcript ends with the forked message.
 #[test]
 fn a_client_can_fork_at_a_seq_it_read_from_session_get() {
     let Some((_dir, mut agent)) = booted("fork-from-read") else {
@@ -462,8 +443,6 @@ fn a_client_can_fork_at_a_seq_it_read_from_session_get() {
     );
 }
 
-/// A cancel during a turn stops it. Asserted by the completion a cancelled turn
-/// never requests, not by the cancel being accepted.
 #[test]
 fn a_cancel_stops_the_turn_instead_of_letting_it_finish() {
     let (resumed, provider) = tool_then_answer();
@@ -510,9 +489,6 @@ fn a_cancel_stops_the_turn_instead_of_letting_it_finish() {
     );
 }
 
-/// A confirmation asked and answered over the same pipe. A scripted client cannot
-/// do this: an early answer is refused on purpose, since a stashed one would
-/// approve the next question. So the client runs on its own thread.
 #[test]
 fn a_confirmation_is_asked_and_answered_over_the_same_pipe() {
     let (resumed, provider) = tool_then_answer();
@@ -578,8 +554,6 @@ fn a_confirmation_is_asked_and_answered_over_the_same_pipe() {
     );
 }
 
-/// A `turn/follow-up` sent mid-turn is injected before the turn ends, so the
-/// answer is the steered one. REST has no way to deliver a follow-up.
 #[test]
 fn a_follow_up_steers_the_turn_it_arrives_during() {
     let provider = || -> HttpFn {
@@ -635,8 +609,6 @@ fn a_follow_up_steers_the_turn_it_arrives_during() {
     );
 }
 
-/// `jan-klod-gateway rpc` writes the protocol to stdout and nothing else. This
-/// needs a subprocess: `rpc::serve` cannot notice a stray `println!` in boot.
 #[test]
 fn the_gateway_subcommand_puts_the_protocol_on_stdout_and_logs_on_stderr() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
@@ -709,9 +681,6 @@ extensions:
     );
 }
 
-/// The shipped client drives the shipped gateway over stdio. The provider points
-/// at a closed port, so the turn fails; the failure must arrive and the stream
-/// must stay usable, or a response could be matched to the wrong request id.
 #[test]
 fn the_shipped_client_drives_the_shipped_gateway_over_stdio() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {

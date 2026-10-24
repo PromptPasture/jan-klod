@@ -1,5 +1,4 @@
-//! The REST surface refuses unauthenticated callers when a token is set,
-//! asserted on the status codes read off the wire.
+//! The REST surface refuses unauthenticated callers when a token is set, asserted on wire status codes.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -14,7 +13,6 @@ use std::collections::HashMap;
 
 const TOKEN: &str = "s3cret-token";
 
-/// Shortens the confirmation wait, so a lost answer fails fast instead of timing out into a denial.
 fn short_answer_timeout() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "5");
 }
@@ -37,8 +35,6 @@ extensions:
     config
 }
 
-/// Send a raw request with an optional `Authorization` header and return
-/// the status line plus body.
 fn request(port: u16, target: &str, auth: Option<&str>) -> String {
     let header = auth.map_or_else(String::new, |t| format!("Authorization: Bearer {t}\r\n"));
     let body = if target.ends_with("/answer") {
@@ -145,9 +141,6 @@ fn with_no_token_configured_the_surface_behaves_as_before() {
     assert!(response.contains("pong"), "and the turn runs: {response}");
 }
 
-/// Drives one confirmation: an outsider tries to answer, then the client answers.
-/// While parked, the waiting driver serves the socket itself and bypasses the
-/// router, so it needs its own token check.
 fn drive_confirmation(port: u16) -> (String, String, String) {
     use std::io::{BufRead, BufReader};
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");

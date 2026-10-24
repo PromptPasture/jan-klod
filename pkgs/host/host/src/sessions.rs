@@ -1,7 +1,4 @@
-//! A session owns a thread, a thread owns an agent (#229); `AgentSession` is `!Send`, so each session builds its own (1.35 MB, ~3.5 ms).
-//!
-//! See [the decision record](../../../../docs/decisions/2026-09-18-two-turns-at-once/Decision.md).
-//! `/sessions`, `/contributions` and `/contributions/invoke` use a dedicated housekeeping agent so answers do not depend on who is connected.
+//! One thread and agent per session; `AgentSession` is `!Send`, so each session builds its own.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -14,7 +11,6 @@ use crate::session_thread::{self, Jobs};
 /// Builds the HTTP client an agent's providers use. `Send + Sync` because each session builds its agent on its own thread.
 pub type Factory = Arc<dyn Fn() -> HttpFn + Send + Sync>;
 
-/// One session's thread, and the queue that reaches it.
 struct Live {
     jobs: Jobs<AgentSession>,
     thread: std::thread::JoinHandle<()>,
@@ -29,10 +25,8 @@ pub struct Agents {
     /// A handle back to itself for the session threads; `Weak`, since an `Arc` would be a cycle.
     me: std::sync::Weak<Self>,
     factory: Factory,
-    /// `session id -> its agent's queue`, plus the housekeeping agent under a key no session can have.
     live: Mutex<HashMap<String, Live>>,
-    /// Bumped whenever something is adopted. An agent built before the bump is replaced at its next request; nothing live is
-    /// stopped, so a mid-adoption request is served rather than refused with `503`.
+    /// Bumped on adoption; an older agent is replaced at its next request, so mid-adoption requests are served, not refused.
     generation: std::sync::atomic::AtomicU64,
 }
 
@@ -40,9 +34,8 @@ pub struct Agents {
 const HOUSEKEEPING: &str = "/housekeeping";
 
 impl Agents {
-    /// A registry over `runtime`, with nothing built yet.
+    /// A registry over `runtime` (taken by value, as adoption mutates it), with nothing built yet.
     #[must_use]
-    /// Takes the `Runtime` by value because adoption mutates it; `build_agent` only borrows, so callers can build their own agent first.
     pub fn new(runtime: Runtime, factory: Factory) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             runtime: Arc::new(std::sync::RwLock::new(runtime)),
@@ -112,10 +105,7 @@ impl Agents {
         handle
     }
 
-    /// Adopt whatever `agent`'s last turn installed, and retire every agent so the next request builds one that can see it.
-    ///
-    /// Every session, the installer included, sees it at its next turn. Nothing is stopped or rebuilt here: adoption bumps a
-    /// generation (stopping outright `503`ed requests that arrived mid-adoption).
+    /// Adopts what `agent`'s last turn installed and retires every agent, so each session sees it at its next turn.
     fn after_turn(&self, session: &str, agent: &mut AgentSession) {
         let installed = agent.take_installed();
         if installed.is_empty() {
@@ -144,8 +134,7 @@ impl Agents {
 }
 
 impl Drop for Agents {
-    /// End every session's thread, and wait for it.
-    /// Each loop is told to stop (an outstanding handle would hang the join); queued work still runs. Waiting makes shutdown observable to tests.
+    /// Ends every session's thread and waits for it; queued work still runs.
     fn drop(&mut self) {
         let live = std::mem::take(&mut *self.lock());
         let mut threads = Vec::with_capacity(live.len());

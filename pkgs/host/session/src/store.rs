@@ -1,7 +1,4 @@
-//! SQLite-backed key/value and turn-log store, host-side only (the sandbox has no filesystem).
-//!
-//! Tables: `entries` (mutable key/value on `namespace, key`) and `events` (append-only log on `session, seq`).
-//! Timestamps are Unix seconds.
+//! SQLite-backed key/value store and append-only turn log, host-side only; timestamps are Unix seconds.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,59 +6,59 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::Digest;
 
-/// A stored entry. Mirrors `store-types.entry`.
+/// A stored entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    /// `<namespace>/<key>` — the row's stable id.
+    /// `<namespace>/<key>`, the row's stable id.
     pub id: String,
     /// Grouping namespace.
     pub namespace: String,
     /// Key within the namespace.
     pub key: String,
-    /// Opaque JSON-encoded value (empty on `list-keys`, which omits the payload).
+    /// Opaque JSON; empty from `list_keys`, which omits payloads.
     pub value: String,
-    /// Unix timestamp (seconds) of first insert.
+    /// Unix seconds of first insert.
     pub created_at: u64,
-    /// Unix timestamp (seconds) of the last update.
+    /// Unix seconds of the last update.
     pub updated_at: u64,
 }
 
-/// One row of a session's append-only turn log. Unlike an [`Entry`], it is never updated in place.
+/// One row of a session's append-only turn log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoggedEvent {
-    /// The session whose log this belongs to.
+    /// The owning session.
     pub session: String,
-    /// Position in that log, starting at 1 and increasing by one per append.
+    /// Position in the log, starting at 1.
     pub seq: u64,
-    /// Unix timestamp (seconds) of the append.
+    /// Unix seconds of the append.
     pub ts: u64,
-    /// Which kind of event this is — the payload's discriminator.
+    /// The payload's discriminator.
     pub kind: String,
-    /// Opaque JSON payload; the store never interprets it.
+    /// Opaque JSON; the store never interprets it.
     pub payload: String,
 }
 
-/// Errors the store can surface. Mirrors `store-types.store-error`.
+/// Errors the store can surface.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StoreError {
-    /// No entry for the requested namespace + key.
+    /// No entry for the namespace and key.
     #[error("entry not found")]
     NotFound,
-    /// Any other backend failure (I/O, SQL, …).
+    /// Any other backend failure (I/O, SQL).
     #[error("storage backend error: {detail}")]
     Backend {
-        /// The underlying SQL or I/O error message.
+        /// The underlying error message.
         detail: String,
     },
 }
 
-/// A SQLite-backed store over one [`Connection`].
+/// SQLite-backed store over one connection.
 pub struct Store {
     conn: Connection,
 }
 
 impl Store {
-    /// Open (creating if needed) a store at `path`, ensuring the schema exists.
+    /// Opens (creating if needed) a store at `path` and ensures the schema.
     ///
     /// # Errors
     /// [`StoreError::Backend`] if the database or schema cannot be created.
@@ -72,7 +69,7 @@ impl Store {
         Self::init(conn)
     }
 
-    /// Open an ephemeral in-memory store (tests, transient state).
+    /// Opens an ephemeral in-memory store.
     ///
     /// # Errors
     /// [`StoreError::Backend`] if the connection cannot be created.
@@ -113,10 +110,10 @@ impl Store {
         Ok(store)
     }
 
-    /// Upsert `value` at `(namespace, key)`, keeping `created_at` and advancing `updated_at`.
+    /// Upserts `value`, keeping `created_at` and advancing `updated_at`.
     ///
     /// # Errors
-    /// [`StoreError::Backend`] on a SQL failure, or [`StoreError::NotFound`] if the row cannot be read back.
+    /// [`StoreError::Backend`] on a SQL failure, or `NotFound` if the row cannot be read back.
     pub fn set(&self, namespace: &str, key: &str, value: &str) -> Result<Entry, StoreError> {
         let now = now_secs();
         self.conn
@@ -138,7 +135,7 @@ impl Store {
         self.get(namespace, key)
     }
 
-    /// Fetch the entry at `(namespace, key)`.
+    /// Fetches the entry at `(namespace, key)`.
     ///
     /// # Errors
     /// [`StoreError::NotFound`] if absent, [`StoreError::Backend`] on a SQL failure.
@@ -166,7 +163,7 @@ impl Store {
             .ok_or(StoreError::NotFound)
     }
 
-    /// Delete `(namespace, key)`. A no-op if absent (per the contract).
+    /// Deletes `(namespace, key)`; a no-op if absent.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -182,7 +179,7 @@ impl Store {
             })
     }
 
-    /// List every key in `namespace`, newest-first, **without** the value payload.
+    /// Lists every key in `namespace`, newest first, without the value payload.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -195,7 +192,7 @@ impl Store {
         )
     }
 
-    /// The `limit` most recent entries in `namespace`, newest-first.
+    /// The `limit` most recent entries in `namespace`, newest first.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -208,7 +205,7 @@ impl Store {
         )
     }
 
-    /// Substring search over values in `namespace`, newest-first (best-effort).
+    /// Substring search over values in `namespace`, newest first (best-effort).
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -227,8 +224,7 @@ impl Store {
         )
     }
 
-    /// List every distinct namespace, most recently written first.
-    /// Grouped (not bare `DISTINCT` + `ORDER BY MAX(...)`, SQLite rejects that).
+    /// Lists every distinct namespace, most recently written first.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -253,7 +249,7 @@ impl Store {
             })
     }
 
-    /// Delete every entry in `namespace`.
+    /// Deletes every entry in `namespace`.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -269,11 +265,7 @@ impl Store {
             })
     }
 
-    /// Append one event to `session`'s log, returning the row.
-    ///
-    /// `seq` is allocated in-statement so no other append can claim the same maximum. The log is never
-    /// updated or deleted in place: rewriting it would make every replay a claim about the present.
-    /// [`Self::purge_session_events`] is the sole exception, for forgetting sessions.
+    /// Appends one event to `session`'s log; `seq` is allocated in-statement so appends cannot collide.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -286,7 +278,7 @@ impl Store {
         self.append_event_at(session, kind, payload, now_secs())
     }
 
-    /// Append one event with an explicit timestamp, for migrations: old transcripts keep their original time.
+    /// Appends one event with an explicit timestamp, for migrations.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -349,7 +341,7 @@ impl Store {
         })
     }
 
-    /// Every event logged for `session`, in order. Unbounded on purpose; [`Self::recent_turns`] is the bounded sibling for `replay`.
+    /// Every event logged for `session`, in order; unbounded, unlike [`Self::recent_turns`].
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -382,13 +374,7 @@ impl Store {
             })
     }
 
-    /// Tail of `session`'s log with at most `turns` turns: the bounded sibling of [`Self::session_events`].
-    ///
-    /// A turn starts at `user-message` and spans several rows, so a plain `LIMIT` would cut turns in half.
-    /// Instead this reads from the earliest `user-message` among the last `turns` messages; `COALESCE`
-    /// covers sessions with fewer turns. Must match [`crate::projection::last_turns`].
-    ///
-    /// `turns == 0` returns before the query: an empty inner query would otherwise read the whole log.
+    /// Tail of `session`'s log with at most `turns` turns; must match [`crate::projection::last_turns`].
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -434,8 +420,7 @@ impl Store {
             })
     }
 
-    /// Every session with logged events, most recent first. Separate from [`Self::list_namespaces`]:
-    /// transcripts stop writing `entries`, but the log persists.
+    /// Every session with logged events, most recent first.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -460,14 +445,10 @@ impl Store {
             })
     }
 
-    /// Copy `session`'s events up to `at_seq` into `into`, renumbered from 1; returns how many were copied.
-    ///
-    /// Original `ts` is kept: these are the parent's facts. `seq` is renumbered via `ROW_NUMBER()`,
-    /// so the fork log is `1..n` by construction.
+    /// Copies `session`'s events up to `at_seq` into `into`, renumbered from 1, keeping `ts`; returns the count.
     ///
     /// # Errors
-    /// [`StoreError::Backend`] if `into` already has events (a fork must start
-    /// from nothing, or the two histories interleave) or on a SQL failure.
+    /// [`StoreError::Backend`] if `into` already has events, or on a SQL failure.
     pub fn fork_events(&self, session: &str, at_seq: u64, into: &str) -> Result<u64, StoreError> {
         if !self.session_events(into)?.is_empty() {
             return Err(StoreError::Backend {
@@ -488,7 +469,7 @@ impl Store {
         Ok(copied as u64)
     }
 
-    /// Delete every event logged for `session`: the log's only removal path.
+    /// Deletes every event logged for `session`; the log's only removal path.
     ///
     /// # Errors
     /// [`StoreError::Backend`] on a SQL failure.
@@ -501,7 +482,6 @@ impl Store {
             })
     }
 
-    /// Run a `SELECT key, value, created_at, updated_at` query into `Entry`s.
     fn query_entries(
         &self,
         sql: &str,
@@ -532,7 +512,6 @@ impl Store {
             })
     }
 
-    /// Add the `prev_digest` column to `events` if it is missing, then backfill it.
     fn ensure_prev_digest_column(&self) -> Result<(), StoreError> {
         let has_column = {
             let mut stmt = self
@@ -566,8 +545,6 @@ impl Store {
         Ok(())
     }
 
-    /// Compute the SHA-256 digest of an event's `(seq, ts, kind, payload)` tuple.
-    /// The digest is formatted as hex and used as `prev_digest` in the next event.
     fn compute_event_digest(seq: u64, ts: u64, kind: &str, payload: &str) -> String {
         let tuple = format!("{seq}/{ts}/{kind}/{payload}");
         let mut hasher = sha2::Sha256::new();
@@ -575,10 +552,7 @@ impl Store {
         format!("{:x}", hasher.finalize())
     }
 
-    /// Idempotent backfill of `prev_digest`: each event stores its predecessor's digest; the first stores NULL.
-    ///
-    /// # Errors
-    /// Returns [`StoreError::Backend`] on any SQL failure.
+    /// Idempotent backfill: each event stores its predecessor's digest; the first stores NULL.
     pub(crate) fn migrate_digests(&self) -> Result<u64, StoreError> {
         let mut migrated = 0;
 
@@ -654,7 +628,6 @@ impl Store {
         Ok(migrated)
     }
 
-    /// Verify a session's `prev_digest` chain, returning a [`ChainVerification`] for `event_log.rs`.
     pub(crate) fn verify_chain_internal(
         &self,
         session: &str,
@@ -738,12 +711,10 @@ impl Store {
     }
 }
 
-/// Clamp a `SQLite` `INTEGER` timestamp to `u64` (stored values are non-negative).
 fn to_u64(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
-/// Current Unix time in seconds (saturating at 0 before the epoch).
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

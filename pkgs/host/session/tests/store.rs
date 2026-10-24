@@ -139,7 +139,6 @@ fn appends_are_numbered_from_one_and_in_order() {
     assert_eq!(log, vec![first, second], "read back in seq order");
 }
 
-/// Each session numbers its own log, so a log reads as a gap-free sequence for replay.
 #[test]
 fn each_session_has_its_own_sequence() {
     let store = Store::open_in_memory().unwrap();
@@ -159,7 +158,6 @@ fn a_session_with_no_events_reads_as_empty_rather_than_missing() {
     assert_eq!(store.session_events("never-used").unwrap(), Vec::new());
 }
 
-/// Sorts past the point where string order diverges from numeric order (`"10" < "9"`).
 #[test]
 fn ordering_holds_past_single_digits() {
     let store = Store::open_in_memory().unwrap();
@@ -191,8 +189,7 @@ fn purging_a_session_leaves_other_sessions_and_the_entries_table_alone() {
     assert_eq!(store.get("ns", "k").unwrap().value, "v");
 }
 
-/// The log survives a reopen, and a database created before the `events` table gains it on open
-/// (`CREATE TABLE IF NOT EXISTS`); without that, every deployed `jan-klod.db` would fail on append.
+/// A database created before the `events` table gains it on open.
 #[test]
 fn an_existing_database_gains_the_table_and_keeps_the_log() {
     let dir = std::env::temp_dir().join(format!(
@@ -238,7 +235,6 @@ fn an_existing_database_gains_the_table_and_keeps_the_log() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Sessions with a log even when they have no entries, which `list_namespaces` would miss.
 #[test]
 fn sessions_with_events_are_listed_even_with_no_entries() {
     let store = Store::open_in_memory().unwrap();
@@ -305,7 +301,6 @@ fn a_fork_copies_a_prefix_and_renumbers_from_one() {
     );
 }
 
-/// Appends to either side after a fork stay out of the other.
 #[test]
 fn a_fork_and_its_parent_diverge() {
     let store = Store::open_in_memory().unwrap();
@@ -339,7 +334,6 @@ fn a_fork_and_its_parent_diverge() {
     );
 }
 
-/// Forking into a session that already has a log would interleave two histories; refused.
 #[test]
 fn forking_into_a_used_session_is_refused() {
     let store = Store::open_in_memory().unwrap();
@@ -360,7 +354,6 @@ fn forking_into_a_used_session_is_refused() {
     );
 }
 
-/// A fork keeps the parent's timestamps; restamping would claim they happened at fork time.
 #[test]
 fn a_fork_preserves_the_original_timestamps() {
     let store = Store::open_in_memory().unwrap();
@@ -369,7 +362,6 @@ fn a_fork_preserves_the_original_timestamps() {
     assert_eq!(store.session_events("child").unwrap()[0].ts, original.ts);
 }
 
-/// Forking past the end copies what exists; forking at 0 copies nothing. The caller decides what counts as an error.
 #[test]
 fn a_fork_bound_outside_the_log_copies_what_there_is() {
     let store = Store::open_in_memory().unwrap();
@@ -384,7 +376,6 @@ fn a_fork_bound_outside_the_log_copies_what_there_is() {
     );
 }
 
-/// Appends one turn: a `user-message`, `tool_calls` `tool-invoked`/`tool-result` pairs, then a `done`.
 /// Row counts vary per turn on purpose, which defeats a row-based `LIMIT`.
 fn append_turn(store: &Store, session: &str, turn: usize, tool_calls: usize) {
     store
@@ -416,15 +407,13 @@ fn append_turn(store: &Store, session: &str, turn: usize, tool_calls: usize) {
     store.append_event(session, kind, &payload).unwrap();
 }
 
-/// Builds `session`'s log with one turn per entry of `tool_calls_per_turn`, each making that many tool calls.
 fn build_session(store: &Store, session: &str, tool_calls_per_turn: &[usize]) {
     for (turn, &tool_calls) in tool_calls_per_turn.iter().enumerate() {
         append_turn(store, session, turn, tool_calls);
     }
 }
 
-/// `recent_turns` (SQL) and `last_turns` (in memory) are independent; this asserts they agree,
-/// so a bounded replay never diverges from the full projection for the same bound.
+/// `recent_turns` (SQL) and `last_turns` (in memory) are independent; this asserts they agree.
 fn assert_recent_turns_matches_last_turns(store: &Store, session: &str, turns: u32) {
     let whole = store.session_events(session).unwrap();
     let expected = projection::last_turns(&whole, turns).to_vec();
@@ -455,7 +444,6 @@ fn recent_turns_matches_last_turns_at_exactly_the_bound() {
     assert_recent_turns_matches_last_turns(&store, "s", 21);
 }
 
-/// Many turns with varying tool-call counts (0, 1, 2, 3, repeating): the boundary turn's row count differs from its neighbours.
 #[test]
 fn recent_turns_matches_last_turns_on_a_long_session_with_variable_row_counts() {
     let store = Store::open_in_memory().unwrap();
@@ -474,8 +462,6 @@ fn recent_turns_matches_last_turns_on_an_empty_session() {
     }
 }
 
-/// Seeded xorshift64 sweep over generated logs, standing in for a property test (no proptest dependency).
-/// Covers bounds aligned to turn boundaries, bounds larger than the log, and mixed zero/multi-call turns.
 #[test]
 fn recent_turns_agrees_with_last_turns_across_many_generated_logs() {
     struct Xorshift64(u64);
@@ -517,8 +503,6 @@ fn recent_turns_agrees_with_last_turns_across_many_generated_logs() {
     }
 }
 
-/// On a long session `recent_turns` reads a bounded number of rows while `session_events` reads the whole log;
-/// both must resolve to the same conversation.
 #[test]
 fn recent_turns_reads_a_small_bounded_tail_of_a_long_session_with_the_same_messages() {
     let store = Store::open_in_memory().unwrap();

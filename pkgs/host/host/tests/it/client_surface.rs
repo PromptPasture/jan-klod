@@ -1,5 +1,4 @@
-//! An extension's contributions reach a client over the rpc surface. A client
-//! that ignores them must still run turns exactly as before (`wit/client-surface.wit`).
+//! An extension's contributions reach a client over the rpc surface; a client that ignores them runs turns as before.
 
 use std::io::Cursor;
 
@@ -9,10 +8,8 @@ use jk_protocol::{jsonrpc, Notification, PROTOCOL_VERSION};
 
 use crate::common;
 
-/// Guests needed: a provider, and the one extension that contributes.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "interceptor-system.wasm"];
 
-/// An offline agent, with `interceptor-system` on when `contributing`.
 fn booted(tag: &str, contributing: bool) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&GUESTS) {
         return None;
@@ -47,7 +44,6 @@ extensions:
     Some((dir, agent))
 }
 
-/// Drive a scripted exchange and hand back what the core wrote, in order.
 fn exchange(agent: &mut jk_agent::AgentSession, script: &[String]) -> Vec<String> {
     let input = Cursor::new(script.join("\n").into_bytes());
     let mut output = Vec::new();
@@ -59,14 +55,12 @@ fn exchange(agent: &mut jk_agent::AgentSession, script: &[String]) -> Vec<String
         .collect()
 }
 
-/// The `protocol/hello` frame, at whatever version this build speaks.
 fn hello() -> String {
     format!(
         r#"{{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{{"version":"{PROTOCOL_VERSION}"}}}}"#
     )
 }
 
-/// The contributions notification in `lines`, if one was sent.
 fn contributions(lines: &[String]) -> Option<Notification> {
     lines
         .iter()
@@ -75,7 +69,6 @@ fn contributions(lines: &[String]) -> Option<Notification> {
         .find(|notification| matches!(notification, Notification::SurfaceContributions { .. }))
 }
 
-/// A response's result, or a panic naming the error.
 fn result(line: &str) -> serde_json::Value {
     let response: jsonrpc::Response = serde_json::from_str(line).expect("a response");
     match response.outcome {
@@ -119,7 +112,6 @@ fn a_client_is_told_what_is_contributed_as_soon_as_it_connects() {
     );
 }
 
-/// Nothing contributing means no notification is sent.
 #[test]
 fn a_runtime_whose_extensions_contribute_nothing_says_nothing() {
     let Some((_dir, mut agent)) = booted("quiet", false) else {
@@ -165,8 +157,6 @@ fn invoking_a_contributed_command_answers_from_the_extension() {
     );
 }
 
-/// A name nobody contributed is the caller's mistake, and is refused as one
-/// rather than silently succeeding.
 #[test]
 fn invoking_something_nobody_contributes_is_refused() {
     let Some((_dir, mut agent)) = booted("unknown", true) else {
@@ -191,8 +181,6 @@ fn invoking_something_nobody_contributes_is_refused() {
     assert_eq!(error.code, jsonrpc::METHOD_NOT_FOUND);
 }
 
-/// Contributions are additive: a client that ignores them gets the same turn.
-/// Compares two runtimes, since ignoring a notification is not observable.
 #[test]
 fn a_client_that_ignores_contributions_runs_the_same_turn() {
     let Some((_with_dir, mut contributing)) = booted("turn-with", true) else {

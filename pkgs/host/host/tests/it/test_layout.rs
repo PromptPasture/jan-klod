@@ -4,10 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::common;
 
-/// Directories that are not ours to police.
 const IGNORED: [&str; 4] = ["target", ".git", "node_modules", "ext"];
 
-/// Collect all `tests/` dirs under root.
 fn test_dirs(root: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -29,7 +27,6 @@ fn test_dirs(root: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// Does dir have package manifest (not bare workspace)?
 fn is_package(dir: &Path) -> Option<bool> {
     let manifest = dir.join("Cargo.toml");
     let text = std::fs::read_to_string(manifest).ok()?;

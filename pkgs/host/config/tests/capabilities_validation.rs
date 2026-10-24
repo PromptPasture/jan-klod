@@ -1,7 +1,6 @@
 #![allow(missing_docs)]
 use std::collections::HashMap;
 
-/// Represents a capability group as defined in scripts/capabilities.yaml.
 #[derive(Debug, Clone)]
 struct Group {
     #[allow(dead_code)]
@@ -12,7 +11,6 @@ struct Group {
     members: Vec<String>,
 }
 
-/// Represents the full capabilities file structure.
 #[derive(Debug, Clone)]
 struct Capabilities {
     version: String,
@@ -21,7 +19,6 @@ struct Capabilities {
     pending: HashMap<String, String>,
 }
 
-/// Parse the capabilities.yaml file into a structured form.
 fn parse_capabilities(yaml_str: &str) -> Result<Capabilities, Box<dyn std::error::Error>> {
     let root: serde_json::Value = serde_yaml_ng::from_str(yaml_str)?;
     let root_obj = root
@@ -116,7 +113,6 @@ fn parse_capabilities(yaml_str: &str) -> Result<Capabilities, Box<dyn std::error
     })
 }
 
-/// Load and parse the capabilities file from its expected location.
 fn load_capabilities() -> Result<Capabilities, Box<dyn std::error::Error>> {
     let paths = vec![
         "scripts/capabilities.yaml",

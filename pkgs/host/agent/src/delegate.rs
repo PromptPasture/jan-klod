@@ -1,6 +1,4 @@
-//! Outbound `agent-*` ACP delegation: a `delegate` call is forwarded to a remote agent through an injected [`AgentTransport`].
-//!
-//! Not wired: `Runtime::build_agent` never instantiates it, so `delegate` calls fail as unknown tools.
+//! Outbound `agent-*` ACP delegation through an injected [`AgentTransport`]; not wired into `Runtime::build_agent`.
 
 use std::collections::HashMap;
 
@@ -8,35 +6,33 @@ use jk_protocol::intercept::ToolDefinition;
 use jk_protocol::intercept::ToolInvoker;
 use jk_protocol::turn::ToolCall;
 
-/// The tool name the model uses to delegate to another agent.
+/// The tool name the model uses to delegate.
 pub const DELEGATE_TOOL: &str = "delegate";
 
-/// Sends a task to a remote agent's ACP endpoint. Injected so tests need no live agent.
+/// Sends a task to a remote agent's ACP endpoint.
 pub trait AgentTransport {
-    /// Delegate `task` (with optional JSON `context`) to the agent at `endpoint`.
+    /// Delegates `task` (with optional JSON `context`) to the agent at `endpoint`.
     ///
     /// # Errors
-    /// Human-readable error if the agent is unreachable, rejects the task,
-    /// times out, or speaks a bad protocol.
+    /// Human-readable error if the agent is unreachable, rejects the task, or fails.
     fn delegate(&self, endpoint: &str, task: &str, context: Option<&str>)
         -> Result<String, String>;
 }
 
-/// [`ToolInvoker`] that services `delegate` calls. Other calls return `None`.
+/// [`ToolInvoker`] that services `delegate` calls.
 pub struct AgentDelegate<T> {
     transport: T,
-    /// Agent id → ACP endpoint (from `config.yaml`).
     agents: HashMap<String, String>,
 }
 
 impl<T: AgentTransport> AgentDelegate<T> {
-    /// Build a delegator with the known `agents` (id → endpoint).
+    /// Delegate over `transport` to the named `agents` (name to endpoint).
     #[must_use]
     pub const fn new(transport: T, agents: HashMap<String, String>) -> Self {
         Self { transport, agents }
     }
 
-    /// Tool definition to advertise to the model.
+    /// The `delegate` tool as advertised to the model.
     #[must_use]
     pub fn tool_definition() -> ToolDefinition {
         ToolDefinition {

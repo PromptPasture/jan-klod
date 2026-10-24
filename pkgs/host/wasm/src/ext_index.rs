@@ -1,22 +1,14 @@
-//! The registry index: what `ext search` reads and `ext install <name>` resolves through.
-//!
-//! It carries a manifest's capability statement away from the bytes so operators can read it before
-//! downloading. Not trusted for install decisions: the entry's `sha256` feeds the normal install flow
-//! and signatures are still verified against `registry.trusted-keys`.
+//! The registry index `ext search` reads and `ext install <name>` resolves through; not trusted for install decisions.
 
 use std::path::Path;
 
 use crate::ext::{self, Checks, ExtError, Installed};
 use crate::route::HttpFn;
 
-/// The index format this build understands.
-///
-/// Refused, not tolerated, when it differs: "this index is newer than me" is the fix the operator needs.
+/// The index format this build understands; any other is refused.
 pub const INDEX_VERSION: u64 = 1;
 
 /// One published component, as the index describes it.
-///
-/// The shape `pkgs/host/wasm/examples/registry_index.rs` writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     /// Component name, and the name `ext install <name>` takes.
@@ -29,17 +21,17 @@ pub struct Entry {
     pub kind: String,
     /// The `host-*` interfaces it declares.
     pub capabilities: Vec<String>,
-    /// What it is for, in prose. Empty when the index says nothing.
+    /// What it is for; empty when absent.
     pub description: String,
-    /// Who published it. Empty when the index says nothing.
+    /// Who published it; empty when absent.
     pub author: String,
-    /// Where the `.wasm` is served from; manifest and signature are siblings ([`ext::install_from_url`]).
+    /// Where the `.wasm` is served from; manifest and signature are siblings.
     pub url: String,
     /// Expected SHA-256 of the component, as hex.
     pub sha256: String,
-    /// Detached minisign signature over the component; empty means nothing vouches for the bytes.
+    /// Detached minisign signature; empty means nothing vouches for the bytes.
     pub signature: String,
-    /// The component's size in bytes, or `0` when the index doesn't say.
+    /// Size in bytes, or `0` when unstated.
     pub size: u64,
 }
 
@@ -109,7 +101,7 @@ pub enum IndexError {
     MissingField {
         /// Where the index came from.
         at: String,
-        /// Which entry, counted from 1 (an index may have no names left).
+        /// Which entry, counted from 1.
         position: usize,
         /// The field that is absent or the wrong type.
         field: &'static str,
@@ -121,13 +113,10 @@ pub enum IndexError {
         name: String,
         /// Where the index came from.
         at: String,
-        /// How many entries were there — `0` is the usual cause and says so.
+        /// How many entries were there; `0` is the usual cause.
         count: usize,
     },
-    /// The caller passed a digest, and the index states a different one.
-    ///
-    /// Refused, not resolved by precedence: silently preferring either digest would check bytes against one
-    /// the operator did not expect.
+    /// The caller's digest differs from the index's; refused rather than resolved by precedence.
     #[error(
         "--sha256 {given} disagrees with the index, which lists {listed} for {name}. \
          One of the two is out of date; nothing was fetched."
@@ -140,18 +129,15 @@ pub enum IndexError {
         /// What the index lists.
         listed: String,
     },
-    /// The install itself refused; passed through since the installer's refusals already say what to do.
+    /// The install refused; its refusals already say what to do.
     #[error(transparent)]
     Install(#[from] ExtError),
 }
 
-/// Read `registry.url` from the top-level `registry` block.
-///
-/// `Ok(None)` when absent: legitimate, not broken config; the caller decides whether it needs one.
-/// Not the `extensions.registry` category (see [`Checks::from_config`]).
+/// Read `registry.url` from the top-level `registry` block; `Ok(None)` when absent.
 ///
 /// # Errors
-/// [`IndexError::UrlNotAString`] when `url` is present and not a string (strict, like the trusted-keys reader).
+/// [`IndexError::UrlNotAString`] when `url` is present and not a string.
 pub fn url_from_config(registry: Option<&serde_json::Value>) -> Result<Option<String>, IndexError> {
     match registry.and_then(|block| block.get("url")) {
         None => Ok(None),
@@ -162,12 +148,8 @@ pub fn url_from_config(registry: Option<&serde_json::Value>) -> Result<Option<St
 
 /// Read the registry URL straight from a `config.yaml`.
 ///
-/// Here, not in the gateway binary, for the reason [`Checks::from_config_path`] is.
-///
 /// # Errors
-/// [`IndexError::Config`] if the file cannot be read or parsed,
-/// [`IndexError::NoUrl`] when it names no registry, and whatever
-/// [`url_from_config`] refuses.
+/// [`IndexError::Config`] if unreadable, [`IndexError::NoUrl`] if no registry is named, or [`url_from_config`] refusals.
 pub fn url_from_config_path(path: &Path) -> Result<String, IndexError> {
     let registry =
         jk_config::Config::top_level(path, "registry").map_err(|err| IndexError::Config {
@@ -179,17 +161,10 @@ pub fn url_from_config_path(path: &Path) -> Result<String, IndexError> {
     })
 }
 
-/// Read the index named by `source` — a URL, or a path to a local file.
-///
-/// Same rule as [`ext::looks_remote`]: `http`/`https` fetches, anything else is a path (offline use).
-///
-/// A remote index is egress-checked **before a byte moves**, like a remote component: it lists code sources.
+/// Read the index at a URL or local path; a remote one is egress-checked before any byte moves.
 ///
 /// # Errors
-/// [`IndexError::Unreadable`] for a local file, [`IndexError::Fetch`] for a
-/// request that fails or answers non-200, [`IndexError::Install`] carrying
-/// [`ExtError::RefusedByPolicy`] for a destination the policy denies, and
-/// whatever [`parse`] refuses about the content.
+/// [`IndexError::Unreadable`], [`IndexError::Fetch`], [`IndexError::Install`] on a policy refusal, or [`parse`] errors.
 pub fn load(source: &str, http: &HttpFn) -> Result<Vec<Entry>, IndexError> {
     let text = if ext::looks_remote(source) {
         ext::check_remote(source)?;
@@ -216,18 +191,10 @@ pub fn load(source: &str, http: &HttpFn) -> Result<Vec<Entry>, IndexError> {
     parse(source, &text)
 }
 
-/// Read an index document.
-///
-/// Fields are read off a `serde_json::Value` (as [`crate::manifest`] does) for better errors than a derive.
-///
-/// **Required: `name`, `version`, `api-version`, `kind`, `capabilities`, `url`, `sha256`.**
-/// `description`, `author` and `signature` default to empty and `size` to `0`.
+/// Read an index document; `name`, `version`, `api-version`, `kind`, `capabilities`, `url`, `sha256` are required.
 ///
 /// # Errors
-/// [`IndexError::Malformed`] for anything that is not a JSON document with an
-/// `extensions` array, [`IndexError::UnknownVersion`] for a format this build
-/// does not read, and [`IndexError::MissingField`] naming the entry and the
-/// field.
+/// [`IndexError::Malformed`], [`IndexError::UnknownVersion`], or [`IndexError::MissingField`].
 pub fn parse(source: &str, text: &str) -> Result<Vec<Entry>, IndexError> {
     let document: serde_json::Value =
         serde_json::from_str(text).map_err(|err| IndexError::Malformed {
@@ -310,9 +277,7 @@ pub fn parse(source: &str, text: &str) -> Result<Vec<Entry>, IndexError> {
     Ok(entries)
 }
 
-/// Entries whose name, kind or description contains `term`, case-insensitively.
-///
-/// An empty term matches everything. Order is the index's own.
+/// Entries whose name, kind or description contains `term`, case-insensitively; empty matches all.
 #[must_use]
 pub fn search<'a>(entries: &'a [Entry], term: &str) -> Vec<&'a Entry> {
     let needle = term.to_lowercase();
@@ -330,7 +295,7 @@ pub fn search<'a>(entries: &'a [Entry], term: &str) -> Vec<&'a Entry> {
 /// The entry named `name`, or a refusal that says how to find one.
 ///
 /// # Errors
-/// [`IndexError::NotListed`], naming how many entries were searched (`0` means an empty index).
+/// [`IndexError::NotListed`], with how many entries were searched.
 pub fn find<'a>(entries: &'a [Entry], name: &str, source: &str) -> Result<&'a Entry, IndexError> {
     entries
         .iter()
@@ -342,16 +307,10 @@ pub fn find<'a>(entries: &'a [Entry], name: &str, source: &str) -> Result<&'a En
         })
 }
 
-/// Install the component the index lists under `name`.
-///
-/// The index supplies where the bytes are and their digest; fetch, signature, manifest cross-check and
-/// landing are all [`ext::install_from_url`], unchanged.
+/// Install the component the index lists under `name`, via [`ext::install_from_url`].
 ///
 /// # Errors
-/// [`IndexError::NotListed`] when no entry has that name,
-/// [`IndexError::DigestDisagrees`] when the caller passed a digest the index
-/// contradicts, and [`IndexError::Install`] for every refusal the installer can
-/// produce.
+/// [`IndexError::NotListed`], [`IndexError::DigestDisagrees`], or any installer refusal.
 pub fn install(
     dir: &Path,
     entries: &[Entry],
@@ -410,7 +369,6 @@ mod tests {
         );
     }
 
-    /// The terse case: only what it takes to decide and verify is still a legitimate index.
     #[test]
     fn the_informational_fields_are_optional() {
         let terse = r#"{"index-version": 1, "extensions": [{
@@ -424,7 +382,6 @@ mod tests {
         assert_eq!(entries[0].size, 0);
     }
 
-    /// Each required field dropped one at a time; a defaulted one would install something nobody described.
     #[test]
     fn every_required_field_is_required_and_names_itself() {
         for field in [
@@ -464,7 +421,6 @@ mod tests {
         assert_eq!((theirs, ours), (2, INDEX_VERSION));
     }
 
-    /// Three documents that are JSON but not an index; each must be an actionable refusal, not an empty result.
     #[test]
     fn something_that_is_not_an_index_is_refused_rather_than_read_as_empty() {
         for (text, why) in [
@@ -518,7 +474,6 @@ mod tests {
         assert_eq!(hit("nothing-like-this"), [] as [std::string::String; 0]);
     }
 
-    /// An empty index and a typo are different problems; the count tells them apart.
     #[test]
     fn a_name_that_is_not_listed_says_how_many_were_searched() {
         let entries = vec![entry("tool-fs", "tool", "")];

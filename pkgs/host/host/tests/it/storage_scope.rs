@@ -1,5 +1,4 @@
-//! Storage scope for `interceptor-permission`: standing grants are run-scoped
-//! unless the instance opts in with `persist: true`. Skips when guests are not staged.
+//! Standing grants for `interceptor-permission` are run-scoped unless the instance sets `persist: true`.
 
 use jk_agent::Runtime;
 use jk_protocol::turn::{Driver, UserPrompt};
@@ -12,7 +11,6 @@ const GUESTS: [&str; 3] = [
     "interceptor-permission.wasm",
 ];
 
-/// Answer every confirmation with `always` (records standing grant).
 struct AlwaysDriver {
     asked: std::rc::Rc<std::cell::RefCell<u32>>,
 }
@@ -23,7 +21,6 @@ impl Driver for AlwaysDriver {
     }
 }
 
-/// Config with permission gate and optional-persist storage.
 fn config_with(dir: &std::path::Path, db: &std::path::Path, persist: bool) -> std::path::PathBuf {
     let path = dir.join("config.yaml");
     let persist_line = if persist { "\n      persist: true" } else { "" };
@@ -53,7 +50,6 @@ extensions:
     path
 }
 
-/// Mock provider: calls bash once, then answers.
 fn tool_calling_provider() -> impl Fn() -> jk_wasm::route::HttpFn {
     move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::atomic::AtomicU32::new(0);
@@ -76,7 +72,6 @@ fn tool_calling_provider() -> impl Fn() -> jk_wasm::route::HttpFn {
     }
 }
 
-/// Run N turns that trip the gate; return ask count.
 fn turns_asked(config: &std::path::Path, ext_dir: &std::path::Path, turns: u32) -> u32 {
     let runtime = Runtime::boot(config, ext_dir).expect("runtime boots");
     let factory = tool_calling_provider();
@@ -92,8 +87,6 @@ fn turns_asked(config: &std::path::Path, ext_dir: &std::path::Path, turns: u32) 
     count
 }
 
-/// Standing grant is process-scoped: `always` silences the gate within one run,
-/// but must ask again after restart.
 #[test]
 fn a_standing_grant_does_not_survive_a_restart() {
     if !common::guests_staged(&GUESTS) {
@@ -121,7 +114,6 @@ fn a_standing_grant_does_not_survive_a_restart() {
     );
 }
 
-/// Opt-in durability: `persist: true` keeps state across restart.
 #[test]
 fn an_instance_that_opts_in_keeps_its_state_across_a_restart() {
     if !common::guests_staged(&GUESTS) {
@@ -144,7 +136,6 @@ fn an_instance_that_opts_in_keeps_its_state_across_a_restart() {
     );
 }
 
-/// One DB backs opted-in interceptors and session logs; their data stays isolated.
 #[test]
 fn a_namespace_a_guest_can_name_never_reaches_another_components_data() {
     if !common::guests_staged(&GUESTS) {

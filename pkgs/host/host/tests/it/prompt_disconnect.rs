@@ -1,6 +1,4 @@
-//! A dropped client does not hold the agent. The heartbeat (a channel send that
-//! fails once the connection closes, #224/#225) ends the wait after about two
-//! beats, ~10 s against a 120 s deadline. Hitting the deadline would be the failure.
+//! A dropped client does not hold the agent: the heartbeat ends the wait in ~10 s, well before the 120 s deadline.
 
 use jk_wasm::route::HttpFn;
 
@@ -16,7 +14,6 @@ const GUESTS: [&str; 3] = [
     "interceptor-permission.wasm",
 ];
 
-/// Provider that calls a dangerous tool, parking the turn.
 fn tool_then_answer_http() -> HttpFn {
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -60,7 +57,6 @@ extensions:
     path
 }
 
-/// Drops the client mid-prompt and asserts the turn finishes quickly.
 #[test]
 fn a_disconnected_client_does_not_hold_the_turn_open() {
     if !common::guests_staged(&GUESTS) {

@@ -1,6 +1,4 @@
-//! A real `AgentSession` served through the seam (#223), from threads that never
-//! hold it. `AgentSession` is `!Send`, so a thread that tried to hold one would
-//! not compile.
+//! A real `AgentSession` is served through the seam from threads that never hold it (`AgentSession` is `!Send`).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -10,7 +8,6 @@ use jk_host::session_thread::{queue, serve};
 
 use crate::common;
 
-/// A provider and a store only: this tests threading, not turns.
 fn booted(tag: &str) -> Option<(common::TempDir, AgentSession, Arc<AtomicU32>)> {
     if !common::guests_staged(&["provider-openai.wasm"]) {
         return None;
@@ -66,8 +63,6 @@ extensions:
     Some((guard, agent, completions))
 }
 
-/// Two turns in two sessions, queued from two threads that each hold only a `Jobs`
-/// handle. `serve_authed` cannot do this: its accepting thread would own the session.
 #[test]
 fn two_threads_queue_turns_in_two_sessions_without_holding_the_session() {
     let Some((_guard, mut agent, completions)) = booted("two-turns") else {
@@ -106,8 +101,6 @@ fn two_threads_queue_turns_in_two_sessions_without_holding_the_session() {
     );
 }
 
-/// Each turn lands in its own session. Answers are identical by construction, so
-/// this reads the transcripts back by id.
 #[test]
 fn each_queued_turn_landed_in_its_own_session() {
     let Some((_guard, mut agent, _)) = booted("two-sessions") else {

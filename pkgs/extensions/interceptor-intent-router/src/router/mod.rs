@@ -1,25 +1,17 @@
-//! Layered intent router: classifies a prompt as [`Intent::Simple`] or [`Intent::Agentic`].
-//! Tiers run cheapest first: language gate, English heuristics, LLM classifier (see `docs/concepts/small-model-harness.md`).
-//! The LLM tier is injected as a closure so this module stays pure and unit-testable.
+//! Layered intent router: language gate, English heuristics, then an injected LLM classifier, cheapest first.
 
 mod heuristics;
 mod language;
 
-/// The router's verdict for a prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intent {
-    /// Answerable directly with one completion — skip the agent loop.
     Simple,
-    /// Needs the `ReAct` step controller (tools, planning, multi-step).
     Agentic,
 }
 
-/// GBNF grammar constraining the tier-3 classifier to exactly one label.
 /// Backends that ignore `grammar` still go through [`parse_intent`].
 pub const CLASSIFIER_GRAMMAR: &str = "root ::= \"simple\" | \"agentic\"";
 
-/// Classify `prompt` through the layered tiers.
-///
 /// `llm_classifier` runs only when the cheap tiers do not settle the prompt.
 pub fn classify(prompt: &str, llm_classifier: impl FnOnce(&str) -> Intent) -> Intent {
     if language::is_heuristic_eligible(prompt) && heuristics::is_simple(prompt) {
@@ -28,8 +20,6 @@ pub fn classify(prompt: &str, llm_classifier: impl FnOnce(&str) -> Intent) -> In
     llm_classifier(prompt)
 }
 
-/// Parse the tier-3 classifier's raw completion text into an [`Intent`].
-///
 /// Ambiguous output defaults to [`Intent::Agentic`]: wrongly skipping the loop is worse than an extra one.
 #[must_use]
 pub fn parse_intent(text: &str) -> Intent {

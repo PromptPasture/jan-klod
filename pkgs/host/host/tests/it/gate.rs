@@ -1,6 +1,4 @@
 //! End-to-end exit gates (Phases 2, 8, 20), run offline against a mock provider.
-//!
-//! All skip when guests are not staged in `ext/`.
 
 use std::cell::Cell;
 use std::io::{BufRead, BufReader, Write};
@@ -19,7 +17,6 @@ use jk_wasm::route::HttpFn;
 use crate::common;
 use std::collections::HashMap;
 
-/// An `host-http` backend that always fails the connection, forcing fallback to the secondary.
 fn failing_http() -> HttpFn {
     Box::new(|_m, _u, _h, _b, _t| Err(WireError::ConnectionFailed))
 }
@@ -33,7 +30,6 @@ const PHASE2_GUESTS: &[&str] = &[
     "interceptor-permission.wasm",
 ];
 
-/// Provider that emits a tool call, then a final answer.
 fn tool_then_answer_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -67,7 +63,6 @@ fn tool_then_answer_http() -> HttpFn {
     })
 }
 
-/// Driver approving every `ask`, counting invocations.
 struct CountingApprovingDriver(Arc<AtomicU32>);
 impl Driver for CountingApprovingDriver {
     fn ask(&mut self, _prompt: &UserPrompt) -> String {
@@ -76,7 +71,6 @@ impl Driver for CountingApprovingDriver {
     }
 }
 
-/// Tool backend returning canned result, counting calls.
 struct CountingTools(Arc<AtomicU32>);
 impl ToolInvoker for CountingTools {
     fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
@@ -98,7 +92,6 @@ const PHASE8_GUESTS: &[&str] = &[
     "tool-fs.wasm",
 ];
 
-/// Provider: fs write call (completion 0), then final answer (completion 1).
 fn tool_calling_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -128,7 +121,6 @@ fn tool_calling_http() -> HttpFn {
     })
 }
 
-/// Driver approving every permission ask (user clicking "allow").
 struct ApprovingDriver;
 impl Driver for ApprovingDriver {
     fn ask(&mut self, _prompt: &UserPrompt) -> String {
@@ -366,8 +358,6 @@ workspace: {ws}
     assert_eq!(written, "hello from the tool");
 }
 
-/// Provider whose "use bash" messages call a gated tool, so the turn parks.
-/// The message decides, not the session: both sessions share this provider.
 fn phase20_fixture(
     tag: &str,
 ) -> Option<(
@@ -437,7 +427,6 @@ extensions:
     Some((guard, agents, surface))
 }
 
-/// Open an SSE turn and keep the socket, so more can be read from it later.
 fn phase20_open_stream(port: u16, session: &str, message: &str) -> TcpStream {
     let body = serde_json::json!({ "message": message }).to_string();
     let request = format!(
@@ -453,13 +442,10 @@ fn phase20_open_stream(port: u16, session: &str, message: &str) -> TcpStream {
     stream
 }
 
-/// Read from `stream` until `needle` appears, or the stream ends.
 fn phase20_read_until(stream: &TcpStream, needle: &str) -> String {
     phase20_read_for(stream, needle, Duration::from_secs(30))
 }
 
-/// [`phase20_read_until`] with a deadline, for asserting something did
-/// **not** arrive in a window.
 fn phase20_read_for(stream: &TcpStream, needle: &str, within: Duration) -> String {
     stream
         .set_read_timeout(Some(within))
@@ -480,7 +466,6 @@ fn phase20_read_for(stream: &TcpStream, needle: &str, within: Duration) -> Strin
     }
 }
 
-/// `POST /session/{id}/answer`, returning the raw response.
 fn phase20_answer(port: u16, session: &str, answer: &str) -> String {
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(
@@ -496,11 +481,6 @@ fn phase20_answer(port: u16, session: &str, answer: &str) -> String {
     response
 }
 
-/// Phase 20 exit gate: two sessions run turns at once over REST, with an `ask`
-/// answered in one while the other streams.
-///
-/// Overlap is asserted by holding A parked: a canned turn finishes in
-/// milliseconds, so timing alone would race.
 #[test]
 fn phase20_exit_gate_two_sessions_at_once() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");
@@ -532,8 +512,6 @@ fn phase20_exit_gate_two_sessions_at_once() {
     );
 }
 
-/// Control: the same two messages in **one** session must serialise, since one
-/// session is one agent. Without it, the test above passes whenever B is quick.
 #[test]
 fn phase20_one_session_still_serialises_the_same_two_turns() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "20");

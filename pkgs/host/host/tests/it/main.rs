@@ -1,5 +1,4 @@
-//! One test target: each separate target was ~4GB of wasmtime link. Modules share a process and set process-global env vars,
-//! so run with `cargo nextest run` for per-test isolation, as `make test`, `make harness` and `make gate` do.
+//! One test target, since each separate target was ~4GB of wasmtime link; run with `cargo nextest run` for per-test isolation.
 
 mod common;
 

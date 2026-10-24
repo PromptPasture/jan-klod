@@ -1,13 +1,10 @@
-//! Boot converts a pre-event-log database, so an upgraded install stays readable; the `event_log` unit tests cover the
-//! conversion itself, this covers that boot runs it. No extensions are enabled, since a provider guest would only add a skip reason.
+//! Boot converts a pre-event-log database, so an upgraded install stays readable.
 
 use jk_agent::Runtime;
 use jk_session::store::Store;
 use jk_wasm::http::WireError;
 use jk_wasm::route::HttpFn;
 
-/// A database as an install from before the log would have it: the `entries`
-/// table alone, holding two turns of one session, with their own timestamps.
 fn old_database(path: &std::path::Path) {
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.execute_batch(

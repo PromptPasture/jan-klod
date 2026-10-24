@@ -1,5 +1,4 @@
 //! Read-only git ops on a real repo; mutations are refused, and disabled execution denies all.
-//! Skips when the guest or git is unavailable.
 
 use std::time::Duration;
 
@@ -19,7 +18,6 @@ fn git_component(engine: &Engine) -> Option<Component> {
     Some(Component::from_file(engine, &path).expect("component compiles"))
 }
 
-/// Run `git` in `dir` for test setup, returning false if git is unavailable.
 fn git(dir: &std::path::Path, args: &[&str]) -> bool {
     std::process::Command::new("git")
         .args(args)

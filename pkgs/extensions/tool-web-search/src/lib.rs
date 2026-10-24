@@ -1,9 +1,5 @@
-//! `tool-web-search` — search the web through a configured provider API, as readable text.
-//!
-//! `base-url` and `api-key` (an `${VAR}` reference) come from `host-config`; the base URL's origin is the granted egress.
-//! Disabled by default: queries disclose the model's work, and the key is a credential.
+//! `tool-web-search`: web search through a configured provider API; disabled by default since queries disclose the model's work.
 
-/// Request timeout in milliseconds; a search that will not answer is not an answer.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 const TIMEOUT_MS: u32 = 10_000;
 
@@ -11,7 +7,6 @@ const TIMEOUT_MS: u32 = 10_000;
 mod search {
     use std::fmt::Write as _;
 
-    /// URL encode a string for use in query parameters.
     fn url_encode(s: &str) -> String {
         let mut result = String::new();
         for ch in s.chars() {
@@ -30,10 +25,6 @@ mod search {
         result
     }
 
-    /// Construct a GET URL for the search provider.
-    ///
-    /// # Errors
-    /// Errors when the base URL, API key or query is empty.
     pub fn construct_url(base_url: &str, query: &str, api_key: &str) -> Result<String, String> {
         if base_url.is_empty() {
             return Err("base-url is not configured".to_string());
@@ -52,7 +43,6 @@ mod search {
         Ok(url)
     }
 
-    /// Format `organic_results` (SerpAPI-style) as one `title | snippet | link` line each.
     #[must_use]
     pub fn format_results(json_body: &str) -> String {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(json_body) else {
@@ -198,9 +188,7 @@ mod component {
     use bindings::jan_klod::interfaces::host_http;
 
     thread_local! {
-        /// Base URL of the search provider, read once at `init`.
         static BASE_URL: Cell<String> = const { Cell::new(String::new()) };
-        /// API key for the search provider, read once at `init`.
         static API_KEY: Cell<String> = const { Cell::new(String::new()) };
     }
 

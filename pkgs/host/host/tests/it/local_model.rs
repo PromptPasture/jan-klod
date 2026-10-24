@@ -1,6 +1,4 @@
-//! A keyless self-hosted model (Ollama, LM Studio, llama.cpp) over a real loopback socket. Canned `HttpFn` tests cannot
-//! show that a keyless provider boots, that egress permits a loopback `base-url`, or that `type:` names a real component.
-//! Skips when the guests are not staged in `ext/`.
+//! A keyless self-hosted model over a real loopback socket: it boots, egress permits a loopback `base-url`, and `type:` names a real component.
 
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
@@ -14,18 +12,13 @@ use jk_agent::Runtime;
 
 use crate::common;
 
-/// Long enough that a healthy request never reaches it, so it bounds only the
-/// failure case rather than pacing the test.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 
-/// A minimal OpenAI-compatible endpoint: one completion, then it keeps serving.
 struct FakeOllama {
     port: u16,
     requests: Arc<AtomicU32>,
     saw_authorization: Arc<AtomicU32>,
     stop: Arc<AtomicU32>,
-    /// I/O failures the endpoint could not complete. Assert this is empty before
-    /// trusting `requests` or `saw_authorization`.
     faults: Arc<Mutex<Vec<String>>>,
 }
 
@@ -180,7 +173,6 @@ extensions:
     );
 }
 
-/// A failure names the endpoint and the cause, not a generated binding's Debug output.
 #[test]
 fn an_unreachable_provider_says_so_and_names_the_endpoint() {
     if !common::guests_staged(&["provider-openai.wasm"]) {

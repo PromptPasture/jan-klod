@@ -1,20 +1,13 @@
-//! Which transcript lines are on screen (#148).
-//!
-//! Attached follows the bottom; scrolling up detaches, and scrolling back down
-//! re-attaches. A line appended while detached must not move the view.
+//! Which transcript lines are on screen.
 
-/// A window over rendered lines: where it starts, and whether it is following
-/// the end.
+/// A window over rendered lines: where it starts, and whether it is following the end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Viewport {
-    /// Index of the first visible line.
     offset: usize,
-    /// Following the bottom as lines arrive.
     attached: bool,
 }
 
 impl Default for Viewport {
-    /// Attached and at the top, which is also the bottom until the transcript overflows.
     fn default() -> Self {
         Self {
             offset: 0,
@@ -24,7 +17,6 @@ impl Default for Viewport {
 }
 
 impl Viewport {
-    /// Largest offset that fills the pane without showing blank rows below the end.
     const fn max_offset(total: usize, height: usize) -> usize {
         total.saturating_sub(height)
     }
@@ -41,13 +33,13 @@ impl Viewport {
         self.attached
     }
 
-    /// Lines below the window. Zero while attached.
+    /// Lines below the window.
     #[must_use]
     pub const fn below(self, total: usize, height: usize) -> usize {
         Self::max_offset(total, height).saturating_sub(self.offset)
     }
 
-    /// Recalculates after a size change. Attached follows the bottom; detached holds, clamped to the end.
+    /// Recalculates after a size change.
     #[must_use]
     pub const fn reflow(mut self, total: usize, height: usize) -> Self {
         let max = Self::max_offset(total, height);
@@ -60,7 +52,7 @@ impl Viewport {
         self
     }
 
-    /// Scrolls the least that brings `[start, start + rows)` on screen. Blocks taller than the pane show from their top (#155).
+    /// Scrolls the least that brings `[start, start + rows)` on screen.
     #[must_use]
     pub const fn reveal(mut self, start: usize, rows: usize, total: usize, height: usize) -> Self {
         let max = Self::max_offset(total, height);
@@ -107,25 +99,25 @@ impl Viewport {
         }
     }
 
-    /// A full page up. `PgUp`.
+    /// A full page up.
     #[must_use]
     pub const fn page_up(self, height: usize) -> Self {
         self.up(height)
     }
 
-    /// A full page down. `PgDn`.
+    /// A full page down.
     #[must_use]
     pub const fn page_down(self, total: usize, height: usize) -> Self {
         self.down(height, total, height)
     }
 
-    /// Half a page up. `Ctrl+U` (only when composer is empty; see #150).
+    /// Half a page up.
     #[must_use]
     pub const fn half_up(self, height: usize) -> Self {
         self.up(height / 2)
     }
 
-    /// Half a page down. `Ctrl+D`.
+    /// Half a page down.
     #[must_use]
     pub const fn half_down(self, total: usize, height: usize) -> Self {
         self.down(height / 2, total, height)
@@ -165,7 +157,6 @@ mod tests {
         assert_eq!(v.below(100, H), 90, "the marker has a count to show");
     }
 
-    /// Scroll up, append lines: the offset must not move.
     #[test]
     fn a_delta_arriving_while_detached_does_not_move_the_view() {
         let detached = Viewport::default().reflow(100, H).page_up(H);
@@ -185,7 +176,6 @@ mod tests {
         assert_eq!(v.below(125, H), 125 - H - before);
     }
 
-    /// Appending while attached must follow the bottom. The other tests would pass a viewport that never follows.
     #[test]
     fn a_delta_arriving_while_attached_follows_the_bottom() {
         let mut v = Viewport::default().reflow(100, H);
@@ -231,7 +221,6 @@ mod tests {
         assert_eq!(up.half_down(100, H).offset(), 75);
     }
 
-    /// Reveal scrolls the least that shows the block (#155).
     #[test]
     fn reveal_scrolls_the_least_that_brings_a_block_on_screen() {
         let bottom = Viewport::default().reflow(100, 10);
@@ -252,7 +241,6 @@ mod tests {
         assert!(back.attached(), "arriving at the bottom re-attaches");
     }
 
-    /// Taller than the pane: the head row wins, since it names the block.
     #[test]
     fn a_block_taller_than_the_pane_is_shown_from_its_top() {
         let view = Viewport::default().reflow(100, 10).reveal(30, 40, 100, 10);

@@ -1,23 +1,21 @@
-//! The memory itself: storing, recalling, and forgetting facts.
-//!
-//! Pure and host-testable: parses and renders the JSON array that `lib.rs` stores.
+//! Storing, recalling and forgetting facts: pure logic over the JSON array `lib.rs` stores.
 
 use chrono::Utc;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-/// A stored fact with metadata.
+/// A stored fact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fact {
-    /// Unique identifier for the fact.
+    /// Unique id.
     pub id: u64,
-    /// The key to store/recall the fact by.
+    /// The key the fact is stored and recalled by.
     pub key: String,
-    /// The fact value.
+    /// The fact's text.
     pub value: String,
-    /// ISO 8601 timestamp of creation.
+    /// ISO 8601 creation time.
     pub created_at: String,
-    /// ISO 8601 timestamp of last update.
+    /// ISO 8601 last-update time.
     pub updated_at: String,
 }
 
@@ -53,11 +51,11 @@ impl Fact {
 pub enum MemoryError {
     /// The arguments were not a recognised operation.
     BadArguments(String),
-    /// A key was required but not provided.
+    /// A required key was not provided.
     MissingKey,
     /// The key names no stored fact.
     NotFound(String),
-    /// Invalid JSON in the operation arguments.
+    /// The operation arguments were not valid JSON.
     InvalidJson,
 }
 
@@ -72,16 +70,15 @@ impl std::fmt::Display for MemoryError {
     }
 }
 
-/// The in-memory facts store, keyed by their key.
+/// The facts store, keyed by fact key.
 #[derive(Debug, Clone, Default)]
 pub struct Memory {
-    /// One fact per key.
     facts: BTreeMap<String, Fact>,
     next_id: u64,
 }
 
 impl Memory {
-    /// Parse memory from stored JSON representation (or create empty if None).
+    /// Parses stored JSON, or an empty memory if `None`.
     #[must_use]
     pub fn parse(stored: Option<&str>) -> Self {
         stored.map_or_else(Self::default, |json_str| {
@@ -105,18 +102,17 @@ impl Memory {
         })
     }
 
-    /// Render memory as JSON array.
+    /// Renders the facts as a JSON array.
     #[must_use]
     pub fn render(&self) -> String {
         let items: Vec<Value> = self.facts.values().map(Fact::to_json).collect();
         serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string())
     }
 
-    /// Store a fact. Returns the stored fact.
+    /// Stores a fact and returns it.
     ///
     /// # Errors
-    ///
-    /// `MemoryError::BadArguments` when `key` is empty.
+    /// `MemoryError::BadArguments` if `key` is empty.
     pub fn store(&mut self, key: String, value: String) -> Result<Fact, MemoryError> {
         if key.is_empty() {
             return Err(MemoryError::BadArguments("key cannot be empty".to_string()));
@@ -143,12 +139,10 @@ impl Memory {
         Ok(fact)
     }
 
-    /// Recall facts. If key is provided, return that fact. Otherwise, return
-    /// the 10 most recent facts in reverse chronological order.
+    /// Recalls the fact for `key`, or the 10 most recent, newest first.
     ///
     /// # Errors
-    ///
-    /// `MemoryError::NotFound` when `key` names no stored fact.
+    /// `MemoryError::NotFound` if `key` names no stored fact.
     pub fn recall(&self, key: Option<String>) -> Result<Vec<Fact>, MemoryError> {
         key.map_or_else(
             || {
@@ -165,11 +159,10 @@ impl Memory {
         )
     }
 
-    /// Forget a fact. Returns the forgotten fact's key.
+    /// Forgets a fact and returns its key.
     ///
     /// # Errors
-    ///
-    /// `MemoryError::NotFound` when `key` names no stored fact.
+    /// `MemoryError::NotFound` if `key` names no stored fact.
     pub fn forget(&mut self, key: String) -> Result<String, MemoryError> {
         if self.facts.remove(&key).is_some() {
             Ok(key)
@@ -178,14 +171,10 @@ impl Memory {
         }
     }
 
-    /// Apply an operation from JSON arguments.
+    /// Applies an operation from JSON arguments.
     ///
     /// # Errors
-    ///
-    /// `MemoryError::InvalidJson` when `arguments` is not JSON, `BadArguments`
-    /// when a required field is missing or `op` is unknown, and whatever the
-    /// operation itself returns (`NotFound` for `recall`/`forget` of an
-    /// absent key).
+    /// `MemoryError::InvalidJson`, `BadArguments` for a bad field or unknown `op`, or the operation's own error.
     pub fn apply(&mut self, arguments: &str) -> Result<String, MemoryError> {
         let args: Value = serde_json::from_str(arguments).map_err(|_| MemoryError::InvalidJson)?;
 

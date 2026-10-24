@@ -1,12 +1,10 @@
-//! Test guest for `interceptor-persona`: checks persona injection at the select-model phase.
-//! Asserts the configured persona is injected when enabled, absent when disabled, and that only the configured one appears.
+//! Test guest for `interceptor-persona`: checks persona injection at `select-model`.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod persona_verification {
     use serde_json::Value;
     use std::collections::HashMap;
 
-    /// Check if interceptor-persona is configured as enabled.
     pub fn is_persona_enabled(config_json: &str) -> bool {
         if let Ok(config_value) = serde_json::from_str::<Value>(config_json) {
             if let Some(config_obj) = config_value.as_object() {
@@ -31,8 +29,6 @@ mod persona_verification {
         false
     }
 
-    /// Extract personas map and default name from config.
-    /// Returns (`personalities_map`, `default_name`).
     pub fn extract_personas(config_json: &str) -> (HashMap<String, String>, String) {
         let mut personalities = HashMap::new();
         let mut default_name = "helpful".to_string();
@@ -76,8 +72,6 @@ mod persona_verification {
         (personalities, default_name)
     }
 
-    /// Assert the configured persona is present when enabled, absent when disabled, and that only
-    /// the configured persona is injected. Returns `Err` with a message on failure.
     pub fn verify_injection(config_json: &str, messages: &[String]) -> Result<(), String> {
         let enabled = is_persona_enabled(config_json);
         let (personalities, default_name) = extract_personas(config_json);

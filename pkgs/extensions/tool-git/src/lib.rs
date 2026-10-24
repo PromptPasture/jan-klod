@@ -1,13 +1,7 @@
-//! `tool-git` — **read-only** repository inspection through `host-process`.
-//!
-//! Only `status`, `diff`, `log`, `show` and `branch` are reachable; no write subcommand can be expressed.
-//! Each invocation disables repo-supplied code paths (fsmonitor, hooksPath, textconv drivers): repo config can run code.
+//! `tool-git`: read-only repository inspection (`status`, `diff`, `log`, `show`, `branch`) through `host-process`.
 
-/// Largest `log` page; past this the caller should narrow the query.
 const MAX_COUNT: u64 = 200;
-/// Default `log` page.
 const DEFAULT_COUNT: u64 = 20;
-/// Longest accepted `rev` or `path`, bounding argv.
 const MAX_ARG_LEN: usize = 200;
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -26,23 +20,14 @@ mod git {
         "--no-optional-locks",
     ];
 
-    /// What the caller asked for, already extracted from the JSON arguments.
     pub struct Request<'a> {
-        /// The operation name (one of the five allowlisted subcommands).
         pub op: &'a str,
-        /// Optional pathspec to narrow `diff`/`log`.
         pub path: Option<&'a str>,
-        /// Revision for `show`.
         pub rev: Option<&'a str>,
-        /// Whether `diff` should read the index rather than the working tree.
         pub staged: bool,
-        /// How many commits `log` returns.
         pub count: Option<u64>,
     }
 
-    /// Build the argument vector for `git`, or explain the refusal.
-    /// # Errors
-    /// Caller-facing message when op is not allowlisted or arguments fail validation.
     pub fn argv(req: &Request) -> Result<Vec<String>, String> {
         let mut out: Vec<String> = HARDENING.iter().map(|s| (*s).to_string()).collect();
         match req.op {
@@ -89,7 +74,7 @@ mod git {
         Ok(out)
     }
 
-    /// Append `-- <path>` so git reads it as a pathspec and never as a flag.
+    /// So git reads it as a pathspec and never as a flag.
     fn push_pathspec(out: &mut Vec<String>, path: Option<&str>) -> Result<(), String> {
         let Some(path) = path else { return Ok(()) };
         let path = validate(path, "path")?;
@@ -120,7 +105,6 @@ mod git {
         Ok(value.to_string())
     }
 
-    /// Format a finished run for the model.
     /// A non-zero exit comes back as a readable result, not a tool error the model cannot act on.
     pub fn render(code: i32, stdout: &str, stderr: &str) -> String {
         let body = if stdout.trim().is_empty() && code == 0 {
@@ -154,7 +138,6 @@ mod git {
             }
         }
 
-        /// The arguments after the hardening prefix — what git actually does.
         fn tail(args: &[String]) -> Vec<&str> {
             args[HARDENING.len()..].iter().map(String::as_str).collect()
         }

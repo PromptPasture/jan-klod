@@ -1,8 +1,4 @@
-//! Assistant text as Markdown, in greys. Emphasis uses modifiers, not accents, so it survives `Mode::Mono`.
-//!
-//! Text is still streaming, so an unterminated fence is normal: everything from
-//! the fence on is shown verbatim. Wrapping happens after styling, so bold
-//! survives a line break.
+//! Assistant text as Markdown, in greys.
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -11,7 +7,7 @@ use ratatui::text::{Line, Span};
 use crate::theme::{Glyph, Theme};
 use crate::wrap::width;
 
-/// The byte offset of a fence that never closes. Scans lines, since a parser would auto-close it.
+/// The byte offset of a fence that never closes.
 fn unterminated_fence(text: &str) -> Option<usize> {
     let mut open_at = None;
     let mut offset = 0;
@@ -30,7 +26,6 @@ fn unterminated_fence(text: &str) -> Option<usize> {
     open_at
 }
 
-/// Lays styled spans across lines of at most `max` cells, breaking between words. `prefix` repeats on each line.
 fn flow(spans: &[(String, Style)], max: usize, prefix: &(String, Style)) -> Vec<Line<'static>> {
     let inner = max.saturating_sub(width(&prefix.0)).max(1);
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -81,7 +76,6 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Vec<Line<'static>> {
     )
 }
 
-/// Emits `text` wrapped in one style, with an `indent` prefix. The indent survives `Mode::Mono`, unlike the code surface.
 pub(crate) fn verbatim(text: &str, max: usize, indent: &str, style: Style) -> Vec<Line<'static>> {
     let inner = max.saturating_sub(width(indent)).max(1);
     text.lines()
@@ -231,7 +225,6 @@ mod tests {
         assert!(plain(&[on_surface[0].clone()]).contains("fn main"));
     }
 
-    /// Streaming rule: an open fence stays plain, since styling it would mean restyling it on close.
     #[test]
     fn an_unterminated_fence_stays_plain_with_its_backticks_shown() {
         let md = "intro\n\n```rust\nfn half_arriv";
@@ -269,7 +262,6 @@ mod tests {
         );
     }
 
-    /// With colour gone, the code indent is the only cue left.
     #[test]
     fn monochrome_still_tells_code_from_prose() {
         let md = "a sentence\n\n```\nsome_code()\n```";
@@ -309,7 +301,6 @@ mod tests {
         }
     }
 
-    /// No fence is syntax-highlighted. A future highlighting slice must change this test on purpose.
     #[test]
     fn no_fence_carries_syntax_colour_tagged_or_not() {
         let t = theme(Mode::Dark);

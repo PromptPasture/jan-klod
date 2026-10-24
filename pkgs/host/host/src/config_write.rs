@@ -63,7 +63,6 @@ impl std::fmt::Display for ConfigWriteError {
 
 impl std::error::Error for ConfigWriteError {}
 
-/// SHA256 digest of a byte string, as lowercase hex.
 fn calculate_digest(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content);
@@ -71,7 +70,6 @@ fn calculate_digest(content: &[u8]) -> String {
     format!("{digest:x}")
 }
 
-/// Digest file name (beside `config.yaml`).
 fn digest_path(config_path: &Path) -> PathBuf {
     let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
     let filename = config_path
@@ -80,7 +78,6 @@ fn digest_path(config_path: &Path) -> PathBuf {
     parent.join(format!("{}.setup-digest", filename.to_string_lossy()))
 }
 
-/// Temp file name (beside `config.yaml`).
 fn temp_path(config_path: &Path) -> PathBuf {
     let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
     let filename = config_path
@@ -89,8 +86,7 @@ fn temp_path(config_path: &Path) -> PathBuf {
     parent.join(format!(".{}.tmp", filename.to_string_lossy()))
 }
 
-/// Whether `config.yaml` is unedited since the last setup run (digest matches).
-/// `Ok(false)` if edited or no digest exists.
+/// Whether `config.yaml` matches its last-setup digest; `Ok(false)` if edited or no digest exists.
 ///
 /// # Errors
 /// Reading the config or digest file fails.

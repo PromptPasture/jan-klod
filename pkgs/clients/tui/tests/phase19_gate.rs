@@ -1,10 +1,4 @@
-//! Gate (#97): a full turn at 120×32 and 60×20 with `NO_COLOR=1` on 16 colours
-//! renders without overflow and loses no information.
-//!
-//! Exit criteria are tested, not written as prose: unrun gates are discovered
-//! failures (#130, #133). Text must be byte-identical between coloured and
-//! colourless renders. Distinct glyphs are counted, since equal renders would
-//! pass even if only tint told states apart.
+//! Gate: a full turn renders without overflow or information loss at 120×32 and 60×20 with `NO_COLOR=1`.
 
 use jk_tui::app::{App, Prompt};
 use jk_tui::blocks;
@@ -12,7 +6,6 @@ use jk_tui::layout;
 use jk_tui::theme::{Depth, GlyphSet, Mode, Theme};
 use jk_tui::wrap::width as cells;
 
-/// The turn, driven through the model so it exercises the paths a real turn takes.
 fn a_full_turn() -> App {
     let mut app = App::default();
 
@@ -74,7 +67,6 @@ fn a_full_turn() -> App {
     app
 }
 
-/// The gate's themes: coloured `TrueColor` and monochrome on 16 colours.
 const fn themes() -> [(&'static str, Theme); 2] {
     [
         (
@@ -88,7 +80,6 @@ const fn themes() -> [(&'static str, Theme); 2] {
     ]
 }
 
-/// First assertion: renders without overflow at both sizes.
 #[test]
 fn a_full_turn_renders_at_both_sizes_the_gate_names() {
     let app = a_full_turn();
@@ -121,7 +112,6 @@ fn a_full_turn_renders_at_both_sizes_the_gate_names() {
     }
 }
 
-/// `NO_COLOR` changes styling only: text must be byte-identical, so a difference means something was colour-only.
 #[test]
 fn no_color_on_sixteen_colours_loses_nothing_but_colour() {
     let app = a_full_turn();
@@ -145,7 +135,6 @@ fn no_color_on_sixteen_colours_loses_nothing_but_colour() {
     }
 }
 
-/// Tool states stay distinguishable with no colour. Every block has identical text, so only the status mark differs.
 #[test]
 fn the_tool_states_are_told_apart_without_colour() {
     const SAME_ARGS: &str = r#"{"path":"src/main.rs"}"#;

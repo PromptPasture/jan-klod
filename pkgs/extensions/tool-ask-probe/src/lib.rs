@@ -1,8 +1,4 @@
-//! `tool-ask-probe` — a tool that asks before it answers.
-//!
-//! Test instrument: the only component exporting `tool-askable`, so the asking path in `tool_host` is covered.
-//! Also exports `tool-callable`, so a host without `tool-askable` can still call it.
-//! Arguments: `{}` asks once; `forever: true` asks until the host's bound stops it; `skip: true` never asks.
+//! Test instrument: the only component exporting `tool-askable`; `{}` asks once, `forever: true` until the host stops it, `skip: true` never.
 
 #[cfg(target_arch = "wasm32")]
 mod component {
@@ -29,9 +25,7 @@ mod component {
     };
     use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
 
-    /// The question, fixed so a test can recognise it.
     const QUESTION: &str = "which colour?";
-    /// What the host uses when nobody can be asked.
     const DEFAULT: &str = "blue";
 
     fn log(level: LogLevel, message: &str) {
@@ -75,8 +69,7 @@ mod component {
             }
         }
 
-        /// The path a host that never learned `tool-askable` takes. It
-        /// cannot ask, so it says so rather than pretending to have asked.
+        /// A host without `tool-askable` cannot ask, so it says so rather than pretending to.
         fn invoke(_arguments: String) -> Result<String, ToolError> {
             Ok(r#"{"asked":false,"answer":null}"#.to_string())
         }

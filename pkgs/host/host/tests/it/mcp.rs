@@ -1,5 +1,4 @@
 //! MCP driven as an editor drives it: `initialize`, `tools/list` and `tools/call`
-//! running a real turn against a canned provider. Offline.
 
 use std::path::PathBuf;
 
@@ -7,7 +6,6 @@ use jk_agent::Runtime;
 
 use crate::common;
 
-/// Offline agent with canned provider (like `rpc.rs`).
 fn booted(tag: &str, reply: &'static str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
         return None;
@@ -38,7 +36,6 @@ extensions:
     Some((dir, agent))
 }
 
-/// Send lines and collect all response frames.
 fn exchange(agent: &mut jk_agent::AgentSession, lines: &[&str]) -> Vec<serde_json::Value> {
     let input = lines.join("\n") + "\n";
     let mut output = Vec::new();
@@ -53,7 +50,6 @@ fn exchange(agent: &mut jk_agent::AgentSession, lines: &[&str]) -> Vec<serde_jso
         .collect()
 }
 
-/// Typical editor exchange: initialize, list tools, call ask.
 #[test]
 fn an_editor_initializes_lists_tools_and_calls_ask() {
     let Some((_dir, mut agent)) = booted("full", "the answer from the model") else {
@@ -97,8 +93,6 @@ fn an_editor_initializes_lists_tools_and_calls_ask() {
     );
 }
 
-/// A missing argument is `isError: true`, not a JSON-RPC error: a tool failure
-/// can be corrected by the model, while a protocol error means a broken server.
 #[test]
 fn a_missing_question_is_an_is_error_not_a_protocol_error() {
     let Some((_dir, mut agent)) = booted("noq", "unused") else {
@@ -126,7 +120,6 @@ fn a_missing_question_is_an_is_error_not_a_protocol_error() {
     assert!(frames[0].get("error").is_none(), "{:#?}", frames[0]);
 }
 
-/// Two calls without a session id continue the same session.
 #[test]
 fn two_calls_without_a_session_continue_the_same_one() {
     let Some((_dir, mut agent)) = booted("session", "ack") else {
@@ -168,8 +161,6 @@ fn two_calls_without_a_session_continue_the_same_one() {
     );
 }
 
-/// An agent whose provider asks for a workspace write, then gives up. The temp
-/// dir lets the test check that the write did not happen.
 fn booted_writing(tag: &str) -> Option<(common::TempDir, jk_agent::AgentSession, PathBuf)> {
     const GUESTS: [&str; 4] = [
         "provider-openai.wasm",
@@ -239,8 +230,6 @@ extensions:
     Some((dir, agent, target))
 }
 
-/// A write-requiring turn is refused and the file is not written. Asserted on
-/// effect, not wording. An MCP client cannot answer prompts, so a fail-open gate would go unnoticed.
 #[test]
 fn a_write_requiring_turn_is_refused_and_nothing_is_written() {
     let Some((_dir, mut agent, target)) = booted_writing("refuse") else {
@@ -261,7 +250,6 @@ fn a_write_requiring_turn_is_refused_and_nothing_is_written() {
     assert!(frames[0].get("error").is_none(), "{:#?}", frames[0]);
 }
 
-/// `session_list` and `session_get` return what the REST endpoints return.
 #[test]
 fn the_read_tools_return_the_sessions_a_turn_created() {
     let Some((_dir, mut agent)) = booted("reads", "answered") else {
@@ -302,7 +290,6 @@ fn the_read_tools_return_the_sessions_a_turn_created() {
     );
 }
 
-/// Missing argument is `isError: true`, like `ask`.
 #[test]
 fn session_get_without_an_id_is_an_is_error() {
     let Some((_dir, mut agent)) = booted("noid", "unused") else {

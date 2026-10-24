@@ -1,5 +1,4 @@
-//! The bearer-token principal reaches the before-loop interceptor through the
-//! REST surface, per session. A guest that ignores `principal` still works.
+//! The bearer-token principal reaches the before-loop interceptor through the REST surface, per session.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -46,7 +45,6 @@ extensions:
     config
 }
 
-/// Sends a raw HTTP request, with an optional bearer token, and returns the response.
 fn send_message(port: u16, session: &str, auth: Option<&str>, message: &str) -> String {
     let header = auth.map_or_else(String::new, |t| format!("Authorization: Bearer {t}\r\n"));
     let body = format!(r#"{{"message":"{message}"}}"#);
@@ -109,7 +107,6 @@ fn two_sessions_with_different_principals_each_see_their_own_principal() {
     );
 }
 
-/// A guest that ignores `principal` still works after the `user-turn` contract change.
 #[test]
 fn a_guest_ignoring_the_principal_field_still_works() {
     let ext_dir = common::repo_root().join("ext");

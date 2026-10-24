@@ -1,5 +1,4 @@
 //! Telegram messages drive a turn offline, through `poll_once` with an injected fetch.
-//! Skips when guests are not staged.
 
 use std::cell::RefCell;
 
@@ -76,7 +75,6 @@ extensions:
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Mock provider: requests a write, then reports done.
 fn write_then_answer_http() -> jk_wasm::route::HttpFn {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
@@ -115,7 +113,6 @@ fn write_then_answer_http() -> jk_wasm::route::HttpFn {
     })
 }
 
-/// Headless confirmation is asked in the chat and answered by the next message.
 #[test]
 fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
     let ext_dir = common::repo_root().join("ext");
@@ -171,7 +168,6 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
     assert_confirmation_flow(&sent, next, &dir);
 }
 
-/// Unlisted Telegram senders are refused before session creation (#257).
 #[test]
 fn telegram_sender_allowlist_refuses_unlisted_and_accepts_listed() {
     let ext_dir = common::repo_root().join("ext");
@@ -253,7 +249,6 @@ extensions:
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Config with provider, interceptors, tool.fs jailed to dir.
 fn write_confirmation_config(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -284,7 +279,6 @@ workspace: {}
     config
 }
 
-/// Checks the confirmation was asked in the right chat and the write followed the reply.
 fn assert_confirmation_flow(sent: &[String], next: i64, dir: &std::path::Path) {
     let question = sent
         .iter()

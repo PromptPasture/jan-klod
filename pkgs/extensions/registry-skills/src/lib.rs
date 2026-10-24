@@ -1,5 +1,4 @@
-//! `registry-skills`: exposes Markdown skills from `.agents/skills/` (workspace wins) and `skills/` (bundled).
-//! Skill files need YAML front matter with `name:` and an optional `description:`.
+//! `registry-skills`: Markdown skills from `.agents/skills/` (workspace wins) and bundled `skills/`.
 
 #[allow(
     unsafe_code,
@@ -26,7 +25,6 @@ use bindings::exports::jan_klod::interfaces::skill_registry::{
 use bindings::jan_klod::interfaces::host_fs;
 use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
 
-/// Resolved skill metadata + template body.
 #[derive(Clone)]
 struct Skill {
     name: String,
@@ -43,7 +41,6 @@ fn log(level: LogLevel, message: &str) {
     host_log::log(level, "registry-skills", message, &[]);
 }
 
-/// Parse YAML front matter from `content`, returning `(front_matter, body)`.
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     let rest = content.strip_prefix("---")?;
     let rest = rest
@@ -59,7 +56,6 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     Some((front, body))
 }
 
-/// Extract `key: value` from a minimal YAML block (single-level only).
 fn yaml_str<'a>(front: &'a str, key: &str) -> Option<&'a str> {
     for line in front.lines() {
         if let Some(rest) = line.strip_prefix(key) {
@@ -71,7 +67,6 @@ fn yaml_str<'a>(front: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
-/// Load all Markdown files with `name:` in front matter from both sources.
 /// Workspace skills override distribution skills of the same name.
 fn load_skills() -> Vec<Skill> {
     use std::collections::HashMap;

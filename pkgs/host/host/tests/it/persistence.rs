@@ -1,6 +1,4 @@
 //! A transcript persisted to SQLite survives a runtime restart.
-//!
-//! Skips when guests are not staged in `ext/`.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
@@ -79,8 +77,6 @@ extensions:
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// A relative `storage.path` resolves against the config file, not the cwd, so
-/// an installed gateway keeps one store per deployment.
 #[test]
 fn a_relative_storage_path_resolves_against_the_config_not_the_cwd() {
     if !common::guests_staged(&["provider-openai.wasm"]) {

@@ -1,5 +1,4 @@
-//! Config `execution:` block end-to-end (#82): a real `Runtime` runs commands
-//! through `tool-proc-probe` across the Component Model boundary.
+//! Config `execution:` block end-to-end: a real `Runtime` runs commands through `tool-proc-probe`.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -10,25 +9,19 @@ use jk_wasm::sandbox;
 
 use crate::common;
 
-/// The guests a turn through `proc-probe` needs.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "tool-proc-probe.wasm"];
 
-/// What a turn's command did, as the model saw it.
 pub struct ProbeTurn {
-    /// Follow-up request body carrying the tool's output.
     pub tool_result: String,
-    /// Completions the turn asked for; one means no tool call.
     pub completions: u32,
 }
 
 impl ProbeTurn {
-    /// Whether `needle` reached the model.
     pub fn produced(&self, needle: &str) -> bool {
         self.tool_result.contains(needle)
     }
 }
 
-/// Boots a `Runtime` with the given `execution:` YAML and drives one `proc-probe` command.
 fn run_command(execution: &str, command: &str, args: &[&str]) -> ProbeTurn {
     run_command_in(None, execution, command, args)
 }
@@ -47,17 +40,14 @@ pub fn run_command_in(
     )
 }
 
-/// Ask `tool-proc-probe` for a long-lived child by name (#109).
 fn run_spawn(execution: &str, name: &str) -> ProbeTurn {
     run_arguments_in(None, execution, &serde_json::json!({ "spawn": name }))
 }
 
-/// Ask `tool-proc-probe` which long-lived names it may start (#220).
 fn run_granted(execution: &str) -> ProbeTurn {
     run_arguments_in(None, execution, &serde_json::json!({ "granted": true }))
 }
 
-/// [`run_spawn`] where the guest never kills the child.
 fn run_spawn_and_leak(execution: &str, name: &str) -> ProbeTurn {
     run_arguments_in(
         None,
@@ -66,7 +56,6 @@ fn run_spawn_and_leak(execution: &str, name: &str) -> ProbeTurn {
     )
 }
 
-/// [`run_spawn`] then write `send` to child and read response.
 fn run_spawn_echo(execution: &str, name: &str, send: &str) -> ProbeTurn {
     run_arguments_in(
         None,
@@ -75,7 +64,6 @@ fn run_spawn_echo(execution: &str, name: &str, send: &str) -> ProbeTurn {
     )
 }
 
-/// [`run_command_in`] taking the full tool arguments, since the probe accepts several request shapes.
 fn run_arguments_in(
     root: Option<&str>,
     execution: &str,
@@ -157,7 +145,6 @@ workspace: {ws}
     }
 }
 
-/// With `execution.enabled: true` a command runs. Asserts on its output reaching the model, since a denial also ends the turn.
 #[test]
 fn the_execution_block_builds_a_runner_that_runs_a_command() {
     if !common::guests_staged(&GUESTS) {
@@ -176,7 +163,6 @@ fn the_execution_block_builds_a_runner_that_runs_a_command() {
     );
 }
 
-/// Without an `execution:` block the same command is denied, so the pair proves the config matters.
 #[test]
 fn no_execution_block_denies_the_same_command() {
     if !common::guests_staged(&GUESTS) {
@@ -190,10 +176,8 @@ fn no_execution_block_denies_the_same_command() {
     );
 }
 
-/// Two seconds, then a word: outlasts a one-second budget, sits under a generous one.
 const SLOW: (&str, [&str; 2]) = ("sh", ["-c", "sleep 2; echo slept"]);
 
-/// The control for the timeout pair: with room to finish, it finishes.
 #[test]
 fn a_slow_command_finishes_when_the_configured_timeout_allows_it() {
     if !common::guests_staged(&GUESTS) {
@@ -211,7 +195,6 @@ fn a_slow_command_finishes_when_the_configured_timeout_allows_it() {
     );
 }
 
-/// `timeout-secs` from config bounds the command; same command as the control.
 #[test]
 fn timeout_secs_from_config_stops_a_slow_command() {
     if !common::guests_staged(&GUESTS) {
@@ -229,7 +212,6 @@ fn timeout_secs_from_config_stops_a_slow_command() {
     );
 }
 
-/// `output-cap` from config truncates, marked by `[truncated]`; the uncapped run is the control.
 #[test]
 fn output_cap_from_config_truncates_a_long_result() {
     if !common::guests_staged(&GUESTS) {
@@ -255,7 +237,6 @@ fn output_cap_from_config_truncates_a_long_result() {
     );
 }
 
-/// `env-passthrough` grants one name at a time, not the whole environment. Values do not overlap, so neither can satisfy the other's assertion.
 #[test]
 fn env_passthrough_grants_one_name_and_not_the_rest() {
     if !common::guests_staged(&GUESTS) {
@@ -281,7 +262,6 @@ fn env_passthrough_grants_one_name_and_not_the_rest() {
     );
 }
 
-/// `enabled: true` with no usable workspace still denies. The root must be unopenable: an absent key adopts `$PWD`.
 #[test]
 fn enabled_without_a_usable_workspace_denies_the_command() {
     if !common::guests_staged(&GUESTS) {
@@ -300,7 +280,6 @@ fn enabled_without_a_usable_workspace_denies_the_command() {
     );
 }
 
-/// An unreadable `execution.sandbox` denies rather than running unconfined.
 #[test]
 fn an_unreadable_sandbox_block_denies_rather_than_running_unconfined() {
     if !common::guests_staged(&GUESTS) {
@@ -318,7 +297,6 @@ fn an_unreadable_sandbox_block_denies_rather_than_running_unconfined() {
     );
 }
 
-/// Unsatisfiable `require: true` denies. Uses `approval-only`, which refuses on every platform; `mode: os` without a backend depends on the host.
 #[test]
 fn an_unsatisfiable_require_denies_the_command() {
     if !common::guests_staged(&GUESTS) {
@@ -336,7 +314,6 @@ fn an_unsatisfiable_require_denies_the_command() {
     );
 }
 
-/// A directory outside any workspace, holding the escape target. Its own tree, since `run_command_in` deletes its temp tree when the turn ends.
 fn escape_target(tag: &str) -> (PathBuf, common::TempDir) {
     let dir = std::env::temp_dir().join(format!("jk-execcfg-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("creates the directory outside the workspace");
@@ -349,7 +326,6 @@ fn write_outside(execution: &str, target: &Path) -> ProbeTurn {
     run_command(execution, "sh", &["-c", &script])
 }
 
-/// Control: `approval-only` wires no backend on any platform, so the escape write succeeds. Platform-independent so a machine without a backend still checks something.
 #[test]
 fn an_approval_only_command_from_config_can_write_outside_the_workspace() {
     if !common::guests_staged(&GUESTS) {
@@ -368,8 +344,6 @@ fn an_approval_only_command_from_config_can_write_outside_the_workspace() {
     );
 }
 
-/// A runner built from config with no `sandbox:` block is confined to the workspace.
-/// Gated on a runtime backend check, since `mode: os` downgrades without one.
 #[test]
 fn a_config_built_runner_is_confined_by_the_backend_it_resolved() {
     if !common::guests_staged(&GUESTS) || sandbox::host_backend().is_none() {
@@ -385,7 +359,6 @@ fn a_config_built_runner_is_confined_by_the_backend_it_resolved() {
     );
 }
 
-/// Confinement still permits what policy grants; otherwise the escape test passes for a runner that denies everything (#124).
 #[test]
 fn a_confined_config_built_runner_can_still_write_inside_the_workspace() {
     if !common::guests_staged(&GUESTS) || sandbox::host_backend().is_none() {
@@ -405,11 +378,9 @@ fn a_confined_config_built_runner_can_still_write_inside_the_workspace() {
     );
 }
 
-/// A config with one granted long-lived child.
 const GRANTED: &str =
     "execution:\n  enabled: true\n  long-lived:\n    - name: echoer\n      command: cat\n";
 
-/// A name the operator did not write down is refused. Its control is `a_granted_long_lived_child_starts_and_answers`.
 #[test]
 fn an_unnamed_long_lived_child_is_refused() {
     if !common::guests_staged(&GUESTS) {
@@ -423,7 +394,6 @@ fn an_unnamed_long_lived_child_is_refused() {
     );
 }
 
-/// The grant is read from config: a granted name is grantable, an unnamed one is not.
 #[test]
 fn the_long_lived_grant_is_read_from_config() {
     if !common::guests_staged(&GUESTS) {
@@ -446,7 +416,6 @@ fn the_long_lived_grant_is_read_from_config() {
     );
 }
 
-/// A guest can list the long-lived names it was granted, so a model can ask for one (#220).
 #[test]
 fn a_guest_can_list_the_long_lived_names_it_was_granted() {
     if !common::guests_staged(&GUESTS) {
@@ -460,7 +429,6 @@ fn a_guest_can_list_the_long_lived_names_it_was_granted() {
     );
 }
 
-/// The listing names children without disclosing their commands. The listing test above is its control.
 #[test]
 fn the_listing_names_children_without_naming_their_commands() {
     if !common::guests_staged(&GUESTS) {
@@ -474,7 +442,6 @@ fn the_listing_names_children_without_naming_their_commands() {
     );
 }
 
-/// Granting nothing lists nothing.
 #[test]
 fn an_ungranting_deployment_lists_no_children() {
     if !common::guests_staged(&GUESTS) {
@@ -493,7 +460,6 @@ fn an_ungranting_deployment_lists_no_children() {
     );
 }
 
-/// Control for the refusal test: a granted child starts, takes input, and echoes it back.
 #[test]
 fn a_granted_long_lived_child_starts_and_answers() {
     if !common::guests_staged(&GUESTS) {
@@ -512,7 +478,6 @@ fn a_granted_long_lived_child_starts_and_answers() {
     );
 }
 
-/// Acceptance line 3: a long-lived child is confined like a one-shot command. It outlives its call, so this is not assumed.
 #[test]
 fn a_long_lived_child_is_confined_like_a_one_shot_command() {
     if !common::guests_staged(&GUESTS) {
@@ -547,9 +512,6 @@ fn a_long_lived_child_is_confined_like_a_one_shot_command() {
     );
 }
 
-/// Acceptance line 2: a child dies with its runtime even if the guest never kills it.
-/// Checked against the OS, not our own bookkeeping. The child reports its pid via
-/// `echo $$`, and the runtime is already dropped when the result is read.
 #[test]
 fn a_long_lived_child_does_not_outlive_the_runtime() {
     if !common::guests_staged(&GUESTS) {
@@ -577,7 +539,6 @@ fn a_long_lived_child_does_not_outlive_the_runtime() {
     );
 }
 
-/// Whether a pid is still alive, asked of the OS.
 pub fn pid_alive(pid: u32) -> bool {
     std::process::Command::new("ps")
         .arg("-p")

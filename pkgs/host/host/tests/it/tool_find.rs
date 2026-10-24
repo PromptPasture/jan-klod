@@ -1,5 +1,4 @@
 //! Glob walks nested trees, prunes build dirs by default and stays inside the workspace jail.
-//! Skips when the guest is not staged.
 
 use jk_wasm::host_fs::Workspace;
 use jk_wasm::host_process::ProcessRunner;

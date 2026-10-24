@@ -1,5 +1,4 @@
-//! The `providers:` chain sets fallback order. Each provider answers with
-//! distinct text, so the order is observable.
+//! The `providers:` chain sets fallback order, observable because each provider answers with distinct text.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
@@ -8,7 +7,6 @@ use jk_wasm::route::HttpFn;
 
 use crate::common;
 
-/// Mock responds as the provider calling (identified by `base-url`).
 fn per_provider_http() -> HttpFn {
     Box::new(move |_m, url: &str, _h, _b, _t| {
         let who = if url.contains("alpha") {
@@ -30,7 +28,6 @@ fn per_provider_http() -> HttpFn {
     })
 }
 
-/// Config with two enabled providers and a `providers:` chain.
 fn config_with_chain(dir: &std::path::Path, chain: &str) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(

@@ -1,7 +1,4 @@
-//! `tool-escape-probe` — a guest that misbehaves intentionally.
-//!
-//! Deliberately misbehaves (raw sockets, stdin, env, `std::fs`); `sandbox_boundary.rs` asserts every attempt is refused.
-//! Relies on dependency defaults, not runtime config: socket checks, empty preopens, and inherited stdin.
+//! `tool-escape-probe`: a guest that deliberately misbehaves; `sandbox_boundary.rs` asserts every attempt is refused.
 
 #[cfg(target_arch = "wasm32")]
 mod component {
@@ -71,8 +68,7 @@ mod component {
         }
     }
 
-    /// Read the host's environment, where the credentials are.
-    /// Closed only because `WasiCtxBuilder::inherit_env` is not called. If that flips, every guest reads provider keys.
+    /// Closed only because `WasiCtxBuilder::inherit_env` is not called; if that flips, every guest reads provider keys.
     fn try_env() -> String {
         let named: Vec<String> = [
             "OPENAI_API_KEY",
@@ -95,13 +91,11 @@ mod component {
         }
     }
 
-    /// Try to read the host's command line, which names its config and bind address.
     fn try_args() -> String {
         let args: Vec<String> = std::env::args().collect();
         format!("ARGS {args:?}")
     }
 
-    /// Try to open a path with ambient `std::fs`, ignoring the path-jailed `host-fs`.
     fn try_fs(path: &str) -> String {
         match std::fs::read_to_string(path) {
             Ok(text) => format!(

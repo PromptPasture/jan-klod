@@ -1,9 +1,5 @@
-//! `tool-fetch` — retrieve a URL through `host-http` as readable text.
-//!
-//! `host-http` is unrestricted egress: [`vet`] refuses private targets first, and `core::egress` is the real boundary.
-//! Disabled by default: the URL itself can carry workspace data out. Vetting and extraction are pure and host-tested.
+//! `tool-fetch`: URL to readable text via `host-http`; disabled by default since the URL can carry workspace data out.
 
-/// Request timeout in milliseconds; a page that will not answer is not an answer.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 const TIMEOUT_MS: u32 = 15_000;
 
@@ -11,14 +7,10 @@ const TIMEOUT_MS: u32 = 15_000;
 mod fetch {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
-    /// Host names that always mean "this machine", whatever they resolve to.
     const LOCAL_NAMES: [&str; 4] = ["localhost", "ip6-localhost", "ip6-loopback", "metadata"];
-    /// Suffixes that name a private or link-local naming scope.
     const LOCAL_SUFFIXES: [&str; 4] = [".localhost", ".local", ".internal", ".home.arpa"];
 
-    /// Vet a model-supplied URL before making a request.
-    /// # Errors
-    /// Caller-facing refusal (model can correct and retry).
+    /// `host-http` is unrestricted egress, so this refuses private targets; `core::egress` is the real boundary.
     pub fn vet(url: &str, allow_private: bool) -> Result<(), String> {
         let lowered = url.trim().to_lowercase();
         let rest = if let Some(rest) = lowered.strip_prefix("https://") {
@@ -56,20 +48,14 @@ mod fetch {
         }
     }
 
-    /// What an authority's host component turned out to be.
     #[derive(Debug, PartialEq, Eq)]
     pub enum Address {
-        /// A dotted-quad or bracketed v6 literal in public space.
         Public,
-        /// An ordinary hostname (its resolved address is not checked).
         PublicName,
-        /// Loopback, link-local, private, unique-local, or unspecified.
         NonPublic,
-        /// An encoding this guard will not try to canonicalise.
         Unrecognised,
     }
 
-    /// Classify the host part of an authority.
     #[must_use]
     pub fn classify_address(host: &str) -> Address {
         if let Some(v6) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
@@ -94,10 +80,7 @@ mod fetch {
         Address::PublicName
     }
 
-    /// Classify a v4 literal.
-    ///
-    /// Parsing is delegated to `Ipv4Addr::from_str`, which refuses alternate encodings
-    /// (octal, hex, integer, short form, leading zero) that a resolver might read differently.
+    /// `Ipv4Addr::from_str` refuses alternate encodings (octal, hex, integer, short form) a resolver might read differently.
     fn classify_v4(host: &str) -> Address {
         let Ok(addr) = host.parse::<Ipv4Addr>() else {
             return Address::Unrecognised;
@@ -109,9 +92,7 @@ mod fetch {
         }
     }
 
-    /// Whether a v4 address is outside public routing.
-    ///
-    /// Most ranges use the standard library's predicates; the rest are unstable there and written out.
+    /// Most ranges use std predicates; the rest are unstable there and written out.
     #[must_use]
     pub fn is_private_v4(addr: Ipv4Addr) -> bool {
         addr.is_unspecified()
@@ -124,9 +105,7 @@ mod fetch {
             || addr.octets()[0] >= 240
     }
 
-    /// Classify a v6 literal.
-    ///
-    /// Judged by parsed value, not text: a prefix match over the spelling misses compressed or padded forms.
+    /// Judged by parsed value, not text: a prefix match misses compressed or padded forms.
     fn classify_v6(addr: &str) -> Address {
         let addr = addr.split('%').next().unwrap_or(addr);
         let Ok(parsed) = addr.parse::<Ipv6Addr>() else {
@@ -146,9 +125,7 @@ mod fetch {
         }
     }
 
-    /// Whether a v6 address is outside public routing.
-    ///
-    /// Unique-local and link-local have no stable predicate, so they are checked on parsed segments.
+    /// Unique-local and link-local have no stable predicate, so parsed segments are checked.
     #[must_use]
     pub const fn is_private_v6(addr: Ipv6Addr) -> bool {
         let first = addr.segments()[0];
@@ -159,12 +136,10 @@ mod fetch {
             || (first & 0xffc0) == 0xfe80
     }
 
-    /// Whether the host is a name that means this machine or a private scope.
     fn is_local_name(host: &str) -> bool {
         LOCAL_NAMES.contains(&host) || LOCAL_SUFFIXES.iter().any(|s| host.ends_with(s))
     }
 
-    /// Drop a `:port` suffix, leaving bracketed v6 literals intact.
     fn strip_port(hostport: &str) -> &str {
         if hostport.starts_with('[') {
             return hostport
@@ -175,14 +150,11 @@ mod fetch {
         hostport.split(':').next().unwrap_or(hostport)
     }
 
-    /// The scheme of a URL, for a refusal message.
     fn scheme_of(url: &str) -> &str {
         url.split_once(':').map_or(url, |(scheme, _)| scheme)
     }
 
-    /// Reduce an HTML document to readable text.
-    ///
-    /// Drops script and style contents (code, not prose), strips tags, and decodes the common entities.
+    /// Drops script and style contents, which are code, not prose.
     #[must_use]
     pub fn to_text(body: &str) -> String {
         let stripped = drop_elements(body, &["script", "style"]);
@@ -202,7 +174,6 @@ mod fetch {
         collapse(&decode_entities(&text))
     }
 
-    /// Remove `<name …> … </name>` spans, contents included.
     fn drop_elements(body: &str, names: &[&str]) -> String {
         let mut out = body.to_string();
         for name in names {
@@ -222,7 +193,6 @@ mod fetch {
         out
     }
 
-    /// Decode the entities that actually show up in prose.
     fn decode_entities(text: &str) -> String {
         text.replace("&nbsp;", " ")
             .replace("&lt;", "<")
@@ -233,7 +203,6 @@ mod fetch {
             .replace("&amp;", "&")
     }
 
-    /// Collapse whitespace runs to single spaces.
     fn collapse(text: &str) -> String {
         text.split_whitespace()
             .collect::<Vec<_>>()
@@ -242,7 +211,6 @@ mod fetch {
             .to_string()
     }
 
-    /// Format a fetched page for the model.
     #[must_use]
     pub fn render(url: &str, status: u16, body: &str) -> String {
         let text = to_text(body);
@@ -359,8 +327,6 @@ mod fetch {
             assert!(!is_private_v4(std::net::Ipv4Addr::new(1, 1, 1, 1)));
         }
 
-        /// The encodings a resolver may read differently from this guard.
-        /// Each reaches loopback if canonicalised instead of refused.
         #[test]
         fn every_alternate_encoding_of_loopback_is_refused() {
             for encoded in [
@@ -380,7 +346,6 @@ mod fetch {
             assert_eq!(classify_address("127.0.0.1"), Address::NonPublic);
         }
 
-        /// A v6 form that a prefix match over the text would miss.
         #[test]
         fn a_compressed_or_padded_v6_is_classified_by_value_not_by_spelling() {
             for spelled in [
@@ -403,8 +368,6 @@ mod fetch {
             assert_eq!(classify_address("[not:an:address]"), Address::Unrecognised);
         }
 
-        /// CGNAT and the reserved top of the v4 space have no stable
-        /// predicate, so they are the two this file still spells out.
         #[test]
         fn the_ranges_stdlib_has_no_predicate_for_are_still_covered() {
             assert_eq!(classify_address("100.64.0.1"), Address::NonPublic);
@@ -476,7 +439,7 @@ mod component {
     use bindings::jan_klod::interfaces::host_http;
 
     thread_local! {
-        /// `allow-private`, read at `init`. Defaults to false: intranet access is opt-in.
+        /// Defaults to false: intranet access is opt-in.
         static ALLOW_PRIVATE: Cell<bool> = const { Cell::new(false) };
     }
 

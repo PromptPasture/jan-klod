@@ -1,8 +1,4 @@
-//! What an extension declares about a user interface it cannot see.
-//! Host-side mirror of `wit/client-surface.wit`, not the wire types ([`crate::Contributions`]);
-//! a surface maps between them (#179, #181).
-//!
-//! Every string here is attacker-influenced (e.g. MCP tool descriptions); nothing here sanitises, so a renderer must escape.
+//! Host-side mirror of `wit/client-surface.wit`; strings are attacker-influenced and unsanitised, so a renderer must escape.
 
 /// One argument a contributed command takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,8 +62,7 @@ pub struct Form {
 /// Everything one extension contributes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contributions {
-    /// The declaring instance's id, e.g. `interceptor.system`. Added by the
-    /// host: a guest cannot be trusted to name itself.
+    /// Instance id, e.g. `interceptor.system`; set by the host since a guest cannot be trusted to name itself.
     pub extension: String,
     /// Commands, in declaration order.
     pub commands: Vec<Command>,
@@ -79,8 +74,6 @@ pub struct Contributions {
 
 impl Contributions {
     /// Whether this extension declared nothing at all.
-    ///
-    /// An empty set is normal and not worth sending to a client.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.commands.is_empty() && self.status_items.is_empty() && self.forms.is_empty()
@@ -108,9 +101,7 @@ pub struct InvokeOutcome {
 /// Why an invocation failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvokeError {
-    /// No extension of that id is loaded, or it contributes no such name.
-    ///
-    /// One case for both, so a client cannot probe which extensions are loaded.
+    /// No such extension or contribution; one case so a client cannot probe which extensions are loaded.
     Unknown,
     /// A required argument was missing, or a value was unusable.
     InvalidArguments,

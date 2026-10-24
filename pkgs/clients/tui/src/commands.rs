@@ -1,8 +1,4 @@
 //! The `/` command table: one list drives both the menu and the help overlay.
-//!
-//! Unavailable commands stay listed with their blocker. `Ready` means the
-//! command acts, not that it needs no transport; this module never knows about
-//! transport.
 
 /// Whether a command can act, and if not, what it is waiting on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,13 +54,10 @@ pub const COMMANDS: [Command; 6] = [
     },
 ];
 
-/// A command an extension contributed. Owned, unlike [`Command`], since contributions arrive at runtime.
-///
-/// Strings are stored already made inert ([`crate::untrusted::inert`]), so no renderer must remember to sanitize them.
+/// A command an extension contributed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contributed {
-    /// The declaring extension's instance id, e.g. `interceptor.system`.
-    /// Needed to invoke it: two extensions may contribute the same name.
+    /// The declaring extension's instance id.
     pub extension: String,
     /// The contributed name, without a slash.
     pub name: String,
@@ -81,7 +74,7 @@ pub enum Source<'a> {
     Extension(&'a str),
 }
 
-/// One row of the menu, from either source. Borrowed, so contributions are not cloned per keystroke.
+/// One row of the menu, from either source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry<'a> {
     /// What the user types, including the slash.
@@ -94,15 +87,13 @@ pub struct Entry<'a> {
     pub source: Source<'a>,
 }
 
-/// The built-in commands starting with `typed`, exact match first. Extensions are added by [`matching_with`].
+/// The built-in commands starting with `typed`, exact match first.
 #[must_use]
 pub fn matching(typed: &str) -> Vec<Entry<'static>> {
     matching_with(typed, &[])
 }
 
-/// [`matching`] over the built-ins and contributions. Built-ins always come first, so an extension cannot outrank `/quit`.
-///
-/// A contribution that collides with a built-in is still listed, under its own extension.
+/// [`matching`] over the built-ins and contributions.
 #[must_use]
 pub fn matching_with<'a>(typed: &str, contributed: &'a [Contributed]) -> Vec<Entry<'a>> {
     let mut found: Vec<Entry<'a>> = COMMANDS
@@ -132,14 +123,12 @@ pub fn matching_with<'a>(typed: &str, contributed: &'a [Contributed]) -> Vec<Ent
     found
 }
 
-/// Whether `/name` starts with `typed`. Contributions are stored without the slash, so it is added here.
 fn slashed_starts_with(name: &str, typed: &str) -> bool {
     typed
         .strip_prefix('/')
         .is_some_and(|rest| name.starts_with(rest))
 }
 
-/// Whether `/name` is exactly what was typed.
 fn slashed_equals(name: &str, typed: &str) -> bool {
     typed.strip_prefix('/').is_some_and(|rest| name == rest)
 }
@@ -166,7 +155,6 @@ mod tests {
         assert_eq!(contribution.source, Source::Extension("interceptor.system"));
     }
 
-    /// An extension cannot take the top of the menu by naming its command `/aaa`.
     #[test]
     fn a_contribution_cannot_outrank_a_built_in() {
         let list = [contributed("aaa")];
@@ -236,7 +224,6 @@ mod tests {
         }
     }
 
-    /// A pending command must state its blocker, or listing it is worse than omitting it.
     #[test]
     fn every_pending_command_carries_a_reason() {
         for command in COMMANDS {
@@ -277,7 +264,6 @@ mod tests {
         );
     }
 
-    /// Pins which commands act.
     #[test]
     fn exactly_the_commands_that_act_are_ready() {
         let ready: Vec<&str> = COMMANDS

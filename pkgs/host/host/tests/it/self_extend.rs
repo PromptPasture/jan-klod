@@ -1,12 +1,10 @@
 //! The `self-extend` distribution compiles a real toolchain in its sandbox, and the default one refuses. Both halves are needed.
-//! The `execution:` block is spliced from the shipped config, so this tests what ships.
 
 use jk_agent::Runtime;
 
 use crate::common;
 use crate::execution_config::run_command_in;
 
-/// The guests `self-extend` needs before any of this means anything.
 pub const NEEDED: &[&str] = &[
     "provider-openai.wasm",
     "interceptor-tool-selector.wasm",
@@ -17,7 +15,6 @@ pub const NEEDED: &[&str] = &[
     "tool-shell.wasm",
 ];
 
-/// The shipped distribution, pointed at a mock provider and a temp directory.
 fn shipped_config(dir: &std::path::Path) -> String {
     let path = common::repo_root().join("scripts/distributions/self-extend/config.yaml");
     let mut config = std::fs::read_to_string(&path)
@@ -41,7 +38,6 @@ fn shipped_config(dir: &std::path::Path) -> String {
     format!("{config}\nworkspace: {}\n", dir.display())
 }
 
-/// Every tool `self-extend` advertises, as the interceptor is served them.
 pub fn shipped_fleet() -> Option<(common::TempDir, serde_json::Value)> {
     if !common::guests_staged(NEEDED) {
         return None;
@@ -60,7 +56,6 @@ pub fn shipped_fleet() -> Option<(common::TempDir, serde_json::Value)> {
     Some((guard, metas))
 }
 
-/// The shipped `execution:` block, spliced verbatim to the end of the file.
 pub fn shipped_execution_block(distribution: &str) -> String {
     let path = common::repo_root()
         .join("scripts/distributions")
@@ -81,8 +76,6 @@ pub fn shipped_execution_block(distribution: &str) -> String {
     block
 }
 
-/// The install step exists in the booted fleet (#221). Checked against the fleet,
-/// not the YAML: a `registry:` key nobody reads is what this failed as.
 #[test]
 fn the_distribution_offers_the_agent_a_way_to_install_what_it_built() {
     let Some((_guard, tools)) = shipped_fleet() else {
@@ -104,7 +97,6 @@ fn the_distribution_offers_the_agent_a_way_to_install_what_it_built() {
     );
 }
 
-/// A crate that compiles to wasm and needs nothing from the network.
 fn seed_crate(workspace: &std::path::Path) {
     std::fs::create_dir_all(workspace.join("src")).expect("creates the crate");
     std::fs::write(
@@ -120,11 +112,8 @@ fn seed_crate(workspace: &std::path::Path) {
     .expect("writes the source");
 }
 
-/// `cargo build` as a tool call would make it. `--offline`: the distribution denies
-/// the network, so a build reaching for it would hang.
 const BUILD_ARGS: [&str; 4] = ["build", "--offline", "--target", "wasm32-wasip2"];
 
-/// A seeded workspace under a test-controlled path. `None` when cargo is absent.
 fn workspace(tag: &str) -> Option<(common::TempDir, std::path::PathBuf)> {
     if !common::tool_available("cargo") {
         eprintln!("skipping: cargo is not on PATH");
@@ -171,7 +160,6 @@ fn the_self_extend_distribution_compiles_to_wasm_inside_the_jail() {
     );
 }
 
-/// The compiling distribution still refuses a write outside the workspace.
 #[test]
 fn the_self_extend_distribution_still_refuses_a_write_outside_the_workspace() {
     if !common::guests_staged(&GUESTS) {
@@ -200,8 +188,6 @@ fn the_self_extend_distribution_still_refuses_a_write_outside_the_workspace() {
     );
 }
 
-/// The same call under `coding`, which has execution disabled. This makes the
-/// test above about the distribution, not cargo.
 #[test]
 fn the_coding_distribution_refuses_the_same_command() {
     if !common::guests_staged(&GUESTS) {

@@ -1,5 +1,4 @@
-//! Provider instantiation and the [`ProviderCompleter`] adapter.
-//! `host-http` is injected as [`HttpFn`] so turns run live or offline.
+//! Provider instantiation and the [`ProviderCompleter`] adapter; `host-http` is injected as [`HttpFn`].
 
 use std::fmt::Write as _;
 
@@ -154,7 +153,6 @@ impl provider_bind::jan_klod::interfaces::host_secrets::Host for CapHost {
     }
 }
 
-/// Instantiate a provider with injected `host-http` and drive lifecycle to `start`.
 fn instantiate_provider(
     engine: &Engine,
     inst: &ExtensionInstance,
@@ -197,7 +195,6 @@ fn instantiate_provider(
     Ok((store, world))
 }
 
-/// Collapse a lifecycle result to [`CoreError`] (trap or extension rejection).
 fn drive(
     id: &str,
     result: wasmtime::Result<Result<(), String>>,
@@ -221,13 +218,11 @@ fn drive(
 /// A provider adapted to [`Completer`](jk_protocol::intercept::Completer).
 pub struct ProviderCompleter {
     id: String,
-    /// Configured endpoint, kept only to name it in failures.
     endpoint: String,
     store: Store<CapHost>,
     world: provider_bind::ProviderWorld,
 }
 
-/// Provider failure in human words.
 fn describe(err: p_llm::ProviderError, endpoint: &str) -> String {
     use p_llm::ProviderError as E;
     match err {
@@ -263,7 +258,7 @@ impl ProviderCompleter {
     /// Instantiate a provider as a completer; `http` backs `host-http`.
     ///
     /// # Errors
-    /// Returns [`CoreError`] if wiring, instantiation, or startup fails.
+    /// [`CoreError`] if wiring, instantiation or startup fails.
     pub fn instantiate(
         engine: &Engine,
         inst: &ExtensionInstance,

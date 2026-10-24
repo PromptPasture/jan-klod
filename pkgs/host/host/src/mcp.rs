@@ -1,7 +1,4 @@
-//! Model Context Protocol, server side: lets Claude Code, Codex, Goose and editors call the core like any MCP server.
-//!
-//! Stdio carries no credential (the spawning operator is the principal); auth happens at the HTTP boundary (serve.rs). Framing is [`crate::rpc`] exactly, so this is a synchronous method-and-payload adapter with no SDK (the session is `!Send`; reach it via `session_thread`).
-//! [`jsonrpc::Request`] is not reused (it flattens into `Command`, so no `tools/call`); [`MCP_VERSION`] is what editors speak, `PROTOCOL_VERSION` is `jan-klod`'s.
+//! Model Context Protocol, server side: a synchronous adapter over [`crate::rpc`] framing, with no SDK.
 
 use std::io::{BufRead, Write};
 
@@ -9,16 +6,14 @@ use jk_protocol::jsonrpc;
 
 use jk_agent::{AgentSession, HeadlessDriver};
 
-/// The MCP spec revision this server implements: a date, negotiated separately from `PROTOCOL_VERSION`. It moves; check the spec.
+/// The MCP spec revision this server implements, a date negotiated separately from `PROTOCOL_VERSION`.
 pub const MCP_VERSION: &str = "2025-11-25";
 
-/// What this server calls itself in `initialize`.
 const SERVER_NAME: &str = "jan-klod";
 
-/// The session an `ask` uses when the caller names none.
 const DEFAULT_SESSION: &str = "mcp";
 
-/// One MCP request or notification. `id` is optional because notifications such as `notifications/initialized` have none.
+/// `id` is optional because notifications have none.
 #[derive(Debug, serde::Deserialize)]
 struct Frame {
     jsonrpc: String,
@@ -29,7 +24,6 @@ struct Frame {
     params: serde_json::Value,
 }
 
-/// The tools this server exposes, with their argument schemas. Built, not `const`, because the schemas are JSON.
 fn tools() -> serde_json::Value {
     serde_json::json!([
         {
@@ -96,10 +90,7 @@ pub fn serve<R: BufRead, W: Write>(
     Ok(())
 }
 
-/// Run one turn and render it as MCP tool content.
-///
-/// A failing tool reports in band: a successful JSON-RPC response carrying `isError: true`, unlike [`jsonrpc::Outcome`].
-/// Mapping a refused turn onto a JSON-RPC error would make every permission refusal read as a broken server.
+/// A failing tool reports in band (`isError: true`), since a JSON-RPC error would make every permission refusal read as a broken server.
 fn call_ask(agent: &mut AgentSession, params: &serde_json::Value) -> serde_json::Value {
     let arguments = params.get("arguments").unwrap_or(&serde_json::Value::Null);
     let Some(question) = arguments
@@ -120,9 +111,7 @@ fn call_ask(agent: &mut AgentSession, params: &serde_json::Value) -> serde_json:
     }
 }
 
-/// The two read tools, over the payloads the REST surface already builds (reused, so there is one answer to "what sessions are there").
-///
-/// Returned as pretty-printed JSON **text**: `structuredContent` is not universally supported.
+/// Returned as pretty-printed JSON text: `structuredContent` is not universally supported.
 fn call_sessions(agent: &AgentSession, params: &serde_json::Value, one: bool) -> serde_json::Value {
     let payload = if one {
         let arguments = params.get("arguments").unwrap_or(&serde_json::Value::Null);
@@ -142,7 +131,6 @@ fn call_sessions(agent: &AgentSession, params: &serde_json::Value, one: bool) ->
     }
 }
 
-/// A `tools/call` result: one text block, and whether it went wrong.
 fn content(text: &str, is_error: bool) -> serde_json::Value {
     serde_json::json!({
         "content": [{ "type": "text", "text": text }],
@@ -150,7 +138,6 @@ fn content(text: &str, is_error: bool) -> serde_json::Value {
     })
 }
 
-/// One line to the response it earns, or `None` for a notification.
 fn answer(line: &str, agent: &mut AgentSession) -> Option<jsonrpc::Response> {
     match classify(line) {
         Asked::Silent => None,
@@ -163,25 +150,15 @@ fn answer(line: &str, agent: &mut AgentSession) -> Option<jsonrpc::Response> {
     }
 }
 
-/// What a line asks for, decided **without** a session, so the frame rules are testable with no runtime or model.
 enum Asked {
-    /// A notification: nothing to answer.
     Silent,
-    /// Answerable without running anything.
     Answer(jsonrpc::Response),
-    /// `tools/call ask`, which needs a turn.
     Ask {
-        /// The request to answer.
         id: jsonrpc::Id,
-        /// The `tools/call` params, arguments included.
         params: serde_json::Value,
     },
-    /// `tools/call session_list` or `session_get`, which need the session store
-    /// but run nothing.
     Sessions {
-        /// The request to answer.
         id: jsonrpc::Id,
-        /// The `tools/call` params, arguments included.
         params: serde_json::Value,
         /// `true` for `session_get`, `false` for `session_list`.
         one: bool,
@@ -252,8 +229,6 @@ fn classify(line: &str) -> Asked {
     })
 }
 
-/// The `initialize` result.
-///
 /// The client's `protocolVersion` is read but not honoured: this server speaks one revision and says which.
 fn initialized(params: &serde_json::Value) -> serde_json::Value {
     let asked = params
@@ -274,12 +249,11 @@ fn initialized(params: &serde_json::Value) -> serde_json::Value {
     })
 }
 
-/// A failed answer.
 fn refuse(id: jsonrpc::Id, code: i64, message: String) -> jsonrpc::Response {
     jsonrpc::Response::error(id, jsonrpc::Error::new(code, message))
 }
 
-/// Write one frame and **flush it**, as [`crate::rpc`] documents: pipe stdout is block-buffered.
+/// Writes one frame and flushes it: pipe stdout is block-buffered.
 fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::io::Result<()> {
     let text = serde_json::to_string(response).expect("a response serializes");
     output.write_all(text.as_bytes())?;
@@ -292,7 +266,6 @@ mod tests {
     use super::{classify, content, tools, Asked, MCP_VERSION};
     use jk_protocol::jsonrpc;
 
-    /// Classify a line and render the response it earns, via `classify` so frame rules test without a runtime.
     fn call(line: &str) -> serde_json::Value {
         match classify(line) {
             Asked::Answer(response) => serde_json::to_value(response).expect("it serializes"),
@@ -347,14 +320,12 @@ mod tests {
         }
     }
 
-    /// `params` is optional pagination on `tools/list`; absent must not be a parse error.
     #[test]
     fn tools_list_works_without_params() {
         let value = call(r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#);
         assert_eq!(value["result"]["tools"].as_array().map(Vec::len), Some(3));
     }
 
-    /// The id-less frame every client sends after `initialize` earns no answer.
     #[test]
     fn an_initialized_notification_is_accepted_in_silence() {
         assert!(
@@ -403,7 +374,6 @@ mod tests {
         );
     }
 
-    /// An unknown tool is a protocol error, unlike a tool that ran and failed (`isError`).
     #[test]
     fn an_unknown_tool_is_a_protocol_error_not_an_is_error() {
         let value =
@@ -417,7 +387,6 @@ mod tests {
         assert_eq!(value["error"]["code"], jsonrpc::INVALID_PARAMS);
     }
 
-    /// A failed tool is a successful response with `isError: true`, not a JSON-RPC error.
     #[test]
     fn a_failure_is_content_with_is_error_rather_than_a_jsonrpc_error() {
         let ok = content("the answer", false);
@@ -437,7 +406,6 @@ mod tests {
         );
     }
 
-    /// Schemas are `additionalProperties: false`, so unknown arguments are reported, not dropped.
     #[test]
     fn every_schema_is_closed() {
         for tool in tools().as_array().expect("an array") {

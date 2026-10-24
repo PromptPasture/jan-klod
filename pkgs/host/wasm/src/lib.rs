@@ -1,6 +1,4 @@
-//! The WebAssembly boundary (#181): turns a `config.yaml` into sandboxed extension components.
-//! Loads config, wires host capabilities, compiles components and drives lifecycle; no agent
-//! behaviour lives here. The only crate that names `wasmtime`.
+//! The WebAssembly boundary: boots `config.yaml` into sandboxed extension components.
 
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod bindings;
@@ -37,14 +35,12 @@ use jk_config::{Config, ExtensionInstance};
 
 pub use host::{ConfigSection, HostState};
 
-/// The user's home directory, if the environment names one.
 fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
 }
 
-/// Whether `cwd` may be adopted as the workspace unprompted: declines `/` and `$HOME`.
 /// Guards against an accidental `cd`, not a determined operator.
 fn adoptable_workspace(cwd: &Path, home: Option<&Path>) -> bool {
     if cwd.parent().is_none() {
@@ -56,8 +52,7 @@ fn adoptable_workspace(cwd: &Path, home: Option<&Path>) -> bool {
     true
 }
 
-/// Deterministic boot tier for a category. Dependencies boot before dependents:
-/// registries, providers, managers that consume them, leaf surfaces (tools, agents, api, chat).
+/// Boot tier for a category: dependencies boot before dependents.
 fn boot_rank(category: &str) -> u8 {
     match category {
         "registry" => 1,
@@ -71,37 +66,30 @@ fn boot_rank(category: &str) -> u8 {
     }
 }
 
-/// Whether `category` is instantiated on first use rather than eagerly (#59).
-///
-/// Providers and interceptors are never lazy: a provider must fail at boot rather than
-/// mid-turn, and deferring an interceptor would run turn one without configured policy.
+/// Providers and interceptors are never lazy: they must fail at boot, not mid-turn.
 fn is_lazy_category(category: &str) -> bool {
     matches!(category, "tool" | "registry" | "agent")
 }
 
-/// Outcome of resolving one enabled instance to a component on disk.
+/// Result of resolving an instance to a component on disk.
 pub enum LoadState {
-    /// `ext/<component>.wasm` was found and compiled.
+    /// Found and compiled.
     Compiled(Component),
-    /// No component file present yet — recorded, not fatal.
+    /// Not present yet; recorded, not fatal.
     Missing(PathBuf),
 }
 
-/// One enabled instance after the boot resolution pass.
+/// One enabled instance after boot resolution.
 pub struct LoadedExtension {
-    /// The resolved config instance (`provider.openai`, …).
+    /// The resolved config instance.
     pub instance: ExtensionInstance,
-    /// Whether its component was found and compiled.
+    /// Compiled or missing.
     pub state: LoadState,
-    /// `host-*` interfaces the component imports, sorted. `None` when no component was
-    /// loaded; `Some(&[])` means it imports none, which a manifest check treats differently.
+    /// Sorted `host-*` imports; `None` if not loaded, which a manifest check treats differently from empty.
     pub capabilities: Option<Vec<String>>,
 }
 
-/// The `host-*` interfaces `component` imports, sorted and deduplicated.
-///
-/// Excludes exports and type-only imports (`llm-types`, `store-types`), matching
-/// `scripts/manifests.sh` so the two can be cross-checked.
+/// Excludes type-only imports, matching `scripts/manifests.sh` so the two can be cross-checked.
 fn host_capabilities(component: &Component, engine: &Engine) -> Vec<String> {
     let mut found: Vec<String> = component
         .component_type()
@@ -118,40 +106,20 @@ fn host_capabilities(component: &Component, engine: &Engine) -> Vec<String> {
     found
 }
 
-/// Whether a component and the manifest beside it agree.
-///
-/// Boot and `ext install` each map this to their own refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Verdict {
-    /// A manifest is present, built against a compatible interface package,
-    /// and declaring everything the component imports.
     Consistent,
-    /// No manifest file beside the component.
     NoManifest,
-    /// Built against an interface package this host does not speak.
-    ApiMismatch {
-        /// The version the manifest declares.
-        theirs: String,
-    },
-    /// The component imports host interfaces its manifest does not admit to.
-    UnderDeclared {
-        /// Those interfaces, in the order `undeclared` reports them.
-        interfaces: Vec<String>,
-    },
+    ApiMismatch { theirs: String },
+    UnderDeclared { interfaces: Vec<String> },
 }
 
-/// A component's real imports, and the verdict on its manifest.
 pub(crate) struct Inspected {
-    /// The `host-*` interfaces the component actually imports.
     pub capabilities: Vec<String>,
-    /// What the manifest beside it turned out to say.
     pub verdict: Verdict,
 }
 
-/// Read a compiled component's imports and check the manifest beside it.
-///
-/// Shared by boot and `ext install`: two copies of "consistent" could diverge silently on a
-/// security-relevant comparison.
+/// Shared by boot and `ext install` so "consistent" cannot diverge between them.
 fn inspect(
     component: &Component,
     engine: &Engine,
@@ -183,17 +151,13 @@ fn inspect(
     })
 }
 
-/// The categories this runtime dispatches, and so the only ones a component stem may name (#222).
+/// Categories this runtime dispatches; the only ones a component stem may name.
 pub const CATEGORIES: [&str; 4] = ["provider", "interceptor", "registry", "tool"];
 
-/// Split a component stem into its category and the rest: `tool-greet` -> `("tool", "greet")`.
-///
-/// An undispatched category is an error: the component would install and never be callable.
-/// The error is a sentence because both callers ([`Runtime::adopt_installed`] and the install
-/// tool) wrap it in their own.
+/// Split a component stem into category and kind: `tool-greet` -> `("tool", "greet")`.
 ///
 /// # Errors
-/// A stem with no `-`, or one whose prefix is not in [`CATEGORIES`].
+/// A stem with no `-`, an empty kind, or a prefix not in [`CATEGORIES`].
 pub fn categorise(stem: &str) -> Result<(&str, &str), String> {
     let (category, kind) = stem.split_once('-').ok_or_else(|| {
         format!("a component stem is `<category>-<kind>`, e.g. `tool-greet`; `{stem}` has no `-`")
@@ -212,24 +176,18 @@ pub fn categorise(stem: &str) -> Result<(&str, &str), String> {
     Ok((category, kind))
 }
 
-/// A booted core: engine, capability linker, and every enabled instance resolved against `ext/`.
+/// A booted core: engine, capability linker and resolved instances.
 pub struct Runtime {
     engine: Engine,
     linker: Linker<HostState>,
     extensions: Vec<LoadedExtension>,
-    /// Top-level agent-behaviour config (`routing`, `providers`, …), verbatim; always a JSON object.
+    /// Top-level agent config, verbatim; always a JSON object.
     agent: serde_json::Value,
-    /// Where components live; the host's install tool writes here (#213).
     ext_dir: PathBuf,
-    /// Wasmtime compile cache wired into `engine` (#60); kept to report hit/miss stats.
     compile_cache: wasmtime::Cache,
-    /// Binary [`sandbox_landlock::LandlockBackend`] re-executes to confine a command;
-    /// see [`Self::with_sandbox_wrapper`].
     sandbox_wrapper: Option<PathBuf>,
 }
 
-/// Pass 1 output of [`Runtime::instantiate`]: instantiated providers plus compiled but pending
-/// tool and registry instances (#59).
 struct ProvidersAndTools {
     providers: Vec<Box<dyn jk_protocol::intercept::Completer>>,
     provider_ids: Vec<String>,
@@ -237,19 +195,16 @@ struct ProvidersAndTools {
     registry_fleet: registry_host::LazyRegistryFleet,
 }
 
-/// What [`Runtime::instantiate`] hands back: the guests one agent runs on.
+/// The guests one agent runs on.
 pub struct Instantiated {
-    /// Every enabled interceptor, in the order the dispatcher consults them.
+    /// Enabled interceptors, in dispatch order.
     pub interceptors: Vec<Box<dyn jk_protocol::intercept::Interceptor>>,
-    /// The provider fallback chain, in the order `providers:` configures.
+    /// Provider fallback chain, in configured order.
     pub providers: Vec<Box<dyn jk_protocol::intercept::Completer>>,
-    /// The tool, registry and host-native fleet, lazily instantiated (#59).
+    /// Tool, registry and native fleet, lazily instantiated.
     pub tools: CombinedFleet,
 }
 
-/// Compile one instance's component and cross-check what it declares.
-///
-/// Shared with [`Runtime::boot`] so a component adopted after boot (#214) takes the same path.
 fn load_instance(
     engine: &Engine,
     ext_dir: &Path,
@@ -297,14 +252,10 @@ fn load_instance(
 }
 
 impl Runtime {
-    /// Load `config.yaml`, wire host capabilities, and resolve every enabled instance against
-    /// `ext_dir`; missing components are recorded so a partial deployment still boots.
+    /// Load `config.yaml` and resolve enabled instances against `ext_dir`; missing components are recorded.
     ///
     /// # Errors
-    /// Returns [`CoreError::Config`] if the config fails to load,
-    /// [`CoreError::Cache`] if the Wasmtime compile cache directory cannot be
-    /// prepared, [`CoreError::Linker`] if a host capability cannot be wired, or
-    /// [`CoreError::Load`] if a present component fails to compile.
+    /// [`CoreError`] if config, compile cache, linker wiring or component compilation fails.
     pub fn boot(
         config_path: impl AsRef<Path>,
         ext_dir: impl AsRef<Path>,
@@ -352,19 +303,14 @@ impl Runtime {
         })
     }
 
-    /// Name the binary the Landlock backend re-executes (instead of discovery).
-    ///
-    /// For tests only: under `cargo test`, `current_exe()` is the test binary, which lacks the
-    /// `confine` subcommand ([#124](https://github.com/PromptPasture/jan-klod/issues/124)).
-    /// Deliberately not a `config.yaml` key: an operator who could name the wrapper could name
-    /// one that confines nothing.
+    /// Test-only: name the Landlock re-exec binary; deliberately not a `config.yaml` key.
     #[must_use]
     pub fn with_sandbox_wrapper(mut self, wrapper: impl Into<PathBuf>) -> Self {
         self.sandbox_wrapper = Some(wrapper.into());
         self
     }
 
-    /// Wasmtime compile-cache `(hits, misses)` for this boot's `Engine`; a hit skipped Cranelift.
+    /// Wasmtime compile-cache `(hits, misses)`; a hit skipped Cranelift.
     #[must_use]
     pub fn compile_cache_stats(&self) -> (usize, usize) {
         (
@@ -373,7 +319,7 @@ impl Runtime {
         )
     }
 
-    /// Where compiled artefacts are cached on disk for this boot.
+    /// Where compiled artefacts are cached on disk.
     #[must_use]
     pub fn compile_cache_dir(&self) -> &Path {
         self.compile_cache.directory()
@@ -385,33 +331,22 @@ impl Runtime {
         &self.extensions
     }
 
-    /// Instantiate every compiled non-lazy component (#59) and run its lifecycle (`init` →
-    /// `start`); missing components are skipped. Returns the started ids.
-    ///
-    /// The boot-plan path: checks that turn-one components (providers, interceptors) work without
-    /// instantiating tools. [`Self::start_all_eager`] skips nothing; `verify` uses it.
+    /// Instantiate and start every compiled non-lazy component; returns the started ids.
     ///
     /// # Errors
-    /// Returns [`CoreError::Instantiate`] if a component cannot be instantiated,
-    /// [`CoreError::Lifecycle`] if a lifecycle call traps, or
-    /// [`CoreError::LifecycleRejected`] if an extension refuses to start.
+    /// [`CoreError`] if a component fails to instantiate, traps or refuses to start.
     pub fn start_all(&self) -> Result<Vec<String>, CoreError> {
         self.start_selected(true)
     }
 
-    /// Like [`Self::start_all`], but instantiates every category, lazy ones included;
-    /// `verify` needs this to prove a component starts before a real turn finds out.
+    /// Like [`Self::start_all`] but includes lazy categories, which `verify` needs.
     ///
     /// # Errors
-    /// Returns [`CoreError::Instantiate`] if a component cannot be instantiated,
-    /// [`CoreError::Lifecycle`] if a lifecycle call traps, or
-    /// [`CoreError::LifecycleRejected`] if an extension refuses to start.
+    /// [`CoreError`] if a component fails to instantiate, traps or refuses to start.
     pub fn start_all_eager(&self) -> Result<Vec<String>, CoreError> {
         self.start_selected(false)
     }
 
-    /// Shared body of [`Self::start_all`]/[`Self::start_all_eager`]. Richer-world categories use
-    /// the same seams and default-deny substrates as [`Self::instantiate`].
     fn start_selected(&self, skip_lazy: bool) -> Result<Vec<String>, CoreError> {
         let mut started = Vec::new();
         let workspace = self.open_workspace();
@@ -428,8 +363,6 @@ impl Runtime {
         Ok(started)
     }
 
-    /// Instantiate and start one compiled extension, returning its id. `tool-*`, `registry-*` and
-    /// `interceptor-*` use their own seams (as [`Self::instantiate`]); the rest use the shared linker.
     fn start_one(
         &self,
         ext: &LoadedExtension,
@@ -484,8 +417,6 @@ impl Runtime {
         Ok(id.clone())
     }
 
-    /// Instantiate through the shared linker and run lifecycle; for categories not handled in
-    /// [`Self::start_one`].
     fn start_via_shared_linker(
         &self,
         ext: &LoadedExtension,
@@ -538,13 +469,13 @@ impl Runtime {
         Ok(id.clone())
     }
 
-    /// A human-readable boot plan (each instance → its component, loaded/missing).
+    /// A human-readable boot plan.
     #[must_use]
     pub const fn report(&self) -> BootReport<'_> {
         BootReport(self)
     }
 
-    /// Top-level agent-behaviour config (`routing`, `providers`, …), verbatim; a JSON object.
+    /// Top-level agent config, verbatim; a JSON object.
     #[must_use]
     pub const fn agent_config(&self) -> &serde_json::Value {
         &self.agent
@@ -559,18 +490,10 @@ impl Runtime {
             .collect()
     }
 
-    /// Adopt a component installed after boot so the next [`Self::instantiate`] can serve it (#214).
-    ///
-    /// `stem` is the file stem: `tool-greet` becomes instance `tool.greet`. It goes through
-    /// [`load_instance`], the boot path, so it gets the same manifest refusals.
-    ///
-    /// It does not write `config.yaml`: installing enables the component for this process only,
-    /// since the approval was for one install, not every boot. Running agents are untouched;
-    /// the caller rebuilds at a turn boundary.
+    /// Adopt a post-boot install (`tool-greet` becomes `tool.greet`); not persisted to `config.yaml`.
     ///
     /// # Errors
-    /// [`CoreError`] when the component is absent, is not a component, or fails the manifest
-    /// cross-check; `self` is unchanged on failure.
+    /// [`CoreError`] if absent, not a component or failing the manifest check; `self` is unchanged.
     pub fn adopt_installed(&mut self, stem: &str) -> Result<String, CoreError> {
         let (category, kind) = categorise(stem).map_err(|reason| CoreError::Adopt {
             stem: stem.to_owned(),
@@ -613,16 +536,10 @@ impl Runtime {
         Ok(id)
     }
 
-    /// Instantiate the guests one agent runs on: enabled interceptors, providers (as the
-    /// configured fallback chain), and tools and registries as a lazy fleet.
-    ///
-    /// `http_factory` mints a `host-http` backend per provider; `storage` is what `host-storage`
-    /// writes to, for instances that opt in with `persist: true`. Both are factories because this
-    /// crate holds no session store (#181).
+    /// Instantiate enabled interceptors, providers (fallback chain) and a lazy tool/registry fleet.
     ///
     /// # Errors
-    /// Returns a [`CoreError`] if any interceptor or provider fails to instantiate
-    /// or start.
+    /// [`CoreError`] if an interceptor or provider fails to instantiate or start.
     pub fn instantiate(
         &self,
         http_factory: &dyn Fn() -> route::HttpFn,
@@ -676,11 +593,7 @@ impl Runtime {
         })
     }
 
-    /// Pass 1 of [`Self::instantiate`]: instantiate enabled providers (eager) and register
-    /// tools and registries as pending (#59).
-    ///
-    /// Host-native tools are off unless `registry.install-tool` says otherwise; it lives in the
-    /// same `registry:` block as `trusted-keys`.
+    /// Host-native tools are off unless `registry.install-tool` is true.
     fn native_tools(&self) -> native_tools::NativeTools {
         let registry = self.agent.get("registry");
         let enabled = registry
@@ -790,8 +703,6 @@ impl Runtime {
         })
     }
 
-    /// Pass 2 of [`Self::instantiate`]: instantiate every enabled interceptor,
-    /// each served the tool set from pass 1 at `select-tools`.
     fn instantiate_interceptors(
         &self,
         tools_advert: &serde_json::Value,
@@ -836,11 +747,8 @@ impl Runtime {
         Ok(interceptors)
     }
 
-    /// The project's `AGENTS.md` from the workspace root, if any, read host-side so interceptors
-    /// need no `host-fs`. Root only (ancestors would leak another project's instructions);
-    /// truncated at a cap since a system prompt is paid for every turn.
+    /// Root `AGENTS.md` only (ancestors would leak another project's); truncated as it is sent every turn.
     fn project_instructions(workspace: Option<&host_fs::Workspace>) -> Option<String> {
-        /// Generous for conventions, small next to a context window.
         const MAX_BYTES: usize = 16 * 1024;
         let text = workspace?.read("AGENTS.md").ok()?;
         if text.len() <= MAX_BYTES {
@@ -857,8 +765,7 @@ impl Runtime {
         ))
     }
 
-    /// Destinations guests may reach: every enabled instance's `base-url`/`endpoint`/`url` (even
-    /// loopback), otherwise public only. Closed over by the HTTP backend, so guests cannot widen it.
+    /// Destinations guests may reach: configured instance URLs (even loopback), else public only.
     #[must_use]
     pub fn egress_policy(&self) -> egress::EgressPolicy {
         let mut policy = egress::EgressPolicy::public_only();
@@ -884,7 +791,6 @@ impl Runtime {
         policy
     }
 
-    /// Open the host-side workspace for `host-fs` from `workspace:` (else `$PWD`); `None` is default-deny.
     fn open_workspace(&self) -> Option<host_fs::Workspace> {
         let root_owned;
         let root: &str = if let Some(r) = self
@@ -918,8 +824,6 @@ impl Runtime {
         )
     }
 
-    /// Build the `host-process` runner from `execution:` config. Disabled unless enabled *and* a
-    /// workspace is configured (cwd is jailed to it), or when `sandbox:` is unreadable.
     fn open_process_runner(
         &self,
         workspace: Option<&host_fs::Workspace>,
@@ -1024,12 +928,7 @@ impl Runtime {
         }
     }
 
-    /// Instantiate the provider that answers interceptors' `llm-provider` calls: the instance
-    /// named by `classifier:`, else the head of the chain (so a small local model can classify).
-    /// `None` when no provider is enabled; callers use the conservative default.
-    ///
-    /// # Errors
-    /// Returns a [`CoreError`] if the chosen provider cannot be instantiated.
+    /// The `classifier:` provider, else the head of the chain; `None` when no provider is enabled.
     fn open_classifier(
         &self,
         http_factory: &dyn Fn() -> route::HttpFn,
@@ -1065,8 +964,7 @@ impl Runtime {
         ))))
     }
 
-    /// An interceptor's `host-config` section: its own config plus top-level agent keys
-    /// (`routing`, `providers`); an instance's own key wins.
+    /// An instance's own key wins over top-level agent keys.
     fn interceptor_config(&self, instance: &ExtensionInstance) -> serde_json::Value {
         let mut section = instance.config.clone();
         if let (serde_json::Value::Object(map), serde_json::Value::Object(agent)) =
@@ -1082,17 +980,16 @@ impl Runtime {
     }
 }
 
-/// Combined tool + registry fleet implementing [`jk_protocol::intercept::ToolInvoker`]:
-/// dispatches to `tool-*` first, then registries. Both are lazy (#59).
+/// Dispatches to `tool-*`, then registries, then host-native tools.
 pub struct CombinedFleet {
     tools: tool_host::LazyToolFleet,
     registry: registry_host::LazyRegistryFleet,
-    /// The host's own tools (#213), last so they never shadow an installed extension.
+    /// Consulted last so native tools never shadow an installed extension.
     native: native_tools::NativeTools,
 }
 
 impl CombinedFleet {
-    /// Stems installed during turns run on this fleet, drained.
+    /// Stems installed during turns on this fleet, drained.
     #[must_use]
     pub fn take_installed(&self) -> Vec<String> {
         self.native.take_installed()
@@ -1124,14 +1021,13 @@ impl jk_protocol::intercept::ToolInvoker for CombinedFleet {
 }
 
 impl CombinedFleet {
-    /// Whether the tool fleet has instantiated its pending guests yet (a test hook onto #59).
+    /// Whether the lazy tool fleet has instantiated its guests yet.
     #[must_use]
     pub const fn tools_instantiated(&self) -> bool {
         self.tools.is_instantiated()
     }
 
-    /// The advertised tool names. A lazy instantiation failure is reported on stderr and
-    /// degrades to no tools.
+    /// The advertised tool names; an instantiation failure is logged and yields none.
     pub fn tool_names(&mut self) -> Vec<String> {
         self.tools.tool_names().unwrap_or_else(|err| {
             eprintln!("WARN [core] tool fleet failed to instantiate: {err}");
@@ -1139,8 +1035,10 @@ impl CombinedFleet {
         })
     }
 
+    /// Advertised tool metas as JSON.
+    ///
     /// # Errors
-    /// instantiate or start.
+    /// [`CoreError`] if a lazy guest fails to instantiate or start.
     pub fn all_metas_json(&mut self) -> Result<serde_json::Value, CoreError> {
         let mut metas: Vec<serde_json::Value> = self
             .tools
@@ -1166,9 +1064,7 @@ impl CombinedFleet {
     }
 }
 
-/// The closure interceptors' `llm-provider` resolves to. Any failure defaults to `"agentic"`,
-/// the conservative label that routes through the full loop. Shared by `Arc` since the closure
-/// outlives the call that builds it.
+/// Any failure defaults to `"agentic"`, the conservative label that routes through the full loop.
 fn classifier_fn(
     classifier: Option<std::sync::Arc<std::sync::Mutex<route::ProviderCompleter>>>,
 ) -> interceptor_host::ProviderFn {
@@ -1188,9 +1084,7 @@ fn classifier_fn(
     })
 }
 
-/// Resolve the configured fallback chain (`providers:` list) into indices into `ids`, in try order.
-/// Entries naming a disabled provider are skipped with a warning; enabled providers the list
-/// omits run last.
+/// Entries naming a disabled provider are skipped with a warning; unlisted providers run last.
 fn order_chain(chain: Option<&serde_json::Value>, ids: &[String]) -> Vec<usize> {
     let Some(entries) = chain.and_then(serde_json::Value::as_array) else {
         return (0..ids.len()).collect();
@@ -1217,7 +1111,6 @@ fn order_chain(chain: Option<&serde_json::Value>, ids: &[String]) -> Vec<usize> 
     order
 }
 
-/// Reorder `items` by `order` (a permutation of its indices).
 fn reorder<T>(items: Vec<T>, order: &[usize]) -> Vec<T> {
     let mut slots: Vec<Option<T>> = items.into_iter().map(Some).collect();
     order
@@ -1226,7 +1119,6 @@ fn reorder<T>(items: Vec<T>, order: &[usize]) -> Vec<T> {
         .collect()
 }
 
-/// Capability linker every extension store shares: WASI plus `host-log`/`host-config`/`host-http`/`host-secrets`.
 fn build_linker(engine: &Engine) -> Result<Linker<HostState>, CoreError> {
     let mut linker: Linker<HostState> = Linker::new(engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(CoreError::linker)?;
@@ -1237,7 +1129,7 @@ fn build_linker(engine: &Engine) -> Result<Linker<HostState>, CoreError> {
     Ok(linker)
 }
 
-/// Renders the boot plan: one line per enabled instance, then a summary.
+/// Renders the boot plan.
 pub struct BootReport<'a>(&'a Runtime);
 
 impl fmt::Display for BootReport<'_> {
@@ -1283,38 +1175,38 @@ pub enum CoreError {
     /// Loading or parsing `config.yaml` failed.
     #[error(transparent)]
     Config(#[from] jk_config::ConfigError),
-    /// A component installed after boot could not be adopted (#214).
+    /// A component installed after boot could not be adopted.
     #[error("cannot adopt `{stem}`: {reason}")]
     Adopt {
-        /// The component stem the caller named.
+        /// Component stem the caller named.
         stem: String,
-        /// Why it was refused, in terms the caller can act on.
+        /// Why it was refused.
         reason: String,
     },
     /// Wiring a host capability into the linker failed.
     #[error("wiring host capabilities into the linker")]
     Linker {
-        /// The underlying Wasmtime linker error.
+        /// Underlying linker error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// Compiling a component from disk failed.
     #[error("loading component for {id} from {path}")]
     Load {
-        /// Instance id whose component failed to compile.
+        /// Instance id.
         id: String,
-        /// Path the component was loaded from.
+        /// Component path.
         path: String,
-        /// The underlying compilation error.
+        /// Compilation error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
-    /// A component's manifest could not be read; unreadable or malformed is refused, not treated as absent.
+    /// Manifest unreadable or malformed; refused, not treated as absent.
     #[error("{id}: its manifest cannot be read")]
     Manifest {
-        /// Instance id whose manifest is unusable.
+        /// Instance id.
         id: String,
-        /// Why.
+        /// Read or parse error.
         #[source]
         source: manifest::ManifestError,
     },
@@ -1325,84 +1217,82 @@ pub enum CoreError {
          the manifest describes"
     )]
     Undeclared {
-        /// Instance id that was refused.
+        /// Instance id.
         id: String,
-        /// The component file, which is also how its manifest is named.
+        /// Component file, which also names its manifest.
         component: String,
-        /// The undeclared interfaces, comma-separated.
+        /// Undeclared interfaces, comma-separated.
         interfaces: String,
     },
-    /// A component was built against an incompatible interface package.
+    /// Component built against an incompatible interface package.
     #[error(
         "{id}: `{component}` was built against jan-klod:interfaces@{theirs}, and this \
          build speaks {ours}. Rebuild the component against this host's `wit/`"
     )]
     ApiVersion {
-        /// Instance id that was refused.
+        /// Instance id.
         id: String,
-        /// The component file.
+        /// Component file.
         component: String,
-        /// The version the component declares.
+        /// Version the component declares.
         theirs: String,
-        /// The version this host speaks.
+        /// Version this host speaks.
         ours: String,
     },
-    /// A component ships no manifest, and none is permitted.
+    /// Component ships no manifest and none is permitted.
     #[error(
         "{id}: `{component}` has no manifest beside it. Run `make ext` to generate \
          one, or set top-level `allow-unmanifested: true` to load components that \
          declare nothing"
     )]
     NoManifest {
-        /// Instance id that was refused.
+        /// Instance id.
         id: String,
-        /// The component file whose manifest is absent.
+        /// Component file whose manifest is absent.
         component: String,
     },
     /// Instantiating a compiled component failed.
     #[error("instantiating {id}")]
     Instantiate {
-        /// Instance id that failed to instantiate.
+        /// Instance id.
         id: String,
-        /// The underlying instantiation error.
+        /// Underlying instantiation error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
-    /// A lifecycle call trapped (guest crash, host-cap error).
+    /// A lifecycle call trapped.
     #[error("{id}: lifecycle `{phase}` trapped")]
     Lifecycle {
-        /// Instance id whose lifecycle call trapped.
+        /// Instance id.
         id: String,
-        /// Lifecycle phase that trapped (`init` / `start`).
+        /// `init` or `start`.
         phase: &'static str,
-        /// The underlying trap.
+        /// Underlying trap.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
-    /// The host-side persistent store could not be opened.
+    /// The persistent store could not be opened.
     #[error("opening the persistent store: {message}")]
     Store {
-        /// The underlying store error, stringified.
+        /// Underlying error, stringified.
         message: String,
     },
-    /// Wasmtime's compile cache could not be set up at `storage.cache-dir` (or
-    /// its default, beside `config.yaml`).
+    /// Wasmtime's compile cache could not be set up.
     #[error("setting up the wasmtime compile cache at {path}: {message}")]
     Cache {
-        /// The cache directory that could not be prepared.
+        /// Cache directory.
         path: String,
-        /// What went wrong — an I/O error creating/chmod-ing the directory,
-        /// or Wasmtime refusing the cache configuration or engine.
+        /// What went wrong.
         message: String,
     },
-    /// A lifecycle call returned an error result (the extension refused to load).
+    /// A lifecycle call returned an error: the extension refused to load.
     #[error("{id}: lifecycle `{phase}` failed: {message}")]
     LifecycleRejected {
-        /// Instance id that refused to load.
+        /// Instance id.
         id: String,
-        /// Lifecycle phase that was rejected (`init` / `start`).
+        /// `init` or `start`.
         phase: &'static str,
-        /// The message the extension returned.
+        /// Message the extension returned.
         message: String,
     },
 }
@@ -1427,7 +1317,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// A stem naming an undispatched category is refused, and the refusal lists the real ones (#222).
     #[test]
     fn a_stem_naming_no_category_is_refused_and_the_refusal_names_the_ones_that_exist() {
         let err = categorise("self-built").expect_err("`self` is not a category");
@@ -1440,7 +1329,6 @@ mod tests {
         assert!(err.contains("self-built"), "and name what was asked: {err}");
     }
 
-    /// Control: dispatched categories still split.
     #[test]
     fn every_dispatched_category_splits_from_a_stem() {
         for category in CATEGORIES {
@@ -1453,16 +1341,12 @@ mod tests {
         }
     }
 
-    /// The two shapes that are not a category error but are still not a
-    /// stem: nothing to split on, and nothing after the category.
     #[test]
     fn a_stem_needs_both_halves() {
         assert!(categorise("toolgreet").is_err(), "no separator");
         assert!(categorise("tool-").is_err(), "no kind");
     }
 
-    /// `Runtime` is shareable across threads so each session can build its own agent (#228).
-    /// Compile-time check: an agent is `!Send`, so only the builder can cross threads.
     #[test]
     fn a_runtime_can_be_shared_across_threads() {
         const fn needs<T: Send + Sync>() {}
@@ -1533,7 +1417,6 @@ mod tests {
         assert_eq!(reorder(vec!["a", "b"], &[1, 9, 0]), vec!["b", "a"]);
     }
 
-    /// The accident this guards against is `cd`, not malice.
     #[test]
     fn a_workspace_is_not_adopted_from_home_or_a_root() {
         let home = PathBuf::from("/Users/someone");

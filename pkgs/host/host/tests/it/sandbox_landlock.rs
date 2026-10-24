@@ -1,6 +1,4 @@
-//! Linux Landlock confinement, mirroring `sandbox_seatbelt.rs`. Panics when the
-//! kernel lacks Landlock. The backend is the gateway binary, since `current_exe()`
-//! under `cargo test` lacks `confine`.
+//! Linux Landlock confinement via the gateway binary, mirroring `sandbox_seatbelt.rs`; panics when the kernel lacks Landlock.
 #![cfg(target_os = "linux")]
 
 use std::io::Read;
@@ -20,7 +18,6 @@ use wasmtime::Engine;
 
 use crate::common;
 
-/// Workspace and external sibling; auto-cleaned.
 struct Dirs {
     root: PathBuf,
     workspace: PathBuf,
@@ -46,7 +43,6 @@ fn dirs(tag: &str) -> Dirs {
     }
 }
 
-/// Fail with clear message if Landlock unavailable (not ambiguous denial).
 fn require_landlock() {
     available().unwrap_or_else(|reason| {
         panic!("these tests assert Landlock's behaviour and it is unavailable: {reason}")
@@ -70,13 +66,11 @@ fn runner(workspace: &Path) -> ProcessRunner {
     )
 }
 
-/// Runner confined by the gateway binary.
 fn confined(workspace: &Path) -> ProcessRunner {
     let backend = LandlockBackend::new(PathBuf::from(env!("CARGO_BIN_EXE_jan-klod-gateway")));
     runner(workspace).with_sandbox(std::sync::Arc::new(backend), policy(workspace))
 }
 
-/// Baseline control (unconfined).
 fn unconfined(workspace: &Path) -> ProcessRunner {
     runner(workspace)
 }
@@ -111,7 +105,6 @@ fn a_confined_command_cannot_write_outside_the_workspace() {
     );
 }
 
-/// Catches broken sandbox (wrapper not found or ruleset empty).
 #[test]
 fn a_confined_command_can_still_write_inside_the_workspace() {
     require_landlock();
@@ -125,7 +118,6 @@ fn a_confined_command_can_still_write_inside_the_workspace() {
     assert!(target.exists());
 }
 
-/// `2>/dev/null` works, which it did not before #212. Linux twin of the seatbelt test.
 #[test]
 fn a_confined_command_can_redirect_to_dev_null() {
     require_landlock();
@@ -145,7 +137,6 @@ fn a_confined_command_can_redirect_to_dev_null() {
     );
 }
 
-/// The grant above names the device file, not `/dev`. This fails if the rule is ever widened to the directory.
 #[test]
 fn granting_dev_null_does_not_grant_the_device_directory() {
     require_landlock();
@@ -164,7 +155,6 @@ fn granting_dev_null_does_not_grant_the_device_directory() {
     );
 }
 
-/// Network denial via listener (closed port and denial look the same).
 #[test]
 fn a_confined_command_cannot_reach_the_network() {
     require_landlock();
@@ -204,7 +194,6 @@ fn a_confined_command_cannot_reach_the_network() {
     );
 }
 
-/// The same denial, reached the way a component reaches it.
 #[test]
 fn a_guest_running_a_command_is_confined_too() {
     require_landlock();

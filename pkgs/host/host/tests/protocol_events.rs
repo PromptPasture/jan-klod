@@ -1,6 +1,4 @@
-//! Every turn event has a place in the client protocol. `notification_for` has no
-//! wildcard arm, so a new `Event` variant fails to compile here. This asserts the
-//! mapping in `jk_host::rpc`, not a copy that could drift from what stdio sends.
+//! Every turn event maps to a client-protocol notification, checked against `jk_host::rpc`.
 
 use jk_host::rpc::notification_for;
 use jk_host::serve;
@@ -8,7 +6,6 @@ use jk_protocol::turn::Event;
 use jk_protocol::turn::{ToolCall, ToolOutcome, UserPrompt};
 use jk_protocol::Notification;
 
-/// One event per variant, with distinguishable fields so misplaced values show as mismatches.
 fn every_event() -> Vec<Event> {
     vec![
         Event::TextDelta("the answer is".to_owned()),
@@ -56,7 +53,6 @@ fn every_event_maps_to_a_notification() {
     }
 }
 
-/// The mapping is lossless: everything an event carries survives.
 #[test]
 fn nothing_an_event_carries_is_dropped() {
     assert_eq!(
@@ -110,8 +106,6 @@ fn nothing_an_event_carries_is_dropped() {
     );
 }
 
-/// Some notifications come from no event: `ask` from `Driver::ask`, `error` from failed
-/// turns, and `session/updated` from the store. None of them passes through `EventSink`.
 #[test]
 fn the_notifications_without_an_event_are_accounted_for() {
     let without_events = every_event()
@@ -137,7 +131,6 @@ fn the_notifications_without_an_event_are_accounted_for() {
 /// Frame keys the protocol spells differently: the `error` frame's `error` is `message`, to match `warning`.
 const RENAMES: &[(&str, &str)] = &[("error", "message")];
 
-/// Assert every key `data` carries survives into `notification`.
 fn assert_frame_fits(kind: &str, data: &serde_json::Value, notification: &Notification) {
     let envelope = serde_json::to_value(notification).expect("a notification serializes");
     let params = envelope
@@ -166,8 +159,7 @@ fn every_turn_event_frame_fits_its_notification() {
     }
 }
 
-/// `tool` and `tool-result` carry exactly the notification's fields. This is stricter than
-/// `assert_frame_fits`, and limited to these kinds because the others carry transport fields.
+/// Stricter than `assert_frame_fits`; limited to kinds whose frames carry no transport fields.
 #[test]
 fn tool_invocation_frames_and_notifications_carry_exactly_the_same_fields() {
     for event in every_event() {
@@ -188,7 +180,6 @@ fn tool_invocation_frames_and_notifications_carry_exactly_the_same_fields() {
     }
 }
 
-/// The `prompt` frame carries `session`, which the client needs to answer it.
 #[test]
 fn the_prompt_frame_fits_the_ask_notification() {
     let prompt = UserPrompt {
@@ -221,8 +212,6 @@ fn the_error_frame_fits_the_error_notification() {
     );
 }
 
-/// The shared `SSE_FRAME_KINDS` constant must list exactly the frame kinds the core emits.
-/// The client's check (`ui/tests/parse_frame.rs`) reads the same constant.
 #[test]
 fn the_projected_frame_kinds_are_the_ones_the_protocol_covers() {
     let mut kinds: Vec<&str> = every_event()

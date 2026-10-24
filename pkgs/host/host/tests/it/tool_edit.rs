@@ -1,5 +1,4 @@
 //! Anchored view, replace and insert; stale anchors are rejected without writing.
-//! Skips when the guest is not staged.
 
 use jk_wasm::host_fs::Workspace;
 use jk_wasm::host_process::ProcessRunner;
@@ -17,7 +16,6 @@ fn edit_component(engine: &Engine) -> Option<Component> {
     Some(Component::from_file(engine, &path).expect("component compiles"))
 }
 
-/// Extract anchor from view's line (format: `anchor|lineno|text`).
 fn anchor_at(view: &str, lineno: usize) -> String {
     let line = view.lines().nth(lineno - 1).expect("line is in the view");
     line.split('|')

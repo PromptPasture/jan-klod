@@ -1,7 +1,4 @@
-//! The conversation, derived from the log by a pure projection from rows to `Message`s.
-//!
-//! Only what the model saw is replayed: `ask`, `answer`, `text-delta` and `warning` are dropped,
-//! so a replayed turn never shows the model asking a permission question it did not ask.
+//! Pure projection of log rows to `Message`s; only what the model saw is replayed, so `ask`, `answer`, `text-delta` and `warning` are dropped.
 
 use crate::event_log::{decode_record, Record, KIND_USER_MESSAGE};
 use crate::store::LoggedEvent;
@@ -16,11 +13,7 @@ pub fn transcript(events: &[LoggedEvent]) -> Vec<Message> {
         .collect()
 }
 
-/// [`transcript`] with each message paired to the log position it came from.
-///
-/// Each message comes from exactly one event, so a seq names a valid fork point:
-/// `session/fork`'s `at-seq` is inclusive ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
-/// Seqs are sparse, so they are log positions, not list indices.
+/// [`transcript`] with each message paired to its log seq, a valid inclusive fork point; seqs are sparse.
 #[must_use]
 pub fn placed_transcript(events: &[LoggedEvent]) -> Vec<(u64, Message)> {
     events
@@ -32,10 +25,7 @@ pub fn placed_transcript(events: &[LoggedEvent]) -> Vec<(u64, Message)> {
         .collect()
 }
 
-/// The tail of `events` holding at most the last `turns` turns.
-///
-/// Bounds count turns, not rows: a turn's row count varies, so a row bound would orphan tool results.
-/// `turns == 0` gives an empty slice; a log with no `user-message` rows is returned whole.
+/// Last `turns` turns of `events`, counted by `user-message` rows so tool results are not orphaned.
 #[must_use]
 pub fn last_turns(events: &[LoggedEvent], turns: u32) -> &[LoggedEvent] {
     if turns == 0 {
@@ -54,7 +44,6 @@ pub fn last_turns(events: &[LoggedEvent], turns: u32) -> &[LoggedEvent] {
     &events[starts[starts.len() - keep]..]
 }
 
-/// The message one record contributes, or `None`. Matches exhaustively, so a new kind must be decided here.
 fn message_for(record: Record) -> Option<Message> {
     use jk_protocol::turn::Event;
     match record {
@@ -87,7 +76,6 @@ mod tests {
     use jk_protocol::turn::{Event, ToolCall, ToolOutcome};
     use serde_json::json;
 
-    /// Builds rows as the store does; tests never depend on `seq` beyond row order.
     fn row(seq: u64, kind: &str, payload: String) -> LoggedEvent {
         LoggedEvent {
             session: "s1".to_owned(),
@@ -103,7 +91,6 @@ mod tests {
         row(seq, kind, payload)
     }
 
-    /// A simple turn must yield exactly the `{user, answer}` pair the old transcript stored.
     #[test]
     fn a_simple_turn_is_the_user_message_and_the_answer() {
         let log = vec![
@@ -129,7 +116,6 @@ mod tests {
         assert_eq!(messages[1].content, "pong");
     }
 
-    /// Tool results are `Role::Tool` messages carrying the call's `tool_call_id`, as `run_tool_calls` does.
     #[test]
     fn a_tool_result_carries_its_call_id() {
         let log = vec![
@@ -177,7 +163,6 @@ mod tests {
         );
     }
 
-    /// Permission prompts are between interceptor and user only; they must not become model or user messages.
     #[test]
     fn a_permission_prompt_and_its_answer_are_not_conversation() {
         let log = vec![
@@ -260,7 +245,6 @@ mod tests {
         assert!(transcript(&log).is_empty());
     }
 
-    /// Unreadable rows are skipped; one bad row must not hide the whole history.
     #[test]
     fn an_undecodable_row_is_skipped_not_fatal() {
         let log = vec![
@@ -329,7 +313,6 @@ mod bound_tests {
     use jk_protocol::turn::{Event, ToolOutcome};
     use serde_json::json;
 
-    /// Each turn is a user message, a tool result, and an answer: a row-based bound would cut one open.
     fn log_of(turns: usize) -> Vec<LoggedEvent> {
         let mut rows = Vec::new();
         for turn in 0..turns {
@@ -386,7 +369,6 @@ mod bound_tests {
         );
     }
 
-    /// Row-based bounds would orphan tool results; this asserts they do not.
     #[test]
     fn a_bounded_conversation_never_opens_with_a_tool_result() {
         let log = log_of(9);
@@ -406,7 +388,6 @@ mod bound_tests {
         assert_eq!(last_turns(&[], 20), []);
     }
 
-    /// A log with no turn boundary is one turn in progress, not zero turns.
     #[test]
     fn a_log_with_no_turn_boundary_is_returned_whole() {
         let (kind, payload) = encode(&Event::Warning("standalone".to_owned()));
@@ -420,7 +401,6 @@ mod bound_tests {
         assert_eq!(last_turns(&log, 20).len(), 1);
     }
 
-    /// `follow-up` is a user message but not a turn boundary: steering continues a turn.
     #[test]
     fn steering_does_not_start_a_new_turn() {
         let mut log = log_of(1);

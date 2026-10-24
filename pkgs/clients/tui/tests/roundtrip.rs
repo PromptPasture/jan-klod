@@ -1,5 +1,4 @@
 //! `send_turn` against a real socket: a canned HTTP server stands in for `jan-klod serve`.
-//! The client must send a well-formed request and read the answer back.
 
 use std::thread;
 

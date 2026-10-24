@@ -1,5 +1,4 @@
-//! Runs an assembled installed layout (`<prefix>/bin` beside `<prefix>/share/jan-klod`) from an unrelated directory,
-//! as `jan-klod` spawns it: path-resolution bugs only show up this way. Skips when the guests are not staged.
+//! Runs an assembled installed layout from an unrelated directory, as `jan-klod` spawns it; path-resolution bugs only show this way.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -24,7 +23,6 @@ impl Drop for Gateway {
     }
 }
 
-/// Builds the layout `install.sh` produces from the repo's build output.
 fn install_into(prefix: &Path) -> PathBuf {
     let bin = prefix.join("bin");
     let data = prefix.join("share/jan-klod");
@@ -58,7 +56,6 @@ fn install_into(prefix: &Path) -> PathBuf {
     installed
 }
 
-/// A port nobody is using, released immediately before the gateway takes it.
 fn free_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds an ephemeral port");
     listener.local_addr().expect("has an address").port()
@@ -75,7 +72,6 @@ fn wait_until_listening(addr: &str, timeout: Duration) -> bool {
     false
 }
 
-/// `GET /health` over a raw socket, so the test needs no HTTP client.
 fn get_health(addr: &str) -> String {
     let mut stream = TcpStream::connect(addr).expect("connects to the gateway");
     stream
@@ -89,7 +85,6 @@ fn get_health(addr: &str) -> String {
     response
 }
 
-/// A directory that is not a jan-klod checkout, like the user's own repository.
 fn elsewhere(prefix: &Path) -> PathBuf {
     let dir = prefix.join("some-users-repo");
     std::fs::create_dir_all(&dir).unwrap();
@@ -168,7 +163,6 @@ fn an_installed_gateway_verifies_its_own_components_from_anywhere() {
     assert!(stdout.contains("0 missing"), "nothing is missing: {stdout}");
 }
 
-/// The negative case, so the tests above cannot pass for an unrelated reason.
 #[test]
 fn a_gateway_with_no_data_directory_beside_it_fails_and_says_why() {
     if !common::guests_staged(&GUESTS) {
@@ -200,8 +194,6 @@ fn a_gateway_with_no_data_directory_beside_it_fails_and_says_why() {
     );
 }
 
-/// `ask` answers on stdout from an installed layout. Stdin is closed, so a prompt
-/// must take its default (denial), not read EOF as approval.
 #[test]
 fn ask_answers_on_stdout_from_an_installed_layout() {
     if !common::guests_staged(&GUESTS) {
@@ -275,8 +267,6 @@ extensions:
     );
 }
 
-/// `verify --live` catches what offline checks cannot: offline verify passes with a
-/// wrong API key or a dead endpoint, the usual first-run failures.
 #[test]
 fn verify_live_reports_a_provider_that_does_not_answer() {
     if !common::guests_staged(&GUESTS) {

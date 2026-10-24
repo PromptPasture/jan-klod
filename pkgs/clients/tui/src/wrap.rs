@@ -1,11 +1,4 @@
-//! Wrapping by display cells, never splitting a grapheme (#147).
-//!
-//! Terminals draw by cells, not bytes or chars: an emoji is two cells, CJK
-//! ideographs are two each, and combining marks take none. Widths come from
-//! `unicode-width`; clusters from `unicode-segmentation`.
-//!
-//! [`wrap`] breaks on words and keeps leading indentation. [`hard_wrap`] keeps
-//! every space.
+//! Wrapping by display cells, never splitting a grapheme.
 
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -16,7 +9,7 @@ pub fn width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
-/// Wraps `text` to `max` cells, keeping its leading indentation. A blank line stays one row.
+/// Wraps `text` to `max` cells, keeping its leading indentation.
 #[must_use]
 pub fn wrap(text: &str, max: usize) -> Vec<String> {
     if max == 0 {
@@ -79,9 +72,7 @@ pub fn wrap(text: &str, max: usize) -> Vec<String> {
     lines
 }
 
-/// Breaks `text` every `max` cells, keeping all whitespace. Unlike [`wrap`], it does not collapse runs of spaces.
-///
-/// Diffs need this, since alignment is content (#156).
+/// Breaks `text` every `max` cells, keeping all whitespace.
 #[must_use]
 pub fn hard_wrap(text: &str, max: usize) -> Vec<String> {
     if max == 0 {
@@ -107,7 +98,6 @@ pub fn hard_wrap(text: &str, max: usize) -> Vec<String> {
 mod tests {
     use super::{hard_wrap, width, wrap};
 
-    /// Every line a wrap produces must fit the pane, in **cells**.
     fn assert_fits(lines: &[String], max: usize) {
         for line in lines {
             assert!(
@@ -139,7 +129,6 @@ mod tests {
         }
     }
 
-    /// Counting `chars()` would overflow the pane by 2x.
     #[test]
     fn cjk_counts_two_cells_each_and_never_overflows() {
         let text = "日本語のテキストです";
@@ -152,7 +141,6 @@ mod tests {
         assert_eq!(lines.concat(), text, "no character was dropped");
     }
 
-    /// Emoji clusters are never split.
     #[test]
     fn a_grapheme_cluster_is_never_split() {
         let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
@@ -194,7 +182,6 @@ mod tests {
         assert_eq!(lines.concat(), "word");
     }
 
-    /// `hard_wrap` keeps what `wrap` collapses.
     #[test]
     fn a_hard_wrap_changes_nothing_but_where_the_line_ends() {
         let aligned = "let x = 1;      // two columns of padding";

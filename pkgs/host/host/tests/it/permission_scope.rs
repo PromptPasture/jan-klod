@@ -1,5 +1,4 @@
 //! How far a standing `always` reaches (#232): by default it lasts for the session that gave it; `persist: true` shares it.
-//! The observable is whether the gate asked, counted by the driver.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -17,7 +16,6 @@ const GUESTS: [&str; 3] = [
     "interceptor-permission.wasm",
 ];
 
-/// Answers every confirmation with `always`, and counts them.
 struct AlwaysAllow {
     asked: Arc<AtomicU32>,
 }
@@ -29,7 +27,6 @@ impl Driver for AlwaysAllow {
     }
 }
 
-/// Keeps no events; these tests count questions, not answers.
 struct Quiet;
 impl EventSink for Quiet {
     fn emit(&mut self, _event: &Event) -> Flow {
@@ -37,8 +34,6 @@ impl EventSink for Quiet {
     }
 }
 
-/// A fleet whose model reaches for a gated tool on the first completion
-/// of every turn, so each turn is a chance to ask.
 fn agents_with_permission(tag: &str, persist: bool) -> Option<(common::TempDir, Arc<Agents>)> {
     if !common::guests_staged(&GUESTS) {
         return None;
@@ -95,7 +90,6 @@ extensions:
     Some((guard, Agents::new(runtime, factory)))
 }
 
-/// Run one turn in `session`, answering any confirmation with `always`.
 fn turn(agents: &Agents, session: &str, asked: &Arc<AtomicU32>) {
     let asked = Arc::clone(asked);
     let session = session.to_owned();
@@ -108,8 +102,6 @@ fn turn(agents: &Agents, session: &str, asked: &Arc<AtomicU32>) {
         .expect("the turn ran");
 }
 
-/// The default: a grant lasts for the session that gave it. The second turn in
-/// the same session must not ask, or the test would pass for the wrong reason.
 #[test]
 fn a_standing_grant_lasts_for_the_session_that_gave_it() {
     let Some((_guard, agents)) = agents_with_permission("default", false) else {
@@ -136,7 +128,6 @@ fn a_standing_grant_lasts_for_the_session_that_gave_it() {
     );
 }
 
-/// `persist: true` shares the grant with every session.
 #[test]
 fn persist_true_shares_the_grant_with_every_session() {
     let Some((_guard, agents)) = agents_with_permission("persist", true) else {

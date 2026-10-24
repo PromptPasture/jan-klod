@@ -1,5 +1,4 @@
-//! `host-process` across the Component-Model boundary, through the `tool-proc-probe` guest. With execution disabled,
-//! every call is denied (default-deny). Offline. Skips (passes as a no-op) when the guest is not staged in `ext/`.
+//! `host-process` through the `tool-proc-probe` guest: with execution disabled, every call is denied.
 
 use std::time::Duration;
 
@@ -64,9 +63,6 @@ fn host_process_is_default_deny_when_disabled() {
     );
 }
 
-/// A command run through a guest must not inherit the host's credentials, since
-/// tool output is sent back to the model. Unlike the `core::host_process` unit
-/// test, this covers the deployment path.
 #[test]
 fn a_guest_run_command_does_not_receive_the_hosts_credentials() {
     let engine = Engine::default();

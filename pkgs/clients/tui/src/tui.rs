@@ -1,5 +1,4 @@
-//! Terminal glue over [`app`](jk_tui::app) and [`Transport`]; not unit-tested.
-//! `Transport` is `Arc<dyn Transport>` because turn and answer threads share one stdio pipe.
+//! Terminal glue over `App` and `Transport`: the event loop and drawing.
 
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -26,11 +25,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 const POLL_MS: u64 = 50;
 
-/// Run the TUI against `transport`, restoring the terminal on exit. The theme
-/// is resolved once, not per frame, so rendering does not depend on re-read state.
-///
-/// # Errors
-/// Propagates a terminal I/O error from the draw/event loop.
+/// The theme is resolved once, not per frame, so rendering does not depend on re-read state.
 pub fn run(
     transport: &Arc<dyn Transport>,
     session: &str,
@@ -156,15 +151,12 @@ fn event_loop(
     Ok(())
 }
 
-/// Connect-time facts, read once: the transport kind (it sets the quit
-/// confirm's wording) and the contributed commands.
 fn take_connect_facts(app: &mut App, transport: &Arc<dyn Transport>) {
     app.set_stdio(transport.is_stdio());
     app.set_contributions(&transport.contributions());
 }
 
-/// Executes the asks the model raised since the last frame. `session/get` is
-/// not here: the switcher answers it from a keystroke.
+/// `session/get` is not here: the switcher answers it from a keystroke.
 fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
     if app.take_cancel_request() {
         match transport.cancel(app.session()) {
@@ -205,8 +197,7 @@ fn drain_transport_requests(app: &mut App, transport: &Arc<dyn Transport>) {
     }
 }
 
-/// Switcher's `Enter`. `session_get` is synchronous because nothing reads the
-/// pipe during a switch, which only starts when `Idle`.
+/// `session_get` is synchronous because nothing reads the pipe during a switch, which only starts when `Idle`.
 fn switch_session(app: &mut App, transport: &Arc<dyn Transport>) {
     let Some(id) = app.sessions_confirm() else {
         return;
@@ -228,23 +219,18 @@ fn switch_session(app: &mut App, transport: &Arc<dyn Transport>) {
     }
 }
 
-/// What `Enter` does, picked from the turn state. A pure function, so the table is testable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Enter {
     /// Answer the pending confirmation (not a steer).
     Answer,
     /// Pending prompt whose dialog is closed: reopen it, never answer blind.
     ReopenPrompt,
-    /// Steer the turn already running — `turn/follow-up`.
     Steer,
-    /// Start a turn — `session/message`.
     Send,
-    /// Turn is cancelling: nothing to do.
     Nothing,
 }
 
-/// Maps turn state to `Enter`'s meaning. `Blocked` is checked first because a
-/// blocked turn is still streaming underneath. Reads `App::turn()`, not the loop's `rx`.
+/// `Blocked` is checked first because a blocked turn is still streaming underneath.
 fn enter_means(app: &App) -> Enter {
     match app.turn() {
         Turn::Blocked if app.dialog_open() => Enter::Answer,
@@ -255,9 +241,7 @@ fn enter_means(app: &App) -> Enter {
     }
 }
 
-/// Sends a follow-up to the running turn and records any refusal, so it is not
-/// silently dropped. Synchronous on purpose: a thread would lose the refusal,
-/// which over REST is the only feedback.
+/// Sends a follow-up to the running turn and records any refusal, so it is not silently dropped.
 fn steer(transport: &dyn Transport, session: &str, app: &mut App) {
     let Some(message) = app.take_submission() else {
         return;
@@ -267,28 +251,20 @@ fn steer(transport: &dyn Transport, session: &str, app: &mut App) {
     }
 }
 
-/// Asks the running turn to stop. Returns false if nothing runs or it was
-/// already asked. The partial answer is kept. Sending happens in the loop's
-/// drain, so the menu and Ctrl+C share one path.
 fn request_cancel(app: &mut App) -> bool {
     app.cancel()
 }
 
-/// Last frame's dimensions for scroll keys.
 #[derive(Debug, Default, Clone, Copy)]
 struct Pane {
     total: usize,
     height: usize,
-    /// Composer width in cells, for visual-row motion.
     composer_width: usize,
     /// Transcript width in cells; differs from the composer, whose caret takes two more.
     transcript_width: usize,
-    /// True when there is no permanent sidebar pane, so `Ctrl+B` opens it as a dialog.
     sidebar_hidden: bool,
 }
 
-/// Keys moving the caret or viewport. Returns true if consumed. Kept out of the
-/// loop, which owns threads and the turn.
 fn edit_or_scroll(
     key: &ratatui::crossterm::event::KeyEvent,
     app: &mut App,
@@ -384,8 +360,7 @@ fn edit_or_scroll(
     true
 }
 
-/// Dialog keys, checked before the composer and menu. Only one dialog is open
-/// at a time. `?` and `Ctrl+B` open dialogs, so they are checked last.
+/// Dialog keys, checked before the composer and menu.
 fn dialog_priority_keys(
     key: &ratatui::crossterm::event::KeyEvent,
     app: &mut App,
@@ -422,9 +397,7 @@ fn dialog_priority_keys(
     false
 }
 
-/// Ask-dialog keys while open. Returns true if consumed. `Esc` closes without
-/// answering, so the prompt stays reopenable. A list prompt consumes every other
-/// key, so nothing reaches the composer. `Enter` is never consumed here.
+/// `Enter` is never consumed here.
 fn dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
     if !app.dialog_open() {
         return false;
@@ -458,7 +431,6 @@ fn dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool
     list_mode
 }
 
-/// Quit confirm owns all keys while open: there is no free text to type.
 const fn quit_confirm_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
     if !app.quit_confirm_open() {
         return false;
@@ -474,7 +446,6 @@ const fn quit_confirm_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut 
     true
 }
 
-/// Switcher keys while open: `Esc` closes, arrows highlight, typing filters.
 /// `Enter` is not consumed; the loop handles it because it needs the transport.
 fn sessions_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
     if !app.sessions_open() {
@@ -506,7 +477,6 @@ fn sessions_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bo
     }
 }
 
-/// Help overlay keys while open: `Esc` or `?` closes; the arrows and PageUp/PageDown scroll.
 const fn help_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
     if !app.help_open() {
         return false;
@@ -522,7 +492,6 @@ const fn help_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> 
     true
 }
 
-/// Sidebar dialog keys while open: `Esc` or `Ctrl+B` closes it.
 const fn sidebar_dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mut App) -> bool {
     if !app.sidebar_dialog_open() {
         return false;
@@ -537,25 +506,18 @@ const fn sidebar_dialog_keys(key: &ratatui::crossterm::event::KeyEvent, app: &mu
     true
 }
 
-/// Scrolls so the selected block is visible after a cursor move or a height change.
 fn reveal_cursor(app: &App, view: &mut Viewport, pane: Pane, theme: Theme) {
     let Some(at) = app.cursor() else { return };
     let (start, rows) = blocks::span_of(&app.transcript, at, pane.transcript_width, theme);
     *view = view.reveal(start, rows, pane.total, pane.height);
 }
 
-/// What one streamed event did to the turn.
 enum Step {
-    /// Applied; there may be more waiting.
     Applied,
-    /// Nothing left right now.
     Drained,
-    /// The turn is over, cleanly or otherwise.
     Ended,
 }
 
-/// Takes one streamed event and applies it. Separate from the loop, which only
-/// spawns threads and owns the channel.
 fn apply_event(
     app: &mut App,
     receiver: &mpsc::Receiver<Result<StreamEvent, String>>,
@@ -606,7 +568,7 @@ fn apply_event(
     Step::Applied
 }
 
-/// Composer caret glyph. A glyph rather than a tint, because `Mode::Mono` drops all colour.
+/// A glyph rather than a tint, because `Mode::Mono` drops all colour.
 const fn caret_glyph(turn: Turn) -> Glyph {
     match turn {
         Turn::Streaming => Glyph::CaretSteering,
@@ -614,8 +576,6 @@ const fn caret_glyph(turn: Turn) -> Glyph {
     }
 }
 
-/// Composer border title: what the field is right now. Kept separate from
-/// [`status_hint`], which says which keys act.
 fn composer_label(app: &App) -> String {
     app.pending_prompt().map_or_else(
         || {
@@ -636,7 +596,6 @@ fn composer_label(app: &App) -> String {
     )
 }
 
-/// The keybinding [`Context`] for the current state.
 fn status_context(app: &App) -> Context {
     if app.pending_prompt().is_some() {
         return if app.dialog_open() {
@@ -652,16 +611,11 @@ fn status_context(app: &App) -> Context {
     }
 }
 
-/// Keybinding hint for the current state, produced from [`keymap::BINDINGS`] so
-/// the status bar cannot drift from the table. `narrow` keeps only the first
-/// binding per context (60–79 columns). A pending prompt's default is appended
-/// here: it is data from the core, not a binding.
+/// Built from `keymap::BINDINGS`, so the status bar cannot drift from the table.
 fn status_hint(app: &App, narrow: bool) -> String {
     status_hint_from(keymap::BINDINGS, app, narrow)
 }
 
-/// [`status_hint`] against an arbitrary table. The table is a parameter so tests
-/// can prove the status bar reads it rather than a hand-written copy.
 fn status_hint_from(table: &[keymap::Binding], app: &App, narrow: bool) -> String {
     let context = status_context(app);
     let base = if narrow {
@@ -677,8 +631,7 @@ fn status_hint_from(table: &[keymap::Binding], app: &App, narrow: bool) -> Strin
     base
 }
 
-/// The spinner frame for `tick`, or nothing when idle. Driven by the poll tick,
-/// not by deltas, which can be sparse.
+/// Driven by the poll tick, not by deltas, which can be sparse.
 fn spinner_frame(theme: Theme, turn: Turn, tick: usize) -> Option<&'static str> {
     match turn {
         Turn::Idle => None,
@@ -689,8 +642,7 @@ fn spinner_frame(theme: Theme, turn: Turn, tick: usize) -> Option<&'static str> 
     }
 }
 
-/// Run-fixed facts for rendering: how the client reached the core, and where it
-/// started. The session id is not here because it can change; read it from `App`.
+/// The session id is not here because it can change; read it from `App`.
 struct Meta<'a> {
     described: &'a str,
     cwd: &'a std::path::Path,
@@ -805,8 +757,6 @@ fn render(
     render_quit_confirm(frame, app, theme);
 }
 
-/// The header row: wordmark, session id, how the client connected, and the
-/// spinner on the right. `collapsed` (60–79 columns) drops the connection.
 fn render_header(
     frame: &mut Frame,
     area: Option<Rect>,
@@ -842,7 +792,6 @@ fn render_header(
     );
 }
 
-/// The status bar: keybinding hints on the left, and a toast or the connection state on the right.
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: Theme, collapsed: bool) {
     let hint = status_hint(app, collapsed);
     let mut block = Block::default().title(Span::styled(
@@ -872,7 +821,6 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: Theme, col
     );
 }
 
-/// The sidebar, drawn from [`sidebar::view`]. This function only places it.
 fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, meta: &Meta<'_>, theme: Theme) {
     let info = SessionInfo {
         id: app.session(),
@@ -888,7 +836,6 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, meta: &Meta<'_>, the
     );
 }
 
-/// The sidebar as a dialog, for widths where there is no permanent sidebar pane.
 fn render_sidebar_dialog(frame: &mut Frame, app: &App, meta: &Meta<'_>, theme: Theme) {
     if !app.sidebar_dialog_open() {
         return;
@@ -903,7 +850,6 @@ fn render_sidebar_dialog(frame: &mut Frame, app: &App, meta: &Meta<'_>, theme: T
     render_modal(frame, " sidebar ", lines, theme, 0);
 }
 
-/// Drawn instead of the normal frame when the terminal is too small to read.
 fn render_too_small(frame: &mut Frame, area: Rect, theme: Theme) {
     let lines = vec![Line::from(Span::styled(
         "terminal too small",
@@ -917,15 +863,11 @@ fn render_too_small(frame: &mut Frame, area: Rect, theme: Theme) {
     );
 }
 
-/// Width of every modal: about two thirds of the frame, clamped to a usable range.
-/// Dialogs wrap their lines to this same width.
 fn modal_width(area_width: u16) -> u16 {
     ((area_width * 2) / 3).clamp(24, area_width.saturating_sub(4).max(24))
 }
 
-/// The one modal primitive: centred, on `raised()` with a `focus()` border.
-/// Every dialog goes through it, because a drawing mistake in the ask dialog
-/// is a security issue. `scroll` is in rows; only help uses it.
+/// Every dialog goes through it, because a drawing mistake in the ask dialog is a security issue.
 fn render_modal(
     frame: &mut Frame,
     title: &str,
@@ -960,7 +902,6 @@ fn render_modal(
     );
 }
 
-/// The ask dialog: content from [`blocks::prompt_dialog`], framed by [`render_modal`].
 fn render_prompt_dialog(frame: &mut Frame, app: &App, theme: Theme) {
     if !app.dialog_open() {
         return;
@@ -980,7 +921,6 @@ fn render_prompt_dialog(frame: &mut Frame, app: &App, theme: Theme) {
     render_modal(frame, " confirm ", lines, theme, 0);
 }
 
-/// The session switcher: content from [`blocks::sessions_dialog`], framed by [`render_modal`].
 fn render_sessions_dialog(frame: &mut Frame, app: &App, theme: Theme) {
     if !app.sessions_open() {
         return;
@@ -998,8 +938,6 @@ fn render_sessions_dialog(frame: &mut Frame, app: &App, theme: Theme) {
     render_modal(frame, " sessions ", lines, theme, 0);
 }
 
-/// The help overlay: content from [`blocks::help_dialog`], framed by [`render_modal`].
-/// Scrollable, since its content can exceed the modal's height.
 fn render_help(frame: &mut Frame, app: &App, theme: Theme) {
     if !app.help_open() {
         return;
@@ -1022,7 +960,6 @@ fn render_help(frame: &mut Frame, app: &App, theme: Theme) {
     );
 }
 
-/// The quit confirm: content from [`blocks::quit_dialog`], framed by [`render_modal`].
 fn render_quit_confirm(frame: &mut Frame, app: &App, theme: Theme) {
     let Some((mid_turn, turn_lost, escalate, quit_selected)) = app.quit_confirm() else {
         return;
@@ -1040,7 +977,6 @@ fn render_quit_confirm(frame: &mut Frame, app: &App, theme: Theme) {
     render_modal(frame, " quit? ", lines, theme, 0);
 }
 
-/// Draws `rows` in a bordered overlay just above the composer.
 fn render_overlay(
     frame: &mut Frame,
     title: &'static str,
@@ -1063,7 +999,6 @@ fn render_overlay(
     }
 }
 
-/// The `@` completion list.
 fn render_completion(frame: &mut Frame, app: &App, theme: Theme, input_area: Rect) {
     if !app.completion_open() {
         return;
@@ -1174,7 +1109,6 @@ mod tests {
         KeyEvent::new(code, modifiers)
     }
 
-    /// Drive one key and report whether the mapping consumed it.
     fn key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> bool {
         let mut view = Viewport::default();
         edit_or_scroll(
@@ -1210,7 +1144,6 @@ mod tests {
         assert_eq!(app.input(), "ab", "Enter must not have edited the buffer");
     }
 
-    /// `Ctrl+U` kills a line with content and scrolls when the composer is empty.
     #[test]
     fn ctrl_u_kills_a_line_with_content_and_is_left_alone_when_empty() {
         let mut app = App::default();
@@ -1247,7 +1180,6 @@ mod tests {
         assert_eq!(app.input(), "");
     }
 
-    /// Arrow keys walk history only when the caret cannot move.
     #[test]
     fn arrows_walk_history_only_when_the_caret_cannot_move() {
         let mut app = App::default();
@@ -1293,7 +1225,6 @@ mod tests {
         assert_eq!(app.input(), "original", "history holds what was sent");
     }
 
-    /// The menu opens only for a slash at column zero of an empty composer.
     #[test]
     fn the_menu_opens_only_at_column_zero_of_an_empty_composer() {
         let mut app = App::default();
@@ -1414,7 +1345,6 @@ mod tests {
         );
     }
 
-    /// A temp tree with one ignored path, for the completion tests.
     fn completion_tree() -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
             "jk-complete-{}-{}",
@@ -1431,7 +1361,6 @@ mod tests {
         root
     }
 
-    /// Type `text`, refreshing the completion against `root` as a real run does.
     fn type_into(app: &mut App, root: &std::path::Path, text: &str) {
         for c in text.chars() {
             app.push_char(c);
@@ -1509,7 +1438,6 @@ mod tests {
         assert_eq!(app.composer.caret(), 0, "Ctrl+A went to the line start");
     }
 
-    /// `Ctrl+O` toggles the block under the cursor, and is a no-op with none.
     #[test]
     fn ctrl_o_toggles_the_selected_block_and_never_types_an_o() {
         let mut app = App::default();
@@ -1534,7 +1462,6 @@ mod tests {
         assert_eq!(app.cursor(), None, "`Alt+Down` puts the selection away");
     }
 
-    /// Bare arrows stay with the composer; the transcript cursor needs Alt.
     #[test]
     fn the_bare_arrows_still_belong_to_the_composer() {
         let mut app = App::default();
@@ -1548,7 +1475,6 @@ mod tests {
         );
     }
 
-    /// `Ctrl+C` raises one cancel ask and keeps the partial answer.
     #[test]
     fn ctrl_c_asks_once_and_keeps_the_partial_answer() {
         let mut app = App::default();
@@ -1597,8 +1523,6 @@ mod signals {
         app
     }
 
-    /// The caret, label and hint all differ between `Idle` and `Streaming`, so
-    /// one missed signal cannot hide the change.
     #[test]
     fn the_caret_the_label_and_the_hint_all_change_when_a_turn_starts() {
         let idle = App::default();
@@ -1623,7 +1547,6 @@ mod signals {
         );
     }
 
-    /// The status bar is produced from the keymap table: a doctored table must change it.
     #[test]
     fn the_status_bar_renders_from_the_keymap_table_and_not_a_duplicate() {
         use jk_tui::keymap::{Binding, Context};
@@ -1656,7 +1579,6 @@ mod signals {
         );
     }
 
-    /// Under `Mode::Mono` the three signals still differ, since colour is gone.
     #[test]
     fn under_monochrome_the_three_still_differ() {
         let idle = App::default();
@@ -1673,7 +1595,6 @@ mod signals {
         assert_ne!(status_hint(&idle, false), status_hint(&busy, false));
     }
 
-    /// The spinner advances on a poll tick with no delta received.
     #[test]
     fn the_spinner_advances_on_a_tick_with_no_delta() {
         let theme = Theme::new(Mode::Dark, Depth::TrueColor, GlyphSet::Unicode);
@@ -1693,7 +1614,6 @@ mod signals {
         );
     }
 
-    /// A pending confirmation names the answer in words, not by reusing the steering caret.
     #[test]
     fn a_pending_prompt_names_the_answer_enter_will_send() {
         let mut app = streaming();
@@ -1812,7 +1732,6 @@ mod enter {
         }
     }
 
-    /// The `Enter` table: the turn state picks its meaning.
     #[test]
     fn the_state_decides_what_enter_means() {
         let idle = App::default();
@@ -1854,7 +1773,6 @@ mod enter {
         );
     }
 
-    /// Steering while streaming sends `turn/follow-up`, not a new message.
     #[test]
     fn steering_sends_a_follow_up_and_not_a_new_message() {
         let recorder = Recorder::default();
@@ -1875,7 +1793,6 @@ mod enter {
         );
     }
 
-    /// `Blocked` answers the prompt and does not steer.
     #[test]
     fn a_blocked_turn_answers_and_does_not_steer() {
         let mut app = App::default();
@@ -1899,7 +1816,6 @@ mod enter {
         );
     }
 
-    /// The answer goes to the prompt's own session, not the client's current one.
     #[test]
     fn the_answer_is_sent_with_the_prompts_own_session_not_the_clients() {
         let mut app = App::default();
@@ -1921,7 +1837,6 @@ mod enter {
         );
     }
 
-    /// `Esc` closes the dialog without sending, and the prompt survives.
     #[test]
     fn esc_closes_the_dialog_without_sending_turn_answer() {
         let mut app = App::default();
@@ -1956,7 +1871,6 @@ mod enter {
         assert!(recorder.sent.lock().expect("lock").is_empty());
     }
 
-    /// `/cancel` and `Ctrl+C` raise the same ask, which the loop drains once.
     #[test]
     fn a_menu_cancel_raises_the_same_ask_ctrl_c_does() {
         for opened_by_menu in [false, true] {
@@ -1982,7 +1896,6 @@ mod enter {
         }
     }
 
-    /// Over REST, steering is refused with a reason shown in the transcript.
     #[test]
     fn rest_refuses_to_steer_and_the_user_can_read_why() {
         let rest = Rest::new("127.0.0.1:1".to_string());
@@ -2012,7 +1925,6 @@ mod enter {
 
 #[cfg(test)]
 mod dialogs {
-    //! Dialog wiring between `App` intents and `Transport`.
 
     use jk_protocol::{SessionGetResult, TranscriptMessage};
     use jk_tui::app::{App, Entry, SessionEntry, SessionMessage};
@@ -2022,7 +1934,6 @@ mod dialogs {
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Mutex;
 
-    /// `?` on an empty composer opens help, tested through `edit_or_scroll`.
     #[test]
     fn a_bare_question_mark_on_an_empty_composer_opens_help() {
         let mut app = App::default();
@@ -2051,7 +1962,6 @@ mod dialogs {
         assert_eq!(typing.input(), "is this on?");
     }
 
-    /// `Ctrl+B` opens the sidebar dialog only when there is no sidebar pane.
     #[test]
     fn ctrl_b_only_opens_the_sidebar_dialog_where_the_pane_is_hidden() {
         let mut wide = App::default();
@@ -2091,7 +2001,6 @@ mod dialogs {
         assert!(narrow.sidebar_dialog_open());
     }
 
-    /// Fake transport that counts `session/list` and `session/get` calls.
     #[derive(Default)]
     struct Fake {
         list_calls: Mutex<usize>,
@@ -2163,8 +2072,6 @@ mod dialogs {
         }
     }
 
-    /// Opening the switcher lists once; selecting loads once and rebuilds the
-    /// transcript, resolving a `tool` message onto its call.
     #[test]
     fn the_switcher_issues_one_list_and_one_get_and_rebuilds_the_transcript() {
         let fake = Fake::default();
@@ -2232,8 +2139,6 @@ mod dialogs {
         );
     }
 
-    /// Only one function draws a dialog frame. Checked by grep, since a second
-    /// copy would compile just as well.
     #[test]
     fn every_dialog_shares_one_frame_implementation() {
         let source = include_str!("tui.rs");

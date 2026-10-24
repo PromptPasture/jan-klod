@@ -1,5 +1,4 @@
 //! A TinyGo component answers a call through the committed fixture `pkgs/extensions/spike/spike.wasm`; needs no toolchain.
-//! Rebuild the fixture (`make -C pkgs/extensions spike-guest`) only when committing a new one.
 
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
@@ -35,7 +34,6 @@ fn spike_wasm() -> PathBuf {
     common::repo_root().join("pkgs/extensions/spike/spike.wasm")
 }
 
-/// Instantiates the component at `path` and calls its `complete`.
 fn echo_through_the_host(path: &Path) -> String {
     let engine = Engine::default();
     let component = Component::from_file(&engine, path).expect("the Go-built component compiles");
@@ -75,9 +73,6 @@ fn a_component_built_from_go_completes_a_call_through_the_host() {
     );
 }
 
-/// Checks that today's `wit/` still yields a working Go guest. Skips without
-/// `tinygo`/`wkg`. Rebuilds into a temp dir, never over the fixture, and does not
-/// assert byte equality since TinyGo output varies by version.
 #[test]
 fn the_committed_artifact_is_rebuildable() {
     if !common::optional_tool("tinygo") || !common::optional_tool("wkg") {

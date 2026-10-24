@@ -1,6 +1,4 @@
-//! Network-granted components cannot reach their own machine. Tests drive
-//! `fetch_within` directly and assert on real server hit counts, since a guest's
-//! own SSRF guard is courtesy, not a boundary.
+//! Network-granted components cannot reach their own machine; asserted on real server hit counts via `fetch_within`.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -13,7 +11,6 @@ use jk_agent::Runtime;
 
 use crate::common;
 
-/// Bounds a failing request; healthy requests do not wait on it.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Loopback server that counts requests and answers all of them, so an escape would see a plausible reply.
@@ -21,7 +18,6 @@ struct Sentinel {
     port: u16,
     hits: Arc<AtomicU32>,
     stop: Arc<AtomicU32>,
-    /// I/O failures; `hits()` is untrusted until `assert_no_faults` passes (#78, #83).
     faults: Arc<Mutex<Vec<String>>>,
 }
 
@@ -77,7 +73,6 @@ impl Sentinel {
         self.hits.load(Ordering::Relaxed)
     }
 
-    /// Fails if the sentinel's own I/O failed, so `hits()` reflects requests actually read.
     fn assert_no_faults(&self) {
         let faults = self.faults.lock().expect("not poisoned").clone();
         assert!(
@@ -120,7 +115,6 @@ extensions:
     path
 }
 
-/// Sends one request through the host's real HTTP backend, with policy derived from `config`.
 fn request_through_the_host(config: &std::path::Path, url: &str) -> Result<(), ()> {
     let runtime = Runtime::boot(config, common::repo_root().join("ext")).expect("boots");
     let policy = runtime.egress_policy();
@@ -153,7 +147,6 @@ fn a_live_local_service_is_not_reachable() {
     );
 }
 
-/// Policy is per-origin, not a global switch: self-hosted models on loopback must stay reachable.
 #[test]
 fn an_endpoint_named_in_config_is_reachable() {
     let dir = std::env::temp_dir().join(format!("jk-egress-ok-{}", std::process::id()));
@@ -176,7 +169,6 @@ fn an_endpoint_named_in_config_is_reachable() {
     assert_eq!(sentinel.hits(), 1, "and the request actually arrived");
 }
 
-/// A provider's `base-url` is allowed without naming it again.
 #[test]
 fn a_providers_base_url_is_allowed_without_naming_it_again() {
     let dir = std::env::temp_dir().join(format!("jk-egress-base-{}", std::process::id()));
@@ -212,7 +204,6 @@ extensions:
     assert_eq!(sentinel.hits(), 1);
 }
 
-/// Granting one origin must not open the machine.
 #[test]
 fn a_grant_covers_one_origin_and_not_its_neighbours() {
     let dir = std::env::temp_dir().join(format!("jk-egress-nb-{}", std::process::id()));
@@ -236,7 +227,6 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
     );
 }
 
-/// Every host-http serving point must consult policy. Scans for the unbounded `http::fetch`, which the tests above would not catch.
 #[test]
 fn every_guest_facing_backend_goes_through_the_policy() {
     let core = common::repo_root().join("pkgs/host/wasm/src");
@@ -302,7 +292,6 @@ fn every_guest_facing_backend_goes_through_the_policy() {
     }
 }
 
-/// Server answering every request with `302` to `target`, counting hits.
 pub fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
     let port = listener.local_addr().expect("has an address").port();
@@ -332,7 +321,6 @@ pub fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
     (port, hits)
 }
 
-/// A permitted origin cannot redirect into a refused one (#107): each hop must pass policy.
 #[test]
 fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
     let forbidden = common::Countable::start();
@@ -360,14 +348,12 @@ fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
     forbidden.only_hit();
 }
 
-/// Redirects once, then serves; records every request so the test can check what survived each hop.
 struct Hops {
     port: u16,
     seen: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Hops {
-    /// First request gets `status` and `Location`, rest get `200 landed`.
     fn start(status: u16, location: String) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
@@ -407,7 +393,6 @@ impl Hops {
     }
 }
 
-/// Redirects to permitted destinations are still followed; the #107 fix does not break all redirects.
 #[test]
 fn a_redirect_to_a_permitted_destination_is_followed() {
     let hops = Hops::start(302, "/landed".to_owned());
@@ -432,7 +417,6 @@ fn a_redirect_to_a_permitted_destination_is_followed() {
     );
 }
 
-/// `Authorization` is stripped on redirect, so API keys cannot leak to redirect targets.
 #[test]
 fn credentials_do_not_survive_a_redirect() {
     let hops = Hops::start(302, "/landed".to_owned());
@@ -465,7 +449,6 @@ fn credentials_do_not_survive_a_redirect() {
     );
 }
 
-/// `302` turns POST into GET and drops the body; `307` preserves both.
 #[test]
 fn a_302_becomes_a_get_and_a_307_keeps_the_post() {
     for (status, expected) in [(302_u16, "GET"), (307, "POST")] {

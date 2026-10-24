@@ -1,7 +1,4 @@
-//! Telegram bot (headless): `getUpdates` long-poll and `sendMessage` POST over an injected [`Fetch`]; chat id = session id.
-//!
-//! [`ChatDriver`] asks confirmations as chat messages and takes the next message as the answer; other chats' updates
-//! are deferred, not dropped. The wait is bounded by [`MAX_ANSWER_POLLS`]; expiry takes the prompt default.
+//! Telegram bot (headless): `getUpdates` long-poll and `sendMessage` over an injected [`Fetch`]; chat id is session id.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -16,7 +13,7 @@ use jk_protocol::turn::{Driver, UserPrompt};
 pub struct Update {
     /// Monotonic update id (drives the poll offset).
     pub update_id: i64,
-    /// Sender id from message.from.id (used for principal and allowlist check).
+    /// Sender id, checked against the allowlist and used as the principal.
     pub sender_id: i64,
     /// Chat to reply to — also used as the loop session id.
     pub chat_id: i64,
@@ -28,15 +25,12 @@ pub struct Update {
 pub type Fetch<'a> =
     &'a dyn Fn(&str, &str, &[(&str, &str)], Option<&[u8]>) -> Result<Vec<u8>, String>;
 
-/// Long-poll seconds passed to `getUpdates` (server holds the request open).
 const LONG_POLL_SECS: u32 = 30;
 
-/// Long-polls a turn waits for its confirmation before taking the prompt's default.
-/// Counted in polls, not wall-clock, so a canned test `fetch` behaves like the real 30s-blocking one.
+/// Long-polls a turn waits for its answer, counted in polls so a canned test `fetch` behaves like the real one.
 const MAX_ANSWER_POLLS: u32 = 4;
 
-/// Parse a `getUpdates` response body into the text messages it carries.
-/// Non-message updates (edits, joins, non-text) are skipped.
+/// Parses a `getUpdates` body into its text messages, skipping non-message updates.
 #[must_use]
 pub fn parse_updates(body: &[u8]) -> Vec<Update> {
     let value: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
@@ -57,16 +51,13 @@ pub fn parse_updates(body: &[u8]) -> Vec<Update> {
         .collect()
 }
 
-/// The next poll offset after handling `updates`: one past the highest update id,
-/// or `None` when there was nothing to advance past.
+/// Next poll offset: one past the highest update id, or `None` when there was nothing to advance past.
 #[must_use]
 pub fn next_offset(updates: &[Update]) -> Option<i64> {
     updates.iter().map(|u| u.update_id).max().map(|max| max + 1)
 }
 
-/// One poll cycle: fetch updates from `offset`, drive each message through the loop, reply, and return the next offset.
-///
-/// `allowed_senders` gates who may drive turns (#257); empty denies all. Refused before a session is created.
+/// One poll cycle returning the next offset; `allowed_senders` (empty denies all) gates who may drive turns.
 ///
 /// # Errors
 /// Transport error string if `getUpdates` or a `sendMessage` fails.
@@ -116,14 +107,12 @@ pub fn poll_once(
     Ok(cursor.get())
 }
 
-/// The `getUpdates` long-poll URL for `offset`.
 fn get_updates_url(token: &str, offset: i64) -> String {
     format!(
         "https://api.telegram.org/bot{token}/getUpdates?timeout={LONG_POLL_SECS}&offset={offset}"
     )
 }
 
-/// Send `text` to `chat_id`.
 fn send_message(fetch: Fetch, token: &str, chat_id: i64, text: &str) -> Result<(), String> {
     let url = format!("https://api.telegram.org/bot{token}/sendMessage");
     let payload = serde_json::json!({ "chat_id": chat_id, "text": text }).to_string();
@@ -136,16 +125,11 @@ fn send_message(fetch: Fetch, token: &str, chat_id: i64, text: &str) -> Result<(
     Ok(())
 }
 
-/// Puts an interceptor's question to the chat and waits for the user's next
-/// message there to answer it.
 struct ChatDriver<'a> {
     fetch: Fetch<'a>,
     token: &'a str,
-    /// The chat being asked — only its messages answer the question.
     chat_id: i64,
-    /// Shared poll offset, advanced as this driver consumes updates.
     cursor: Rc<Cell<i64>>,
-    /// Updates from other chats seen while waiting, to run after this turn.
     deferred: Rc<RefCell<Vec<Update>>>,
 }
 
@@ -169,7 +153,6 @@ impl Driver for ChatDriver<'_> {
 }
 
 impl ChatDriver<'_> {
-    /// Long-poll until this chat says something, deferring other chats' messages.
     fn wait_for_reply(&self) -> Option<String> {
         for _ in 0..MAX_ANSWER_POLLS {
             let url = get_updates_url(self.token, self.cursor.get());

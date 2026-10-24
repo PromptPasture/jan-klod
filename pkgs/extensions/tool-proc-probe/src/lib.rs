@@ -1,6 +1,4 @@
-//! `tool-proc-probe` — exercises the `host-process` capability.
-//!
-//! Exercises `host-process`: `invoke` with `command` returns the command's stdout.
+//! `tool-proc-probe`: `invoke` with `command` returns the command's stdout, exercising `host-process`.
 
 #[cfg(target_arch = "wasm32")]
 mod component {

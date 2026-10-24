@@ -1,6 +1,4 @@
 //! What the tool selector costs and saves against the fleet `self-extend` ships (#219).
-//! The shipped config is used with only mock-provider, key and path substitutions,
-//! each asserted to match, so the measurement cannot drift from what ships.
 
 use jk_protocol::intercept::{Dispatcher, HookState, PendingRequest, Phase};
 
@@ -13,7 +11,6 @@ use wasmtime::Engine;
 use crate::common;
 use crate::self_extend::shipped_fleet;
 
-/// A driver that is never asked: `select-tools` has no question to put.
 struct NoDriver;
 impl jk_protocol::turn::Driver for NoDriver {
     fn ask(&mut self, _prompt: &jk_protocol::turn::UserPrompt) -> String {
@@ -21,7 +18,6 @@ impl jk_protocol::turn::Driver for NoDriver {
     }
 }
 
-/// The selector, configured with `tools` and whatever else the case needs.
 fn selector(tools: &serde_json::Value, keys: &[(&str, usize)]) -> WasmInterceptor {
     let mut config = serde_json::json!({ "tools": tools.clone() });
     for (key, value) in keys {
@@ -42,7 +38,6 @@ fn selector(tools: &serde_json::Value, keys: &[(&str, usize)]) -> WasmIntercepto
     .expect("the selector instantiates")
 }
 
-/// What the selector advertises for `asked`.
 fn advertised(
     tools: &serde_json::Value,
     keys: &[(&str, usize)],
@@ -72,7 +67,6 @@ fn advertised(
         .collect()
 }
 
-/// Prompt bytes a tool costs: name, prose and schema, excluding each provider's wrapper.
 fn schema_bytes(tools: &[(String, String, String)]) -> usize {
     tools
         .iter()
@@ -80,7 +74,6 @@ fn schema_bytes(tools: &[(String, String, String)]) -> usize {
         .sum()
 }
 
-/// Against the shipped fleet, a relevant tool is advertised and an unrelated one is not.
 #[test]
 fn a_bounded_fleet_keeps_the_relevant_tool_and_drops_the_unrelated_one() {
     let Some((_guard, tools)) = shipped_fleet() else {
@@ -99,7 +92,6 @@ fn a_bounded_fleet_keeps_the_relevant_tool_and_drops_the_unrelated_one() {
     );
 }
 
-/// With nothing matching, the floor still advertises tools rather than an empty list.
 #[test]
 fn a_request_matching_nothing_still_advertises_the_floor() {
     let Some((_guard, tools)) = shipped_fleet() else {
@@ -113,7 +105,6 @@ fn a_request_matching_nothing_still_advertises_the_floor() {
     assert_eq!(kept.len(), 2, "the floor did not hold: {kept:?}");
 }
 
-/// Unconfigured, the selector advertises the whole fleet, so existing deployments see no change.
 #[test]
 fn an_unconfigured_selector_advertises_the_whole_fleet() {
     let Some((_guard, tools)) = shipped_fleet() else {
@@ -124,8 +115,6 @@ fn an_unconfigured_selector_advertises_the_whole_fleet() {
     assert_eq!(kept.len(), whole, "the default is not a pass-through");
 }
 
-/// A tighter bound saves prompt bytes. Asserted as a direction, not a fixed figure,
-/// since schema edits would otherwise break it.
 #[test]
 fn the_bound_saves_prompt_bytes_and_says_how_many() {
     let Some((_guard, tools)) = shipped_fleet() else {

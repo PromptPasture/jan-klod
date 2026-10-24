@@ -1,13 +1,10 @@
 //! A Python component answers a real tool call; it imports raw WASI that the host links and denies at the context.
-//! Skips when not staged (#188): it is 18.5 MB and needs `componentize-py`. `JK_REQUIRE_GUESTS` does not force it.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
 
 use crate::common;
 
-/// The component this test needs, which `make -C pkgs/extensions py-guest`
-/// stages when `componentize-py` is present.
 const PY_COMPONENT: &str = "tool-hello-py.wasm";
 
 #[test]

@@ -1,5 +1,4 @@
-//! Refusals a model can reach through `ext-install` (#213). `ext_install.rs` covers
-//! the function itself; this covers the tool path, which must keep its refusals.
+//! Refusals a model can reach through `ext-install`; `ext_install.rs` covers the function itself.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,7 +14,6 @@ use crate::common;
 
 const PROBE: &str = "tool-escape-probe.wasm";
 
-/// A driver that refuses whatever it is asked, and counts the asking.
 struct DecliningDriver {
     asked: Rc<RefCell<u32>>,
 }
@@ -27,8 +25,6 @@ impl Driver for DecliningDriver {
     }
 }
 
-/// No guest can write `ext/`. `sandbox_boundary.rs` implies this only incidentally,
-/// so this names the directory and fails if it ever becomes reachable.
 #[test]
 fn a_guest_cannot_write_the_extension_directory() {
     if !common::guests_staged(&[PROBE]) {
@@ -64,8 +60,6 @@ fn a_guest_cannot_write_the_extension_directory() {
     );
 }
 
-/// Boot a runtime whose model asks to install `path`, with the permission
-/// gate on, and return the directory it would have installed into.
 fn install_turn(tag: &str, driver: &mut dyn Driver) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("jk-instref-{tag}-{}", std::process::id()));
     let ext = dir.join("ext");
@@ -150,8 +144,6 @@ extensions:
     ext
 }
 
-/// The operator says no, and nothing is installed. `ext-install` is not on the
-/// permission gate's read-only allowlist, so the gate confirms it like any write.
 #[test]
 fn an_install_the_operator_declines_does_not_happen() {
     if !common::guests_staged(&[

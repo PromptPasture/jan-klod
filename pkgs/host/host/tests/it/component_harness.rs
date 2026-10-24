@@ -1,6 +1,4 @@
-//! Offline component tests: load a staged guest through the Component Model,
-//! back its imports with [`TestHost`], and exercise its WIT interface. Tests
-//! skip when their component is not staged in `ext/` (`make harness` builds it).
+//! Offline component tests: load a staged guest, back its imports with [`TestHost`], and exercise its WIT interface.
 
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
@@ -14,7 +12,6 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::common;
 
-/// `provider-world`: lifecycle + `llm-provider`, also imports `host-http`.
 mod provider_bind {
     wasmtime::component::bindgen!({
         path: "../../../wit",
@@ -22,7 +19,6 @@ mod provider_bind {
     });
 }
 
-/// `skill-registry-world`: lifecycle + `skill-registry`, imports `host-fs`.
 mod skill_registry_bind {
     wasmtime::component::bindgen!({
         path: "../../../wit",
@@ -30,14 +26,12 @@ mod skill_registry_bind {
     });
 }
 
-/// A canned `host-http` reply; 5xx and 4xx map to errors as in [`jk_wasm::http`].
 #[derive(Clone)]
 struct MockHttp {
     status: u16,
     body: Vec<u8>,
 }
 
-/// Host backing every guest's imports: config section, log buffer, canned HTTP.
 struct TestHost {
     wasi: WasiCtx,
     table: ResourceTable,
@@ -255,7 +249,6 @@ impl skill_registry_bind::jan_klod::interfaces::host_config::Host for TestHost {
     }
 }
 
-/// Resolves a staged guest at `<repo>/ext/<file>`; `None` skips when absent.
 fn staged_component(engine: &Engine, file: &str) -> Option<Component> {
     let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "..", "ext", file]
         .iter()
@@ -421,7 +414,6 @@ fn provider_openai_maps_auth_error() -> Result<()> {
     Ok(())
 }
 
-/// A reply with both a preamble and tool calls must yield both, not drop the text.
 #[test]
 fn provider_openai_keeps_text_that_accompanies_tool_calls() -> Result<()> {
     use provider_bind::exports::jan_klod::interfaces::extension_lifecycle::ExtensionContext;

@@ -1,11 +1,4 @@
-//! `@` path completion. Offers paths and reads nothing.
-//!
-//! The fragment runs from the last `@` to the caret and ends at whitespace, so
-//! it can sit mid-sentence. The walk honours `.gitignore` and stops at
-//! [`MAX_ENTRIES`]; [`Completion::truncated`] makes that cap visible.
-//!
-//! The walk starts at the working directory, so `..` matches nothing. That is a
-//! convenience, not a security boundary.
+//! `@` path completion.
 
 use std::path::Path;
 
@@ -31,8 +24,6 @@ pub fn fragment(text: &str, caret: usize) -> Option<&str> {
 }
 
 /// Paths under `root` matching `fragment`, honouring `.gitignore`.
-///
-/// A substring match, so `@main` finds `src/main.rs`.
 #[must_use]
 pub fn complete(root: &Path, fragment: &str) -> Completion {
     let mut entries = Vec::new();
@@ -68,8 +59,7 @@ pub fn complete(root: &Path, fragment: &str) -> Completion {
 mod tests {
     use super::{complete, fragment, Completion, MAX_ENTRIES};
 
-    /// A unique tree per call. The name must not come from the clock: tests share a
-    /// process, and macOS's clock has microsecond resolution, so trees collided.
+    /// The name must not come from the clock: trees collided at macOS's microsecond resolution.
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     fn tree() -> std::path::PathBuf {
@@ -103,7 +93,6 @@ mod tests {
         assert_eq!(fragment("@", 1), Some(""));
     }
 
-    /// Ignored and hidden paths are not offered.
     #[test]
     fn gitignored_paths_are_not_offered() {
         let root = tree();
@@ -126,7 +115,6 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// `..` cannot escape, by construction rather than by a check.
     #[test]
     fn dot_dot_cannot_be_walked_into() {
         let root = tree();
@@ -152,7 +140,6 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// The cap binds, and the list says so.
     #[test]
     fn the_entry_cap_binds_and_says_so() {
         let root = tree();

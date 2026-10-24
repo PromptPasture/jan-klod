@@ -1,6 +1,4 @@
-//! `registry-mcp` over a stdio child, end to end (#110). The server is a shell
-//! script, so this proves the framing and plumbing, not that a real MCP server
-//! behaves. Offline; skips when guests are not staged.
+//! `registry-mcp` over a stdio child with a shell-script server; proves framing and plumbing only.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,7 +7,6 @@ use jk_agent::Runtime;
 
 use crate::common;
 
-/// The guests a turn through the MCP registry needs.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "registry-mcp.wasm"];
 
 /// Per-test argv marker so `pgrep` cannot match another test's child.
@@ -17,11 +14,6 @@ fn marker(tag: &str) -> String {
     format!("jk-stdio-fixture-110-{tag}-{}", std::process::id())
 }
 
-/// Minimal MCP server as one `sh -c` line, answering the three methods the test
-/// drives. Must stay one line: YAML folds newlines, and a comment swallowed the
-/// program. `MARKER` is an assignment, not a comment, so it stays in argv.
-/// The trailing `sleep 30` keeps the child alive after stdin hits EOF; without it
-/// the lifetime test would pass whether or not anything killed the child (#109).
 fn fixture_script(tag: &str) -> String {
     let reply =
         |result: &str| format!(r#"printf '{{"jsonrpc":"2.0","id":1,"result":{result}}}\n'"#);
@@ -40,8 +32,6 @@ fn fixture_script(tag: &str) -> String {
     )
 }
 
-/// Config enabling `registry.mcp` over stdio. The operator grants the process
-/// (`long-lived`); the guest names it and never supplies a command.
 fn config_yaml_with(workspace: &str, script: &str) -> String {
     let script = script.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
@@ -70,13 +60,10 @@ execution:
     )
 }
 
-/// Boots an agent against the fixture server. The caller owns the temp dir guard,
-/// which decides when the runtime drops.
 fn booted(tag: &str) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     booted_with(tag, || common::canned_http("ok"))
 }
 
-/// [`booted`], driven by a provider of the caller's choice.
 fn booted_with(
     tag: &str,
     http: impl Fn() -> jk_wasm::route::HttpFn,
@@ -84,7 +71,6 @@ fn booted_with(
     booted_against(tag, &fixture_script(tag), http)
 }
 
-/// [`booted_with`], against a server of the caller's choosing.
 fn booted_against(
     tag: &str,
     script: &str,
@@ -112,7 +98,6 @@ fn booted_against(
     Some((guard, agent))
 }
 
-/// Whether the fixture child is running, checked by its argv marker.
 fn fixture_running(tag: &str) -> bool {
     std::process::Command::new("pgrep")
         .arg("-f")
@@ -121,7 +106,6 @@ fn fixture_running(tag: &str) -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
-/// Acceptance line 1: a stdio server named in config lists its tools.
 #[test]
 fn a_stdio_server_named_in_config_lists_its_tools() {
     let Some((_dir, mut agent)) = booted("list") else {
@@ -134,7 +118,6 @@ fn a_stdio_server_named_in_config_lists_its_tools() {
     );
 }
 
-/// Acceptance line 1, the other half: `tools/call` through a turn.
 #[test]
 fn a_tool_on_a_stdio_server_can_be_called() {
     if !common::guests_staged(&GUESTS) {
@@ -186,8 +169,6 @@ fn a_tool_on_a_stdio_server_can_be_called() {
     );
 }
 
-/// Acceptance line 1's last clause: the child dies with the runtime. Checked by
-/// looking for the process, since calling kill is not the same as the child being dead (#109).
 #[test]
 fn the_stdio_child_is_gone_once_the_runtime_stops() {
     let Some((dir, mut agent)) = booted("lifetime") else {
@@ -212,12 +193,8 @@ fn the_stdio_child_is_gone_once_the_runtime_stops() {
     );
 }
 
-/// Acceptance line 2 bound: a misbehaving server must not pin the single-threaded
-/// core. Long enough for the guest's own ten-second budget, short enough that an
-/// unbounded wait cannot pass.
 const MUST_FINISH_WITHIN: std::time::Duration = std::time::Duration::from_secs(40);
 
-/// A server that answers every request with something that is not JSON.
 fn malformed_script(tag: &str) -> String {
     format!(
         "MARKER={m}; while IFS= read -r line; do printf 'this is not json\\n'; \
@@ -226,12 +203,10 @@ fn malformed_script(tag: &str) -> String {
     )
 }
 
-/// A server that starts, stays up, and never answers anything.
 fn silent_script(tag: &str) -> String {
     format!("MARKER={m}; sleep 60", m = marker(tag))
 }
 
-/// A reply that is not JSON means the server is down, not that the turn fails.
 #[test]
 fn a_malformed_reply_leaves_the_server_down_rather_than_breaking_the_turn() {
     let started = std::time::Instant::now();
@@ -263,8 +238,6 @@ fn a_malformed_reply_leaves_the_server_down_rather_than_breaking_the_turn() {
     );
 }
 
-/// A child that starts and never answers. Only the guest's own budget ends the
-/// wait, so without it this test hangs rather than fails.
 #[test]
 fn a_silent_child_gives_up_instead_of_pinning_the_core() {
     let started = std::time::Instant::now();

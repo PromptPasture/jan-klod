@@ -1,5 +1,4 @@
 //! `interceptor-intent-router` uses model tier for simple-vs-agentic.
-//! Tests: assert classifier consulted, verdict acted on, provider failure degrades.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -13,7 +12,6 @@ use crate::common;
 
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "interceptor-intent-router.wasm"];
 
-/// Provider varies by instance: `judge` for classification, `main` for turns
 fn split_http(classifications: &Arc<AtomicU32>, verdict: &'static str) -> HttpFn {
     let classifications = Arc::clone(classifications);
     Box::new(move |_m, url: &str, _h, _b, _t| {

@@ -1,22 +1,11 @@
-//! What a component declares it needs, and whether it agrees.
-//!
-//! Importing an undeclared capability is a refusal; over-declaring is not (capabilities are default-deny,
-//! so the manifest must not become a second place to sync grants). Parsed with `toml` because
-//! mis-parsing hand-written TOML would defeat a security check.
+//! What a component declares it needs; undeclared imports are refused, over-declaring is not (capabilities are default-deny).
 
 use std::path::{Path, PathBuf};
 
-/// The `jan-klod:interfaces` package version this build speaks.
-///
-/// A constant, not read from `wit/` (an installed gateway has none); `pkgs/host/host/tests/it/manifest.rs`
-/// asserts it matches every `wit/*.wit`.
+/// The `jan-klod:interfaces` package version this build speaks; a constant because an installed gateway has no `wit/`.
 pub const API_VERSION: &str = "0.4.0";
 
-/// Whether a component built against `declared` can run on a host speaking `host`.
-///
-/// Same major, and while major is `0` the same minor too (cargo's rule for pre-1.0 crates): a major-only
-/// check would accept `0.1` on a host speaking `0.9`. From `1.0` on a differing minor passes; N-1 minor
-/// compatibility through adapters is a separate policy (16b). An unparseable version is incompatible.
+/// Whether `declared` can run on `host`: same major, and the same minor while major is `0`; unparseable is incompatible.
 #[must_use]
 pub fn api_compatible(host: &str, declared: &str) -> bool {
     let parts = |v: &str| -> Option<(u64, u64)> {
@@ -44,14 +33,9 @@ pub struct Manifest {
     pub api_version: String,
     /// Category (`provider`, `tool`, `interceptor`, …).
     pub kind: String,
-    /// What the component is for, in prose. Empty when absent.
-    ///
-    /// The only optional key: boot doesn't read it, so refusing an install over a missing sentence would fail
-    /// over decoration. The registry index reads it from here.
+    /// What the component is for; empty when absent, the only optional key.
     pub description: String,
-    /// The `host-*` interfaces it declares, sorted.
-    ///
-    /// An empty list is a claim ("needs nothing"), distinct from an absent manifest.
+    /// Declared `host-*` interfaces, sorted; empty claims "needs nothing", distinct from an absent manifest.
     pub capabilities: Vec<String>,
 }
 
@@ -86,13 +70,10 @@ pub enum ManifestError {
 }
 
 impl Manifest {
-    /// Read the manifest beside a component, if there is one.
-    ///
-    /// `Ok(None)` means no manifest file, distinct from a manifest declaring nothing.
+    /// Read the manifest beside a component; `Ok(None)` means no file, distinct from one declaring nothing.
     ///
     /// # Errors
-    /// [`ManifestError`] if the file exists but cannot be read, parsed, or lacks a required key; a broken
-    /// manifest is never treated as absent (a typo would silently widen).
+    /// [`ManifestError`] if the file exists but cannot be read, parsed or lacks a required key; never treated as absent.
     pub fn beside(component: &Path) -> Result<Option<Self>, ManifestError> {
         let path = manifest_path(component);
         if !path.exists() {
@@ -147,9 +128,7 @@ impl Manifest {
         }))
     }
 
-    /// Interfaces `imported` uses that this manifest does not declare.
-    ///
-    /// The refusal set; empty means the declaration covers every import.
+    /// Interfaces `imported` uses that this manifest does not declare: the refusal set.
     #[must_use]
     pub fn undeclared<'a>(&self, imported: &'a [String]) -> Vec<&'a str> {
         imported
@@ -160,9 +139,7 @@ impl Manifest {
     }
 }
 
-/// Where a component's manifest lives: beside it, same stem.
-///
-/// Public so `ext remove` deletes the same file `beside` reads: one naming rule.
+/// Where a component's manifest lives: beside it, same stem; public so `ext remove` deletes the file `beside` reads.
 #[must_use]
 pub fn manifest_path(component: &Path) -> PathBuf {
     let stem = component.file_stem().map_or_else(
@@ -218,7 +195,6 @@ capabilities = [
         assert_eq!(manifest.capabilities, vec!["host-fs"]);
     }
 
-    /// The one key a manifest may leave out; prose is not a condition of loading.
     #[test]
     fn a_manifest_without_a_description_still_reads() {
         let dir = tmp();
@@ -239,7 +215,6 @@ capabilities = [
         assert_eq!(Manifest::beside(&component).unwrap(), None);
     }
 
-    /// A present-but-broken manifest never reads as absent: a typo would widen grants by erasing the declaration.
     #[test]
     fn a_broken_manifest_is_an_error_not_an_absence() {
         let dir = tmp();
@@ -260,7 +235,6 @@ capabilities = [
         assert_eq!(key, "capabilities", "the first absent key is reported");
     }
 
-    /// An empty list stays "needs nothing", not the absent case.
     #[test]
     fn an_empty_capability_list_is_a_declaration() {
         let dir = tmp();
@@ -296,7 +270,6 @@ capabilities = [
         );
     }
 
-    /// Over-declaring is deliberately not a finding: capabilities are default-deny at the call.
     #[test]
     fn declaring_more_than_the_component_imports_is_not_a_problem() {
         let dir = tmp();
@@ -313,7 +286,6 @@ capabilities = [
         );
     }
 
-    /// Hand-authored TOML (trailing comments, inline arrays) would defeat a line-oriented reader.
     #[test]
     fn a_hand_written_manifest_parses() {
         let dir = tmp();
@@ -355,28 +327,24 @@ mod api_version_tests {
         assert!(!api_compatible("0.1.0", "0.4.0"));
     }
 
-    /// Everything in play is `0.x`, where a major-only check would call `0.1` and `0.9` compatible.
     #[test]
     fn a_differing_minor_below_one_point_zero_is_not() {
         assert!(!api_compatible("0.1.0", "0.2.0"));
         assert!(!api_compatible("0.9.0", "0.1.0"));
     }
 
-    /// From 1.0 on a differing minor passes.
     #[test]
     fn a_differing_minor_from_one_point_zero_on_is_compatible() {
         assert!(api_compatible("1.3.0", "1.1.0"));
         assert!(api_compatible("1.1.0", "1.3.0"));
     }
 
-    /// A patch difference never matters at any major.
     #[test]
     fn a_patch_difference_is_ignored() {
         assert!(api_compatible("0.1.0", "0.1.7"));
         assert!(api_compatible("2.0.4", "2.0.0"));
     }
 
-    /// Refuse rather than guess.
     #[test]
     fn an_unparseable_version_is_incompatible() {
         assert!(!api_compatible("0.1.0", "dev"));

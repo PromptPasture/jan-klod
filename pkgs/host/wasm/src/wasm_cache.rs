@@ -1,12 +1,4 @@
-//! Wasmtime's built-in compiled-artefact cache, wired into the `Engine` each boot (not hand-rolled).
-//!
-//! The built-in key covers bytes, Wasmtime version, target and engine config; corrupt artefacts are misses.
-//! This module picks where the cache lives, makes it user-private, and hands the [`Cache`] to
-//! [`crate::Runtime`] for hit/miss counters.
-//!
-//! Security: a hit loads native code from disk without re-verifying it, so a world-writable cache dir
-//! would let anything on the machine plant code this process executes. [`ensure_private_dir`] closes
-//! that with `0700` on unix.
+//! Wasmtime's compile cache; a hit loads unverified native code, so the directory is made `0700` on unix.
 
 use std::path::{Path, PathBuf};
 
@@ -14,15 +6,9 @@ use wasmtime::{Cache, CacheConfig, Config as EngineConfig, Engine};
 
 use crate::CoreError;
 
-/// Directory name used when `storage.cache-dir` names none: a sibling of `storage.path`'s directory
-/// (or of `config.yaml` when storage is the in-memory default), per #60.
 const DEFAULT_DIR_NAME: &str = "wasmtime-cache";
 
-/// Resolve the compile-cache directory: `storage.cache-dir` if set (relative to `config_dir`, like
-/// `storage.path`), else `config_dir/wasmtime-cache`.
-///
-/// **Not** derived from `storage.path`: in-memory stores have none, and the cache is independent of
-/// transcript persistence.
+/// Independent of `storage.path`: in-memory stores have none.
 pub fn resolve_cache_dir(config_dir: &Path, agent: &serde_json::Value) -> PathBuf {
     let configured = agent
         .get("storage")
@@ -34,13 +20,7 @@ pub fn resolve_cache_dir(config_dir: &Path, agent: &serde_json::Value) -> PathBu
     )
 }
 
-/// Create `dir` (and any missing parents) and make it user-private on unix.
-///
-/// Called before handing the directory to Wasmtime, whose `CacheConfig::validate` creates a missing
-/// directory but never restricts its permissions. Without unix permission bits the chmod is skipped.
-///
-/// # Errors
-/// Whatever `std::fs::create_dir_all`/`set_permissions` returns.
+/// Wasmtime's `CacheConfig::validate` creates a missing directory but never restricts its permissions.
 pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
@@ -51,14 +31,7 @@ pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Build the `Engine` a boot uses, with Wasmtime's compile cache wired to the resolved cache directory.
-///
-/// Returns the `Cache` handle too (it is not reachable back out of the engine) so
-/// [`crate::Runtime::compile_cache_stats`] can read hit/miss counters.
-///
-/// # Errors
-/// [`CoreError::Cache`] if the directory cannot be created/made private, or if
-/// Wasmtime itself refuses the cache configuration or engine construction.
+/// Returns the `Cache` handle too, as it is not reachable back out of the engine.
 pub fn build_engine(
     config_dir: &Path,
     agent: &serde_json::Value,
@@ -96,7 +69,6 @@ mod tests {
     use wasmtime::component::Component;
     use wasmtime::{Cache, CacheConfig, Config as EngineConfig, Engine, ModuleVersionStrategy};
 
-    /// Two distinct, individually valid components, to prove a byte change is a miss.
     const WAT_A: &str = "(component (core module (func)))";
     const WAT_B: &str = "(component (core module (func (param i32))))";
 
@@ -190,8 +162,6 @@ mod tests {
         );
     }
 
-    /// Simulate a Wasmtime version change via `Config::module_version` (which defaults to the Wasmtime
-    /// version); the workspace never overrides it, so two `Custom` strings are used.
     #[test]
     fn a_module_version_change_the_same_shape_as_a_wasmtime_upgrade_is_a_miss() {
         let dir = temp_dir("version");

@@ -1,5 +1,4 @@
-//! Loop conductor: sequences a turn and runs the `ReAct` loop. Every decision is delegated to interceptors.
-//! Decoupled from Wasmtime through [`Completer`] and [`ToolInvoker`], so it is unit-tested with stubs.
+//! Sequences a turn and runs the `ReAct` loop; every decision is delegated to interceptors.
 
 use jk_protocol::turn::{Event, EventSink, Flow};
 
@@ -10,7 +9,7 @@ use jk_protocol::intercept::{
 
 use jk_protocol::turn::{Driver, Message, Role, ToolCall, ToolOutcome};
 
-/// Default cap on `ReAct` iterations, to stop infinite tool-call loops. Raise via `limits.max-iterations`.
+/// Default cap on `ReAct` iterations; raise via `limits.max-iterations`.
 pub const DEFAULT_MAX_ITERATIONS: u32 = 8;
 
 /// Bounds a turn runs under.
@@ -28,10 +27,9 @@ impl Default for Limits {
     }
 }
 
-/// Retries for malformed completions before giving up.
 const MAX_RETRIES: u32 = 3;
 
-/// An [`EventSink`] that drops every event — the non-streaming default.
+/// An [`EventSink`] that drops every event.
 pub struct NoSink;
 impl EventSink for NoSink {
     fn emit(&mut self, _event: &Event) -> Flow {
@@ -44,20 +42,16 @@ impl EventSink for NoSink {
 pub enum RunResult {
     /// The loop produced an answer.
     Answered {
-        /// Final answer text (after `after-response`/`finalize`).
+        /// Final answer text.
         text: String,
-        /// Whether request-shaping path ran.
+        /// Whether the request-shaping path ran.
         agentic: bool,
     },
-    /// Turn failed: shaping phase blocked or all fallback providers failed.
+    /// Shaping was blocked or every fallback provider failed.
     Failed(String),
 }
 
-/// Runs one turn through the loop. `providers` is the fallback chain, `tools`
-/// routes tool calls, and `driver` answers interceptor `ask`s.
-///
-/// `on_effective_message` fires once with the message the model receives after
-/// `before-loop` rewrites (see [`build_initial_request`]).
+/// Runs one turn through the loop; `providers` is the fallback chain.
 #[allow(clippy::too_many_arguments)]
 pub fn run_turn(
     dispatcher: &mut Dispatcher,
@@ -168,9 +162,7 @@ pub fn run_turn(
     RunResult::Answered { text, agentic }
 }
 
-/// Assembles the first [`PendingRequest`]: runs `before-loop`, then appends the
-/// new message to `history`. Returns whether the agentic path should run.
-/// `on_effective_message` fires once, before any loop event (#84).
+/// `on_effective_message` fires once, before any loop event.
 fn build_initial_request(
     dispatcher: &mut Dispatcher,
     driver: &mut dyn Driver,
@@ -212,15 +204,11 @@ fn build_initial_request(
     (agentic, request)
 }
 
-/// What the `ReAct` loop does after a cycle.
 enum LoopStep {
-    /// Keep looping.
     Continue,
-    /// Stop; this text is final.
     Break(String),
 }
 
-/// Handle no-tool-call completion: turn ends or driver steers with follow-up.
 fn handle_no_tool_calls(
     dispatcher: &mut Dispatcher,
     driver: &mut dyn Driver,
@@ -250,7 +238,6 @@ fn handle_no_tool_calls(
     LoopStep::Continue
 }
 
-/// Convert [`ToolPass`] outcome to loop's next step.
 fn after_tool_calls(pass: ToolPass, final_text: String, sink: &mut dyn EventSink) -> LoopStep {
     match pass {
         ToolPass::Continue => LoopStep::Continue,
@@ -263,8 +250,7 @@ fn after_tool_calls(pass: ToolPass, final_text: String, sink: &mut dyn EventSink
     }
 }
 
-/// Marks a turn stopped at the cycle cap. The note goes in the text and the
-/// events, since headless callers see only the text.
+/// The note goes in the text and the events, since headless callers see only the text.
 fn cut_short(text: &str, cap: u32, sink: &mut dyn EventSink) -> String {
     note_incomplete(
         text,
@@ -276,7 +262,7 @@ fn cut_short(text: &str, cap: u32, sink: &mut dyn EventSink) -> String {
     )
 }
 
-/// Marks a turn ended before the model finished. An unmarked partial answer would teach the model false facts.
+/// An unmarked partial answer would teach the model false facts.
 fn note_incomplete(text: &str, note: &str, sink: &mut dyn EventSink) -> String {
     sink.emit(&Event::Warning(note.to_string()));
     if text.trim().is_empty() {
@@ -286,20 +272,14 @@ fn note_incomplete(text: &str, note: &str, sink: &mut dyn EventSink) -> String {
     }
 }
 
-/// Why the tool pass ended the loop. Not a bool: a `tool-result` termination is
-/// a decision, a sink cancel is an interruption, and merging them would record a disconnect as finished.
+/// Not a bool: merging a `tool-result` termination with a sink cancel would record a disconnect as finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolPass {
-    /// Keep looping.
     Continue,
-    /// Interceptor terminated at `tool-result`.
     Terminated,
-    /// Sink cancelled (no listener or explicit stop).
     Cancelled,
 }
 
-/// Runs each tool call through the `tool-call` gate, dispatch and `tool-result`,
-/// appending each result to the conversation.
 fn run_tool_calls(
     dispatcher: &mut Dispatcher,
     tools: &mut dyn ToolInvoker,
@@ -370,7 +350,6 @@ fn run_tool_calls(
     stop
 }
 
-/// Dispatches a request-shaping phase, returning the (possibly replaced) request.
 fn shape(
     dispatcher: &mut Dispatcher,
     driver: &mut dyn Driver,
@@ -394,7 +373,6 @@ fn shape(
     }
 }
 
-/// Dispatches `after-response` or `finalize`; an interceptor may rewrite the text via `replace`.
 fn post_phase(
     dispatcher: &mut Dispatcher,
     driver: &mut dyn Driver,
@@ -417,7 +395,6 @@ fn post_phase(
     }
 }
 
-/// Try each completer in order; first success wins. On exhaustion, return diagnostic.
 fn complete_with_fallback(
     providers: &mut [Box<dyn Completer>],
     request: &PendingRequest,
@@ -440,8 +417,7 @@ fn complete_with_fallback(
     Err(format!("all providers failed ({})", failures.join("; ")))
 }
 
-/// Completes with a retry harness: malformed output is fed back with a
-/// correction and re-issued, up to [`MAX_RETRIES`]. Corrections are transient.
+/// Corrections are transient.
 fn complete_validated(
     providers: &mut [Box<dyn Completer>],
     request: &PendingRequest,
@@ -511,7 +487,6 @@ mod tests {
         }
     }
 
-    /// Interceptor returning fixed decision, recording calls.
     struct Stub {
         id: String,
         phases: Vec<Phase>,
@@ -545,7 +520,6 @@ mod tests {
         })
     }
 
-    /// Completer with queue of replies (last repeats when drained).
     struct ScriptedProvider {
         id: String,
         replies: RefCell<VecDeque<Result<Completion, String>>>,
@@ -613,7 +587,6 @@ mod tests {
         })
     }
 
-    /// Invoker returning canned result, counting invocations.
     struct CountingTools {
         result: String,
         count: Rc<RefCell<u32>>,
@@ -725,7 +698,6 @@ mod tests {
         assert_eq!(*seen.borrow(), vec![Some("gpt-x".to_string())]);
     }
 
-    /// #84: `on_effective_message` must see the `before-loop` rewrite, not the original.
     #[test]
     fn on_effective_message_sees_a_before_loop_rewrite_not_the_original() {
         let log = Rc::new(RefCell::new(vec![]));
@@ -763,7 +735,6 @@ mod tests {
         );
     }
 
-    /// A turn hitting the cycle cap says so in both text and stream.
     #[test]
     fn hitting_the_cycle_cap_is_reported_not_hidden() {
         let mut d = Dispatcher::new(vec![]);
@@ -1101,7 +1072,6 @@ mod tests {
         );
     }
 
-    /// Sink recording every emitted event.
     #[derive(Default)]
     struct RecordingSink(Vec<Event>);
     impl EventSink for RecordingSink {
@@ -1111,7 +1081,6 @@ mod tests {
         }
     }
 
-    /// Sink recording events, returning `Stop` after `after` events to test cancellation.
     struct CancelAfter {
         events: Vec<Event>,
         after: usize,
@@ -1206,7 +1175,6 @@ mod tests {
         );
     }
 
-    /// Driver injecting one follow-up, then stops steering.
     struct SteeringDriver {
         follow_ups: std::cell::RefCell<Vec<&'static str>>,
     }
@@ -1343,7 +1311,6 @@ mod tests {
         assert!(matches!(sink.0.last(), Some(Event::Done { .. })));
     }
 
-    /// Provider whose completion stopped at token limit.
     fn truncated_provider() -> Box<dyn Completer> {
         Box::new(ScriptedProvider {
             id: "cut".into(),

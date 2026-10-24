@@ -1,26 +1,18 @@
-//! `interceptor-persona`: personality as data, read from configuration.
-//! Injects the configured default persona at `select-model`, before `interceptor-context`
-//! measures the token budget. An unknown persona falls back to the built-in text with a warning.
+//! `interceptor-persona`: injects the configured persona at `select-model`, before the token budget is measured.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod persona {
     use serde_json::Value;
 
-    /// The built-in helpful persona, used when config supplies no personas.
     pub const DEFAULT_HELPFUL: &str =
         "You are helpful, concise, and focused on solving the user's problem.";
 
-    /// Persona configuration deserialized from extension config.
     #[derive(Clone, Debug)]
     pub struct PersonaConfig {
-        /// The persona text in force: the configured default, or the built-in
-        /// The persona text in force: the configured default, or the built-in one.
         pub default: String,
     }
 
     impl PersonaConfig {
-        /// Parse from the extension's config section. Returns `None` when disabled or invalid,
-        /// plus an optional warning.
         pub fn from_config(raw_json: &str) -> (Option<Self>, Option<String>) {
             let config_value: Value = match serde_json::from_str(raw_json) {
                 Ok(v) => v,
@@ -176,7 +168,6 @@ mod component {
     use bindings::jan_klod::interfaces::llm_types::{Message, Role};
 
     thread_local! {
-        /// The resolved persona configuration.
         static PERSONA_CONFIG: RefCell<Option<persona::PersonaConfig>> = const { RefCell::new(None) };
     }
 

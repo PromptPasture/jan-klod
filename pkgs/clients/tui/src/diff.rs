@@ -1,7 +1,4 @@
-//! Parses and renders a unified diff. Signs are real characters in column 0, so they survive monochrome.
-//!
-//! Nothing here computes a diff; `tool-git` supplies one. Non-diffs return
-//! `None` and the caller shows plain text.
+//! Parses and renders a unified diff.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -9,15 +6,13 @@ use ratatui::text::{Line, Span};
 use crate::theme::Theme;
 use crate::wrap::{hard_wrap, width};
 
-/// Appended by the guests when output hits its cap. A shared convention, not a wire contract.
+/// Marker the guests append when output hits its cap; a shared convention, not a wire contract.
 const TRUNCATION: &str = "…[truncated:";
 
-/// One parsed line of a diff.
 #[derive(Debug, PartialEq, Eq)]
 enum Row<'a> {
     File(&'a str),
     Hunk(&'a str),
-    /// A body line; a side it does not appear on has no line number.
     Body {
         sign: char,
         old: Option<usize>,
@@ -28,7 +23,6 @@ enum Row<'a> {
     Note(&'a str),
 }
 
-/// The `-a,b +c,d` of a hunk header, or `None` if it is not one.
 fn hunk_start(line: &str) -> Option<(usize, usize)> {
     let inner = line.strip_prefix("@@ ")?;
     let (ranges, _) = inner.split_once(" @@")?;
@@ -44,7 +38,6 @@ fn hunk_start(line: &str) -> Option<(usize, usize)> {
     Some((first(old, '-')?, first(new, '+')?))
 }
 
-/// Whether a line is one of the per-file headers that open a diff.
 fn is_file_header(line: &str) -> bool {
     [
         "diff --git ",
@@ -66,7 +59,7 @@ fn is_file_header(line: &str) -> bool {
         || line == "+++ /dev/null"
 }
 
-/// Parses `text` as a unified diff, or `None` if any line does not fit. Strict on purpose: a lenient parser would render half a log as a diff.
+/// Strict on purpose: a lenient parser would render half a log as a diff.
 fn parse(text: &str) -> Option<Vec<Row<'_>>> {
     let mut rows = Vec::new();
     let mut counters: Option<(usize, usize)> = None;
@@ -122,14 +115,11 @@ fn parse(text: &str) -> Option<Vec<Row<'_>>> {
         .then_some(rows)
 }
 
-/// The number column, right-aligned, or blanks where that side has no line.
 fn number(value: Option<usize>, cells: usize) -> String {
     value.map_or_else(|| " ".repeat(cells), |n| format!("{n:>cells$}"))
 }
 
 /// The `(added, removed)` line counts of `text`, or `None` if it is not a diff.
-///
-/// Shares [`parse`] with [`render`], so the two cannot disagree about what is a diff.
 #[must_use]
 pub fn counts(text: &str) -> Option<(usize, usize)> {
     let rows = parse(text)?;
@@ -203,7 +193,6 @@ pub fn render(text: &str, max: usize, theme: Theme) -> Option<Vec<Line<'static>>
 mod tests {
     use super::{counts, parse, render};
 
-    /// A non-diff gives `None`, not a guessed `+0 -0`.
     #[test]
     fn counts_the_added_and_removed_lines_or_says_it_could_not_parse() {
         assert_eq!(counts(TWO_HUNKS), Some((2, 1)));
@@ -213,7 +202,6 @@ mod tests {
     use crate::theme::{Depth, GlyphSet, Mode, Theme};
     use crate::wrap::width;
 
-    /// Two hunks, both sides numbered, with a `+` and a `-` in each.
     const TWO_HUNKS: &str = "\
 diff --git a/src/main.rs b/src/main.rs
 index 1111111..2222222 100644
@@ -240,7 +228,6 @@ index 1111111..2222222 100644
             .collect()
     }
 
-    /// Signs are characters in column 0.
     #[test]
     fn both_hunks_render_and_the_sign_is_a_character_in_column_zero() {
         let rendered = plain(&render(TWO_HUNKS, 60, theme(Mode::Dark)).expect("a diff"));
@@ -273,7 +260,6 @@ index 1111111..2222222 100644
         );
     }
 
-    /// Both sides are numbered from the hunk header.
     #[test]
     fn line_numbers_come_from_the_hunk_header_and_skip_the_side_that_has_none() {
         let rendered = plain(&render(TWO_HUNKS, 60, theme(Mode::Dark)).expect("a diff"));
@@ -300,7 +286,6 @@ index 1111111..2222222 100644
         );
     }
 
-    /// Mono changes the colours and not one character.
     #[test]
     fn monochrome_changes_the_colours_and_not_one_character() {
         let colour = render(TWO_HUNKS, 60, theme(Mode::Dark)).expect("a diff");
@@ -316,7 +301,6 @@ index 1111111..2222222 100644
         );
     }
 
-    /// Diff-shaped but unparseable content renders as plain text.
     #[test]
     fn anything_that_is_not_a_diff_is_refused_rather_than_guessed_at() {
         for content in [
@@ -335,7 +319,6 @@ index 1111111..2222222 100644
         }
     }
 
-    /// The guests' output cap cut the diff. It still renders, and says so.
     #[test]
     fn a_diff_the_output_cap_cut_still_renders_and_says_it_was_cut() {
         let cut = "@@ -1,9 +1,9 @@\n context\n-gone\n+new\n…[truncated: 4096 bytes omitted]";
@@ -355,7 +338,6 @@ index 1111111..2222222 100644
         assert_eq!(rows.len(), 4);
     }
 
-    /// A long line wraps without claiming to be a second change.
     #[test]
     fn a_long_line_wraps_without_claiming_to_be_a_second_change() {
         let long = format!("@@ -1 +1 @@\n+    let x = 1;{}// aligned", " ".repeat(30));

@@ -1,6 +1,4 @@
 //! Print the extension plan from `config.yaml`.
-//!
-//! Usage: `cargo run -p jk-config --example dump -- [path]`; defaults to `config.yaml`.
 
 use jk_config::Config;
 

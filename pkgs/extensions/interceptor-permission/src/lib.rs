@@ -1,7 +1,4 @@
-//! `interceptor-permission`: the default `tool-call` gate. Scope check first, then a read-only
-//! allowlist (see [`rules`]); anything else asks the driver.
-//! `always`/`never` answers are standing decisions per kind of action (`fs:write`), kept for the
-//! session unless `persist: true`. Scope escapes are never remembered; unreadable state asks.
+//! `interceptor-permission`: the default `tool-call` gate; scope check, then read-only allowlist, else ask the driver.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod rules;
@@ -11,7 +8,6 @@ mod component {
     use crate::rules::{Answer, Policy, Verdict};
     use core::cell::RefCell;
 
-    /// `host-storage` namespace holding this run's standing decisions.
     const NAMESPACE: &str = "permission";
 
     #[allow(
@@ -40,7 +36,6 @@ mod component {
     use bindings::jan_klod::interfaces::host_storage;
 
     thread_local! {
-        /// Resolved permission policy, read once from `host-config` at `init`.
         static POLICY: RefCell<Policy> = RefCell::new(Policy::default());
     }
 
@@ -48,7 +43,6 @@ mod component {
         host_log::log(level, "interceptor-permission", message, &[]);
     }
 
-    /// Read the policy from this extension's config section; missing keys use defaults.
     fn load_policy() {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
         let section =
@@ -56,8 +50,7 @@ mod component {
         POLICY.with(|p| *p.borrow_mut() = Policy::from_config(&section));
     }
 
-    /// Count a refusal of `key` and return the running total. The counter sits under a distinct
-    /// prefix so it can never be read as a verdict; an unreadable value counts as zero.
+    /// The counter sits under a distinct prefix so it can never be read as a verdict.
     fn count_refusal(key: &str) -> u32 {
         let counter = format!("refusals:{key}");
         let previous = host_storage::get(NAMESPACE, &counter)
@@ -69,14 +62,12 @@ mod component {
         next
     }
 
-    /// Look up a standing decision for `key`. Any failure or non-verdict value returns `None`.
     fn recall(key: &str) -> Option<Verdict> {
         let entry = host_storage::get(NAMESPACE, key).ok()?;
         Verdict::parse(&entry.value)
     }
 
-    /// Record a standing decision for this run. A failed write only costs a re-ask, so it is
-    /// logged and ignored: failing to persist must never fail the security decision.
+    /// A failed write is logged and ignored: failing to persist must never fail the security decision.
     fn remember(key: &str, verdict: Verdict) {
         if host_storage::set(NAMESPACE, key, verdict.as_str()).is_err() {
             log(
@@ -91,7 +82,7 @@ mod component {
         }
     }
 
-    /// The confirmation to put to the driver. `always`/`never` are offered only with a scope.
+    /// `always`/`never` are offered only with a scope.
     #[allow(
         clippy::option_if_let_else,
         reason = "side-effecting arm reads worse as closures"

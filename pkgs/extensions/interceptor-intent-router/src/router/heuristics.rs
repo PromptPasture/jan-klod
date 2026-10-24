@@ -1,8 +1,5 @@
-//! Tier-1 heuristics — English phrases, zero model cost.
-//!
-//! Unmatched input passes to the LLM tier; a false `simple` skips the agent loop, so stay conservative.
+//! Tier-1 English phrase heuristics; stay conservative, since a false `simple` skips the agent loop.
 
-/// Greetings answerable with a greeting.
 const GREETINGS: &[&str] = &[
     "hi",
     "hello",
@@ -21,10 +18,8 @@ const GREETINGS: &[&str] = &[
     "wassup",
 ];
 
-/// Greeting prefixes (may have trailing name/clause).
 const GREETING_PREFIXES: &[&str] = &["good morning", "good afternoon", "good evening", "good day"];
 
-/// Farewell phrases.
 const FAREWELLS: &[&str] = &[
     "bye",
     "goodbye",
@@ -41,7 +36,6 @@ const FAREWELLS: &[&str] = &[
     "gn",
 ];
 
-/// Affirmations, acknowledgements, negations.
 const AFFIRMATIONS: &[&str] = &[
     "yes",
     "yeah",
@@ -71,7 +65,6 @@ const AFFIRMATIONS: &[&str] = &[
     "agreed",
 ];
 
-/// Politeness and gratitude.
 const COURTESIES: &[&str] = &[
     "thanks",
     "thank you",
@@ -91,7 +84,6 @@ const COURTESIES: &[&str] = &[
     "my bad",
 ];
 
-/// Conversation control.
 const CLARIFICATIONS: &[&str] = &[
     "never mind",
     "nevermind",
@@ -102,7 +94,6 @@ const CLARIFICATIONS: &[&str] = &[
     "moving on",
 ];
 
-/// Meta-queries (answerable from canned identity).
 const META_QUERIES: &[&str] = &[
     "who are you",
     "what are you",
@@ -117,7 +108,6 @@ const META_QUERIES: &[&str] = &[
     "what are your capabilities",
 ];
 
-/// Short filler interjections.
 const FILLERS: &[&str] = &[
     "hmm",
     "huh",
@@ -130,7 +120,6 @@ const FILLERS: &[&str] = &[
     "hi there",
 ];
 
-/// Every exact-match group, checked after normalisation.
 const EXACT_GROUPS: &[&[&str]] = &[
     GREETINGS,
     FAREWELLS,
@@ -141,10 +130,7 @@ const EXACT_GROUPS: &[&[&str]] = &[
     FILLERS,
 ];
 
-/// Test if text is obviously *simple* by heuristic alone.
-///
-/// Empty input is simple. Otherwise must exactly match a phrase in [`EXACT_GROUPS`]
-/// or start with a [`GREETING_PREFIXES`] entry (after normalization).
+/// Empty input is simple; otherwise it must match a known phrase or greeting prefix after normalization.
 pub fn is_simple(text: &str) -> bool {
     let normalized = normalize(text);
     if normalized.is_empty() {
@@ -161,7 +147,6 @@ pub fn is_simple(text: &str) -> bool {
         .any(|prefix| normalized == *prefix || normalized.starts_with(&format!("{prefix} ")))
 }
 
-/// Lowercase, drop punctuation (keep apostrophes), collapse whitespace.
 fn normalize(text: &str) -> String {
     let cleaned: String = text
         .to_lowercase()

@@ -1,12 +1,9 @@
-//! `tool-edit` — hash-anchored line edits routed through `host-fs`.
-//! Anchor is `fnv1a32(lineno \0 text)`; a stale anchor is rejected without a write.
+//! `tool-edit`: hash-anchored line edits through `host-fs`; a stale anchor is rejected without a write.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod edit {
 
-    /// FNV-1a 32-bit offset basis.
     const FNV_OFFSET: u32 = 0x811c_9dc5;
-    /// FNV-1a 32-bit prime.
     const FNV_PRIME: u32 = 0x0100_0193;
 
     /// FNV-1a. It only detects change, so a collision costs a rejected edit, never a bad write.
@@ -16,8 +13,7 @@ mod edit {
         })
     }
 
-    /// Anchor for the 1-based line `lineno` holding `text`.
-    /// Hashing both makes the anchor fail closed: moved or changed lines differ.
+    /// Hashing line number and text makes the anchor fail closed: moved or changed lines differ.
     pub fn anchor(lineno: usize, text: &str) -> String {
         let mut buf = lineno.to_string().into_bytes();
         buf.push(0);
@@ -25,7 +21,6 @@ mod edit {
         format!("{:08x}", fnv1a32(&buf))
     }
 
-    /// Split `content` into lines and whether it ended with a newline.
     fn lines_of(content: &str) -> (Vec<String>, bool) {
         content.strip_suffix('\n').map_or_else(
             || (content.split('\n').map(str::to_string).collect(), false),
@@ -33,7 +28,6 @@ mod edit {
         )
     }
 
-    /// Re-join `lines`, restoring the original trailing newline.
     fn join_lines(lines: &[String], trailing_newline: bool) -> String {
         let mut out = lines.join("\n");
         if trailing_newline {
@@ -42,7 +36,6 @@ mod edit {
         out
     }
 
-    /// Split replacement `contents` into lines, dropping trailing newline.
     fn contents_lines(contents: &str) -> Vec<String> {
         if contents.is_empty() {
             return Vec::new();
@@ -55,9 +48,6 @@ mod edit {
             .collect()
     }
 
-    /// Resolve `target` to its 0-based line index.
-    /// # Errors
-    /// Anchor misses (file changed) or is ambiguous (collision). Both recoverable by re-viewing.
     fn find_anchor(lines: &[String], target: &str) -> Result<usize, String> {
         let hits: Vec<usize> = lines
             .iter()
@@ -78,7 +68,6 @@ mod edit {
         }
     }
 
-    /// Render `content` as one `anchor|lineno|text` line per source line.
     pub fn render_view(content: &str) -> String {
         let (lines, _) = lines_of(content);
         lines
@@ -89,10 +78,7 @@ mod edit {
             .join("\n")
     }
 
-    /// Replace lines `start..=end` (`end` defaults to `start`) with `contents`.
-    /// Empty `contents` deletes the span. Returns new text and line count.
-    /// # Errors
-    /// Anchor does not resolve or `end` precedes `start`. Nothing is written.
+    /// Empty `contents` deletes the span; `end` defaults to `start`.
     pub fn replace(
         content: &str,
         start: &str,
@@ -116,10 +102,7 @@ mod edit {
         Ok((join_lines(&lines, trailing_newline), replaced))
     }
 
-    /// Insert `contents` before or after the anchored line. Returns new file text and line count.
-    /// # Errors
-    /// Anchor does not resolve or `contents` is empty
-    /// (an insert that changes nothing is a mistake, not a no-op).
+    /// An insert that changes nothing is a mistake, so empty `contents` is rejected.
     pub fn insert(
         content: &str,
         target: &str,
@@ -143,7 +126,6 @@ mod edit {
         use super::{anchor, insert, render_view, replace};
         use guest_fs::{truncate, MAX_OUTPUT_BYTES};
 
-        /// Anchor of line `lineno` as `view` renders it.
         fn anchor_of(content: &str, lineno: usize) -> String {
             anchor(lineno, content.split('\n').nth(lineno - 1).unwrap())
         }
@@ -302,7 +284,6 @@ mod component {
         }
     }
 
-    /// A rejected edit: no write happened, and the model is told how to recover.
     fn rejected(reason: &str) -> String {
         format!("REJECTED (nothing was written): {reason}")
     }

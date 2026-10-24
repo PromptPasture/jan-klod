@@ -1,5 +1,4 @@
-//! `tool-plan` across turns and sessions. Plan rules are covered by the guest's
-//! own tests; these cover what only the whole stack can show.
+//! `tool-plan` across turns and sessions; plan rules are covered by the guest's own tests.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,7 +12,6 @@ const GUESTS: [&str; 3] = [
     "tool-plan.wasm",
 ];
 
-/// Scripted `plan` arguments and the requests that carried their results.
 struct Script {
     calls: Mutex<Vec<String>>,
     seen: Mutex<Vec<String>>,
@@ -32,8 +30,6 @@ impl Script {
     }
 }
 
-/// Calls `plan` once per turn, then ends it. The turn half is read from the
-/// last message's role: a turn is two completions, so counting them misaligns.
 fn provider(script: &Arc<Script>) -> impl Fn() -> jk_wasm::route::HttpFn {
     let script = Arc::clone(script);
     move || -> jk_wasm::route::HttpFn {
@@ -146,8 +142,6 @@ fn a_plan_written_in_one_turn_is_read_back_in_the_next() {
     );
 }
 
-/// Only a second session can show that the host keys storage by session: the
-/// guest has no session id.
 #[test]
 fn two_sessions_do_not_share_a_plan() {
     if !common::guests_staged(&GUESTS) {
@@ -182,8 +176,6 @@ fn two_sessions_do_not_share_a_plan() {
     );
 }
 
-/// Control for the isolation test: without `scope: session` the sessions share
-/// a plan. Also pins the run-scoped default that other guests rely on.
 #[test]
 fn without_session_scope_the_same_two_sessions_share_a_plan() {
     if !common::guests_staged(&GUESTS) {

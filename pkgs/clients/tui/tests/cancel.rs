@@ -1,8 +1,4 @@
-//! Acceptance #157, line 3: a cancelled turn **stops**, not just "message sent".
-//!
-//! The fake server streams `delta` frames forever. Without `cancel` shutting the
-//! socket, `stream_turn` would block past the timeout, so the test proves the
-//! turn actually stops (#133: a gate that looks like it runs but does not).
+//! A cancelled turn stops, rather than merely having its cancel message sent.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener};
@@ -71,7 +67,7 @@ fn cancel_stops_a_turn_streaming_forever_over_rest() {
     );
 }
 
-/// #289: on Linux a frame arriving after shutdown turns EOF into ECONNRESET. Holding the reader off the socket makes that window deterministic.
+/// On Linux a frame arriving after shutdown turns EOF into ECONNRESET; holding the reader off the socket makes that deterministic.
 #[test]
 fn a_cancel_that_resets_the_connection_still_ends_the_turn_cleanly() {
     let transport = std::sync::Arc::new(Rest::new(fake_core().to_string()));

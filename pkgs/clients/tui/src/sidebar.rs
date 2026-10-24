@@ -1,8 +1,4 @@
 //! The sidebar: a projection, never a driver.
-//!
-//! [`view`] returns lines to draw from the model. It polls nothing and sends
-//! nothing. `tests/sidebar_projection.rs` greps this source for the words that
-//! would mean it had grown a way to drive anything.
 
 use std::path::Path;
 
@@ -14,7 +10,7 @@ use crate::blocks;
 use crate::diff;
 use crate::theme::{Glyph, Theme};
 
-/// Connection facts fixed at start-up. Passed in, since the sidebar only displays them.
+/// Connection facts fixed at start-up.
 #[derive(Debug, Clone, Copy)]
 pub struct SessionInfo<'a> {
     /// The session id.
@@ -110,14 +106,10 @@ fn row(lines: &mut Vec<Line<'static>>, text: &str, width: usize, theme: Theme) {
     )));
 }
 
-/// Cuts every line to the pane and marks the cut. Kept in one place so later sections inherit it (#206).
-///
-/// `cwd` pre-cuts from the left, so this is a no-op on it.
 fn cut(text: &str, width: usize, theme: Theme) -> String {
     crate::untrusted::inert_within(text, width, theme.glyph(Glyph::Elided))
 }
 
-/// Cuts from the left, so the leaf of a long path stays visible.
 fn truncate_from_left(theme: Theme, text: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
@@ -164,9 +156,7 @@ fn tool_glyph(tool: &ToolBlock, theme: Theme) -> &'static str {
     }
 }
 
-/// Files this session's tool calls touched, oldest first, one row per path.
-///
-/// Counts are `None` when the result is not a diff. Never `+0 -0`: a non-diff is not evidence that nothing changed.
+/// Counts are `None` when the result is not a diff.
 fn changed_files(app: &App) -> Vec<(String, Option<(usize, usize)>)> {
     let mut ordered: Vec<(String, Option<(usize, usize)>)> = Vec::new();
     for entry in &app.transcript {
@@ -219,7 +209,6 @@ mod tests {
         }
     }
 
-    /// One extension reporting one status item, as the notification delivers it.
     fn reporting(text: &str) -> Vec<jk_protocol::Contributions> {
         vec![jk_protocol::Contributions {
             extension: "interceptor.system".to_owned(),
@@ -246,7 +235,6 @@ mod tests {
         );
     }
 
-    /// An empty section would teach readers to expect one.
     #[test]
     fn no_contributions_means_no_section_at_all() {
         let app = App::default();
@@ -255,7 +243,6 @@ mod tests {
         assert!(!text.contains("EXTENSIONS"), "{text}");
     }
 
-    /// Cleaned on arrival, and still inert once drawn.
     #[test]
     fn a_hostile_status_item_is_inert_in_the_rendered_line() {
         let mut app = App::default();
@@ -265,7 +252,6 @@ mod tests {
         assert!(!text.contains('\u{1b}'), "{text:?}");
     }
 
-    /// A long claim is cut to the pane and marked as cut. Only contributed rows are checked.
     #[test]
     fn a_long_status_item_is_cut_to_the_pane() {
         let mut app = App::default();
@@ -295,7 +281,6 @@ mod tests {
         );
     }
 
-    /// A non-diff result shows a bare path, never a guessed `+0 -0`.
     #[test]
     fn changed_shows_a_bare_path_rather_than_guessing_zero_counts() {
         let mut app = App::default();
@@ -317,7 +302,6 @@ mod tests {
         assert!(!text.contains('+'), "a count was invented: {text:?}");
     }
 
-    /// Every line fits the pane, in both glyph sets: the marker width differs between them (#206).
     #[test]
     fn every_line_fits_the_pane_it_was_given() {
         for glyphs in [GlyphSet::Unicode, GlyphSet::Ascii] {
@@ -354,7 +338,6 @@ mod tests {
         }
     }
 
-    /// A parsed diff's counts are shown.
     #[test]
     fn changed_shows_real_counts_when_the_result_parses_as_a_diff() {
         let mut app = App::default();
@@ -372,7 +355,6 @@ mod tests {
         assert!(text.contains("src/main.rs +1 -1"), "{text:?}");
     }
 
-    /// THIS TURN clears at the next user message, and shows call order.
     #[test]
     fn this_turn_is_cleared_by_the_next_message() {
         let mut app = App::default();
@@ -403,7 +385,6 @@ mod tests {
         );
     }
 
-    /// A long path is truncated from the left, so the leaf stays readable.
     #[test]
     fn the_working_directory_is_truncated_from_the_left() {
         let app = App::default();

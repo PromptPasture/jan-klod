@@ -1,6 +1,4 @@
-//! `ext-search` and `ext-install <name>` as the model reaches them (#218). The
-//! operator path is in `ext_registry.rs`. Uses a local index and a canned client,
-//! so no socket is opened.
+//! `ext-search` and `ext-install <name>` as the model reaches them, over a local index and a canned client.
 
 use std::fmt::Write as _;
 
@@ -11,7 +9,6 @@ use jk_wasm::native_tools::NativeTools;
 use crate::common;
 use crate::ext_install::{canned_files, published, scratch, Scratch};
 
-/// An index describing `tool-fs` at a URL the canned client answers.
 fn write_index(scratch: &Scratch, component: &[u8], signature: &str) -> String {
     let digest = <sha2::Sha256 as sha2::Digest>::digest(component);
     let hex = digest.iter().fold(String::new(), |mut out, byte| {
@@ -51,7 +48,6 @@ fn call(name: &str, arguments: &str) -> ToolCall {
     }
 }
 
-/// A tools fixture over a signed `tool-fs` published to a canned server.
 fn fixture(tag: &str) -> Option<(Scratch, NativeTools)> {
     if !common::guests_staged(&["tool-fs.wasm"]) {
         return None;
@@ -68,7 +64,6 @@ fn fixture(tag: &str) -> Option<(Scratch, NativeTools)> {
     Some((scratch, tools))
 }
 
-/// The model is shown the capability line and whether the entry is signed.
 #[test]
 fn search_shows_capabilities_and_whether_it_is_signed() {
     let Some((_scratch, mut tools)) = fixture("search") else {
@@ -92,7 +87,6 @@ fn search_shows_capabilities_and_whether_it_is_signed() {
     );
 }
 
-/// A name from the index installs and is queued for adoption.
 #[test]
 fn a_named_component_installs_and_is_queued_for_the_next_turn() {
     let Some((scratch, mut tools)) = fixture("install") else {
@@ -116,7 +110,6 @@ fn a_named_component_installs_and_is_queued_for_the_next_turn() {
     );
 }
 
-/// A missing `reason` is refused, since the operator's prompt is built from it.
 #[test]
 fn a_registry_install_without_a_reason_is_refused() {
     let Some((scratch, mut tools)) = fixture("reason") else {
@@ -137,8 +130,6 @@ fn a_registry_install_without_a_reason_is_refused() {
     );
 }
 
-/// An unlisted name is refused, and the refusal names the index searched, so a
-/// wrong index is not mistaken for a missing name.
 #[test]
 fn a_name_the_index_does_not_list_is_refused() {
     let Some((scratch, mut tools)) = fixture("unknown") else {

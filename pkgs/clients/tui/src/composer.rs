@@ -1,12 +1,7 @@
-//! The message buffer and its caret: a model with no rendering, so tests run without a terminal.
-//!
-//! Motion and deletion use grapheme clusters, so the caret never lands inside
-//! one. A word is a run of non-whitespace, as in shells, so `foo.bar` is one word.
+//! The message buffer and its caret, with no rendering.
 
 use unicode_segmentation::UnicodeSegmentation;
 
-/// One wrapped row of the composer: where it starts, its text, and whether its
-/// end is a newline (or the buffer's end) rather than a soft wrap.
 struct Row {
     start: usize,
     text: String,
@@ -22,7 +17,7 @@ pub struct Composer {
 }
 
 impl Composer {
-    /// The text as it stands. May contain newlines.
+    /// The text as it stands.
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
@@ -51,14 +46,14 @@ impl Composer {
         Some(std::mem::take(&mut self.text).trim().to_string())
     }
 
-    /// Replaces the whole buffer, caret at the end. Used for recall (#151).
+    /// Replaces the whole buffer, caret at the end.
     pub fn set(&mut self, text: &str) {
         self.text.clear();
         self.text.push_str(text);
         self.caret = self.text.len();
     }
 
-    /// Replaces the `count` bytes before the caret with `text`, for accepting a completion (#153).
+    /// Replaces the `count` bytes before the caret with `text`, for accepting a completion.
     pub fn replace_before(&mut self, count: usize, text: &str) {
         let start = self.caret.saturating_sub(count);
         self.text.replace_range(start..self.caret, text);
@@ -137,14 +132,12 @@ impl Composer {
         self.caret = self.line_end();
     }
 
-    /// The byte index one word back: over any whitespace, then over the word.
     fn word_start(&self) -> usize {
         let head = &self.text[..self.caret];
         let trimmed = head.trim_end_matches(|c: char| c.is_whitespace());
         trimmed.rfind(char::is_whitespace).map_or(0, |i| i + 1)
     }
 
-    /// The byte index one word forward: over any whitespace, then over the word.
     fn word_end(&self) -> usize {
         let tail = &self.text[self.caret..];
         let skipped = tail.len() - tail.trim_start_matches(|c: char| c.is_whitespace()).len();
@@ -177,10 +170,6 @@ impl Composer {
     }
 
     /// `Ctrl+U`: kill the whole line the caret is on.
-    ///
-    /// Reaches the composer only when there *is* something to kill — an empty
-    /// composer leaves the key to the transcript's half-page scroll (#148), and
-    /// the two sides share [`Composer::is_empty`] as their single condition.
     pub fn kill_line(&mut self) {
         let (start, end) = (self.line_start(), self.line_end());
         self.text.replace_range(start..end, "");
@@ -190,7 +179,6 @@ impl Composer {
     /// Rows the composer grows to before it scrolls.
     pub const MAX_ROWS: usize = 8;
 
-    /// Wrapped rows with byte offsets, which vertical motion needs; a `Vec<String>` loses them.
     fn layout(&self, width: usize) -> (Vec<Row>, (usize, usize)) {
         let width = width.max(1);
         let mut rows: Vec<Row> = Vec::new();
@@ -232,15 +220,14 @@ impl Composer {
         (rows, caret)
     }
 
-    /// Wrapped rows and caret `(row, column)`. Breaks between graphemes, not words, so every byte survives.
-    /// Columns are display cells.
+    /// Wrapped rows and caret `(row, column)`.
     #[must_use]
     pub fn rows(&self, width: usize) -> (Vec<String>, (usize, usize)) {
         let (rows, caret) = self.layout(width);
         (rows.into_iter().map(|r| r.text).collect(), caret)
     }
 
-    /// The byte offset at `column` cells into `row`. A soft-wrapped row clamps before its end, which is the next row's start.
+    /// A soft-wrapped row clamps before its end, which is the next row's start.
     fn offset_in_row(row: &Row, column: usize) -> usize {
         let mut used = 0;
         let mut last = row.start;
@@ -271,7 +258,7 @@ impl Composer {
         row + 1 >= rows.len()
     }
 
-    /// Moves the caret one visual row up, not one logical line. The column is taken from the current position.
+    /// Moves the caret one visual row up, not one logical line.
     pub fn up(&mut self, width: usize) {
         let (rows, (row, col)) = self.layout(width);
         if row == 0 {
@@ -280,7 +267,7 @@ impl Composer {
         self.caret = Self::offset_in_row(&rows[row - 1], col);
     }
 
-    /// Moves the caret one visual row down. See [`Composer::up`].
+    /// Moves the caret one visual row down.
     pub fn down(&mut self, width: usize) {
         let (rows, (row, col)) = self.layout(width);
         if row + 1 >= rows.len() {
@@ -289,7 +276,7 @@ impl Composer {
         self.caret = Self::offset_in_row(&rows[row + 1], col);
     }
 
-    /// The rows on screen and the caret within them. Scrolls past [`Self::MAX_ROWS`], keeping the caret visible.
+    /// The rows on screen and the caret within them.
     #[must_use]
     pub fn visible(&self, width: usize) -> (Vec<String>, (usize, usize)) {
         let (rows, (caret_row, caret_col)) = self.rows(width);

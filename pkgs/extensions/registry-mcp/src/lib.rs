@@ -1,6 +1,4 @@
-//! `registry-mcp` — SSE MCP gateway implementing `mcp-registry`.
-//! Reads `servers` from `host-config`, connects at `init`, and proxies tool calls over `host-http` or stdio.
-//! Stdio entries name a child granted in `execution.long-lived`.
+//! `registry-mcp`: MCP gateway that proxies tool calls to servers over `host-http` or stdio.
 
 #[allow(
     unsafe_code,
@@ -31,16 +29,12 @@ use bindings::jan_klod::interfaces::host_http::{self, HttpHeader, HttpRequest};
 use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
 use bindings::jan_klod::interfaces::host_process;
 
-/// How a server is reached: one JSON-RPC protocol over two wires.
 #[derive(Clone)]
 enum Wire {
-    /// SSE / streamable-HTTP over `host-http`.
     Http(String),
-    /// Stdio child held open by the host.
     Stdio(u32),
 }
 
-/// One configured MCP server.
 #[derive(Clone)]
 struct Server {
     id: String,
@@ -50,7 +44,6 @@ struct Server {
 }
 
 impl Server {
-    /// Wire name for `list-servers`.
     const fn transport_name(&self) -> &'static str {
         match self.wire {
             Wire::Http(_) => "sse",
@@ -107,10 +100,9 @@ fn json_rpc_post(url: &str, method: &str, params: Option<Value>) -> Result<Value
 /// Total stdio reply timeout; matches the HTTP transport's `timeout_ms`.
 const STDIO_REPLY_BUDGET_MS: u32 = 10_000;
 
-/// One read's window; short enough for liveness checks, long enough not to spin.
+/// Short enough for liveness checks, long enough not to spin.
 const STDIO_POLL_MS: u32 = 200;
 
-/// Send a JSON-RPC request over a stdio child and read its reply.
 /// Newline-delimited, per the MCP stdio transport spec.
 fn json_rpc_stdio(child: u32, method: &str, params: Option<Value>) -> Result<Value, String> {
     let id = next_id();
@@ -142,7 +134,6 @@ fn json_rpc_stdio(child: u32, method: &str, params: Option<Value>) -> Result<Val
     Err(format!("no reply within {STDIO_REPLY_BUDGET_MS}ms"))
 }
 
-/// One JSON-RPC call, dispatched over the appropriate wire.
 fn json_rpc(wire: &Wire, method: &str, params: Option<Value>) -> Result<Value, String> {
     match wire {
         Wire::Http(url) => json_rpc_post(url, method, params),
@@ -150,7 +141,6 @@ fn json_rpc(wire: &Wire, method: &str, params: Option<Value>) -> Result<Value, S
     }
 }
 
-/// Start a stdio server and complete the MCP handshake.
 /// The host supplies the command, so this guest cannot choose what runs.
 fn connect_stdio(id: &str, child_name: &str) -> Server {
     let Ok(child) = host_process::spawn(child_name) else {
@@ -196,7 +186,6 @@ fn connect_server(id: &str, url: &str) -> Server {
     connect_over(id, Wire::Http(url.to_owned()))
 }
 
-/// Ask a server for its tools; `tools/list` is identical on both wires.
 fn connect_over(id: &str, wire: Wire) -> Server {
     match json_rpc(&wire, "tools/list", None) {
         Ok(resp) => {

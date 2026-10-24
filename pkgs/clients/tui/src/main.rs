@@ -1,8 +1,4 @@
 //! `jan-klod` — TUI client for the jan-klod gateway.
-//!
-//! By default it spawns its own `jan-klod-gateway rpc` over stdio; `--addr`
-//! drives a running gateway over REST + SSE instead. Config and ext paths are
-//! left to the gateway to resolve.
 
 mod tui;
 
@@ -17,7 +13,6 @@ use std::time::{Duration, Instant};
 use jk_tui::transport::{Logs, Rest, Stdio as StdioTransport, Transport};
 use jk_tui::{gateway_bin, StreamEvent};
 
-/// Default for a bare `--addr`, and the address `serve` binds by default.
 const DEFAULT_ADDR: &str = "127.0.0.1:8787";
 
 const USAGE: &str = "\
@@ -83,10 +78,8 @@ fn main() -> ExitCode {
 
 #[derive(Debug)]
 struct Args {
-    /// `Some` when the user named a running gateway, which selects REST.
     addr: Option<String>,
     session: Option<String>,
-    /// `--ascii`: force ASCII glyphs. Colour is left to `NO_COLOR` and `JAN_KLOD_THEME`.
     ascii: bool,
 }
 
@@ -97,7 +90,7 @@ enum Mode {
     Tui,
 }
 
-/// Strips a leading `tui`/`--tui`. Only the first argument selects the mode.
+/// Only the first argument selects the mode.
 fn split_mode(args: &[String]) -> (Mode, Vec<String>) {
     match args.split_first() {
         Some((first, rest)) if first == "tui" || first == "--tui" => (Mode::Tui, rest.to_vec()),
@@ -105,7 +98,6 @@ fn split_mode(args: &[String]) -> (Mode, Vec<String>) {
     }
 }
 
-/// The text `--version` or `--help` asks for, when either is the first argument.
 fn info(args: &[String]) -> Option<String> {
     match args.first().map(String::as_str) {
         Some("--version") => Some(format!("jan-klod {}\n", env!("CARGO_PKG_VERSION"))),
@@ -114,7 +106,6 @@ fn info(args: &[String]) -> Option<String> {
     }
 }
 
-/// Read `--addr <host:port>`, `--ascii`, and at most one positional session id.
 fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut addr = None;
     let mut session = None;
@@ -153,7 +144,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
-/// Check if positional arg looks like `host:port` (narrow: port tail must be digits).
+/// Whether a positional arg looks like `host:port`: the port tail must be digits.
 fn looks_like_an_address(arg: &str) -> bool {
     let Some((host, port)) = arg.rsplit_once(':') else {
         return false;
@@ -167,7 +158,6 @@ fn looks_like_an_address(arg: &str) -> bool {
         || host.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
-/// The line REPL: one message per line, streamed back as it arrives.
 fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
     println!(
         "jan-klod → {} (session `{session}`); type a message, `quit` to exit.",
@@ -238,7 +228,6 @@ fn repl(transport: &Arc<dyn Transport>, session: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Spawns a gateway at `addr` unless one answers, and waits up to 10s for it.
 fn ensure_gateway(addr: &str) -> Option<Child> {
     if is_up(addr) {
         return None;
@@ -270,7 +259,6 @@ fn ensure_gateway(addr: &str) -> Option<Child> {
     }
 }
 
-/// Poll TCP connect until the gateway accepts connections or the deadline passes.
 fn wait_for_gateway(addr: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -329,7 +317,6 @@ mod tests {
         }
     }
 
-    /// Only a leading mode word counts; elsewhere `--tui` is an unknown option.
     #[test]
     fn a_mode_word_that_is_not_first_is_not_a_mode() {
         let (mode, rest) = split_mode(&args(&["s1", "--tui"]));

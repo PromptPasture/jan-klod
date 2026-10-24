@@ -1,23 +1,18 @@
-//! Joins `host-storage` to the SQLite session store (#180). A newtype rather than an `impl` on `Store`, because the
-//! planned split (#181, #182) would leave this crate owning neither the trait nor `Store`.
+//! Joins `host-storage` to the `SQLite` session store.
 
 use std::sync::{Arc, Mutex};
 
 use jk_session::store::{Entry, Store, StoreError};
 use jk_wasm::guest_storage::{Entries, Row, StorageFault};
 
-/// The session store, offered to guests as the four calls `host-storage` has.
-/// Shares the session's handle, so guest writes and the log use one lock.
 pub struct SessionEntries(Arc<Mutex<Store>>);
 
 impl SessionEntries {
-    /// Offer `store` to `host-storage`.
     #[must_use]
     pub const fn new(store: Arc<Mutex<Store>>) -> Self {
         Self(store)
     }
 
-    /// Run `call` against the store, mapping both failure kinds.
     /// A poisoned lock maps to `Backend`: refusing beats answering with partial data.
     fn with<T>(
         &self,
@@ -28,7 +23,7 @@ impl SessionEntries {
     }
 }
 
-/// Maps a store error to the capability's fault. The detail is logged because the contract carries none.
+/// The detail is logged because the contract carries none.
 fn fault(err: &StoreError) -> StorageFault {
     match err {
         StoreError::NotFound => StorageFault::NotFound,
@@ -39,8 +34,7 @@ fn fault(err: &StoreError) -> StorageFault {
     }
 }
 
-/// A stored entry as the seam's plain row. The `id` is dropped: it names the
-/// scoped namespace, which the capability rebuilds from the guest's request.
+/// The `id` is dropped: the capability rebuilds it from the guest's request.
 fn row(entry: Entry) -> Row {
     Row {
         namespace: entry.namespace,

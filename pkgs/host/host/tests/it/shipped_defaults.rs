@@ -1,6 +1,4 @@
-//! Boots the real shipped `config.yaml` and drives the real `Runtime` and REST
-//! surface through `jk_tui`. Only provider HTTP and the workspace root are faked.
-//! Skips when guests are not staged in `ext/`.
+//! Boots the real shipped `config.yaml` and drives the real `Runtime` and REST surface; only provider HTTP and the workspace root are faked.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -17,7 +15,6 @@ use jk_wasm::route::HttpFn;
 use crate::common;
 use std::collections::HashMap;
 
-/// Stub env vars the shipped config expands (placeholder values; no provider HTTP uses them).
 fn stub_env() {
     #[allow(unsafe_code)]
     for key in [
@@ -81,7 +78,6 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
     }
 }
 
-/// #59 boot plan on real config: `start_all` leaves `tool.*` lazy, `start_all_eager` starts all.
 #[test]
 fn the_shipped_configs_tools_are_lazy_under_start_all_but_not_start_all_eager() {
     let ext_dir = common::repo_root().join("ext");
@@ -127,7 +123,6 @@ fn the_shipped_configs_tools_are_lazy_under_start_all_but_not_start_all_eager() 
     }
 }
 
-/// Mock provider: request file write on first call, report done on second.
 fn write_then_answer_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -164,7 +159,6 @@ fn write_then_answer_http() -> HttpFn {
     })
 }
 
-/// POST answer to a pending confirmation (second connection, mid-turn).
 fn post_answer(port: u16, session: &str, answer: &str) -> String {
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(

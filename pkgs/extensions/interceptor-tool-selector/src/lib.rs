@@ -1,6 +1,4 @@
-//! Default `select-tools` interceptor: cuts the advertised tools to the ones this turn needs.
-//!
-//! Unbounded by default. Component-Model glue only; the rules live in [`rank`].
+//! Default `select-tools` interceptor: cuts advertised tools to the ones this turn needs.
 
 /// Ranking of tool descriptions against the user's request.
 pub mod rank;
@@ -34,9 +32,8 @@ mod component {
 
     use crate::rank::{select, Cut, Doc};
 
-    /// `max-tools` when unset: no bound. Hiding a tool is lossy and unrecoverable, so operators opt in.
+    /// Hiding a tool is lossy and unrecoverable, so operators opt in.
     pub const DEFAULT_MAX_TOOLS: usize = 0;
-    /// `min-tools` when unset: the floor a bounded fleet still advertises.
     pub const DEFAULT_MIN_TOOLS: usize = 3;
 
     fn log(level: LogLevel, message: &str) {
@@ -60,7 +57,6 @@ mod component {
             .join("\n")
     }
 
-    /// Tools from the `tools` config key; empty when absent or malformed.
     fn advertised_tools() -> Vec<ToolDefinition> {
         let Ok(raw) = host_config::get("tools") else {
             return Vec::new();

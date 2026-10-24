@@ -1,7 +1,4 @@
-//! Newline-delimited JSON-RPC 2.0 over a byte stream: transport for spawned clients (no server, port, or token); MCP and ACP adapt this.
-//!
-//! No credential on stdio (the spawning operator is the principal); auth happens at the HTTP boundary (serve.rs). `protocol/hello` must come first so the version check cannot be skipped.
-//! Generic over [`BufRead`]/[`Write`] for in-process tests; mid-turn `turn/cancel` is read between turn events ([`RpcSink::emit`]) and cancels via [`Flow::Stop`].
+//! Newline-delimited JSON-RPC 2.0 over a byte stream for spawned clients; `protocol/hello` must come first so the version check cannot be skipped.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -22,7 +19,7 @@ use jk_agent::AgentSession;
 use jk_protocol::turn::{Driver, UserPrompt};
 use jk_protocol::turn::{Event, EventSink, Flow};
 
-/// Serve frames from `input`, answering on `output`, until EOF or a refused handshake. Malformed frames are answered and the loop continues.
+/// Serves frames from `input`, answering on `output`, until EOF or a refused handshake.
 ///
 /// # Errors
 /// Write failures: the pipe is gone.
@@ -82,15 +79,11 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
     Ok(())
 }
 
-/// From the reader thread.
 pub(crate) enum Incoming {
-    /// Text line.
     Line(String),
-    /// Non-UTF-8 bytes.
     NotUtf8,
 }
 
-/// Connection ends: where answers go and frames arrive.
 pub(crate) struct Wire<'a, W: Write> {
     /// Shared by the turn's sink and driver; `Rc<RefCell<_>>` since one thread writes.
     writer: Rc<RefCell<W>>,
@@ -98,30 +91,24 @@ pub(crate) struct Wire<'a, W: Write> {
 }
 
 impl<'a, W: Write> Wire<'a, W> {
-    /// A wire over `writer`, reading frames from `incoming`.
-    /// Crate-visible so the WebSocket surface (#226) reuses [`command`] with the same wire.
     pub(crate) const fn new(writer: Rc<RefCell<W>>, incoming: &'a Receiver<Incoming>) -> Self {
         Self { writer, incoming }
     }
 }
 
 impl<W: Write> Wire<'_, W> {
-    /// Answer one request.
     pub(crate) fn write(&self, response: &jsonrpc::Response) -> std::io::Result<()> {
         write_frame(&mut *self.writer.borrow_mut(), response)
     }
 }
 
-/// What serving one frame decided.
 pub(crate) enum Served {
-    /// Answer it and read the next frame.
     Answer(jsonrpc::Response),
-    /// Answer it and hang up. Only a refused handshake does this.
+    /// Answer it and hang up; only a refused handshake does this.
     Close(jsonrpc::Response),
 }
 
-/// Which session a command is about, if any (#229).
-/// Lets the WebSocket route each frame to the agent owning its session; beside the command enum so a new variant is a compile error here.
+/// Beside the command enum so a new variant is a compile error here.
 #[must_use]
 pub(crate) fn session_of(command: &Command) -> Option<&str> {
     match command {
@@ -138,7 +125,6 @@ pub(crate) fn session_of(command: &Command) -> Option<&str> {
     }
 }
 
-/// The refusal for a frame that is not text (#226), beside `parse`'s so all such refusals are shaped alike.
 #[must_use]
 pub(crate) fn not_text() -> String {
     let response = refuse(
@@ -149,7 +135,6 @@ pub(crate) fn not_text() -> String {
     serde_json::to_string(&response).unwrap_or_else(|_| String::from("{}"))
 }
 
-/// Parse a line to a request or refusal, separate from serving so frame rules test without a session.
 pub(crate) fn parse(line: &str) -> Result<jsonrpc::Request, jsonrpc::Response> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return Err(refuse(
@@ -180,8 +165,7 @@ pub(crate) fn parse(line: &str) -> Result<jsonrpc::Request, jsonrpc::Response> {
     }
 }
 
-/// Why a frame that is valid JSON is not a request this core can serve: separates "no such command" from "wrong arguments"
-/// via [`COMMAND_METHODS`] (serde gives one code, JSON-RPC two).
+/// Separates "no such command" from "wrong arguments" via [`COMMAND_METHODS`]: serde gives one code, JSON-RPC two.
 fn diagnose(value: &serde_json::Value, err: &serde_json::Error) -> jsonrpc::Response {
     let Some(object) = value.as_object() else {
         return refuse(
@@ -233,8 +217,7 @@ fn diagnose(value: &serde_json::Value, err: &serde_json::Error) -> jsonrpc::Resp
     }
 }
 
-/// Serve one command.
-/// Every arm names a command (no wildcard) so new protocol commands fail to compile until handled; guarded arms are non-exhaustive, so the handshake gate can sit mid-match.
+/// Every arm names a command (no wildcard), so new protocol commands fail to compile until handled.
 pub(crate) fn command<W: Write>(
     command: Command,
     id: jsonrpc::Id,
@@ -340,7 +323,6 @@ pub(crate) fn command<W: Write>(
     }
 }
 
-/// Run one turn, streaming events as notifications; the request is answered with `{answer, agentic}` when it ends (as blocking REST).
 /// Deliberately duplicates `done`: clients can await the response or render the stream, not both.
 fn turn<W: Write>(
     session: &str,
@@ -374,18 +356,15 @@ fn turn<W: Write>(
     }
 }
 
-/// What the sink and the driver both need to know about the running turn.
 struct TurnState {
-    /// The session this turn belongs to. A `turn/cancel` naming another is refused: cancelling the wrong turn silently would be worse.
+    /// A `turn/cancel` naming another session is refused: cancelling the wrong turn silently would be worse.
     session: String,
     cancelled: Cell<bool>,
     follow_ups: RefCell<VecDeque<String>>,
-    /// Whether a question is on the wire waiting to be answered. An answer when nothing asked is refused, not stashed (REST: `409`):
-    /// a stashed one would approve the next question.
+    /// An answer when nothing asked is refused, not stashed (REST: `409`): a stashed one would approve the next question.
     asking: Cell<bool>,
 }
 
-/// Streams a turn's events, and notices a cancel between them.
 struct RpcSink<'a, W: Write> {
     writer: Rc<RefCell<W>>,
     incoming: &'a Receiver<Incoming>,
@@ -406,8 +385,6 @@ impl<W: Write> EventSink for RpcSink<'_, W> {
     }
 }
 
-/// Puts a question to the client and waits, on this thread, for the answer to
-/// arrive as its own frame.
 struct RpcDriver<'a, W: Write> {
     writer: Rc<RefCell<W>>,
     incoming: &'a Receiver<Incoming>,
@@ -436,8 +413,7 @@ impl<W: Write> Driver for RpcDriver<'_, W> {
 }
 
 impl<W: Write> RpcDriver<'_, W> {
-    /// Read frames until this session's answer arrives, or the wait expires.
-    /// Unlike REST, no heartbeat probe is needed: the pipe closing closes the channel and `recv_timeout` reports `Disconnected`.
+    /// No heartbeat probe is needed: the pipe closing closes the channel, and `recv_timeout` reports `Disconnected`.
     fn wait_for_answer(&self) -> Option<String> {
         let deadline = Instant::now() + session::answer_timeout();
         self.state.asking.set(true);
@@ -446,7 +422,7 @@ impl<W: Write> RpcDriver<'_, W> {
         answer
     }
 
-    /// The wait itself, so the `asking` flag is cleared on every path out.
+    /// The wait itself, so `asking` is cleared on every path out.
     fn wait_until(&self, deadline: Instant) -> Option<String> {
         loop {
             let remaining = deadline.checked_duration_since(Instant::now())?;
@@ -465,7 +441,6 @@ impl<W: Write> RpcDriver<'_, W> {
     }
 }
 
-/// Serve every frame already queued, without waiting for more.
 fn serve_queued<W: Write>(
     incoming: &Receiver<Incoming>,
     state: &TurnState,
@@ -476,10 +451,7 @@ fn serve_queued<W: Write>(
     }
 }
 
-/// Serve one frame that arrived while a turn is running.
-///
-/// Returns the text of a `turn/answer` for this session; everything else is answered in place (a client told "busy" can
-/// retry, one left hanging cannot). Stdio runs one turn at a time; the core runs one per session (`host::sessions`).
+/// Returns the text of a `turn/answer` for this session; everything else is answered in place, so a client told "busy" can retry.
 fn serve_frame<W: Write>(
     frame: Incoming,
     state: &TurnState,
@@ -534,7 +506,7 @@ fn serve_frame<W: Write>(
     answer_text
 }
 
-/// The notification each turn event becomes. Exhaustive (no `_ =>` arm) so a new `Event` variant fails to compile until it has somewhere to go.
+/// The notification each turn event becomes; exhaustive, so a new `Event` variant fails to compile until handled.
 #[must_use]
 pub fn notification_for(event: &Event) -> Notification {
     match event {
@@ -559,7 +531,6 @@ pub fn notification_for(event: &Event) -> Notification {
     }
 }
 
-/// Write one notification: a response's line discipline, with no id.
 fn write_notification<W: Write>(
     output: &mut W,
     notification: &Notification,
@@ -571,17 +542,15 @@ fn write_notification<W: Write>(
     output.flush()
 }
 
-/// A successful answer.
 fn answer(id: jsonrpc::Id, result: serde_json::Value) -> Served {
     Served::Answer(jsonrpc::Response::result(id, result))
 }
 
-/// A failed answer.
 fn refuse(id: jsonrpc::Id, code: i64, message: String) -> jsonrpc::Response {
     jsonrpc::Response::error(id, jsonrpc::Error::new(code, message))
 }
 
-/// Write one frame and **flush it**: pipe stdout is block-buffered, so a client would hang waiting for an answer in this process's buffer.
+/// Writes one frame and flushes it: pipe stdout is block-buffered, so a client would otherwise hang.
 fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::io::Result<()> {
     let text = serde_json::to_string(response).expect("a response serializes");
     output.write_all(text.as_bytes())?;
@@ -589,8 +558,7 @@ fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::i
     output.flush()
 }
 
-/// What the loaded extensions contribute, as the notification clients read. Maps kernel shapes to wire shapes
-/// (`jk-agent` does not depend on `jk-protocol`), like [`notification_for`].
+/// Maps kernel shapes to wire shapes, as `jk-agent` does not depend on `jk-protocol`.
 fn contributions_notification(agent: &mut AgentSession) -> Notification {
     let extensions = agent
         .contributions()
@@ -652,7 +620,6 @@ mod tests {
     use super::{parse, write_frame};
     use jk_protocol::{jsonrpc, Command, COMMAND_METHODS};
 
-    /// The code and message a line is refused with, or `None` if it parsed.
     fn refusal(line: &str) -> Option<(i64, jsonrpc::Id, String)> {
         match parse(line) {
             Ok(_) => None,
@@ -687,7 +654,6 @@ mod tests {
         assert_eq!(request.command, Command::SessionList);
     }
 
-    /// Not JSON at all: the answer carries a null id because there is none to read (the spec's one case).
     #[test]
     fn a_line_that_is_not_json_is_a_parse_error_with_a_null_id() {
         let (code, id, _) = refusal("this is not json").expect("refused");
@@ -695,7 +661,6 @@ mod tests {
         assert_eq!(id, jsonrpc::Id::Null);
     }
 
-    /// Valid JSON, wrong shape.
     #[test]
     fn json_that_is_not_a_request_object_is_an_invalid_request() {
         for line in ["[1,2,3]", "\"hello\"", "42", "null"] {
@@ -705,7 +670,6 @@ mod tests {
         }
     }
 
-    /// A frame not declaring JSON-RPC 2.0 is not one, but its id is still answered so the client is not left waiting.
     #[test]
     fn a_frame_declaring_another_jsonrpc_version_is_refused_against_its_id() {
         let (code, id, message) =
@@ -723,7 +687,6 @@ mod tests {
         assert_eq!(id, jsonrpc::Id::Null);
     }
 
-    /// An id a client cannot correlate is refused, keeping the null id for this core's answers to unreadable frames.
     #[test]
     fn a_client_may_not_send_a_null_id() {
         let (code, id, message) =
@@ -733,7 +696,6 @@ mod tests {
         assert!(message.contains("null"), "says which member: {message}");
     }
 
-    /// The distinction `COMMAND_METHODS` exists for: both are one serde error, but a client author needs to know which mistake they made.
     #[test]
     fn an_unknown_method_and_bad_params_are_told_apart() {
         let (code, id, message) =
@@ -759,7 +721,6 @@ mod tests {
         );
     }
 
-    /// Every contract method reaches a command, so none gets `method not found`.
     #[test]
     fn no_documented_method_is_reported_as_unknown() {
         for method in COMMAND_METHODS {
@@ -774,7 +735,6 @@ mod tests {
         }
     }
 
-    /// Every frame ends in a newline and is flushed: the reader splits on newlines and blocks until it sees one.
     #[test]
     fn a_frame_is_written_as_one_flushed_line() {
         struct CountingWriter {

@@ -1,12 +1,8 @@
-//! Tier-0 language detection — pure-Rust gate.
-//!
-//! Reliable non-English text bypasses English heuristics; short or unreliable input stays eligible.
+//! Tier-0 language gate: reliable non-English text bypasses English heuristics; short or unreliable input stays eligible.
 
 use whatlang::{detect, Lang};
 
-/// Check if heuristics should run for `text`.
-///
-/// Returns `false` only for reliable non-English (goes to LLM tier directly).
+/// `false` only for reliable non-English text, which goes to the LLM tier.
 pub fn is_heuristic_eligible(text: &str) -> bool {
     match detect(text) {
         Some(info) if info.is_reliable() => info.lang() == Lang::Eng,

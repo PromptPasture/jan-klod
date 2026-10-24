@@ -1,5 +1,4 @@
-//! Runs turns through the real `Runtime` with canned HTTP (no network or API
-//! key). Skips when guests are not staged in `ext/`; build with `make ext`.
+//! Runs turns through the real `Runtime` with canned HTTP (no network or API key).
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;

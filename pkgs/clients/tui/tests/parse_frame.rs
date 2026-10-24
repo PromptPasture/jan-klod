@@ -2,7 +2,6 @@
 use jk_protocol::SSE_FRAME_KINDS;
 use jk_tui::{parse_frame, StreamEvent};
 
-/// Guards #81: every frame kind the core sends needs a client arm, or it is silently dropped.
 #[test]
 fn every_sse_frame_kind_the_core_emits_is_handled() {
     for kind in SSE_FRAME_KINDS {
@@ -71,7 +70,6 @@ fn parse_frame_maps_each_event_kind() {
     );
 }
 
-/// Regression: `tool-result` had no arm, so healthy tool results fell through to the error fallback.
 #[test]
 fn a_tool_result_is_never_reported_as_an_error() {
     let ev = parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#);
@@ -81,7 +79,6 @@ fn a_tool_result_is_never_reported_as_an_error() {
     );
 }
 
-/// An unknown kind is dropped, not reported: the core is newer, which is not a failed turn (#81).
 #[test]
 fn an_unknown_kind_is_dropped_rather_than_shown_as_a_failure() {
     assert_eq!(parse_frame("weird", "{}"), None);
@@ -133,7 +130,6 @@ fn a_prompt_without_options_still_parses() {
     );
 }
 
-/// #103: a prompt is answered on the session the frame names, not necessarily the current one.
 #[test]
 fn parse_frame_carries_the_prompts_own_session() {
     let data = r#"{"question":"Proceed?","default":"no","session":"a-different-session"}"#;

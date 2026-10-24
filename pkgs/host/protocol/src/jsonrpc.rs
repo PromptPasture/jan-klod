@@ -1,15 +1,4 @@
-//! The JSON-RPC 2.0 envelope the stdio and WebSocket transports wrap a
-//! [`Command`](crate::Command) or [`Notification`](crate::Notification) in.
-//! Lives here, not in the transport, so the core and every client share one frame type.
-//!
-//! # Shapes
-//!
-//! ```text
-//! request       {"jsonrpc":"2.0","id":1,"method":"session/list"}
-//! notification  {"jsonrpc":"2.0","method":"done","params":{…}}
-//! response      {"jsonrpc":"2.0","id":1,"result":{…}}
-//!               {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"…"}}
-//! ```
+//! The JSON-RPC 2.0 envelope that transports wrap a command or notification in.
 
 use serde::{Deserialize, Serialize};
 
@@ -26,17 +15,14 @@ pub const METHOD_NOT_FOUND: i64 = -32601;
 pub const INVALID_PARAMS: i64 = -32602;
 /// The core failed while serving a command it understood.
 pub const INTERNAL_ERROR: i64 = -32603;
-/// Server-defined (spec reserves `-32000..=-32099`): the client's protocol
-/// version is incompatible. See [`incompatible_version`].
+/// The client's protocol version is incompatible; see [`incompatible_version`].
 pub const INCOMPATIBLE_VERSION: i64 = -32000;
 
-/// A request id, echoed back on the response.
-///
-/// Both spellings the spec allows, since non-Rust clients generate from this schema.
+/// A request id, echoed back on the response; both spellings the spec allows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Id {
-    /// A numeric id, the usual choice.
+    /// A numeric id.
     Number(i64),
     /// A string id.
     Text(String),
@@ -47,18 +33,17 @@ pub enum Id {
 /// One command, framed: a request that expects a [`Response`] carrying this id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
-    /// Always [`VERSION`]. A frame declaring anything else is
-    /// [`INVALID_REQUEST`].
+    /// Always [`VERSION`]; anything else is [`INVALID_REQUEST`].
     pub jsonrpc: String,
     /// Answered with this same id.
     pub id: Id,
-    /// The command's `method` and `params`, flattened (hence adjacent tagging).
+    /// The command's `method` and `params`, flattened.
     #[serde(flatten)]
     pub command: crate::Command,
 }
 
 impl Request {
-    /// Frame `command` as a request answered against `id`.
+    /// Frames `command` as a request with `id`.
     #[must_use]
     pub fn new(id: Id, command: crate::Command) -> Self {
         Self {
@@ -80,7 +65,7 @@ pub struct Notification {
 }
 
 impl Notification {
-    /// Frame `notification` for sending.
+    /// Frames `notification` for sending.
     #[must_use]
     pub fn new(notification: crate::Notification) -> Self {
         Self {
@@ -97,7 +82,7 @@ pub struct Response {
     pub jsonrpc: String,
     /// The id of the request this answers.
     pub id: Id,
-    /// Either a result or an error — see [`Outcome`].
+    /// Either a result or an error.
     #[serde(flatten)]
     pub outcome: Outcome,
 }
@@ -124,13 +109,11 @@ impl Response {
     }
 }
 
-/// What a [`Response`] carries.
-///
-/// An enum so a response with both or neither of `result`/`error` cannot be built.
+/// What a [`Response`] carries; an enum so it cannot have both or neither of `result`/`error`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
-    /// The command succeeded. The payload's shape depends on the command.
+    /// The command succeeded; the payload shape depends on the command.
     Result(serde_json::Value),
     /// The command failed.
     Error(Error),
@@ -159,7 +142,7 @@ impl Error {
         }
     }
 
-    /// The same error, carrying detail a client can act on.
+    /// The same error, carrying `data`.
     #[must_use]
     pub fn with_data(mut self, data: serde_json::Value) -> Self {
         self.data = Some(data);
@@ -167,12 +150,7 @@ impl Error {
     }
 }
 
-/// The error answering an incompatible [`Command::Hello`] before closing.
-///
-/// The core's version travels in `data` because the client gets no
-/// [`HelloResult`](crate::HelloResult) to learn it from.
-///
-/// [`Command::Hello`]: crate::Command::Hello
+/// The error answering an incompatible hello; the core's version is in `data`, as the client gets no hello result.
 #[must_use]
 pub fn incompatible_version(client: &str) -> Error {
     Error::new(

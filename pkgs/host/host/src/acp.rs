@@ -1,5 +1,4 @@
-//! ACP: Agent Client Protocol (Zed): integer version, bidirectional, `initialize` first.
-//! No credential on stdio (the spawning operator is the principal); auth happens at the HTTP boundary (serve.rs).
+//! ACP (Agent Client Protocol): bidirectional, `initialize` first; stdio has no credential, auth is at the HTTP boundary.
 
 use std::cell::RefCell;
 use std::io::{BufRead, Write};
@@ -18,11 +17,8 @@ use jk_protocol::turn::{Event, EventSink, Flow};
 /// ACP protocol version (integer, not date like MCP).
 pub const ACP_VERSION: i64 = 1;
 
-/// What this agent calls itself in `initialize`.
 const AGENT_NAME: &str = "jan-klod";
 
-/// One ACP request or notification (own type to avoid name conflicts with
-/// repository's `Command` enum, like `mcp` does).
 #[derive(Debug, serde::Deserialize)]
 struct Frame {
     jsonrpc: String,
@@ -33,19 +29,16 @@ struct Frame {
     params: serde_json::Value,
 }
 
-/// Connection state (handshake, minted session ids), unlike `mcp`'s stateless `classify`; still testable without a runtime.
+/// Connection state (handshake, minted session ids); testable without a runtime.
 #[derive(Debug, Default)]
 pub struct Connection {
-    /// Whether `initialize` has been answered.
     negotiated: bool,
-    /// Session ids this connection minted, most recent last.
     sessions: Vec<String>,
 }
 
-/// Agent→editor question interface, a seam so tests can script answers: `session/request_permission` blocks bidirectionally on one pipe.
+/// Agent-to-editor question seam, so tests can script answers.
 pub trait Asker {
-    /// Put `prompt` to the editor and return the answer; the default is always safe (headless refusal).
-    /// `&self` with interior mutability: the streaming sink and permission driver both need it in one turn.
+    /// Puts `prompt` to the editor and returns the answer; defaults to a safe headless refusal.
     fn ask(&self, session: &str, prompt: &UserPrompt) -> String;
 
     /// Whether the client cancelled (sticky once true).
@@ -62,7 +55,6 @@ impl Asker for NoAsker {
     }
 }
 
-/// Turns the loop's `ask` into ACP's `session/request_permission`.
 struct AcpDriver<'a, A: Asker> {
     asker: &'a A,
     session: String,
@@ -74,16 +66,13 @@ impl<A: Asker> Driver for AcpDriver<'_, A> {
     }
 }
 
-/// Whether a line is a `session/cancel` notification.
 fn is_cancel(line: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(line).is_ok_and(|frame| {
         frame.get("method").and_then(serde_json::Value::as_str) == Some("session/cancel")
     })
 }
 
-/// The `options` array for a permission request, built from the prompt's own.
-/// `optionId` **is** the interceptor's option text, so nothing translates between vocabularies and the permission model cannot drift.
-/// `kind` is a rendering hint: affirmative is `allow_once`, everything else `reject_once`.
+/// `optionId` is the interceptor's own option text, so vocabularies cannot drift; affirmative is `allow_once`, else `reject_once`.
 fn permission_options(prompt: &UserPrompt) -> serde_json::Value {
     let offered: Vec<&str> = if prompt.options.is_empty() {
         vec![prompt.default_answer.as_str()]
@@ -105,18 +94,16 @@ fn permission_options(prompt: &UserPrompt) -> serde_json::Value {
     )
 }
 
-/// [`Asker`] for [`serve`]: write request, block on answer. The only place core originates JSON-RPC and waits;
-/// works because the reader thread holds the pipe while the turn runs.
+/// Writes the request and blocks on the answer; works because the reader thread holds the pipe while the turn runs.
 struct PipeAsker<'a, W: Write> {
     writer: Rc<RefCell<W>>,
     incoming: &'a Receiver<String>,
     next_id: std::cell::Cell<i64>,
-    /// Set the moment a `session/cancel` is seen, and never unset.
+    /// Set when a `session/cancel` is seen, never unset.
     cancelled: std::cell::Cell<bool>,
 }
 
 impl<W: Write> PipeAsker<'_, W> {
-    /// Drain editor input, noting cancels (checked between streamed events).
     fn drain(&self) {
         while let Ok(line) = self.incoming.try_recv() {
             if is_cancel(&line) {
@@ -180,22 +167,16 @@ impl<W: Write> Asker for PipeAsker<'_, W> {
     }
 }
 
-/// Frame routing (session-independent classification).
 enum Routed {
-    /// Notification (no answer).
     Silent,
-    /// Answer without running (handshake, routing).
     Answer(jsonrpc::Response),
-    /// `session/prompt` (needs a turn).
     Prompt {
-        /// Request id.
         id: jsonrpc::Id,
-        /// Request params.
         params: serde_json::Value,
     },
 }
 
-/// Serve ACP on `input`/`output` until client hangs up.
+/// Serves ACP on `input`/`output` until the client hangs up.
 ///
 /// # Errors
 /// I/O failure on `output`; malformed frames are answered, not returned.
@@ -238,7 +219,6 @@ pub fn serve<R: BufRead + Send + 'static, W: Write>(
     Ok(())
 }
 
-/// Streams a turn's events as ACP `session/update` notifications.
 struct AcpSink<'a, W: Write, A: Asker> {
     writer: &'a Rc<RefCell<W>>,
     session: String,
@@ -279,13 +259,13 @@ impl<W: Write, A: Asker> EventSink for AcpSink<'_, W, A> {
 }
 
 impl Connection {
-    /// A connection that has not yet been negotiated.
+    /// A fresh, un-negotiated connection.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Line to response, or `None` for notifications. Public so callers can drive ACP without the read loop.
+    /// Line to response, or `None` for notifications.
     pub fn answer<W: Write, A: Asker>(
         &mut self,
         line: &str,
@@ -305,7 +285,6 @@ impl Connection {
         }
     }
 
-    /// Frame routing, session-independent; testable without a runtime like `mcp::classify`.
     fn route(&mut self, line: &str) -> Routed {
         let frame: Frame = match serde_json::from_str(line) {
             Ok(frame) => frame,
@@ -365,7 +344,7 @@ impl Connection {
         })
     }
 
-    /// `initialize` result: all capabilities false/empty, which is honest and what clients trust.
+    /// Every capability is false or empty, which is what this agent implements.
     fn initialized(params: &serde_json::Value) -> serde_json::Value {
         let asked = params
             .get("protocolVersion")
@@ -392,11 +371,7 @@ impl Connection {
         })
     }
 
-    /// Mint a session id.
-    ///
-    /// # `cwd` is recorded and **not** honoured, deliberately
-    /// Honouring it would let a client choose what the file tools reach; the workspace is a grant (`config.yaml` or `$PWD`)
-    /// and `Workspace::open` refuses `$HOME` and roots. What to do on a mismatch is left to the box that runs a turn.
+    /// `cwd` is recorded, not honoured: honouring it would let a client choose what the file tools reach.
     fn new_session(&mut self, params: &serde_json::Value) -> serde_json::Value {
         let id = jk_agent::session::new_session_id();
         self.sessions.push(id.clone());
@@ -412,15 +387,7 @@ impl Connection {
 }
 
 impl Connection {
-    /// Run one turn for `session/prompt`, streaming updates.
-    ///
-    /// # `stopReason` is not `isError`
-    /// Stop reasons say why a turn **ended**, unlike MCP's `isError`. **A permission refusal is `end_turn`, never `refusal`:**
-    /// the spec lets an editor discard the prompt on `refusal`, and a blocked tool call is not that.
-    /// A turn that genuinely failed has no stop reason and is a JSON-RPC error.
-    ///
-    /// # Errors
-    /// A message when the frame is unusable or the turn failed, returned as a JSON-RPC error.
+    /// A permission refusal is `end_turn`, never `refusal` (the spec lets editors discard the prompt on `refusal`).
     fn prompt<W: Write, A: Asker>(
         &self,
         params: &serde_json::Value,
@@ -475,12 +442,11 @@ impl Connection {
     }
 }
 
-/// A failed answer.
 fn refuse(id: jsonrpc::Id, code: i64, message: String) -> jsonrpc::Response {
     jsonrpc::Response::error(id, jsonrpc::Error::new(code, message))
 }
 
-/// Write one frame and **flush it**, as [`crate::rpc`] documents (pipe stdout is block-buffered).
+/// Writes one frame and flushes it (pipe stdout is block-buffered).
 fn write_frame<W: Write>(output: &mut W, response: &jsonrpc::Response) -> std::io::Result<()> {
     let text = serde_json::to_string(response).expect("a response serializes");
     output.write_all(text.as_bytes())?;
@@ -493,7 +459,6 @@ mod tests {
     use super::{Asker, Connection, PipeAsker, Rc, RefCell, Routed, UserPrompt, ACP_VERSION};
     use jk_protocol::jsonrpc;
 
-    /// Everything except `session/prompt` is answered without the agent, so these tests pass no runtime.
     fn negotiated() -> Connection {
         let mut connection = Connection::default();
         let value = call(
@@ -507,7 +472,6 @@ mod tests {
         connection
     }
 
-    /// Answer a line that does not need a turn; `session/prompt` is covered in `pkgs/host/host/tests/it/acp.rs`.
     fn call(connection: &mut Connection, line: &str) -> serde_json::Value {
         match connection.route(line) {
             Routed::Answer(response) => serde_json::to_value(response).expect("it serializes"),
@@ -536,7 +500,6 @@ mod tests {
         );
     }
 
-    /// Every capability is declared false, because every one of them is.
     #[test]
     fn no_capability_is_claimed_that_is_not_implemented() {
         let mut connection = Connection::default();
@@ -555,7 +518,6 @@ mod tests {
         }
     }
 
-    /// The spec's MUST: nothing before `initialize`.
     #[test]
     fn session_new_before_initialize_is_refused() {
         let mut connection = Connection::default();
@@ -588,7 +550,6 @@ mod tests {
         assert_eq!(connection.sessions, [id], "and the connection remembers it");
     }
 
-    /// Two sessions on one connection get different ids; otherwise a second `session/new` would alias the first.
     #[test]
     fn each_session_gets_its_own_id() {
         let mut connection = negotiated();
@@ -599,8 +560,6 @@ mod tests {
         assert_eq!(connection.sessions.len(), 2);
     }
 
-    /// The editor's `cwd` is echoed rather than acted on. The workspace is a
-    /// grant; a client must not be able to retarget it.
     #[test]
     fn the_clients_cwd_is_reported_not_adopted() {
         let mut connection = negotiated();
@@ -628,7 +587,6 @@ mod tests {
         );
     }
 
-    /// Still refused before the handshake: the ordering MUST covers `session/prompt` too.
     #[test]
     fn session_prompt_before_initialize_is_refused() {
         let mut connection = Connection::default();
@@ -653,7 +611,6 @@ mod tests {
         );
     }
 
-    /// Ask through a real [`PipeAsker`] with the answer queued; these check the wire shape, which scripted askers bypass.
     fn asked(answer: &str, prompt: &UserPrompt) -> (serde_json::Value, String) {
         let (handover, incoming) = std::sync::mpsc::channel();
         handover.send(answer.to_owned()).expect("queues the answer");
@@ -704,7 +661,7 @@ mod tests {
         );
     }
 
-    /// Every answer this cannot read takes the default (refusal): unreadable input must never widen a permission.
+    /// Unreadable answers take the default refusal: unreadable input must never widen a permission.
     #[test]
     fn an_answer_that_cannot_be_read_refuses() {
         for answer in [
@@ -718,8 +675,6 @@ mod tests {
         }
     }
 
-    /// A `session/cancel` while parked ends the wait with a refusal and marks the turn cancelled,
-    /// turning the prompt's answer from `end_turn` into `cancelled`.
     #[test]
     fn a_cancel_while_parked_refuses_and_marks_the_turn() {
         let (handover, incoming) = std::sync::mpsc::channel();
@@ -743,7 +698,6 @@ mod tests {
         assert!(asker.cancelled(), "and the turn is marked cancelled");
     }
 
-    /// A cancel while the turn streams is noticed too, between events.
     #[test]
     fn a_cancel_between_events_is_noticed_without_waiting() {
         let (handover, incoming) = std::sync::mpsc::channel();
@@ -764,7 +718,6 @@ mod tests {
         assert!(asker.cancelled());
     }
 
-    /// An ordinary mid-turn frame is not a cancel.
     #[test]
     fn an_unrelated_frame_mid_turn_is_not_a_cancel() {
         let (handover, incoming) = std::sync::mpsc::channel();
@@ -783,7 +736,6 @@ mod tests {
         assert!(!asker.cancelled(), "neither frame cancels anything");
     }
 
-    /// An editor that closes the pipe while parked does not hang the turn.
     #[test]
     fn a_closed_pipe_while_parked_refuses_rather_than_hanging() {
         let (handover, incoming) = std::sync::mpsc::channel::<String>();
@@ -798,7 +750,6 @@ mod tests {
         assert_eq!(asker.ask("sess-1", &confirm()), "no");
     }
 
-    /// A free-text prompt still has to be answerable by a dialog.
     #[test]
     fn a_free_text_prompt_offers_its_default_as_an_option() {
         let prompt = UserPrompt {

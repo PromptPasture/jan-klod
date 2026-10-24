@@ -1,9 +1,6 @@
-//! `tool-find` — glob search over the workspace tree through `host-fs`.
-//!
-//! The walk runs guest-side over `host-fs` `list-dir`; the matcher, walk and output cap live in `guest_fs`.
-//! This crate renders the result and holds the Component-Model glue (wasm32 only).
+//! `tool-find`: glob search over the workspace tree through `host-fs`, walking guest-side via `guest_fs`.
 
-/// Format the walk outcome. Bounds and truncation are noted, so a partial tree never reads as exhaustive.
+/// Bounds and truncation are noted, so a partial tree never reads as exhaustive.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn render(pattern: &str, outcome: &guest_fs::Outcome) -> String {
     if outcome.paths.is_empty() {
@@ -113,8 +110,7 @@ mod component {
         }
     }
 
-    /// The `host-fs` `list-dir` seam the shared walk drives. `None` (unreadable)
-    /// means "skip this subtree", never "fail the call".
+    /// `None` (unreadable) means skip the subtree, never fail the call.
     fn list_dir(dir: &str) -> Option<Vec<guest_fs::Entry>> {
         host_fs::list_dir(dir).ok().map(|entries| {
             entries

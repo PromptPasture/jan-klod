@@ -1,6 +1,4 @@
 //! Sessions must replay prior turns to the model, not just persist them.
-//! Asserts on what the provider wire received (store/transcript can look
-//! correct while model still sees isolation). Skips when guests not staged.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,7 +11,6 @@ use crate::common;
 
 const GUESTS: [&str; 1] = ["provider-openai.wasm"];
 
-/// Record every request to read the message list the model saw.
 fn recording_http(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> HttpFn {
     let seen = Arc::clone(seen);
     Box::new(move |_m, _u, _h, body: Option<&[u8]>, _t| {
@@ -36,7 +33,6 @@ fn recording_http(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> HttpFn {
     })
 }
 
-/// Config with durable store (sessions survive Runtime restart).
 fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -60,7 +56,6 @@ extensions:
     config
 }
 
-/// Extract message `content` from the last recorded request.
 fn last_messages(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> Vec<String> {
     let recorded = seen.lock().unwrap();
     let last = recorded.last().expect("the provider was called").clone();
@@ -199,7 +194,6 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
     );
 }
 
-/// Config with system-prompt interceptor (like shipped install).
 fn write_config_with_system(dir: &std::path::Path, prompt: &str) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -229,7 +223,6 @@ extensions:
     config
 }
 
-/// Extract message `role` from the last recorded request.
 fn last_roles(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> Vec<String> {
     let recorded = seen.lock().unwrap();
     let last = recorded.last().expect("the provider was called").clone();
@@ -285,7 +278,6 @@ fn the_model_is_told_what_it_is_before_anything_else() {
     );
 }
 
-/// Config with tool fleet and interceptors advertising it (like shipped).
 fn write_config_with_tools(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -321,7 +313,6 @@ workspace: {ws}
     config
 }
 
-/// Checks the request body: canned providers would accept requests with no tool schemas.
 #[test]
 fn the_model_is_actually_told_which_tools_exist() {
     if !common::guests_staged(&[
@@ -382,7 +373,6 @@ fn the_model_is_actually_told_which_tools_exist() {
     );
 }
 
-/// Collect warnings like REST surface and TUI do.
 #[derive(Default)]
 struct WarningSink(Vec<String>);
 
@@ -395,7 +385,6 @@ impl jk_protocol::turn::EventSink for WarningSink {
     }
 }
 
-/// Truncated completion (`finish_reason: "length"`) is flagged as warning, not silent.
 #[test]
 fn a_truncated_answer_is_flagged_to_the_client() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -440,8 +429,6 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     );
 }
 
-/// AGENTS.md reaches the model, labelled as the project's instructions. The host
-/// reads it and passes it as config, so no interceptor needs `host-fs`.
 #[test]
 fn project_instructions_from_agents_md_reach_the_model() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-system.wasm"]) {

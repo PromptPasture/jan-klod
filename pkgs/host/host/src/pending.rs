@@ -1,8 +1,4 @@
-//! Prompts waiting for an answer, and the route that delivers one (#225).
-//!
-//! The answer must not be a session job: queued behind the parked turn it would wait on itself, so the
-//! turn blocks on a one-shot that the accepting thread completes without touching the session.
-//! A second park for a session is refused, not replacing the first, which would orphan a waiting turn.
+//! Parked prompts and their answers; answers bypass the session queue, which the parked turn is blocking.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -23,8 +19,7 @@ impl Pending {
         Self::default()
     }
 
-    /// Register `session` as waiting, and hand back what to wait on.
-    /// `None` when that session already has a prompt parked.
+    /// Registers `session` as waiting and returns what to wait on; `None` if one is already parked.
     pub fn park(&self, session: &str) -> Option<Parked<'_>> {
         let (answer, answers) = channel();
         let mut waiting = self.lock();
@@ -40,8 +35,7 @@ impl Pending {
         })
     }
 
-    /// Deliver `answer` to the turn parked on `session`.
-    /// `false` when nothing is parked, so the client is not told an answer arrived when it did not.
+    /// Delivers `answer` to the turn parked on `session`; `false` when none is parked.
     pub fn answer(&self, session: &str, answer: String) -> bool {
         let Some(waiting) = self.lock().remove(session) else {
             return false;
@@ -71,8 +65,7 @@ pub struct Parked<'a> {
 }
 
 impl Parked<'_> {
-    /// Wait up to `slice` for the answer.
-    /// `None` means the slice expired, not that no answer is coming; the caller owns the deadline and heartbeats between slices.
+    /// Waits up to `slice`; `None` means the slice expired, not that no answer is coming.
     #[must_use]
     pub fn wait(&self, slice: Duration) -> Option<String> {
         self.answers.recv_timeout(slice).ok()
@@ -100,7 +93,6 @@ mod tests {
         assert_eq!(parked.wait(SLICE).as_deref(), Some("yes"));
     }
 
-    /// An answer nobody is waiting for is refused, not swallowed.
     #[test]
     fn an_answer_for_a_session_nobody_parked_is_refused() {
         let pending = Pending::new();
@@ -108,7 +100,6 @@ mod tests {
         assert!(!pending.is_parked("s1"));
     }
 
-    /// A second park is refused and the first still gets its answer.
     #[test]
     fn a_second_park_is_refused_and_the_first_still_answers() {
         let pending = Pending::new();
@@ -118,7 +109,6 @@ mod tests {
         assert_eq!(first.wait(SLICE).as_deref(), Some("for the first"));
     }
 
-    /// An abandoned confirmation leaves no row.
     #[test]
     fn a_dropped_wait_leaves_nothing_behind() {
         let pending = Pending::new();
@@ -131,7 +121,6 @@ mod tests {
         assert!(pending.park("s1").is_some());
     }
 
-    /// A slice that expires is not a refusal: the caller heartbeats and asks again.
     #[test]
     fn an_expired_slice_can_be_waited_on_again() {
         let pending = Pending::new();
@@ -141,7 +130,7 @@ mod tests {
         assert_eq!(parked.wait(SLICE).as_deref(), Some("late but arrived"));
     }
 
-    /// The answer arrives from another thread; the parked side never holds the lock while waiting.
+    /// The parked side never holds the lock while waiting.
     #[test]
     fn the_answer_may_come_from_another_thread() {
         let pending = Pending::new();

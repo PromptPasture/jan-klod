@@ -1,5 +1,4 @@
 //! Contributions over REST: unlike stdio, a browser must poll `GET /contributions`
-//! and learns from an invoke's answer whether the set changed.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -11,10 +10,8 @@ use jk_host::sessions::Agents;
 
 use crate::common;
 
-/// The provider, and the one extension that contributes anything.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "interceptor-system.wasm"];
 
-/// An offline agent with `interceptor-system` enabled, and a bound server.
 fn booted(tag: &str) -> Option<(common::TempDir, std::sync::Arc<Agents>, Surface, u16)> {
     if !common::guests_staged(&GUESTS) {
         return None;
@@ -47,7 +44,6 @@ extensions:
     Some((dir, agents, surface, port))
 }
 
-/// Send one request on its own thread while the session thread serves it.
 fn exchange(
     agents: &std::sync::Arc<Agents>,
     surface: &Surface,
@@ -124,7 +120,6 @@ fn a_browser_can_invoke_one_and_is_told_whether_the_set_moved() {
     );
 }
 
-/// A name nobody contributes is refused with an error status, not an empty success.
 #[test]
 fn invoking_something_nobody_contributes_is_a_404() {
     let Some((_dir, agents, surface, port)) = booted("unknown") else {

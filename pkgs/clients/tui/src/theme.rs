@@ -1,8 +1,4 @@
-//! The terminal design system: one grey ramp for structure and four accents for
-//!
-//! meaning, reached only through role accessors such as [`Theme::body`]. Callers
-//! never name a swatch, so no one invents a shade that no contrast test sees.
-//! Environment detection takes its input as an argument, so tests state the terminal they mean.
+//! The terminal design system, reached only through [`Theme`] role accessors: a grey ramp plus four accents.
 
 use ratatui::style::Color;
 
@@ -13,14 +9,14 @@ pub enum Mode {
     Dark,
     /// Light terminal: `snow` is the background, `ink-0` is emphasis.
     Light,
-    /// No colour: every role resolves to [`Color::Reset`]. This is what `NO_COLOR` asks for.
+    /// No colour: every role resolves to [`Color::Reset`].
     Mono,
 }
 
 /// How many colours the terminal can render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Depth {
-    /// 24-bit colour — the hexes below, unmodified.
+    /// 24-bit colour, the hexes unmodified.
     TrueColor,
     /// The xterm-256 indexed palette.
     Indexed256,
@@ -28,8 +24,7 @@ pub enum Depth {
     Basic16,
 }
 
-/// One colour at each depth. The downsampled forms are a fixed table, not a
-/// runtime nearest-colour search, so they can be checked against contrast targets.
+/// The downsampled forms are a fixed table, not a runtime nearest-colour search, so they can be checked against contrast targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Swatch {
     rgb: (u8, u8, u8),
@@ -52,12 +47,6 @@ impl Swatch {
     }
 }
 
-/// The ten steps, light to dark. Private: reached only through roles.
-///
-/// `Basic16` collapses the ramp to four greys, so its fine steps are lost there.
-///
-/// `ash` is 240 rather than #97's original 242: at 242 secondary text reached only
-/// 3.88:1 on `chalk`, and the contrast target does not move.
 const RAMP: [Swatch; 10] = [
     sw((0xF2, 0xF3, 0xF5), 255, Color::White),
     sw((0xD6, 0xDA, 0xE0), 252, Color::White),
@@ -71,7 +60,6 @@ const RAMP: [Swatch; 10] = [
     sw((0x0B, 0x0B, 0x0C), 232, Color::Black),
 ];
 
-/// Names for the ten [`RAMP`] steps—private by design.
 #[derive(Debug, Clone, Copy)]
 enum Tone {
     Snow = 0,
@@ -86,21 +74,17 @@ enum Tone {
     Ink0,
 }
 
-/// One accent, in the two directions of the ramp.
 #[derive(Debug, Clone, Copy)]
 struct AccentPair {
     dark: Swatch,
     light: Swatch,
 }
 
-/// One row of [`ACCENTS`]; see [`sw`] for why these are constructors.
 const fn pair(dark: Swatch, light: Swatch) -> AccentPair {
     AccentPair { dark, light }
 }
 
-/// The four accents, indexed by [`Accent`]. The xterm-256 indices are fixed
-/// here rather than computed per frame. `Basic16` uses the standard blue, green,
-/// red and yellow, the only meanings sixteen colours carry without ambiguity.
+/// `Basic16` uses the standard blue, green, red and yellow, the only meanings sixteen colours carry without ambiguity.
 const ACCENTS: [AccentPair; 4] = [
     pair(
         sw((0x8F, 0xB8, 0xD4), 110, Color::Blue),
@@ -120,7 +104,6 @@ const ACCENTS: [AccentPair; 4] = [
     ),
 ];
 
-/// Names for the four [`ACCENTS`]. Private, like [`Tone`].
 #[derive(Debug, Clone, Copy)]
 enum Accent {
     Blade = 0,
@@ -138,8 +121,7 @@ pub enum GlyphSet {
     Ascii,
 }
 
-/// A state the interface shows without relying on colour. Callers name a
-/// variant, never a literal mark, so the theme controls the vocabulary.
+/// A state the interface shows without relying on colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glyph {
     /// The rule down the left of a message block.
@@ -160,17 +142,16 @@ pub enum Glyph {
     DiffRemoved,
     /// The composer's caret, idle: what you type becomes a new message.
     Caret,
-    /// The composer's caret while a turn runs (#160): input steers the turn
-    /// rather than starting one. A separate glyph, since colour is absent under `Mode::Mono`.
+    /// The composer's caret while a turn runs: input steers the turn rather than starting one.
     CaretSteering,
-    /// The transcript is scrolled up and there is more below (#148).
+    /// The transcript is scrolled up and there is more below.
     MoreBelow,
-    /// Text that did not fit and was cut short (#155).
+    /// Text that did not fit and was cut short.
     Elided,
 }
 
 impl Glyph {
-    /// Every variant, for sweeps. Adding one without a form in [`Glyph::forms`] fails to compile.
+    /// Every variant, for sweeps.
     pub const ALL: [Self; 12] = [
         Self::MessageGutter,
         Self::ToolDone,
@@ -186,7 +167,7 @@ impl Glyph {
         Self::Elided,
     ];
 
-    /// The Unicode and ASCII forms. ASCII `ToolDone` is `*` because `+` already means `DiffAdded`.
+    /// The Unicode and ASCII forms.
     #[must_use]
     pub const fn forms(self) -> (&'static str, &'static str) {
         match self {
@@ -206,15 +187,12 @@ impl Glyph {
     }
 }
 
-/// Spinner frames for a running tool, Unicode then ASCII. Not a [`Glyph`]:
-/// motion identifies it, not shape.
+/// Not a [`Glyph`]: motion identifies it, not shape.
 const SPINNER: (&[&str], &[&str]) = (
     &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
     &["-", "\\", "|", "/"],
 );
 
-/// Background from `COLORFGBG` (`fg;bg`, or `fg;x;bg`): ANSI 7 and 9–15 are
-/// light, 0–6 and 8 dark. Anything else is `None`, so the caller falls through.
 fn background_of(colorfgbg: &str) -> Option<Mode> {
     match colorfgbg.rsplit(';').next()?.trim().parse::<u8>().ok()? {
         0..=6 | 8 => Some(Mode::Dark),
@@ -223,7 +201,6 @@ fn background_of(colorfgbg: &str) -> Option<Mode> {
     }
 }
 
-/// Whether a locale names UTF-8, ignoring case and hyphens (`en_US.UTF-8`, `C.utf8`).
 fn is_utf8(locale: &str) -> bool {
     let normalised = locale.to_ascii_lowercase().replace('-', "");
     normalised.contains("utf8")
@@ -248,19 +225,7 @@ impl Theme {
         }
     }
 
-    /// Resolve a theme from the environment. `lookup` is injected rather than
-    /// read, since tests that mutate the real environment race each other.
-    ///
-    /// `force_ascii` is the `--ascii` flag and beats the locale only.
-    ///
-    /// # Precedence
-    ///
-    /// Mode: `NO_COLOR` (set to anything) → `JAN_KLOD_THEME` → `COLORFGBG` →
-    /// dark. Depth: `COLORTERM` → `TERM` → sixteen colours. Glyphs:
-    /// `force_ascii` → `LC_ALL` / `LC_CTYPE` / `LANG` → ASCII.
-    ///
-    /// There is no terminal background query: crossterm (ratatui 0.30) has none,
-    /// so the mode chain ends at dark.
+    /// Resolve a theme from the environment.
     pub fn detect(lookup: impl Fn(&str) -> Option<String>, force_ascii: bool) -> Self {
         Self {
             mode: Self::detect_mode(&lookup),
@@ -349,7 +314,6 @@ impl Theme {
         }
     }
 
-    /// Resolve a ramp role, given the step each direction uses.
     const fn ramp(self, dark: Tone, light: Tone) -> Color {
         match self.mode {
             Mode::Mono => Color::Reset,
@@ -358,7 +322,6 @@ impl Theme {
         }
     }
 
-    /// Resolve an accent.
     const fn accent(self, accent: Accent) -> Color {
         match self.mode {
             Mode::Mono => Color::Reset,
@@ -379,8 +342,7 @@ impl Theme {
         self.ramp(Tone::Ink1, Tone::Chalk)
     }
 
-    /// The surface a code or tool block sits on. Light terminals reuse
-    /// [`Theme::raised`], since no ramp step is left between `snow` and `chalk`.
+    /// The surface a code or tool block sits on.
     #[must_use]
     pub const fn code_surface(self) -> Color {
         self.ramp(Tone::Ink2, Tone::Chalk)
@@ -399,10 +361,6 @@ impl Theme {
     }
 
     /// Muted text: the status line, timestamps.
-    ///
-    /// No contrast floor, by decision (#135): no ramp step gives it AA from both
-    /// ends (`no_single_ramp_step_can_give_muted_an_aa_floor_from_both_ends`).
-    /// Anything drawn in this colour must also be marked by position or a [`Glyph`].
     #[must_use]
     pub const fn muted(self) -> Color {
         self.ramp(Tone::Smoke, Tone::Smoke)
@@ -414,15 +372,13 @@ impl Theme {
         self.ramp(Tone::Steel0, Tone::Mist)
     }
 
-    /// The border of the focused pane, and the gutter rule. Light terminals use
-    /// `ash`: the next step with enough contrast that does not reach body text.
+    /// The border of the focused pane, and the gutter rule.
     #[must_use]
     pub const fn border_active(self) -> Color {
         self.ramp(Tone::Steel1, Tone::Ash)
     }
 
-    /// Focus: the focused pane's border, the caret, the selected row, the
-    /// active dialog option.
+    /// Focus: the focused pane's border, the caret, the selected row, the active dialog option.
     #[must_use]
     pub const fn focus(self) -> Color {
         self.accent(Accent::Blade)
@@ -453,7 +409,6 @@ mod tests {
     use ratatui::style::Color;
     use std::collections::HashMap;
 
-    /// Every role, so a test can sweep them without naming each one twice.
     fn roles(theme: Theme) -> Vec<Color> {
         vec![
             theme.background(),
@@ -471,8 +426,7 @@ mod tests {
         ]
     }
 
-    /// WCAG 2.1 relative luminance of a role's truecolor form. Only truecolor is
-    /// checked: the downsampled forms map onto palettes this crate does not define.
+    /// Only truecolor is checked: the downsampled forms map onto palettes this crate does not define.
     #[allow(clippy::suboptimal_flops)]
     fn relative_luminance(color: Color) -> f64 {
         let Color::Rgb(r, g, b) = color else {
@@ -489,35 +443,25 @@ mod tests {
         0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
     }
 
-    /// The WCAG contrast ratio between two roles, always ≥ 1.0.
     fn contrast(a: Color, b: Color) -> f64 {
         let (la, lb) = (relative_luminance(a), relative_luminance(b));
         let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
         (hi + 0.05) / (lo + 0.05)
     }
 
-    /// A role accessor, so the tables below can be swept rather than unrolled.
     type Role = fn(Theme) -> Color;
 
-    /// The environment one detection case hands to [`Theme::detect`].
     type Vars = &'static [(&'static str, &'static str)];
-    /// A row of the mode-precedence table: what it shows, the environment, the answer.
     type ModeCase = (&'static str, Vars, Mode);
-    /// A row of the depth-precedence table.
     type DepthCase = (&'static str, Vars, Depth);
-    /// A row of the glyph-selection table; the `bool` is `--ascii`.
     type GlyphCase = (&'static str, Vars, bool, GlyphSet);
 
-    /// Everything a foreground role can be drawn on.
     const SURFACES: [(&str, Role); 3] = [
         ("background", Theme::background),
         ("raised", Theme::raised),
         ("code_surface", Theme::code_surface),
     ];
 
-    /// The roles under a contrast floor (#128). Borders are absent: grey borders
-    /// are separators, and holding them to 3:1 would light up every idle rule.
-    /// `muted` is absent for the reason given on [`Theme::muted`] (#135).
     const GATED: [(&str, Role, f64); 6] = [
         ("body", Theme::body, 7.0),
         ("secondary", Theme::secondary, 4.5),
@@ -545,11 +489,6 @@ mod tests {
         }
     }
 
-    /// No ramp step gives `muted` an AA floor (#135), shown as arithmetic. Against
-    /// a lighter surface a foreground must be dark enough, and against a darker
-    /// one light enough. `chalk` (light raised) and `ink-2` (dark code surface)
-    /// demand ranges that do not overlap. If this fails, a surface moved and #135
-    /// is worth reopening.
     #[allow(clippy::suboptimal_flops)]
     #[test]
     fn no_single_ramp_step_can_give_muted_an_aa_floor_from_both_ends() {
@@ -878,7 +817,6 @@ mod tests {
         }
     }
 
-    /// The two carets must differ: they say whether `Enter` sends or steers (#160).
     #[test]
     fn the_two_carets_are_told_apart_in_both_vocabularies() {
         for set in [GlyphSet::Unicode, GlyphSet::Ascii] {

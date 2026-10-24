@@ -1,5 +1,4 @@
 //! Hand-built minisign keypairs and signatures, verified by the same `minisign-verify` the installer uses.
-//! [`sign`] makes the prehashed (`ED`) form the installer requires; [`sign_legacy`] proves the legacy form is refused.
 
 use std::path::Path;
 
@@ -7,21 +6,17 @@ use blake2::digest::consts::U64;
 use blake2::{Blake2b, Digest};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
-/// Minisign's prehashed algorithm tag.
 const PREHASHED: [u8; 2] = [0x45, 0x44];
-/// Minisign's legacy algorithm tag: Ed25519 over the raw file.
 const LEGACY: [u8; 2] = [0x45, 0x64];
 /// The prefix line 3 must carry, and whose length line 4's input skips.
 const TRUSTED_PREFIX: &str = "trusted comment: ";
 
-/// A throwaway signing identity.
 pub struct Signer {
     pair: Ed25519KeyPair,
     key_id: [u8; 8],
 }
 
 impl Signer {
-    /// A fresh keypair. The key id is the public key's first eight bytes; minisign only needs it to match.
     pub fn new() -> Self {
         let seed = ring::rand::SystemRandom::new();
         let document =
@@ -32,8 +27,6 @@ impl Signer {
         Self { pair, key_id }
     }
 
-    /// This identity's public key, base64 as minisign writes it:
-    /// `sigalg[2] || key_id[8] || key[32]`.
     pub fn public_key_base64(&self) -> String {
         let mut raw = Vec::with_capacity(42);
         raw.extend_from_slice(&PREHASHED);
@@ -42,13 +35,10 @@ impl Signer {
         base64(&raw)
     }
 
-    /// Write `<file>.minisig` for `file` in the prehashed form the installer
-    /// requires.
     pub fn sign(&self, file: &Path) {
         self.write_signature(file, PREHASHED);
     }
 
-    /// Same, in **legacy** form — to prove it is refused.
     pub fn sign_legacy(&self, file: &Path) {
         self.write_signature(file, LEGACY);
     }
@@ -84,7 +74,6 @@ impl Signer {
     }
 }
 
-/// Standard base64, which minisign uses for every binary field.
 fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();

@@ -1,6 +1,4 @@
-//! `interceptor-intent-router` — the default `before-loop` interceptor.
-//!
-//! Classifies each prompt `simple` (answered inline via `Decision::Block`) or `agentic` (proceeds); unclassifiable prompts default to `agentic`.
+//! `interceptor-intent-router`: default `before-loop` interceptor; `simple` prompts are answered inline, `agentic` proceeds.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod router;
@@ -35,7 +33,6 @@ mod component {
         self, CompletionChunk, CompletionRequest, Message, Role,
     };
 
-    /// Tier-3 system prompt; output is constrained by [`router::CLASSIFIER_GRAMMAR`].
     const CLASSIFIER_SYSTEM: &str = "You are an intent classifier. Reply with exactly one word. \
         Answer 'simple' when the message is a greeting, acknowledgement, or a single-fact question \
         answerable directly. Answer 'agentic' when it needs tools, planning, or multiple steps.";
@@ -44,7 +41,7 @@ mod component {
         host_log::log(level, "interceptor-intent-router", message, &[]);
     }
 
-    /// Tier-3 classifier: one constrained-decoding call; any provider failure defaults to [`Intent::Agentic`].
+    /// Any provider failure defaults to [`Intent::Agentic`].
     fn llm_classify(prompt: &str) -> Intent {
         let request = CompletionRequest {
             model: String::new(),
@@ -76,8 +73,7 @@ mod component {
         router::parse_intent(&text)
     }
 
-    /// Drain a provider stream handle to its concatenated text, then close it.
-    /// Tool-call chunks are ignored (the classifier never emits them).
+    /// Tool-call chunks are ignored; the classifier never emits them.
     fn drain_text(handle: llm_provider::StreamHandle) -> String {
         let mut text = String::new();
         loop {
@@ -91,7 +87,6 @@ mod component {
         text
     }
 
-    /// The single type implementing every interface `interceptor-world` exports.
     struct Component;
 
     impl Lifecycle for Component {
@@ -118,12 +113,11 @@ mod component {
     }
 
     impl Interceptor for Component {
-        /// Only `before-loop`: decide whether the agentic loop runs at all.
         fn subscribed_phases() -> Vec<Phase> {
             vec![Phase::BeforeLoop]
         }
 
-        /// `simple` blocks the loop, `agentic` proceeds; any other state is a host dispatch error (`invalid-state`).
+        /// Any other state is a host dispatch error (`invalid-state`).
         fn intercept(input: InterceptInput) -> Result<Decision, InterceptorError> {
             let HookState::BeforeLoop(turn) = input.state else {
                 log(LogLevel::Error, "dispatched with non-before-loop state");

@@ -1,6 +1,4 @@
-//! `ext install` against real components: valid ones land and load, and a
-//! manifest that disagrees with the real imports is refused. Refusals that need
-//! only bytes are unit tests in `core::ext`.
+//! `ext install` against real components: valid ones land and load, a manifest that disagrees with the real imports is refused.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,7 +7,6 @@ use jk_wasm::ext::{self, Declaration, ExtError};
 
 use crate::common;
 
-/// Scratch `ext/` and sources dir, removed on drop.
 pub struct Scratch {
     root: PathBuf,
     pub ext: PathBuf,
@@ -36,7 +33,6 @@ pub fn scratch(tag: &str) -> Scratch {
     }
 }
 
-/// Copies a staged guest and its manifest into `incoming`, returning the component path.
 pub fn offer(scratch: &Scratch, guest: &str) -> PathBuf {
     let staged = common::repo_root().join("ext");
     let component = scratch.incoming.join(format!("{guest}.wasm"));
@@ -49,8 +45,6 @@ pub fn offer(scratch: &Scratch, guest: &str) -> PathBuf {
     component
 }
 
-/// SHA-256 of a file, from a system tool that shares no code with the host, so a
-/// wrong hex encoder cannot agree with itself. `None` when no tool exists; the caller skips.
 fn sha256_of(path: &Path) -> Option<String> {
     let candidates: [(&str, &[&str]); 2] = [("sha256sum", &[]), ("shasum", &["-a", "256"])];
     for (program, flags) in candidates {
@@ -73,8 +67,6 @@ fn sha256_of(path: &Path) -> Option<String> {
     None
 }
 
-/// A properly signed offer and the checks that accept it. Structural tests need a
-/// signature, or they are refused before reaching the check they cover.
 fn signed_offer(scratch: &Scratch, guest: &str) -> (PathBuf, ext::Checks) {
     let component = offer(scratch, guest);
     let signer = crate::common::minisig::Signer::new();
@@ -88,8 +80,6 @@ fn signed_offer(scratch: &Scratch, guest: &str) -> (PathBuf, ext::Checks) {
     (component, checks)
 }
 
-/// Re-signs an offer whose files were edited after signing, so the structural
-/// check is what refuses it rather than a stale signature.
 fn resign(scratch: &Scratch, guest: &str) -> ext::Checks {
     let signer = crate::common::minisig::Signer::new();
     signer.sign(&scratch.incoming.join(format!("{guest}.wasm")));
@@ -101,7 +91,6 @@ fn resign(scratch: &Scratch, guest: &str) -> ext::Checks {
     }
 }
 
-/// Every name in a directory, sorted — enough to assert "nothing landed".
 pub fn names(dir: &Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(dir)
         .expect("reads the directory")
@@ -148,8 +137,6 @@ fn a_valid_component_lands_with_its_manifest_and_is_then_loadable() {
         .expect("what install accepted, the runtime can load");
 }
 
-/// A manifest that under-declares the component's imports is refused and nothing lands.
-/// Operators read the declaration before granting anything.
 #[test]
 fn a_manifest_that_under_declares_is_refused_and_nothing_lands() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -186,9 +173,6 @@ fn a_manifest_that_under_declares_is_refused_and_nothing_lands() {
     );
 }
 
-/// A stem naming no category is refused before any byte moves (#222). Left to
-/// adoption, the component would land, report success, and be uncallable later.
-/// The valid-install test above is the control: the same bytes under a `tool-` stem.
 #[test]
 fn a_component_whose_stem_names_no_category_is_refused_and_nothing_lands() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -224,8 +208,6 @@ fn a_component_whose_stem_names_no_category_is_refused_and_nothing_lands() {
     );
 }
 
-/// The digest check: the right digest installs, and a flipped byte is refused with
-/// both digests named. Flipping a byte keeps the file valid wasm, so only the digest can catch it.
 #[test]
 fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -294,7 +276,6 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     );
 }
 
-/// A manifest built for another API version is refused, the same gate boot applies.
 #[test]
 fn a_manifest_from_another_api_version_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -326,7 +307,6 @@ fn a_manifest_from_another_api_version_is_refused() {
 
 use crate::common::minisig::Signer;
 
-/// Sign both files of an offer with `signer`.
 fn sign_pair(scratch: &Scratch, guest: &str, signer: &Signer) {
     signer.sign(&scratch.incoming.join(format!("{guest}.wasm")));
     signer.sign(&scratch.incoming.join(format!("{guest}.manifest.toml")));
@@ -359,8 +339,6 @@ fn a_signature_from_a_trusted_key_over_both_files_installs() {
     );
 }
 
-/// Signing only the component is not enough: the manifest has no provenance of
-/// its own, so an unsigned manifest would let an attacker's declaration through.
 #[test]
 fn a_signature_over_the_component_but_not_the_manifest_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -383,8 +361,6 @@ fn a_signature_over_the_component_but_not_the_manifest_is_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-/// A perfectly valid signature by a key nobody trusted is refused — which is
-/// the whole difference between "signed" and "signed by someone we chose".
 #[test]
 fn a_valid_signature_from_an_untrusted_key_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -405,7 +381,6 @@ fn a_valid_signature_from_an_untrusted_key_is_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-/// Bytes changed after signing must fail. This also catches a signature checked against the source rather than the staged bytes.
 #[test]
 fn bytes_changed_after_signing_are_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -430,8 +405,6 @@ fn bytes_changed_after_signing_are_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-/// The legacy signature format is refused. `verify` runs with `allow_legacy` false,
-/// and without this test passing `true` would look identical from outside.
 #[test]
 fn a_legacy_format_signature_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -451,7 +424,6 @@ fn a_legacy_format_signature_is_refused() {
     );
 }
 
-/// Unsigned installs need flag *and* digest; neither alone suffices.
 #[test]
 fn allow_unsigned_needs_a_digest_and_says_so() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -501,7 +473,6 @@ fn allow_unsigned_needs_a_digest_and_says_so() {
     );
 }
 
-/// An empty `trusted-keys` list means nothing is trusted, not "skip the check".
 #[test]
 fn no_configured_keys_refuses_rather_than_accepting_anything() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -520,9 +491,6 @@ fn no_configured_keys_refuses_rather_than_accepting_anything() {
     assert_eq!(*keys, 0, "and the message says how many keys were tried");
 }
 
-/// Acceptance line 2: what `install` accepts, a real boot loads. Compiling (as the
-/// valid-install test does) is not booting; boot also resolves the instance, reads
-/// the manifest, and cross-checks imports.
 #[test]
 fn a_component_installed_here_is_loaded_by_a_real_boot() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -565,8 +533,6 @@ extensions:
     );
 }
 
-/// A loopback URL is refused before anything goes on the wire. Only the server's
-/// hit count can prove that, so this uses `common::Countable`.
 #[test]
 fn a_loopback_source_is_refused_before_anything_is_fetched() {
     let sentinel = common::Countable::start();
@@ -585,7 +551,6 @@ fn a_loopback_source_is_refused_before_anything_is_fetched() {
     sentinel.only_hit();
 }
 
-/// Address classes the policy exists for. None can host a sentinel, so these assert the decision alone.
 #[test]
 fn private_link_local_and_metadata_sources_are_refused() {
     for url in [
@@ -603,7 +568,6 @@ fn private_link_local_and_metadata_sources_are_refused() {
     }
 }
 
-/// Only http(s) is remote. `file:///etc/passwd` is a local path, not a fetch the policy has no opinion about.
 #[test]
 fn only_http_and_https_count_as_remote() {
     for remote in [
@@ -625,8 +589,6 @@ fn only_http_and_https_count_as_remote() {
     }
 }
 
-/// Serves a set of files by URL and records each URL requested. Uses public
-/// `example.com` URLs, which the policy permits without a loopback grant.
 pub fn canned_files(
     files: Vec<(&'static str, Vec<u8>)>,
 ) -> (jk_wasm::route::HttpFn, Arc<std::sync::Mutex<Vec<String>>>) {
@@ -647,7 +609,6 @@ pub fn canned_files(
     (http, asked)
 }
 
-/// Four files for signed remote install, from staged guest.
 pub fn published(scratch: &Scratch, guest: &str) -> (Vec<(&'static str, Vec<u8>)>, ext::Checks) {
     let component = offer(scratch, guest);
     let signer = crate::common::minisig::Signer::new();
@@ -676,7 +637,6 @@ pub fn published(scratch: &Scratch, guest: &str) -> (Vec<(&'static str, Vec<u8>)
     )
 }
 
-/// Signed remote install fetches four files, same verification as local.
 #[test]
 fn a_remote_install_fetches_the_pair_and_both_signatures() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -713,7 +673,6 @@ fn a_remote_install_fetches_the_pair_and_both_signatures() {
     );
 }
 
-/// Bytes tampered in flight are refused like a tampered local file: downloads have no weaker path.
 #[test]
 fn bytes_tampered_in_flight_are_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -739,7 +698,6 @@ fn bytes_tampered_in_flight_are_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-/// A waived signature fetches only the two files; a 404 on `.minisig` must not fail an unsigned install.
 #[test]
 fn an_unsigned_remote_install_does_not_fetch_signatures() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -769,7 +727,6 @@ fn an_unsigned_remote_install_does_not_fetch_signatures() {
     assert_eq!(asked.len(), 2, "no signature was requested: {asked:?}");
 }
 
-/// URL with query refused, not mangled silently.
 #[test]
 fn a_url_with_a_query_is_refused_rather_than_mangled() {
     let (http, asked) = canned_files(vec![]);
@@ -790,7 +747,6 @@ fn a_url_with_a_query_is_refused_rather_than_mangled() {
     );
 }
 
-/// `install_from_url` refuses a denied destination before asking the client. The other tests use permitted URLs, so this is what catches the check being dropped.
 #[test]
 fn a_refused_destination_is_not_even_requested() {
     let (http, asked) = canned_files(vec![]);
@@ -812,8 +768,6 @@ fn a_refused_destination_is_not_even_requested() {
     );
 }
 
-/// A redirect from a permitted origin to a refused one ends the install and the destination is never touched.
-/// The installer gets a public URL; the client reaches a loopback redirector that the policy permits, but not the sentinel behind it.
 #[test]
 fn a_redirect_to_a_refused_destination_ends_a_remote_install() {
     let scratch = scratch("remote-redirect");

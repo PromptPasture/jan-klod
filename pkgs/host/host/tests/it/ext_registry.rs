@@ -1,6 +1,4 @@
-//! `ext search` and `ext install <name>` against a registry index. Offline and
-//! signed: the index is a file and the component comes from a canned `HttpFn`.
-//! Parsing refusals are unit tests in `core::ext_index`.
+//! `ext search` and `ext install <name>` against a signed, file-based registry index and a canned `HttpFn`.
 
 use std::path::Path;
 
@@ -9,9 +7,6 @@ use jk_wasm::ext_index::{self, IndexError};
 use crate::common;
 use crate::ext_install::{canned_files, names, published, scratch, Scratch};
 
-/// An index describing one published component, written to a file. The digest is
-/// computed from the served bytes, standing in for a generated index; the digest
-/// check itself is covered in `ext_install`.
 fn write_index(scratch: &Scratch, component: &[u8], signature: &str) -> String {
     use std::fmt::Write;
     let digest = <sha2::Sha256 as sha2::Digest>::digest(component);
@@ -44,8 +39,6 @@ fn write_index(scratch: &Scratch, component: &[u8], signature: &str) -> String {
     path.display().to_string()
 }
 
-/// A name resolved through a **local** index installs with no network. A path as
-/// `registry.url` is documented behaviour for air-gapped mirrors, not a test shortcut.
 #[test]
 fn a_name_from_a_local_index_installs_offline() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -87,8 +80,6 @@ fn a_name_from_a_local_index_installs_offline() {
     );
 }
 
-/// The index's digest is really checked: bytes it does not describe are refused as a mismatch.
-/// Otherwise the previous test would pass for an installer that ignored `sha256`.
 #[test]
 fn bytes_that_are_not_the_ones_the_index_describes_are_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -117,7 +108,6 @@ fn bytes_that_are_not_the_ones_the_index_describes_are_refused() {
     assert_eq!(names(&scratch.ext), [] as [String; 0], "and nothing landed");
 }
 
-/// A command-line digest that contradicts the index's stops the install; they are not resolved by precedence.
 #[test]
 fn a_digest_the_index_contradicts_is_refused_before_anything_is_fetched() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -141,7 +131,6 @@ fn a_digest_the_index_contradicts_is_refused_before_anything_is_fetched() {
     );
 }
 
-/// An unreachable index is a refusal naming the URL, not an empty result: a 404 must not read as "no results".
 #[test]
 fn an_unreachable_index_says_so_rather_than_reading_as_empty() {
     let (http, _) = canned_files(vec![("nothing-served", Vec::new())]);
@@ -157,8 +146,6 @@ fn an_unreachable_index_says_so_rather_than_reading_as_empty() {
     );
 }
 
-/// A registry URL the egress policy refuses is refused before a byte moves, as a
-/// component URL is: an index lists executable code to download.
 #[test]
 fn a_loopback_index_is_refused_before_it_is_requested() {
     let (http, asked) = canned_files(vec![("index.json", b"{}".to_vec())]);
@@ -177,7 +164,6 @@ fn a_loopback_index_is_refused_before_it_is_requested() {
     );
 }
 
-/// A malformed index names the file and what was wrong with it.
 #[test]
 fn a_malformed_local_index_names_the_file_and_the_problem() {
     let scratch = scratch("index-malformed");
@@ -201,8 +187,6 @@ fn a_malformed_local_index_names_the_file_and_the_problem() {
     );
 }
 
-/// Runs `jan-klod-gateway ext <args…>` in `cwd`. Uses the real binary because the
-/// capability line is rendered by the gateway, not the core.
 fn gateway(cwd: &Path, args: &[&str]) -> (bool, String, String) {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_jan-klod-gateway"))
         .arg("ext")
@@ -228,7 +212,6 @@ fn config_naming(scratch: &Scratch, url: &str) -> std::path::PathBuf {
     path
 }
 
-/// The acceptance: `ext search` prints what each hit asks the host for.
 #[test]
 fn ext_search_prints_the_capabilities_of_every_hit() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -264,7 +247,6 @@ fn ext_search_prints_the_capabilities_of_every_hit() {
     );
 }
 
-/// A broken registry fails the command with a message: no panic, no silence.
 #[test]
 fn a_broken_registry_fails_the_command_with_a_message() {
     let scratch = scratch("index-cli-broken");

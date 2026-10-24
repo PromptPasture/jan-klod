@@ -1,18 +1,12 @@
-//! The frame's regions as a pure function of terminal size, so layout is testable without a terminal.
-//!
-//! The transcript/composer split inside [`Frame::content`] depends on the
-//! composer's content, which this module does not know about.
+//! The frame's regions as a pure function of terminal size.
 
 use ratatui::layout::Rect;
 
-/// Fixed sidebar width.
 const SIDEBAR_WIDTH: u16 = 28;
-/// Fewest rows a transcript can have before the frame is too small.
 const MIN_TRANSCRIPT_HEIGHT: u16 = 5;
-/// A bordered composer's minimum: one row of text and two of border.
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 
-/// The frame's regions for one terminal size. `header` and `sidebar` are `None` where hidden.
+/// The frame's regions for one terminal size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Frame {
     /// The one-row header, when the terminal is tall enough for it.
@@ -23,8 +17,7 @@ pub struct Frame {
     pub content: Rect,
     /// The one-row status bar.
     pub status: Rect,
-    /// `content` cannot fit a transcript and a composer at their smallest —
-    /// draw the "terminal too small" panel there instead of the normal frame.
+    /// `content` cannot fit a transcript and composer: draw the "terminal too small" panel instead.
     pub too_small: bool,
     /// 60–79 columns: the header collapses and the status bar shows fewer hints.
     pub collapsed_header: bool,
@@ -33,8 +26,6 @@ pub struct Frame {
 }
 
 /// The frame's regions for `width` × `height`.
-///
-/// Below 20 rows the sidebar and then the header are dropped before the transcript shrinks.
 #[must_use]
 pub fn regions(width: u16, height: u16) -> Frame {
     let header_visible = height >= 20;
@@ -100,12 +91,10 @@ pub fn regions(width: u16, height: u16) -> Frame {
 mod tests {
     use super::{regions, Frame};
 
-    /// Whether two rects share a cell.
     fn overlaps(a: ratatui::layout::Rect, b: ratatui::layout::Rect) -> bool {
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
     }
 
-    /// Regions stay within the terminal and never overlap.
     fn assert_tiles_cleanly(frame: Frame, width: u16, height: u16) {
         let mut present: Vec<ratatui::layout::Rect> = vec![frame.content, frame.status];
         present.extend(frame.header);
@@ -183,7 +172,6 @@ mod tests {
         assert_tiles_cleanly(frame, 60, 8);
     }
 
-    /// Sweeps sizes around every breakpoint.
     #[test]
     fn regions_never_overlap_or_run_past_the_terminal_at_any_size() {
         for width in [10, 30, 59, 60, 79, 80, 99, 100, 200] {

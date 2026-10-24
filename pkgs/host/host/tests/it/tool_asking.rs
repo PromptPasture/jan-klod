@@ -1,6 +1,4 @@
-//! A tool can ask the user mid-call and the turn continues (#216). The probe
-//! returns a question and is re-invoked with the answer, so no guest is on the
-//! stack while the loop is suspended.
+//! A tool can ask the user mid-call and the turn continues; no guest is on the stack while the loop is suspended.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -16,7 +14,6 @@ use crate::common;
 
 const PROBE: &str = "tool-ask-probe.wasm";
 
-/// Answers every question with a fixed reply, and counts them.
 struct Answering {
     reply: String,
     asked: Rc<RefCell<Vec<String>>>,
@@ -29,7 +26,6 @@ impl Driver for Answering {
     }
 }
 
-/// Driver for a headless surface, which cannot prompt: the prompt's default is the answer.
 struct Headless;
 impl Driver for Headless {
     fn ask(&mut self, prompt: &UserPrompt) -> String {
@@ -94,7 +90,6 @@ fn a_tool_asks_and_is_invoked_again_with_the_answer() {
     );
 }
 
-/// The probe can ask but may finish in one step, so "can ask" and "does ask" stay separate.
 #[test]
 fn a_tool_that_does_not_ask_answers_in_one_step() {
     let Some(mut fleet) = fleet() else {
@@ -116,7 +111,6 @@ fn a_tool_that_does_not_ask_answers_in_one_step() {
     assert!(out.content.contains("\"asked\":false"), "{}", out.content);
 }
 
-/// With no one to ask, the prompt's default answers and the turn finishes instead of hanging.
 #[test]
 fn with_nobody_to_ask_the_default_answers_and_the_turn_finishes() {
     let Some(mut fleet) = fleet() else {
@@ -133,7 +127,6 @@ fn with_nobody_to_ask_the_default_answers_and_the_turn_finishes() {
     );
 }
 
-/// The host bounds how often a tool may ask; a guest cannot be trusted to stop on its own.
 #[test]
 fn a_tool_that_asks_forever_is_cut_off_rather_than_hanging_the_turn() {
     let Some(mut fleet) = fleet() else {
