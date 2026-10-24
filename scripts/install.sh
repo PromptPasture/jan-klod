@@ -20,11 +20,8 @@ set -eu
 REPO="PromptPasture/jan-klod"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
 
-# The distributions the release publishes. Kept in step with
-# scripts/distributions/ and .github/workflows/release.yml by
-# `docs_match_config::the_installer_offers_the_distributions_the_release_builds`
-# — a name here that the release does not build is a 404 at the user, and the
-# test is what turns that into a failing build instead.
+# Must match scripts/distributions/ and release.yml; a mismatch is a 404 for the
+# user. `docs_match_config::the_installer_offers_the_distributions_the_release_builds` enforces it.
 DISTRIBUTIONS="coding headless-chat minimal self-extend"
 DIST="coding"
 
@@ -49,8 +46,7 @@ esac
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 
-# release.yml spells 64-bit ARM differently per OS: `aarch64` on Linux,
-# `arm64` on macOS. Don't normalize both to one value — that 404s on Mac.
+# release.yml names 64-bit ARM per OS (aarch64 on Linux, arm64 on macOS). Do not normalize.
 case "${OS}/${ARCH}" in
   linux/x86_64)          ARCH="x86_64"  ;;
   linux/aarch64|linux/arm64) ARCH="aarch64" ;;
@@ -69,7 +65,6 @@ case "${OS}/${ARCH}" in
     ;;
 esac
 
-# Find the latest release tag.
 API="https://api.github.com/repos/${REPO}/releases/latest"
 TAG=$(curl -sSfL "${API}" | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
 if [ -z "${TAG}" ]; then
@@ -77,47 +72,28 @@ if [ -z "${TAG}" ]; then
   exit 1
 fi
 
-# The archive carries the distribution, as `make bundle DIST=` names it.
-#
-# There is no unsuffixed fallback, and that is safe rather than brave: nothing
-# is tagged or released yet, so no published asset has the old name. Making the
-# same change *after* a release would have needed one — an installer that asks
-# for an archive no existing tag has turns every previous version into a 404,
-# which is the one failure a user cannot work around.
+# The archive name carries the distribution, as `make bundle DIST=` names it.
+# No unsuffixed fallback: an installer asking for an archive that older tags lack
+# would 404 every previous version.
 BUNDLE="jan-klod-${TAG}-${OS}-${ARCH}-${DIST}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${TAG}/${BUNDLE}"
 CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS.txt"
 
 echo "Installing jan-klod ${TAG} (${OS}-${ARCH}, ${DIST}) …"
 
-# Download bundle + checksums to a temp dir.
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
 curl -sSfL "${URL}" -o "${TMP}/${BUNDLE}"
 curl -sSfL "${CHECKSUMS_URL}" -o "${TMP}/SHA256SUMS.txt"
 
-# What this check proves, and what it does not (#93).
+# This checksum proves transit integrity only. SHA256SUMS.txt comes from the same
+# release as the bundle, so it does not prove provenance; that needs a minisign
+# signature, which is not installed everywhere, so verify by hand:
 #
-# It proves the download was not corrupted or truncated in transit. It does
-# **not** prove the bundle is ours: SHA256SUMS.txt comes from the same release
-# as the bundle, so anyone who can serve you one can serve you both, and the
-# pair would agree. All the integrity this establishes is relative to a file
-# fetched from the same place by the same means.
+#   minisign -Vm <bundle> -P <key from the landing page>  (see docs/quickstart.md)
 #
-# The signature is what closes that, because the key it verifies against is
-# published somewhere the release cannot rewrite. This script deliberately does
-# not check it: minisign is not installed on most machines, and an installer
-# that silently required a tool nobody has would fail for the wrong reason —
-# while one that "checked" a signature only when a binary happened to be
-# present would report success on two quite different situations.
-#
-# So the check stays a checksum and says so, and verifying by hand is one
-# command, documented in docs/quickstart.md beside the public key:
-#
-#   minisign -Vm <bundle> -P <the key published on the landing page>
-#
-# macOS ships `shasum`, not `sha256sum` — fall back to it.
+# macOS ships `shasum`, not `sha256sum`.
 if command -v sha256sum > /dev/null 2>&1; then
   SHA_CHECK="sha256sum -c -"
 elif command -v shasum > /dev/null 2>&1; then
@@ -130,8 +106,7 @@ cd "${TMP}"
 grep "${BUNDLE}" SHA256SUMS.txt | ${SHA_CHECK}
 cd - > /dev/null
 
-# Extract and install everything the bundle carries — not just the binaries,
-# or the installed agent boots with no extensions and no tools.
+# Install the whole bundle: binaries alone boot with no extensions or tools.
 tar -xzf "${TMP}/${BUNDLE}" -C "${TMP}"
 EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}-${DIST}"
 DATA_DIR="${DATA_DIR:-$(dirname "${INSTALL_DIR}")/share/jan-klod}"
@@ -148,14 +123,12 @@ echo "Installed: ${INSTALL_DIR}/jan-klod"
 echo "Installed: ${INSTALL_DIR}/jan-klod-gateway"
 echo "Installed: ${DATA_DIR}/ (config.yaml + $(ls "${DATA_DIR}/ext" | wc -l | tr -d " ") components)"
 
-# Confirm every enabled extension actually loads.
 if ! "${INSTALL_DIR}/jan-klod-gateway" verify > /dev/null 2>&1; then
   echo "" >&2
   echo "warning: the installed components did not all verify. Run:" >&2
   echo "  ${INSTALL_DIR}/jan-klod-gateway verify" >&2
 fi
 
-# Check PATH.
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;
   *)

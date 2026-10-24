@@ -1,7 +1,4 @@
-//! The TUI's pure state model — no terminal, no I/O, so it is unit-tested.
-//!
-//! The `tui` binary is a thin shell: key events mutate this state, answers
-//! record, and rendering is a pure function of it.
+//! The TUI's pure state model, with no terminal or I/O.
 
 use std::collections::VecDeque;
 
@@ -28,20 +25,13 @@ pub enum ToolStatus {
     /// Invoked, no result yet.
     Running,
     /// Answered, with what it returned and whether it failed.
-    ///
-    /// Struct variant not `Done(String)` + flag: "failed" only makes sense
-    /// with a result; a separate field would let `Running`/`Interrupted`
-    /// carry it pointlessly.
     Done {
         /// Tool's return value.
         content: String,
-        /// Whether core reported the call failed (#162), not inferred from
-        /// `content`.
+        /// Whether core reported the call failed, rather than inferring it from `content`.
         failed: bool,
     },
     /// The turn ended with this call still open.
-    ///
-    /// A `Running` block forever reads as hung, not as a stopped turn.
     Interrupted,
 }
 
@@ -52,22 +42,15 @@ pub struct ToolBlock {
     pub id: String,
     /// Tool name.
     pub name: String,
-    /// JSON arguments. Option because "not sent" and "call took none"
-    /// differ. #161: both send them; `None` = older core or omitted.
+    /// JSON arguments.
     pub arguments: Option<String>,
     /// Running, done, or interrupted.
     pub status: ToolStatus,
-    /// Whether full arguments and result show. Collapsed by default;
-    /// **failure opens itself** (hiding the reason one keystroke away
-    /// is wrong for failures).
+    /// Whether full arguments and result show.
     pub expanded: bool,
 }
 
 /// One entry in the transcript.
-///
-/// Enum not `Who`+fields: tool blocks aren't speakers. Squeezing into
-/// `{ who, text }` would make `text` a rendering, hiding the model's meaning
-/// from the client (#100).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
     /// Something somebody said.
@@ -81,29 +64,20 @@ pub enum Entry {
     Tool(ToolBlock),
 }
 
-/// Where the turn is (#158).
-///
-/// Four states, only three stored — see [`App::turn`].
+/// Where the turn is; `Blocked` is derived from the prompt queue, not stored.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Turn {
-    /// Nothing running. The composer's text is a new message.
+    /// Nothing running.
     #[default]
     Idle,
     /// A turn is running and text is arriving.
     Streaming,
-    /// A cancel has been *asked for*, not "the turn stopped". Over stdio,
-    /// `turn/cancel` can't send yet (#157); over REST+SSE it's the dropped
-    /// stream the conductor notices asynchronously. State ≠ stream.
+    /// A cancel has been *asked for*, not confirmed.
     Cancelling,
-    /// A confirmation is waiting. The turn underneath is still streaming.
+    /// A confirmation is waiting.
     Blocked,
 }
 
-/// The stored part of [`Turn`] — every state except `Blocked`.
-///
-/// `Blocked` is omitted: `App::pending_prompt` answers "waiting?", so
-/// storing it would duplicate state. Pattern: `menu: Option<usize>` — one
-/// field, `Some` *means* open.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     #[default]
@@ -113,95 +87,47 @@ enum Phase {
 }
 
 /// The REPL/TUI state: the input buffer and the scrollback transcript.
-///
-/// Four separate facts (`should_quit`, `dialog_open`, `cancel_requested`,
-/// `disconnected`) need no shared state machine; an enum per field would
-/// invent false constraints.
 #[derive(Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct App {
-    /// The message being written, with its caret (#150).
-    ///
-    /// [`Composer`] not `String`: emoji backspace leaves halves behind
-    /// with plain `pop`.
+    /// The message being written, with its caret.
     pub composer: Composer,
     /// The conversation so far, oldest first.
     pub transcript: Vec<Entry>,
     /// Set when the user asked to quit.
     pub should_quit: bool,
-    /// Submitted messages, oldest first (#151). Appended, never mutated;
-    /// edited recalls don't affect it. Not persisted; the event log is truth.
+    /// Append-only: recall edits do not change it.
     history: Vec<String>,
-    /// Where recall is in [`Self::history`], and the text it placed in the
-    /// composer. The text enables "unmodified": composer is unmodified while
-    /// holding exactly what recall placed there.
     recall: Option<(usize, String)>,
-    /// Which entry the `/` menu has highlighted, when it is open.
-    ///
-    /// `Some` **is** open, no separate flag. Menu shows derives from
-    /// composer (see [`Self::menu_query`]), only highlight is stored.
     menu: Option<usize>,
-    /// The open `@` completion: fragment, highlight, and result. Cached
-    /// (recomputing walks the filesystem). Fragment stored to prevent stale
-    /// lists against newer fragments.
+    /// Cached because recomputing walks the filesystem; the fragment is kept to detect stale results.
     completion: Option<(String, usize, paths::Completion)>,
-    /// Which tool block `Ctrl+O` acts on (#155). Index into [`Self::transcript`],
-    /// only [`Entry::Tool`]: messages have nothing to open. `None` is common.
-    /// Unused in reading; appearing uninvited would move highlights while user types.
+    /// Tool block `Ctrl+O` acts on: an index into [`Self::transcript`] that is always an [`Entry::Tool`].
     cursor: Option<usize>,
-    /// The turn, minus the derived state. See [`Phase`].
     phase: Phase,
-    /// Stop asked but not sent. Like [`Self::should_quit`]: model records
-    /// intent, caller does it (caller holds transport). Commands dispatch
-    /// here; this type has no transport.
     cancel_requested: bool,
-    /// Confirmations a turn is waiting on, oldest first (#103). Queue not slot:
-    /// second `ask` waits behind first, doesn't overwrite. Dialog shows `1 of 2`.
-    /// `Turn::Blocked` ← non-empty.
+    /// A queue, not a slot: a second `ask` waits behind the first.
     prompts: VecDeque<Pending>,
-    /// Whether the modal for the front of [`Self::prompts`] is on screen.
-    /// Separate from "pending?": `Esc` closes without answering. Turn stays
-    /// `Blocked` with question queued.
     dialog_open: bool,
-    /// Transport died (gateway or core stopped, #104). Never clears.
+    /// Never clears.
     disconnected: bool,
-    /// `warning`/`error` toast for a few ticks (#104), newest wins. Full text
-    /// already in transcript; unread expirations lose nothing.
     toast: Option<Toast>,
-    /// Session id being driven. Owned, mutable (#105). Switching replaces it
-    /// in [`Self::load_session`].
     session: String,
-    /// Transport is spawned-gateway. Set once at startup. Matters in
-    /// [`Self::request_quit`]: stdio turn lost on quit.
     stdio: bool,
-    /// The session switcher (#105), when open.
     sessions: Option<Sessions>,
-    /// Set when `Ctrl+S`/`/sessions` asked but not sent yet. Like
-    /// [`Self::cancel_requested`]: model records intent, caller performs it.
     sessions_requested: bool,
-    /// What extensions contribute, newest notification wins. Already made
-    /// inert; see [`Self::set_contributions`].
+    /// Already made inert; see [`Self::set_contributions`].
     contributed: Vec<crate::commands::Contributed>,
     /// The status items from the same notification, likewise inert.
     contributed_status: Vec<ContributedStatus>,
-    /// A contributed command the user chose, waiting to be sent as
-    /// `surface/invoke`. Model records intent, caller performs it — the same
-    /// contract as [`Self::cancel_requested`].
     invoke_requested: Option<(String, String)>,
-    /// Set when `/new` asked but not sent to core yet. Caller sends
-    /// `session/create` and calls [`Self::load_session`].
     new_session_requested: bool,
-    /// The help overlay (#105), when open.
     help: Option<Help>,
-    /// The sidebar-in-a-dialog (#105), when open. Reachable at widths where
-    /// the permanent sidebar pane hides.
     sidebar_dialog: bool,
-    /// The quit confirm (#105), when open.
     quit: Option<QuitConfirm>,
 }
 
-/// A toast: text, kind, and expiry tick. Expiry in `tick` units (not
-/// wall-clock), same as spinner advance. Testable without sleeps.
+/// Expiry is counted in `tick` units, not wall-clock time, so it is testable without sleeps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Toast {
     text: String,
@@ -209,27 +135,21 @@ struct Toast {
     expires_at: usize,
 }
 
-/// Toast display duration in ticks (~few seconds at 50ms/tick).
 const TOAST_TICKS: usize = 60;
 
-/// Toast type: `warning` or `error` (#104); others are in transcript.
+/// Kind of toast.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
-    /// `warning()`.
+    /// Raised by [`App::toast_warning`].
     Warning,
-    /// `removed()`.
+    /// Raised by [`App::toast_error`].
     Error,
 }
 
-/// Session entry from `session/list`: id and preview. Shown in switcher
 /// A status item an extension contributed, as this client holds it.
-///
-/// Stored already made inert ([`crate::untrusted::inert`]), like the commands
-/// beside it — the sidebar only fits it to a width.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContributedStatus {
-    /// The declaring extension's instance id, shown so a reader can tell who
-    /// is claiming something rather than reading it as the client's own word.
+    /// The declaring extension's instance id, so a reader can tell who is speaking.
     pub extension: String,
     /// The short text to show.
     pub text: String,
@@ -237,19 +157,16 @@ pub struct ContributedStatus {
     pub detail: String,
 }
 
-/// (#105), populated fresh per open.
+/// A session row in the switcher, from `session/list`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionEntry {
     /// Session id.
     pub id: String,
-    /// First 80 characters of the session's first user message, as
-    /// `session/list` sends it.
+    /// First 80 characters of the session's first user message, as `session/list` sends it.
     pub preview: String,
 }
 
-/// Session message from `session/get`. Reduced to transcript-rebuild needs
-/// (#105 point 3). No `seq` (client doesn't address log positions);
-/// `session/fork` out of scope.
+/// A message from `session/get`, reduced to what rebuilds the transcript.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionMessage {
     /// `system`, `user`, `assistant` or `tool`, exactly as the wire sends it.
@@ -260,8 +177,6 @@ pub struct SessionMessage {
     pub tool_call_id: Option<String>,
 }
 
-/// The session switcher's model (#105). Populated once per open from
-/// `session/list`, filtered by typed text.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Sessions {
     entries: Vec<SessionEntry>,
@@ -269,63 +184,38 @@ struct Sessions {
     selected: usize,
 }
 
-/// Help overlay model (#105): scroll position only. Content is
-/// [`crate::blocks::help_dialog`] (pure from [`crate::keymap::BINDINGS`]).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Help {
     scroll: usize,
 }
 
-/// Quit confirm model (#105). Four independent facts, no invalid combos.
-/// Enum per field would create four one-wider types replacing four flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 struct QuitConfirm {
-    /// `false` is cancel, the default; `true` selects quit.
     quit_selected: bool,
-    /// Whether a turn was running when opened. Needs the wording to say
-    /// what happens to it and triggers a second confirmation.
     mid_turn: bool,
-    /// Whether quitting genuinely loses the running turn: stdio's gateway
-    /// dies with this client; `--addr`'s does not. Stored regardless of
-    /// `mid_turn` rather than nested; nothing reads it without `mid_turn`.
+    /// Whether quitting loses the running turn: a stdio gateway dies with this client, a `--addr` gateway does not.
     turn_lost: bool,
-    /// Set once quit is selected and confirmed once while `mid_turn`. The
-    /// "second, explicit confirmation" #105 asks for. A second `Enter` with
-    /// this set actually quits.
     escalate: bool,
 }
 
 /// A confirmation a running turn is waiting on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prompt {
-    /// The session this question was asked on — **not necessarily the client's
-    /// current one** (client may drive more than one). What `turn/answer`
-    /// must be sent with. `tui.rs` used to send its own session instead, the
-    /// bug #103 opens on.
+    /// The session this question was asked on, which is not necessarily the client's current one.
     pub session: String,
     /// What is being asked.
     pub question: String,
-    /// The answers core recognises. Empty means free text, the protocol's
-    /// convention.
+    /// The answers core accepts.
     pub options: Vec<String>,
     /// What core assumes if nobody answers — a denial, for the permission gate.
     pub default: String,
 }
 
-/// A queued prompt plus what changes before it's answered: which option is
-/// highlighted. Kept beside the prompt rather than a second `Option` on
-/// [`App`], so two queued questions won't be confused by *which* selection
-/// field is set. One slot per prompt, traveling with it when a second `ask`
-/// appends behind it.
+/// Kept per prompt rather than as one `Option` on [`App`], so queued questions cannot share a selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Pending {
     prompt: Prompt,
-    /// Index into `prompt.options`. Starts at `default`'s index (searched,
-    /// not assumed first). `None` when `default` is absent from `options`:
-    /// core contradicting itself; demand explicit choice rather than guess.
-    /// Also `None` for free-text prompts (`options` empty), where nothing
-    /// selects.
     selected: Option<usize>,
 }
 
@@ -336,7 +226,6 @@ impl App {
         self.cursor
     }
 
-    /// Tool block indices, oldest first — the positions the cursor can occupy.
     fn stops(&self) -> Vec<usize> {
         self.transcript
             .iter()
@@ -346,22 +235,12 @@ impl App {
     }
 
     /// Move the cursor to the previous tool block, or to the newest one.
-    ///
-    /// Starting at the newest is why this is `Alt+Up`: the transcript grows
-    /// downwards, the wanted call usually just happened, walking up mirrors
-    /// scrolling back.
-    ///
-    /// Returns whether it moved.
     pub fn cursor_up(&mut self) -> bool {
         let stops = self.stops();
         let moved = self.cursor.map_or_else(
             || stops.last().copied(),
             |at| stops.iter().rev().find(|&&i| i < at).copied(),
         );
-        // At the oldest block already: hold there rather than wrapping to the
-        // newest. A selection that jumps to the far end of the transcript when
-        // a user presses the same key once too often is a selection they then
-        // have to find again.
         if moved.is_some() {
             self.cursor = moved;
             return true;
@@ -369,17 +248,14 @@ impl App {
         false
     }
 
-    /// Move cursor to next tool block or off the end. Past the newest it
-    /// clears; `Alt+Down` is how user deselects — the same key that selected.
+    /// Move cursor to the next tool block.
     pub fn cursor_down(&mut self) -> bool {
         let Some(at) = self.cursor else { return false };
         self.cursor = self.stops().iter().find(|&&i| i > at).copied();
         true
     }
 
-    /// Open or close the block under the cursor. Returns whether anything
-    /// happened. Nothing under cursor is a no-op, not a panic: index is
-    /// re-checked, not trusted.
+    /// Open or close the block under the cursor.
     pub fn toggle_expanded(&mut self) -> bool {
         let Some(at) = self.cursor else { return false };
         match self.transcript.get_mut(at) {
@@ -391,8 +267,7 @@ impl App {
         }
     }
 
-    /// The text being written. Accessor prevents desynchronising caret
-    /// from text.
+    /// The text being written.
     #[must_use]
     pub fn input(&self) -> &str {
         self.composer.text()
@@ -403,8 +278,6 @@ impl App {
         self.composer.push(c);
         self.maybe_open_menu();
         if c == '@' {
-            // Opened here only, so deleting to older `@` doesn't reopen
-            // a dismissed list.
             self.completion = Some((String::new(), 0, paths::Completion::default()));
         }
     }
@@ -415,8 +288,7 @@ impl App {
         self.maybe_open_menu();
     }
 
-    /// Take trimmed, non-empty submission: record as [`Who::You`], clear
-    /// input, return message. Whitespace-only yields `None`.
+    /// Takes the trimmed, non-empty input and records it as a [`Who::You`] entry.
     pub fn take_submission(&mut self) -> Option<String> {
         let message = self.composer.take()?;
         self.history.push(message.clone());
@@ -426,9 +298,6 @@ impl App {
     }
 
     /// The fragment the `/` menu is filtering on, when it is open.
-    ///
-    /// A command is `/` then non-whitespace. On space or newline, it stops
-    /// being one and the menu closes.
     #[must_use]
     pub fn menu_query(&self) -> Option<&str> {
         self.menu?;
@@ -436,8 +305,7 @@ impl App {
         (text.starts_with('/') && !text.contains(char::is_whitespace)).then_some(text)
     }
 
-    /// The menu entries — built-ins and what extensions contributed. Empty =
-    /// empty state, not closed.
+    /// The menu entries — built-ins and what extensions contributed.
     #[must_use]
     pub fn menu_entries(&self) -> Vec<crate::commands::Entry<'_>> {
         self.menu_query()
@@ -445,15 +313,7 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Replace what extensions contribute, from a `surface/contributions`
-    /// notification.
-    ///
-    /// Text is made inert here rather than at each frame: cleaning at the door
-    /// means no renderer has to remember, and a label cannot be safe in the
-    /// menu and hostile in the help overlay. Width is still a frame's
-    /// business, since only it knows the cell.
-    /// Forms are not read. Nothing contributes one yet and no renderer here
-    /// draws one, so storing them would be state this client cannot show.
+    /// Replace what extensions contribute, from a `surface/contributions` notification.
     pub fn set_contributions(&mut self, sets: &[jk_protocol::Contributions]) {
         self.contributed = sets
             .iter()
@@ -467,8 +327,6 @@ impl App {
                         summary: crate::untrusted::inert(&command.description),
                     })
             })
-            // A contribution whose name cleaned away to nothing cannot be
-            // typed, matched or invoked, so it is not offered.
             .filter(|c| !c.name.is_empty())
             .collect();
         self.contributed_status = sets
@@ -481,8 +339,6 @@ impl App {
                     detail: crate::untrusted::inert(&item.detail),
                 })
             })
-            // Nothing left to show is a blank row, which reads as a rendering
-            // fault rather than as an extension with nothing to say.
             .filter(|item| !item.text.is_empty())
             .collect();
     }
@@ -506,26 +362,20 @@ impl App {
         self.menu.unwrap_or(0).min(len.saturating_sub(1))
     }
 
-    /// Open the menu, if this keystroke is the one that opens it.
     fn maybe_open_menu(&mut self) {
         if self.composer.text() == "/" {
             self.menu = Some(0);
         } else if self.menu_query().is_none() {
-            // It stopped looking like a command — a space, a newline, or the
-            // slash was deleted.
             self.menu = None;
         }
     }
 
     /// `Esc` with the menu open: close it and leave the text alone.
-    ///
-    /// Only a keystroke reopens it, so this does not immediately undo itself.
     pub const fn menu_dismiss(&mut self) {
         self.menu = None;
     }
 
-    /// Move the highlight, wrapping. Short list convenient; wrapping is
-    /// disorienting in history.
+    /// Move the highlight, wrapping at either end.
     pub fn menu_move(&mut self, delta: isize) {
         let len = self.menu_entries().len();
         if len == 0 {
@@ -538,12 +388,7 @@ impl App {
     }
 
     /// Run the highlighted command, or explain why it cannot run.
-    ///
-    /// Returns whether anything was accepted. `false` on empty means `Enter`
-    /// still submits.
     pub fn menu_accept(&mut self) -> bool {
-        // Copied out before anything is mutated: an entry borrows the
-        // contributed list, which lives in `self`.
         let Some((name, availability, extension)) =
             self.menu_entries().get(self.menu_selected()).map(|entry| {
                 (
@@ -560,8 +405,6 @@ impl App {
         };
         self.menu = None;
         self.composer.set("");
-        // A contribution is not dispatched by name here: two extensions may
-        // contribute the same one, and only the pair identifies it.
         if let Some(extension) = extension {
             self.invoke_requested = Some((extension, name));
             return true;
@@ -569,23 +412,15 @@ impl App {
         match availability {
             Availability::Ready => match name.as_str() {
                 "/newline" => self.composer.push('\n'),
-                // Ask before leaving rather than quitting outright. Same
-                // confirming path `Ctrl+D` and `Ctrl+C` (idle, empty) use (#105).
                 "/quit" => self.request_quit(),
-                // Sets the ask; caller sends it. Commands dispatch here; this
-                // type has no transport.
                 "/cancel" => {
                     if !self.cancel() {
                         self.record(Who::Status, "no turn is running".to_string());
                     }
                 }
-                // #105: the other asks a transport must serve, plus the
-                // one that needs none.
                 "/new" => self.request_new_session(),
                 "/sessions" => self.request_sessions(),
                 "/help" => self.toggle_help(),
-                // Unreachable while table and match agree. Status line rather
-                // than panic if they diverge; a status beats a crash.
                 other => self.record(Who::Status, format!("{other} is not wired up")),
             },
             Availability::Pending(reason) => {
@@ -607,10 +442,6 @@ impl App {
     }
 
     /// A tool returned; close the block with the matching id.
-    ///
-    /// Unmatched result becomes a muted line, not silence. Client and core
-    /// disagree about what's open; user should see something arrived. Silent
-    /// drop looks like it never came.
     pub fn record_tool_result(&mut self, id: &str, content: String, failed: bool) {
         let open = self
             .transcript
@@ -624,9 +455,6 @@ impl App {
             });
         match open {
             Some(block) => {
-                // A failure opens itself. Before #162, this asked
-                // `blocks::reads_as_failure(&content)`, matching core's wording.
-                // Now the core reports it and we read the fact.
                 block.expanded = failed;
                 block.status = ToolStatus::Done { content, failed };
             }
@@ -634,11 +462,7 @@ impl App {
         }
     }
 
-    /// The turn ended; nothing still open is still running.
-    ///
-    /// Called on `done` **and** on error. A failed turn leaves the same
-    /// blocks open as a finished one. A spinner that never stops reads as a
-    /// hung client, not as a turn that moved on.
+    /// The turn ended; nothing still open can still be running.
     pub fn interrupt_open_tools(&mut self) {
         for entry in &mut self.transcript {
             if let Entry::Tool(block) = entry {
@@ -655,7 +479,7 @@ impl App {
         self.completion.is_some()
     }
 
-    /// The paths on offer. Empty = empty state, not closed.
+    /// The paths on offer.
     #[must_use]
     pub fn completion_entries(&self) -> &[String] {
         self.completion
@@ -663,7 +487,7 @@ impl App {
             .map_or(&[], |(_, _, found)| found.entries.as_slice())
     }
 
-    /// Whether the list stopped at the cap. Shown, never silent (#145).
+    /// Whether the list stopped at the cap.
     #[must_use]
     pub fn completion_truncated(&self) -> bool {
         self.completion
@@ -681,8 +505,7 @@ impl App {
             .min(len.saturating_sub(1))
     }
 
-    /// Recompute list if fragment moved; close if none remains. `root` is an
-    /// argument not `std::env::current_dir()` so tests state the tree.
+    /// Recompute the list if the fragment moved; close it if none remains.
     pub fn refresh_completion(&mut self, root: &std::path::Path) {
         if self.completion.is_none() {
             return;
@@ -718,11 +541,6 @@ impl App {
     }
 
     /// Insert the highlighted path in place of the typed fragment.
-    ///
-    /// **No file is read.** The path is text in a message; the core decides
-    /// what to do. A client that opened it would grow policy.
-    ///
-    /// Returns whether anything was accepted.
     pub fn completion_accept(&mut self) -> bool {
         let Some(path) = self
             .completion_entries()
@@ -731,10 +549,6 @@ impl App {
         else {
             return false;
         };
-        // The `@` goes too: #101 asks for accepted text to be "plain path".
-        // Keeping it leaves a hint with no contract. Client inserts text, reads
-        // nothing; message should say what user means, not carry unagreed
-        // convention. `'@'` is one byte, hence `+ 1`.
         let typed = self
             .completion
             .as_ref()
@@ -744,9 +558,6 @@ impl App {
         true
     }
 
-    /// Whether `↑`/`↓` walks history or moves caret. Two unmodified states:
-    /// fresh empty composer, **and** one still holding exactly what recall
-    /// put there. Without the second, `↑` twice recalls once, then moves caret.
     fn composer_unmodified(&self) -> bool {
         self.composer.is_empty()
             || self
@@ -755,21 +566,16 @@ impl App {
                 .is_some_and(|(_, text)| text == self.composer.text())
     }
 
-    /// `↑`: the previous message, or the caret up if history isn't this keypress.
+    /// `↑`: the previous message, or moves the caret up when history does not apply.
     pub fn history_up(&mut self, width: usize) {
         if !(self.composer.on_first_row(width) && self.composer_unmodified()) {
             self.composer.up(width);
             return;
         }
-        // A cleared composer starts the walk over, not resuming from recall's
-        // position. Otherwise clearing and pressing `↑` lands on the entry
-        // *before* the one just discarded, unlike emptying anywhere else.
         if self.composer.is_empty() {
             self.recall = None;
         }
         let next = match self.recall {
-            // At the oldest: stop rather than wrap. Wrapping hands the newest
-            // message at the moment they asked for the oldest.
             Some((0, _)) => return,
             Some((i, _)) => i - 1,
             None => match self.history.len().checked_sub(1) {
@@ -794,16 +600,12 @@ impl App {
             self.composer.set(&text);
             self.recall = Some((i + 1, text));
         } else {
-            // Past the newest is the line the user was writing before
-            // recalling; it's empty because they submitted the last one.
             self.composer.set("");
             self.recall = None;
         }
     }
 
-    /// Where the turn is. `Blocked` wins over what's stored: a question's
-    /// fact, not the stream. Turn underneath confirmation still streams,
-    /// becoming visible when answered.
+    /// Where the turn is.
     #[must_use]
     pub fn turn(&self) -> Turn {
         if !self.prompts.is_empty() {
@@ -821,12 +623,7 @@ impl App {
         self.phase = Phase::Streaming;
     }
 
-    /// Ask for the running turn to stop. Returns whether this is the
-    /// **first** ask. Caller uses this to decide whether to act. A second
-    /// `Ctrl+C` while `Cancelling` returns `false`: cancelling isn't
-    /// idempotent at transport; hammering the key must not queue messages.
-    /// A pending confirmation is dropped. A question about an ending turn is
-    /// one nobody will answer.
+    /// Ask for the running turn to stop.
     pub fn cancel(&mut self) -> bool {
         if !matches!(self.phase, Phase::Streaming) {
             return false;
@@ -835,22 +632,18 @@ impl App {
         self.cancel_requested = true;
         self.prompts.clear();
         self.dialog_open = false;
-        // Tool block left `Running` is a spinner that never stops, reading
-        // as hung rather than stopped turn.
         self.interrupt_open_tools();
         true
     }
 
-    /// Take pending cancel ask, sent **once** (not idempotent).
-    /// [`Self::cancel`] sets it and refuses twice.
+    /// Take the pending cancel request.
     pub const fn take_cancel_request(&mut self) -> bool {
         let asked = self.cancel_requested;
         self.cancel_requested = false;
         asked
     }
 
-    /// Stream ended, answer incomplete. Transcript unchanged (by design).
-    /// Keep what arrived before cancel; stops don't lose progress.
+    /// Stream ended.
     pub fn end_turn(&mut self) {
         self.phase = Phase::Idle;
         self.prompts.clear();
@@ -886,10 +679,7 @@ impl App {
         }
     }
 
-    /// Queue a confirmation, opening dialog if none pending. **Queue not
-    /// stack** (#103): second ask appends. Dialog opens only first time (user
-    /// may close intentionally). Selection starts at `default`'s index
-    /// (searched, not assumed first). If `default` missing, no selection.
+    /// Queue a confirmation.
     pub fn ask(&mut self, prompt: Prompt) {
         let selected = prompt.options.iter().position(|o| o == &prompt.default);
         let opening = self.prompts.is_empty();
@@ -905,21 +695,19 @@ impl App {
         self.dialog_open
     }
 
-    /// Reopen dialog if prompt pending (Esc close's other half). `Enter`
-    /// while closed reopens rather than answering blind.
+    /// Reopens the dialog if a prompt is pending.
     pub fn open_dialog(&mut self) {
         if !self.prompts.is_empty() {
             self.dialog_open = true;
         }
     }
 
-    /// Close dialog **without answering** (turn stays `Blocked`).
-    /// Closing ≠ choosing.
+    /// Close the dialog without answering; the turn stays `Blocked`.
     pub const fn close_dialog(&mut self) {
         self.dialog_open = false;
     }
 
-    /// Front prompt if waiting (accessor to keep queue+dialog state private).
+    /// The front prompt, if one is waiting.
     #[must_use]
     pub fn pending_prompt(&self) -> Option<&Prompt> {
         self.prompts.front().map(|p| &p.prompt)
@@ -931,14 +719,13 @@ impl App {
         self.prompts.front().and_then(|p| p.selected)
     }
 
-    /// How many prompts are waiting, including the one on screen — what makes
-    /// the dialog's `1 of 2` true.
+    /// How many prompts are waiting, including the one on screen.
     #[must_use]
     pub fn prompt_queue_len(&self) -> usize {
         self.prompts.len()
     }
 
-    /// Move selection, wrapping like `/` menu. No-op if no options or none pending.
+    /// Move selection, wrapping like `/` menu.
     pub fn prompt_move(&mut self, delta: isize) {
         let Some(front) = self.prompts.front_mut() else {
             return;
@@ -953,7 +740,7 @@ impl App {
         front.selected = Some(usize::try_from(next).unwrap_or(0));
     }
 
-    /// Jump to digit-key option (as displayed). Out of range is no-op not clamp.
+    /// Jump to digit-key option (as displayed).
     pub fn prompt_jump(&mut self, one_based: usize) {
         let Some(front) = self.prompts.front_mut() else {
             return;
@@ -965,12 +752,7 @@ impl App {
 
     /// Take front answer if ready, returning `(session, answer)`.
     ///
-    /// Session from notification (not `self`): multiple clients may run (#103).
-    /// Answer is byte-identical to option or composer text (no normalization).
-    /// Returns `None` without dequeuing if no selection (no guessing).
-    ///
     /// # Panics
-    ///
     /// Never: the queue is proven non-empty above.
     pub fn take_answer(&mut self) -> Option<(String, String)> {
         let front = self.prompts.front()?;
@@ -985,12 +767,7 @@ impl App {
             front.selected.map(|i| front.prompt.options[i].clone())?
         };
         let Pending { prompt, .. } = self.prompts.pop_front().expect("front just checked above");
-        // `take` clears the composer and its caret together: an answer left
-        // in the buffer would send as the next message.
         self.composer.take();
-        // The next queued prompt, if any, shows immediately, not behind a
-        // closed dialog. "Answering the first shows the second" (#103's
-        // Acceptance) means visibly.
         self.dialog_open = !self.prompts.is_empty();
         self.record(Who::Status, format!("{} → {answer}", prompt.question));
         Some((prompt.session, answer))
@@ -1006,16 +783,12 @@ impl App {
         self.record(Who::Status, text);
     }
 
-    /// Transport dead, stays so (#104). Like [`Self::end_turn`]: in-flight
-    /// can't finish; drop unopened prompts, like [`Self::cancel`] for user
-    /// stops. Idempotent: caller may notice same dead transport multiple times.
+    /// Transport is gone and stays gone.
     pub fn disconnect(&mut self, reason: impl Into<String>) {
         if !self.disconnected {
             self.disconnected = true;
             self.record_error(reason);
         }
-        // Unconditional: nothing can still be running once transport is gone,
-        // whichever telling of it this is.
         self.phase = Phase::Idle;
         self.prompts.clear();
         self.dialog_open = false;
@@ -1028,9 +801,7 @@ impl App {
         self.disconnected
     }
 
-    /// Status bar connection+turn word (#104): `ready`, `streaming`, `blocked`,
-    /// `cancelling`, or `disconnected`. `disconnected` wins (turn already
-    /// `Idle`; #104 prevents false `ready`).
+    /// Status word for the status bar; `disconnected` wins over the turn state.
     #[must_use]
     pub fn connection_state(&self) -> &'static str {
         if self.disconnected {
@@ -1044,7 +815,7 @@ impl App {
         }
     }
 
-    /// Toast `warning` (#104): text in transcript + toast, newest wins.
+    /// Show a `warning` toast; the text also goes to the transcript.
     pub fn toast_warning(&mut self, text: impl Into<String>, tick: usize) {
         let text = text.into();
         self.record_status(format!("⚠ {text}"));
@@ -1055,7 +826,7 @@ impl App {
         });
     }
 
-    /// Toast `error` (#104): like warning, but via [`Self::record_error`].
+    /// Show an `error` toast; the text is also recorded as an error.
     pub fn toast_error(&mut self, text: impl Into<String>, tick: usize) {
         let text = text.into();
         self.record_error(text.clone());
@@ -1072,20 +843,14 @@ impl App {
         self.toast.as_ref().map(|t| (t.text.as_str(), t.kind))
     }
 
-    /// Expire the toast once `tick` passes the point it was raised.
-    ///
-    /// Driven by [`crate::tui`]'s poll tick, not a clock (#104). Spinner
-    /// already advances on every timeout; reusing it lets toast expiry be
-    /// tested without `sleep`.
+    /// Expire the toast once `tick` reaches its expiry.
     pub fn tick(&mut self, tick: usize) {
         if self.toast.as_ref().is_some_and(|t| tick >= t.expires_at) {
             self.toast = None;
         }
     }
 
-    /// Request quit unconditionally. Kept for `Esc`, whose behaviour this
-    /// slice leaves alone. #105 names three other triggers for the confirming
-    /// version, [`Self::request_quit`].
+    /// Quit unconditionally, without confirmation.
     pub const fn quit(&mut self) {
         self.should_quit = true;
     }
@@ -1096,45 +861,35 @@ impl App {
         &self.session
     }
 
-    /// Set the session id — at startup, and again on every switch or `/new`
-    /// (#105's design point 1: id stops being fixed for the run).
+    /// Set the session id at startup and on every switch or `/new`.
     pub fn set_session(&mut self, id: impl Into<String>) {
         self.session = id.into();
     }
 
-    /// Record which kind of transport this run has, once, at startup. See the
-    /// field's own docs for why [`Self::request_quit`] needs it.
+    /// Record which kind of transport this run has, once, at startup.
     pub const fn set_stdio(&mut self, stdio: bool) {
         self.stdio = stdio;
     }
 
-    /// Whether anything has been sent this run — what quit confirm (#105)
-    /// skips entirely for the lack of.
     const fn has_sent_anything(&self) -> bool {
         !self.history.is_empty()
     }
 
-    // ---- session switcher (#105) ----
-
-    /// `Ctrl+S`/`/sessions`: ask for fresh `session/list`. Never cached;
-    /// see [`Self::open_sessions`]. No-op while ask dialog open (owns
-    /// every key; second dialog unreachable).
+    /// `Ctrl+S`/`/sessions`: ask for a fresh `session/list`.
     pub const fn request_sessions(&mut self) {
         if !self.dialog_open {
             self.sessions_requested = true;
         }
     }
 
-    /// Take the pending `session/list` ask, if there is one. Drains; same
-    /// contract as [`Self::take_cancel_request`].
+    /// Take the pending `session/list` ask, if there is one.
     pub const fn take_sessions_request(&mut self) -> bool {
         let asked = self.sessions_requested;
         self.sessions_requested = false;
         asked
     }
 
-    /// Take the contributed command the user chose, if any. Drains; same
-    /// contract as [`Self::take_sessions_request`].
+    /// Take the contributed command the user chose, if any.
     pub const fn take_invoke_request(&mut self) -> Option<(String, String)> {
         self.invoke_requested.take()
     }
@@ -1154,8 +909,7 @@ impl App {
         self.sessions.is_some()
     }
 
-    /// `Esc`: close the switcher. Nothing was asked of the core, so there is
-    /// nothing to undo.
+    /// `Esc`: close the switcher.
     pub fn sessions_close(&mut self) {
         self.sessions = None;
     }
@@ -1183,7 +937,6 @@ impl App {
     }
 
     /// Entries matching typed filter on id or preview, case-insensitive.
-    /// Empty = empty state, not closed; same as [`Self::menu_entries`].
     #[must_use]
     pub fn sessions_filtered(&self) -> Vec<&SessionEntry> {
         let Some(sessions) = self.sessions.as_ref() else {
@@ -1226,10 +979,7 @@ impl App {
         }
     }
 
-    /// `Enter`: the session to switch to, or a refusal recorded with no id
-    /// when a turn is running (#105 point 4). Mid-turn refused with reason,
-    /// not silent. Switcher stays open; caller closes it when
-    /// [`Self::load_session`] runs.
+    /// `Enter`: the session to switch to.
     pub fn sessions_confirm(&mut self) -> Option<String> {
         let id = self
             .sessions_filtered()
@@ -1247,9 +997,7 @@ impl App {
         }
     }
 
-    /// `session/get` answered (or `/new`'s `session/create` with empty
-    /// transcript): replace this client's view with what core holds for `id`
-    /// (reload, not stash, #105 point 3). Switcher closes.
+    /// Replaces this client's view with session `id` as core holds it.
     pub fn load_session(&mut self, id: String, messages: Vec<SessionMessage>) {
         self.session = id;
         self.transcript = messages
@@ -1267,15 +1015,12 @@ impl App {
         }
     }
 
-    /// Take the pending `session/create` ask, if there is one. Drains; same
-    /// contract as [`Self::take_cancel_request`].
+    /// Take the pending `session/create` ask, if there is one.
     pub const fn take_new_session_request(&mut self) -> bool {
         let asked = self.new_session_requested;
         self.new_session_requested = false;
         asked
     }
-
-    // ---- help overlay (#105) ----
 
     /// Whether the overlay is on screen.
     #[must_use]
@@ -1283,8 +1028,7 @@ impl App {
         self.help.is_some()
     }
 
-    /// `?` on empty composer, or `/help`: open or close. No-op while ask
-    /// dialog open, for the same reason as [`Self::request_sessions`].
+    /// `?` on empty composer, or `/help`: open or close.
     pub fn toggle_help(&mut self) {
         if self.dialog_open {
             return;
@@ -1301,22 +1045,18 @@ impl App {
         self.help = None;
     }
 
-    /// How far the overlay has scrolled. Renderer clamps it against what it
-    /// drew. This model has no width or height to know the bound.
+    /// How far the overlay has scrolled.
     #[must_use]
     pub fn help_scroll(&self) -> usize {
         self.help.as_ref().map_or(0, |h| h.scroll)
     }
 
-    /// Scroll by `delta` rows, negative moving up. Saturates at zero; past
-    /// the top is a no-op, not a jump to the bottom.
+    /// Scroll by `delta` rows, negative moving up.
     pub const fn help_scroll_by(&mut self, delta: isize) {
         if let Some(help) = self.help.as_mut() {
             help.scroll = help.scroll.saturating_add_signed(delta);
         }
     }
-
-    // ---- sidebar-in-a-dialog (#105) ----
 
     /// Whether the sidebar's dialog is on screen.
     #[must_use]
@@ -1324,10 +1064,7 @@ impl App {
         self.sidebar_dialog
     }
 
-    /// `Ctrl+B`, at a width where sidebar has no permanent pane. No-op while
-    /// ask dialog open, for the same reason as [`Self::request_sessions`].
-    /// Caller (`tui.rs`) refuses when sidebar is visible; only it knows
-    /// the last frame's layout.
+    /// `Ctrl+B`, at a width where sidebar has no permanent pane.
     pub const fn toggle_sidebar_dialog(&mut self) {
         if self.dialog_open {
             return;
@@ -1340,19 +1077,13 @@ impl App {
         self.sidebar_dialog = false;
     }
 
-    // ---- quit confirm (#105) ----
-
-    /// `Ctrl+D`/`C` on empty composer while `Idle`, or `/quit`: ask before
-    /// leaving unless nothing happened (empty session is friction). Cancel is
-    /// the initial selection.
+    /// Asks before quitting, unless nothing has happened yet.
     pub fn request_quit(&mut self) {
         if !self.has_sent_anything() {
             self.should_quit = true;
             return;
         }
         if self.dialog_open {
-            // The ask modal owns every key; a quit confirm under it would be
-            // unreachable, same reason as `request_sessions` refuses.
             return;
         }
         let mid_turn = self.turn() != Turn::Idle;
@@ -1375,26 +1106,21 @@ impl App {
         self.quit = None;
     }
 
-    /// What the dialog renders: `(mid_turn, turn_lost, escalate,
-    /// quit_selected)`.
+    /// What the dialog renders: `(mid_turn, turn_lost, escalate, quit_selected)`.
     #[must_use]
     pub fn quit_confirm(&self) -> Option<(bool, bool, bool, bool)> {
         self.quit
             .map(|q| (q.mid_turn, q.turn_lost, q.escalate, q.quit_selected))
     }
 
-    /// `↑`/`↓`/`Tab`: there are only two options, so this toggles rather than
-    /// moving an index.
+    /// `↑`/`↓`/`Tab`: toggles between the two options.
     pub const fn quit_confirm_move(&mut self) {
         if let Some(q) = self.quit.as_mut() {
             q.quit_selected = !q.quit_selected;
         }
     }
 
-    /// `Enter`. Cancel closes outright. Quit needs a second, explicit
-    /// confirmation when a turn is running (#105's design point 5). The first
-    /// `Enter` on `quit` sets [`QuitConfirm::escalate`] and re-asks; the
-    /// second actually quits. With no turn, one `Enter` is enough.
+    /// `Enter`: acts on the highlighted option, escalating once mid-turn before quitting.
     pub const fn quit_confirm_accept(&mut self) {
         let Some(q) = self.quit.as_mut() else {
             return;
@@ -1419,9 +1145,6 @@ impl App {
     }
 }
 
-/// One `session/get` message, as a transcript [`Entry`], or `None` for
-/// `system` (skipped: the model's own instructions, not user text) (#105
-/// design point 3).
 fn session_message_entry(message: SessionMessage) -> Option<Entry> {
     match message.role.as_str() {
         "user" => Some(Entry::Message {
@@ -1433,11 +1156,6 @@ fn session_message_entry(message: SessionMessage) -> Option<Entry> {
             text: message.content,
         }),
         "tool" => {
-            // `session/get` carries no tool name or `failed` flag; only
-            // `session/message`'s live notifications do (#106 added `seq`, not
-            // either). The call id is what's known, standing in for the name.
-            // Results are assumed to have succeeded absent any way to tell,
-            // the same default a core older than #162 already rendered.
             let id = message.tool_call_id.unwrap_or_default();
             Some(Entry::Tool(ToolBlock {
                 name: id.clone(),
@@ -1458,7 +1176,6 @@ fn session_message_entry(message: SessionMessage) -> Option<Entry> {
 mod tests {
     use super::{App, Entry, Prompt, ToastKind, ToolStatus, Turn, Who};
 
-    /// One extension contributing one command, as the notification delivers it.
     fn contributing(name: &str, summary: &str) -> Vec<jk_protocol::Contributions> {
         vec![jk_protocol::Contributions {
             extension: "interceptor.system".to_owned(),
@@ -1473,7 +1190,6 @@ mod tests {
         }]
     }
 
-    /// The same, contributing one status item instead.
     fn reporting(text: &str, detail: &str) -> Vec<jk_protocol::Contributions> {
         vec![jk_protocol::Contributions {
             extension: "interceptor.system".to_owned(),
@@ -1496,8 +1212,6 @@ mod tests {
         assert!(!item.detail.contains('\u{7}'), "{:?}", item.detail);
     }
 
-    /// A blank row reads as a rendering fault rather than as an extension
-    /// with nothing to say, so an item that cleans away is not kept.
     #[test]
     fn a_status_item_that_cleans_away_is_dropped() {
         let mut app = App::default();
@@ -1518,8 +1232,6 @@ mod tests {
         );
     }
 
-    /// Cleaned at the door, so no renderer has to remember — and a label
-    /// cannot be safe in the menu and hostile in the help overlay.
     #[test]
     fn a_hostile_label_is_inert_before_it_is_ever_stored() {
         let mut app = App::default();
@@ -1529,8 +1241,6 @@ mod tests {
         assert!(!stored.summary.contains('\u{1b}'), "{:?}", stored.summary);
     }
 
-    /// A name that cleans away to nothing cannot be typed, matched or
-    /// invoked, so it is not offered at all.
     #[test]
     fn a_contribution_whose_name_is_only_escapes_is_dropped() {
         let mut app = App::default();
@@ -1538,8 +1248,6 @@ mod tests {
         assert_eq!(app.contributions(), []);
     }
 
-    /// Choosing one records intent for the caller to send, the way `/cancel`
-    /// and `/sessions` do — this type never holds a transport.
     #[test]
     fn choosing_a_contributed_command_asks_for_an_invocation() {
         let mut app = App::default();
@@ -1557,7 +1265,6 @@ mod tests {
         assert_eq!(app.take_invoke_request(), None, "draining is once only");
     }
 
-    /// A built-in must still act rather than be sent to an extension.
     #[test]
     fn choosing_a_built_in_asks_for_no_invocation() {
         let mut app = App::default();
@@ -1570,11 +1277,6 @@ mod tests {
         assert_eq!(app.take_invoke_request(), None);
     }
 
-    /// Acceptance: a dead transport moves the status word to `disconnected`
-    /// and stops the spinner. `connection_state` only reports the stored turn,
-    /// which `disconnect` forces back to `Idle`. `spinner_frame` returns
-    /// `None` for `Turn::Idle` and nothing else here; one assertion covers
-    /// both halves of #104's acceptance line.
     #[test]
     fn a_dead_transport_reports_disconnected_and_stops_the_turn() {
         let mut app = App::default();
@@ -1594,7 +1296,6 @@ mod tests {
             "the reason was not recorded"
         );
 
-        // A prompt nobody can answer must not stay `Blocked` forever.
         app.begin_turn();
         app.ask(Prompt {
             session: "s1".into(),
@@ -1602,7 +1303,7 @@ mod tests {
             options: vec!["y".into()],
             default: "y".into(),
         });
-        app.disconnect("again"); // idempotent: no second narration
+        app.disconnect("again");
         assert_eq!(app.turn(), Turn::Idle);
         assert_eq!(
             format!("{:?}", app.transcript).matches("again").count(),
@@ -1629,9 +1330,6 @@ mod tests {
         assert_eq!(app.connection_state(), "cancelling");
     }
 
-    /// Acceptance: a `warning` produces both a toast and a transcript line.
-    /// The transcript line outlives the toast; a toast that expires unread
-    /// loses nothing.
     #[test]
     fn a_warning_toasts_and_writes_the_transcript_and_the_toast_expires_first() {
         let mut app = App::default();
@@ -1645,7 +1343,6 @@ mod tests {
             "the full text did not land in the transcript"
         );
 
-        // The toast expires; the transcript line does not move.
         app.tick(1_000);
         assert!(app.toast().is_none(), "the toast should have expired");
         assert!(
@@ -1675,7 +1372,6 @@ mod tests {
             .collect()
     }
 
-    /// The first Acceptance line: one block, resolved.
     #[test]
     fn an_invocation_and_its_result_are_one_block() {
         let mut app = App::default();
@@ -1694,7 +1390,6 @@ mod tests {
         assert_eq!(app.transcript.len(), 1, "and nothing else was recorded");
     }
 
-    /// Acceptance: the whole cycle, and the partial answer survives it.
     #[test]
     fn a_cancelled_turn_ends_idle_and_keeps_what_it_had_already_said() {
         let mut app = App::default();
@@ -1728,7 +1423,6 @@ mod tests {
         );
     }
 
-    /// Acceptance: a second `Ctrl+C` while already cancelling does nothing.
     #[test]
     fn cancelling_twice_asks_once() {
         let mut app = App::default();
@@ -1747,7 +1441,6 @@ mod tests {
         assert!(!app.cancel(), "nor after it ended");
     }
 
-    /// Acceptance: `Blocked` is entered on a prompt and left when answered.
     #[test]
     fn a_confirmation_blocks_the_turn_and_answering_it_resumes() {
         let mut app = App::default();
@@ -1772,7 +1465,6 @@ mod tests {
         );
     }
 
-    /// A confirmation nobody will answer must not outlive the turn it is about.
     #[test]
     fn cancelling_drops_the_question_rather_than_leaving_it_unanswerable() {
         let mut app = App::default();
@@ -1794,8 +1486,6 @@ mod tests {
         assert!(app.take_answer().is_none(), "the question went with it");
     }
 
-    /// The two states that can both claim "a confirmation is waiting" are one
-    /// field; they cannot disagree.
     #[test]
     fn blocked_is_derived_from_the_prompt_and_not_stored_beside_it() {
         let mut app = App::default();
@@ -1815,8 +1505,6 @@ mod tests {
         assert_eq!(app.turn(), Turn::Idle, "an answered turn is over");
     }
 
-    /// Acceptance: the initial selection is `default`'s own index, for an
-    /// arbitrary option order — including one where `default` is not first.
     #[test]
     fn the_initial_selection_is_defaults_index_wherever_it_sits() {
         let mut app = App::default();
@@ -1833,8 +1521,6 @@ mod tests {
              assume position 0"
         );
 
-        // A core that contradicts itself (`default` not among `options`)
-        // must not have this guess at a selection.
         let mut confused = App::default();
         confused.ask(Prompt {
             session: "s1".into(),
@@ -1849,8 +1535,6 @@ mod tests {
         );
     }
 
-    /// Acceptance: the answer sent is byte-identical to the chosen entry,
-    /// never normalised, even if it would look "cleaner".
     #[test]
     fn the_answer_is_byte_identical_to_the_chosen_option() {
         let mut app = App::default();
@@ -1868,8 +1552,6 @@ mod tests {
         );
     }
 
-    /// Acceptance: the session sent is the one the notification carried, not
-    /// whatever the client happens to be driving elsewhere.
     #[test]
     fn the_answer_carries_the_prompts_own_session() {
         let mut app = App::default();
@@ -1883,8 +1565,6 @@ mod tests {
         assert_eq!(session, "the-notifications-session");
     }
 
-    /// Acceptance: two overlapping `ask`s queue rather than stack. Answering
-    /// the first leaves the second exactly as it arrived.
     #[test]
     fn a_second_ask_queues_behind_the_first_and_neither_disturbs_the_other() {
         let mut app = App::default();
@@ -1931,8 +1611,6 @@ mod tests {
         );
     }
 
-    /// `Esc` closes the dialog without answering; the prompt survives so it
-    /// can be reopened.
     #[test]
     fn esc_closes_without_answering_and_the_prompt_survives() {
         let mut app = App::default();
@@ -1960,7 +1638,6 @@ mod tests {
         assert!(app.dialog_open(), "it can be reopened");
     }
 
-    /// The cursor only stops where there is something to open.
     #[test]
     fn the_cursor_walks_tool_blocks_and_ignores_everything_else() {
         let mut app = App::default();
@@ -1993,12 +1670,8 @@ mod tests {
         assert!(!app.cursor_down(), "nothing below that");
     }
 
-    /// Acceptance: a toggle with nothing under the cursor is a no-op.
     #[test]
     fn toggling_opens_the_selected_block_and_does_nothing_with_no_selection() {
-        // The block is entry **zero** deliberately: a toggle that treated no
-        // selection as "the first one" would pass when index 0 is a message,
-        // opening the wrong block in the client.
         let mut app = App::default();
         app.record_tool_invoked("c1".into(), "read".into(), None);
         app.record(Who::You, "hello");
@@ -2011,15 +1684,10 @@ mod tests {
         assert!(app.toggle_expanded());
         assert!(!tools(&app)[0].expanded, "same key closed it");
 
-        // A cursor that outlived its entry costs a keystroke, not the client.
         app.transcript.clear();
         assert!(!app.toggle_expanded(), "stale index doesn't panic");
     }
 
-    /// Acceptance: **a failure opens itself.** A tool that failed is the
-    /// block whose contents a user certainly wants. Hiding the reason behind
-    /// a keystroke they must know about is wrong. A successful call is the
-    /// opposite: twelve reads = twelve screens of JSON nobody asked for.
     #[test]
     fn a_failed_call_arrives_expanded_and_a_successful_one_does_not() {
         let mut app = App::default();
@@ -2040,7 +1708,6 @@ mod tests {
         );
     }
 
-    /// The second: an unmatched result is visible, not dropped.
     #[test]
     fn a_result_for_an_unknown_call_is_a_muted_line_and_not_a_panic() {
         let mut app = App::default();
@@ -2059,7 +1726,6 @@ mod tests {
         }
     }
 
-    /// The third: `done` with a block open marks it interrupted.
     #[test]
     fn a_block_still_open_when_the_turn_ends_is_interrupted() {
         let mut app = App::default();
@@ -2091,14 +1757,12 @@ mod tests {
             .collect()
     }
 
-    /// Acceptance: switching mid-turn is refused with a reason; the turn
-    /// is unaffected.
     #[test]
     fn switching_mid_turn_is_refused_and_the_turn_is_unaffected() {
         let mut app = App::default();
         app.set_session("cli");
         app.open_sessions(entries(&["cli", "other"]));
-        app.sessions_move(1); // "other"
+        app.sessions_move(1);
         app.begin_turn();
 
         assert_eq!(
@@ -2117,13 +1781,10 @@ mod tests {
             "refusal explains why"
         );
 
-        // Idle, the same choice is accepted.
         app.end_turn();
         assert_eq!(app.sessions_confirm(), Some("other".to_string()));
     }
 
-    /// The switcher filters both id and preview, case-insensitively. The
-    /// current session is inspectable so the caller can mark it.
     #[test]
     fn the_switcher_filters_by_id_or_preview() {
         let mut app = App::default();
@@ -2151,8 +1812,6 @@ mod tests {
         assert_eq!(app.sessions_filtered().len(), 2, "empty filter shows all");
     }
 
-    /// #105's design point 3: roles map as documented; `system` is skipped,
-    /// not an empty block.
     #[test]
     fn load_session_maps_roles_and_skips_system() {
         let mut app = App::default();
@@ -2218,8 +1877,6 @@ mod tests {
         );
     }
 
-    /// The sidebar dialog toggles like the help overlay; declines under the
-    /// ask dialog for the same reason.
     #[test]
     fn the_sidebar_dialog_toggles_and_declines_under_the_ask_dialog() {
         let mut app = App::default();
@@ -2241,8 +1898,6 @@ mod tests {
         );
     }
 
-    /// Acceptance: the quit confirm is skipped when nothing has happened,
-    /// shown otherwise with cancel selected.
     #[test]
     fn the_quit_confirm_is_skipped_on_an_empty_session_and_shown_otherwise() {
         let mut app = App::default();
@@ -2253,7 +1908,7 @@ mod tests {
         );
 
         let mut used = App::default();
-        used.take_submission(); // whitespace-only; exercises the path
+        used.take_submission();
         used.push_char('h');
         used.take_submission();
         used.should_quit = false;
@@ -2265,7 +1920,6 @@ mod tests {
         assert!(!quit_selected, "cancel is selected by default");
     }
 
-    /// Acceptance: quitting mid-turn requires a second, explicit confirmation.
     #[test]
     fn quitting_mid_turn_requires_a_second_confirmation() {
         let mut app = App::default();
@@ -2275,7 +1929,7 @@ mod tests {
         app.request_quit();
         assert!(app.quit_confirm_open());
 
-        app.quit_confirm_move(); // select "quit"
+        app.quit_confirm_move();
         app.quit_confirm_accept();
         assert!(
             !app.should_quit,
@@ -2290,8 +1944,6 @@ mod tests {
         assert!(app.should_quit, "the second confirmation quits");
     }
 
-    /// Two calls in flight resolve to their own blocks, which is the whole
-    /// point of pairing by id rather than by position.
     #[test]
     fn concurrent_calls_resolve_by_id_not_by_order() {
         let mut app = App::default();

@@ -1,4 +1,3 @@
-// Each binary compiles independently; not all items needed.
 #![allow(dead_code)]
 
 use std::io::{Read, Write};
@@ -13,7 +12,6 @@ use jk_wasm::route::HttpFn;
 
 pub mod minisig;
 
-/// Removes test temp directory on drop, even on panic
 pub struct TempDir(pub PathBuf);
 impl Drop for TempDir {
     fn drop(&mut self) {
@@ -21,7 +19,6 @@ impl Drop for TempDir {
     }
 }
 
-/// Get repo root from crate manifest directory
 pub fn repo_root() -> PathBuf {
     [env!("CARGO_MANIFEST_DIR"), "..", "..", ".."]
         .iter()
@@ -31,9 +28,6 @@ pub fn repo_root() -> PathBuf {
 /// Set to fail instead of skip when guests not staged. `make gate` exports it.
 const REQUIRE: &str = "JK_REQUIRE_GUESTS";
 
-/// Check whether every named guest is staged in `ext/`.
-/// Skipped test reports as passing, hiding broken assertions if `ext/` is unstaged.
-/// With `JK_REQUIRE_GUESTS` set (`make gate`, CI), missing guest panics instead of skip.
 pub fn guests_staged(guests: &[&str]) -> bool {
     let ext_dir = repo_root().join("ext");
     let absent: Vec<&str> = guests
@@ -54,7 +48,6 @@ pub fn guests_staged(guests: &[&str]) -> bool {
     false
 }
 
-/// Check if program answers a version query. Try both `--version` and `version`.
 fn runnable(program: &str) -> bool {
     ["--version", "version"].iter().any(|flag| {
         std::process::Command::new(program)
@@ -66,8 +59,6 @@ fn runnable(program: &str) -> bool {
     })
 }
 
-/// Check if optional developer toolchain is present (no failure if absent).
-/// Distinct from [`tool_available`]: skip is announced, not silent.
 pub fn optional_tool(program: &str) -> bool {
     if runnable(program) {
         return true;
@@ -76,7 +67,6 @@ pub fn optional_tool(program: &str) -> bool {
     false
 }
 
-/// Check if external program is on `PATH`. Fails if missing when `JK_REQUIRE_GUESTS` is set.
 pub fn tool_available(program: &str) -> bool {
     if runnable(program) {
         return true;
@@ -90,7 +80,6 @@ pub fn tool_available(program: &str) -> bool {
     false
 }
 
-/// Canned chat-completions reply for offline provider completion
 pub fn canned_http(content: &'static str) -> HttpFn {
     Box::new(move |_m, _u, _h, _b, _t| {
         let body = serde_json::json!({
@@ -107,8 +96,6 @@ pub fn canned_http(content: &'static str) -> HttpFn {
     })
 }
 
-/// Read complete HTTP request: headers + exact Content-Length bytes of body.
-/// Reads may arrive in segments; socket close without full read causes RST.
 pub fn read_request(socket: &mut TcpStream) -> std::io::Result<String> {
     let mut raw: Vec<u8> = Vec::new();
     let mut chunk = [0_u8; 1024];
@@ -134,11 +121,7 @@ pub fn read_request(socket: &mut TcpStream) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&raw).into_owned())
 }
 
-/// Loopback server whose request count can be asserted without race.
-/// `only_hit` connects itself to flush the accept queue, proving counter is live.
-/// Returns count=1 means code under test never connected.
 pub struct Countable {
-    /// Loopback port this server listens on
     pub port: u16,
     hits: Arc<AtomicU32>,
 }
@@ -149,12 +132,10 @@ impl Countable {
         let port = listener.local_addr().expect("has an address").port();
         let hits = Arc::new(AtomicU32::new(0));
         let counted = Arc::clone(&hits);
-        // Blocking accept; thread dies with test (no stop flag, no cleanup cost)
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut socket) = stream else { continue };
                 counted.fetch_add(1, Ordering::SeqCst);
-                // Read until headers end; short read → RST (defect #78, #83)
                 let mut seen = Vec::new();
                 let mut byte = [0_u8; 1];
                 while socket.read(&mut byte).unwrap_or(0) == 1 {
@@ -171,8 +152,6 @@ impl Countable {
         Self { port, hits }
     }
 
-    /// Assert server was reached exactly once (by this self-probe).
-    /// Self-probe proves counter is live and flushes accept queue.
     pub fn only_hit(&self) {
         let before = self.hits.load(Ordering::SeqCst);
         let mut probe =

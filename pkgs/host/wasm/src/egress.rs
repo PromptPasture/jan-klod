@@ -1,51 +1,22 @@
-//! Where a sandboxed component is allowed to send a request.
-//!
-//! Destination checking must live host-side. Guest-side checks (e.g. `tool-fetch`
-//! refusing private addresses) protect a confused model, not the host from a
-//! component that skips them. Default: **public destinations only**; loopback,
-//! private, link-local and unique-local are refused unless the operator named
-//! the origin.
-//!
-//! ## Why per-origin grants, not a boolean flag
-//!
-//! Self-hosted local models (Ollama on `127.0.0.1:11434`) need to reach private
-//! endpoints. A "allow all local" flag opens every local port to every guest.
-//! Per-origin grants reuse the config the operator already wrote (provider
-//! `base-url`, MCP server endpoint): the Ollama they configured is reachable,
-//! the Postgres they didn't is not.
-//!
-//! ## One DNS lookup, not two
-//!
-//! Checks every address a hostname resolves to; a public name pointing at
-//! `127.0.0.1` is caught. Addresses are handed back (not dropped) so the caller
-//! connects to the same addresses the check approved. This prevents DNS rebinding
-//! ([#108](https://github.com/PromptPasture/jan-klod/issues/108)): a name whose
-//! answer changes between check and connect is checked as public but connected to
-//! as private.
+//! Egress policy: components reach public destinations only, checked host-side, with resolved addresses returned against DNS rebinding.
 
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
 use crate::http::WireError;
 
-/// Where a permitted request may go — what [`EgressPolicy::check`] decided.
-///
-/// Returned instead of `()` to pin the addresses the policy classified, preventing
-/// a second lookup (see module docs for DNS rebinding defense).
+/// What [`EgressPolicy::check`] decided.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Destination {
-    /// Hostname resolved; every answer was public. Connect to these addresses
-    /// (prevents re-resolution).
+    /// Hostname resolved, every answer public; connect to these addresses.
     Resolved(Vec<SocketAddr>),
-    /// No resolution needed: either the URL named an address literal, or the
-    /// operator granted this origin.
+    /// An address literal or an operator-granted origin; no resolution needed.
     AsNamed,
 }
 
 /// Destinations a component may reach.
 #[derive(Clone, Debug, Default)]
 pub struct EgressPolicy {
-    /// Origins (`scheme://host:port`, lowercased) allowed despite resolving private.
     allowed: HashSet<String>,
 }
 
@@ -56,8 +27,7 @@ impl EgressPolicy {
         Self::default()
     }
 
-    /// Allow `url`'s origin (scheme, host, port) regardless of where it resolves.
-    /// Path is ignored.
+    /// Allow `url`'s origin (scheme, host, port) regardless of where it resolves; path is ignored.
     #[must_use]
     pub fn allowing(mut self, url: &str) -> Self {
         if let Some(origin) = origin_of(url) {
@@ -75,10 +45,7 @@ impl EgressPolicy {
     /// Decide if a request to `url` may leave the host.
     ///
     /// # Errors
-    /// [`WireError::InvalidUrl`] if the URL has no usable host. [`WireError::ConnectionFailed`]
-    /// when the destination is private and unallowed — intentionally the same error as a
-    /// refused connection, so components cannot scan ports by distinguishing "blocked" from
-    /// "nothing listening".
+    /// [`WireError::InvalidUrl`] without a host; `ConnectionFailed` for a private unallowed target, identical to a refusal so ports cannot be scanned.
     pub fn check(&self, url: &str) -> Result<Destination, WireError> {
         let Some(origin) = origin_of(url) else {
             return Err(WireError::InvalidUrl);
@@ -90,7 +57,6 @@ impl EgressPolicy {
             return Err(WireError::InvalidUrl);
         };
 
-        // Address literals need no lookup and must not get one (resolver is an attack vector).
         if let Ok(ip) = host.parse::<IpAddr>() {
             return if is_public(ip) {
                 Ok(Destination::AsNamed)
@@ -99,8 +65,6 @@ impl EgressPolicy {
             };
         }
 
-        // Hostname: all resolved addresses must be public; even one private address
-        // (e.g., round-robin alternate) causes refusal.
         let resolved = (host.as_str(), port)
             .to_socket_addrs()
             .map_err(|_| WireError::ConnectionFailed)?;
@@ -114,12 +78,10 @@ impl EgressPolicy {
         if addrs.is_empty() {
             return Err(WireError::ConnectionFailed);
         }
-        // All classified as public; connecting to any of them is safe.
         Ok(Destination::Resolved(addrs))
     }
 }
 
-/// `scheme://host:port` for `url` (lowercased, scheme's default port filled in).
 fn origin_of(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_lowercase();
@@ -127,7 +89,6 @@ fn origin_of(url: &str) -> Option<String> {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next()?;
-    // Credentials are not part of an origin.
     let authority = authority.rsplit('@').next()?;
     if authority.is_empty() {
         return None;
@@ -136,7 +97,6 @@ fn origin_of(url: &str) -> Option<String> {
     Some(format!("{scheme}://{host}:{port}"))
 }
 
-/// The host and port a URL names.
 fn host_port(url: &str) -> Option<(String, u16)> {
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_lowercase();
@@ -145,7 +105,6 @@ fn host_port(url: &str) -> Option<(String, u16)> {
     split_authority(authority, &scheme)
 }
 
-/// Split `host[:port]` (handles `[::1]:8080` bracket form, defaults port from scheme).
 fn split_authority(authority: &str, scheme: &str) -> Option<(String, u16)> {
     let default_port = if scheme == "https" { 443 } else { 80 };
     if let Some(rest) = authority.strip_prefix('[') {
@@ -161,10 +120,7 @@ fn split_authority(authority: &str, scheme: &str) -> Option<(String, u16)> {
     }
 }
 
-/// Whether an address is reachable without a grant.
-///
-/// Rejects loopback, private, link-local, and reserved ranges. Link-local
-/// exclusion prevents access to cloud metadata (`169.254.169.254`).
+/// Link-local is excluded to block cloud metadata (`169.254.169.254`).
 fn is_public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_public_v4(v4),
@@ -181,9 +137,7 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
         || ip.is_documentation()
         || ip.is_unspecified()
         || a == 0
-        // Carrier-grade NAT (ISP internal: 100.64.0.0/10)
         || (a == 100 && (64..=127).contains(&b))
-        // Benchmarking (198.18.0.0/15) and reserved (240.0.0.0/4)
         || (a == 198 && (b == 18 || b == 19))
         || a >= 240)
 }
@@ -192,12 +146,10 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() {
         return false;
     }
-    // IPv4-mapped addresses are checked as IPv4.
     if let Some(v4) = ip.to_ipv4_mapped() {
         return is_public_v4(v4);
     }
     let first = ip.segments()[0];
-    // Reject unique-local (fc00::/7) and link-local (fe80::/10).
     !((first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80)
 }
 
@@ -238,19 +190,16 @@ mod tests {
 
     #[test]
     fn a_configured_local_endpoint_is_reachable() {
-        // Self-hosted model on loopback: grant is per-origin only.
         let policy = EgressPolicy::public_only().allowing("http://127.0.0.1:11434/v1");
         assert_eq!(
             policy.check("http://127.0.0.1:11434/v1/chat/completions"),
             Ok(Destination::AsNamed)
         );
-        // Different port on same host stays blocked.
         assert_eq!(
             policy.check("http://127.0.0.1:5432/"),
             Err(WireError::ConnectionFailed),
             "allowing Ollama must not allow the database next to it"
         );
-        // Different scheme on same port stays blocked.
         assert_eq!(
             policy.check("https://127.0.0.1:11434/v1"),
             Err(WireError::ConnectionFailed)
@@ -259,7 +208,6 @@ mod tests {
 
     #[test]
     fn a_default_port_matches_an_explicit_one() {
-        // https default (443) and http default (80) are normalized.
         let policy = EgressPolicy::public_only().allowing("https://api.example.test");
         assert_eq!(
             policy.check("https://api.example.test:443/v1/chat"),
@@ -282,7 +230,6 @@ mod tests {
 
     #[test]
     fn credentials_in_the_authority_do_not_change_the_origin() {
-        // `http://public.test@127.0.0.1/` points at 127.0.0.1, not public.test.
         let policy = EgressPolicy::public_only().allowing("http://public.test");
         assert_eq!(
             policy.check("http://public.test@127.0.0.1/"),
@@ -294,7 +241,6 @@ mod tests {
     #[test]
     fn a_public_address_is_allowed_without_a_grant() {
         let policy = EgressPolicy::public_only();
-        // A literal, so there is no lookup to pin and nothing to rebind.
         assert_eq!(
             policy.check("https://93.184.216.34/"),
             Ok(Destination::AsNamed)
@@ -303,8 +249,6 @@ mod tests {
 
     #[test]
     fn a_resolved_name_hands_back_the_addresses_it_classified() {
-        // Issue #108: prevent DNS rebinding. Unapproved names are resolved
-        // and checked; approved origins skip resolution.
         let policy = EgressPolicy::public_only();
         assert_eq!(
             policy.check("http://localhost:8787/"),

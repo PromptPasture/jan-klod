@@ -7,7 +7,6 @@ publish.workspace = true
 description = "tool-call interceptor: a thin single-rule permission gate that asks the driver to confirm a potentially dangerous tool call, then blocks or proceeds on the answer."
 
 [lib]
-# A reactor component: exports interceptor-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]

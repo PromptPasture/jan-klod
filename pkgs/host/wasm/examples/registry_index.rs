@@ -1,53 +1,12 @@
-//! Generate `index.json` — what a registry says about a directory of staged
-//! components, before anyone downloads one.
-//!
-//! Usage: `registry_index <ext-dir> <base-url> <author> <out-file>`, normally
-//! through `scripts/registry-index.sh` / `make registry-index`.
-//!
-//! # Why this is a `jk-wasm` example rather than a shell script
-//!
-//! Six of the eleven fields per entry are *the manifest's own*, and this reads
-//! them with [`jk_wasm::ext::list`] — the same reader `ext list` and the
-//! boot path use. A shell generator would be a second parser of
-//! `ext/*.manifest.toml`, free to disagree with the first about what a
-//! component declares, and the whole value of an index is that the capability
-//! line in it is the one the host will enforce.
-//!
-//! # What each field is, and where it comes from
-//!
-//! `name`, `version`, `api-version`, `kind`, `capabilities`, `description` are
-//! read from the manifest. `sha256` and `size` are measured from the `.wasm`
-//! beside it. `url` is derived from the base URL. `author` is the publisher of
-//! this index, passed in, because a manifest names no author and inventing a
-//! per-component one from an empty `Cargo.toml` field would be decoration.
-//!
-//! **`sha256` and `signature` describe the individual `.wasm` and its
-//! `.minisig`, never an archive.** `ext install` verifies per *file* and
-//! derives the manifest and signature URLs as siblings of the component's, so
-//! an index whose digest covered a tarball would describe something the
-//! installer never fetches.
-//!
-//! # Determinism
-//!
-//! Two runs over one directory must produce byte-identical output, which
-//! `scripts/registry-index-drift.sh` checks and probes. Nothing here reads the
-//! clock, the environment, or the filesystem's own ordering: entries come out
-//! sorted by name (`ext::list` sorts), capabilities sorted (`Manifest::beside`
-//! sorts), and the JSON key order is this file's field order because
-//! `serde_json` writes a struct in declaration order.
+//! Generate `index.json`: what a registry says about a directory of staged components.
 
 use std::path::Path;
 
 use jk_wasm::ext::{list, Declaration};
 
-/// The index format's own version, so a reader can refuse one it doesn't
-/// understand rather than guessing at missing keys.
 const INDEX_VERSION: u32 = 1;
 
-/// One published component, as a registry describes it.
-///
-/// Field order is the serialized key order — see the module note on
-/// determinism.
+/// Field order is the serialized key order.
 #[derive(serde::Serialize)]
 struct Entry {
     name: String,
@@ -64,7 +23,6 @@ struct Entry {
     size: u64,
 }
 
-/// The whole document.
 #[derive(serde::Serialize)]
 struct Index {
     #[serde(rename = "index-version")]
@@ -77,8 +35,6 @@ fn fail(message: &str) -> ! {
     std::process::exit(1)
 }
 
-/// A SHA-256 digest as lowercase hex — the spelling `ext install --sha256`
-/// uses.
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes.iter().fold(String::new(), |mut out, byte| {
@@ -87,13 +43,7 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Where the component will be served from.
-///
-/// The base is refused if it carries a query or fragment per
-/// `ext::ExtError::OpaqueUrl`: the manifest and signature URLs are
-/// derived as siblings via relative resolution, which drops a query — so an
-/// index built on such a base would name components whose companions 404.
-/// Better to refuse while generating than to publish it.
+/// A base with a query or fragment is refused: relative resolution drops queries, so companions would 404.
 fn component_url(base: &str, name: &str) -> String {
     let parsed =
         url::Url::parse(base).unwrap_or_else(|err| fail(&format!("{base} is not a URL: {err}")));
@@ -107,17 +57,7 @@ fn component_url(base: &str, name: &str) -> String {
     format!("{}/{name}.wasm", base.trim_end_matches('/'))
 }
 
-/// The detached signature over the component, when there is one.
-///
-/// Empty until something signs the first-party components — that is
-/// [#93](https://github.com/PromptPasture/jan-klod/issues/93), deferred until
-/// before the first release. Emitting `""` says "nothing vouches for these
-/// bytes yet", the true statement; a reader requiring provenance can refuse
-/// the entry instead of finding no key and assuming the index is older.
-///
-/// The whole `.minisig` text, not just its base64 line: what
-/// `minisign_verify::Signature::decode` takes, so a reader can verify from
-/// the index without a second fetch.
+/// Empty until first-party components are signed; `""` says nothing vouches for the bytes.
 fn signature_beside(component: &Path) -> String {
     let mut name = component.as_os_str().to_os_string();
     name.push(".minisig");
@@ -134,11 +74,6 @@ fn main() {
 
     let mut extensions = Vec::with_capacity(staged.len());
     for component in staged {
-        // A component whose manifest is absent or broken is not described,
-        // not vaguely: every field below the name comes from that manifest,
-        // an entry with guesses is worse than an index that is short. It's a
-        // refusal with a fix — `make ext` regenerates the manifest — so
-        // failing here is the message.
         let manifest = match component.declaration {
             Declaration::Present(manifest) => manifest,
             Declaration::Absent => fail(&format!(
@@ -157,9 +92,6 @@ fn main() {
             url: component_url(base_url, &manifest.name),
             sha256: hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes)),
             signature: signature_beside(&component.component),
-            // `try_from` not `as`: a size that didn't convert would be wrong
-            // in a published index, no sensible wrong number for "how many
-            // bytes will you download".
             size: u64::try_from(bytes.len())
                 .unwrap_or_else(|err| fail(&format!("{} is unmeasurable: {err}", manifest.name))),
             name: manifest.name,
@@ -178,8 +110,6 @@ fn main() {
     };
     let mut json = serde_json::to_string_pretty(&index)
         .unwrap_or_else(|err| fail(&format!("serializing the index: {err}")));
-    // A trailing newline, so the file is a text file and a diff reads as
-    // lines rather than as one changed line.
     json.push('\n');
 
     let path = Path::new(out);
@@ -189,8 +119,6 @@ fn main() {
                 .unwrap_or_else(|err| fail(&format!("{}: {err}", parent.display())));
         }
     }
-    // Written once, at the end: a generator that refuses halfway must not
-    // leave a truncated index behind for the next reader to believe.
     std::fs::write(path, &json).unwrap_or_else(|err| fail(&format!("{out}: {err}")));
 
     println!(

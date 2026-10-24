@@ -1,6 +1,4 @@
-//! Default `select-model` interceptor — classify request to task type,
-//! resolve routing table, set model. Pure Rust logic, unit-tested natively;
-//! Component-Model glue for `wasm32` only.
+//! Default `select-model` interceptor: classifies the request into a task and sets the routed model.
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod routing;
@@ -42,7 +40,6 @@ mod component {
         host_log::log(level, "interceptor-task-router", message, &[]);
     }
 
-    /// Collect stream text and close handle.
     fn drain_text(handle: llm_provider::StreamHandle) -> String {
         let mut text = String::new();
         loop {
@@ -56,7 +53,6 @@ mod component {
         text
     }
 
-    /// Classify message into built-in task via constrained-decoding call.
     fn classify(user_message: &str) -> Option<String> {
         let grammar = routing::classifier_grammar(routing::BUILT_IN_TASKS);
         let request = CompletionRequest {
@@ -128,7 +124,6 @@ mod component {
 
             let task = classify(&user_message).unwrap_or_else(|| routing::DEFAULT_TASK.to_string());
 
-            // Resolve routing table entry.
             let Ok(raw) = host_config::get(&format!("routing.{task}")) else {
                 log(
                     LogLevel::Info,
@@ -136,14 +131,12 @@ mod component {
                 );
                 return Ok(Decision::Proceed);
             };
-            // host-config serves quoted JSON strings.
             let route = raw.trim().trim_matches('"');
             let Some(model) = routing::model_from_route(route) else {
                 return Ok(Decision::Proceed);
             };
 
             if let Some(provider) = routing::unhonoured_provider(route) {
-                // Log names the endpoint request won't reach (chain fixed at boot).
                 log(
                     LogLevel::Warn,
                     &format!(

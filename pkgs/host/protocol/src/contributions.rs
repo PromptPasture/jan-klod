@@ -1,21 +1,4 @@
-//! What an extension declares about a user interface it cannot see.
-//!
-//! The host-side mirror of `wit/client-surface.wit`: plain types with no
-//! Component-Model dependency, so a surface can carry them to a client without
-//! touching generated bindings — the same separation `intercept` keeps for loop
-//! state, and [`crate::turn::Event`] for turn events.
-//!
-//! Not the wire types either — those are the crate root's [`crate::Contributions`]
-//! and friends. A surface maps these to notifications the way it maps
-//! [`crate::turn::Event`], which is what keeps the loop from knowing what a
-//! client speaks (#179). They sit in this crate because the wasm adapters
-//! produce them and the loop hands them on, and both sit above it (#181).
-//!
-//! **Every string here is attacker-influenced.** A contributed `title` can
-//! carry whatever an MCP server wrote in a tool description, so a renderer
-//! escapes it. The rule lives in the WIT doc; nothing here sanitises, because a
-//! host that rewrote contributed text would make each renderer's escaping look
-//! unnecessary while remaining necessary.
+//! Host-side mirror of `wit/client-surface.wit`; strings are attacker-influenced and unsanitised, so a renderer must escape.
 
 /// One argument a contributed command takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,9 +62,7 @@ pub struct Form {
 /// Everything one extension contributes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contributions {
-    /// The declaring instance's id, e.g. `interceptor.system`. Added by the
-    /// host: a guest cannot be trusted to name itself, and two extensions may
-    /// contribute the same command name.
+    /// Instance id, e.g. `interceptor.system`; set by the host since a guest cannot be trusted to name itself.
     pub extension: String,
     /// Commands, in declaration order.
     pub commands: Vec<Command>,
@@ -93,10 +74,6 @@ pub struct Contributions {
 
 impl Contributions {
     /// Whether this extension declared nothing at all.
-    ///
-    /// An empty set is the normal state for a component that exports the
-    /// interface but has nothing to offer right now, and it is not worth
-    /// sending to a client.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.commands.is_empty() && self.status_items.is_empty() && self.forms.is_empty()
@@ -124,11 +101,7 @@ pub struct InvokeOutcome {
 /// Why an invocation failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvokeError {
-    /// No extension of that id is loaded, or it contributes no such name.
-    ///
-    /// One case for both, deliberately: a client that names a contribution
-    /// nobody declared has the same problem either way, and distinguishing
-    /// them would tell it which extensions are loaded.
+    /// No such extension or contribution; one case so a client cannot probe which extensions are loaded.
     Unknown,
     /// A required argument was missing, or a value was unusable.
     InvalidArguments,

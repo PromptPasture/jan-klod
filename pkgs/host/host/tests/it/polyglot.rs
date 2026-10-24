@@ -1,22 +1,5 @@
-//! A component built from another language runs in this host — the "any
-//! language" claim, backed by an actual test rather than a spike.
-//!
-//! Loads `pkgs/extensions/spike/spike.wasm` (TinyGo, built against `wit/spike`),
-//! instantiates it with the host's WASI wiring, calls its exported `complete`,
-//! and checks the round trip. Runs every gate, no toolchain required.
-//!
-//! That artifact is a **committed fixture**, the one exception to ignored guest
-//! components: `.gitignore` negates it, `make -C pkgs/extensions clean` leaves it
-//! alone, and `make -C pkgs/extensions spike-guest` regenerates it with `-no-debug
-//! -opt=z` (~75 KB, no DWARF) for whoever commits the new one. Nothing in a test
-//! run writes to it.
-//!
-//! This proves the Component Model boundary is language-neutral, not that today's
-//! `wit/` still compiles under TinyGo — the committed artifact is what runs.
-//! [`the_committed_artifact_is_rebuildable`] covers rebuilding when the toolchain
-//! is present, building into a temp dir so the fixture stays untouched.
+//! A TinyGo component answers a call through the committed fixture `pkgs/extensions/spike/spike.wasm`; needs no toolchain.
 
-// Dominated by `bindgen!` output; exempt from the workspace's doc/style lints.
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 use std::path::{Path, PathBuf};
@@ -32,8 +15,7 @@ wasmtime::component::bindgen!({
     world: "spike",
 });
 
-/// The `spike` world declares no imports, but a TinyGo `wasip2` component still
-/// pulls in `wasi:cli`/`wasi:io` for its runtime, which the host must satisfy.
+/// TinyGo `wasip2` components still import `wasi:cli`/`wasi:io`, so the host must link WASI.
 struct Host {
     ctx: WasiCtx,
     table: ResourceTable,
@@ -52,9 +34,6 @@ fn spike_wasm() -> PathBuf {
     common::repo_root().join("pkgs/extensions/spike/spike.wasm")
 }
 
-/// Instantiate the component at `path` in this host and call its `complete`.
-/// Shared by both tests so each asserts the same round trip — one against the
-/// committed fixture, one against a fresh build of it.
 fn echo_through_the_host(path: &Path) -> String {
     let engine = Engine::default();
     let component = Component::from_file(&engine, path).expect("the Go-built component compiles");
@@ -87,7 +66,6 @@ fn a_component_built_from_go_completes_a_call_through_the_host() {
         path.display()
     );
 
-    // The guest's own logic, run in our sandbox: `"echo: " + prompt`, written in Go.
     assert_eq!(
         echo_through_the_host(&path),
         "echo: hello, component model",
@@ -95,16 +73,6 @@ fn a_component_built_from_go_completes_a_call_through_the_host() {
     );
 }
 
-/// The other half: does today's `wit/` still produce a working Go guest? Only
-/// checkable where `tinygo`/`wkg` exist, so this skips via
-/// [`common::optional_tool`] (an announced skip) rather than the
-/// `JK_REQUIRE_GUESTS` policy.
-///
-/// Rebuilds into a temp dir via `SPIKE_WASM`, never over the committed fixture:
-/// writing there made test outcomes depend on test order and left `make gate`
-/// with a dirty tree. The fresh component is put through the same round trip,
-/// catching drift that compiles but no longer works. Byte equality is not
-/// asserted — TinyGo output moves with the compiler version.
 #[test]
 fn the_committed_artifact_is_rebuildable() {
     if !common::optional_tool("tinygo") || !common::optional_tool("wkg") {

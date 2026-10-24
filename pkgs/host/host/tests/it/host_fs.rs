@@ -1,8 +1,4 @@
-//! `host-fs` across Component-Model boundary. Instantiates `tool-fs` guest,
-//! drives `invoke({op, path, ...})` against path-jailed workspace: normal paths
-//! round-trip, escaping denied, no workspace = all denied (default-deny). Offline.
-//!
-//! Skips when guest not staged in `ext/`.
+//! `host-fs` through the `tool-fs` guest: workspace escapes are denied, and with no workspace everything is denied.
 
 use jk_wasm::host_fs::Workspace;
 use jk_wasm::host_process::ProcessRunner;
@@ -40,7 +36,6 @@ fn host_fs_round_trips_through_a_guest() {
     )
     .expect("tool instantiates");
 
-    // Write-then-read round-trips through host-fs.
     let wrote = tool
         .invoke(r#"{"op":"write","path":"notes/todo.md","contents":"buy milk"}"#)
         .expect("write succeeds");
@@ -54,7 +49,6 @@ fn host_fs_round_trips_through_a_guest() {
         .expect("read succeeds");
     assert_eq!(out, "buy milk");
 
-    // Escaping path denied by path-jail (surfaced as tool error).
     let escape = tool.invoke(r#"{"op":"write","path":"../escape.txt","contents":"x"}"#);
     assert!(
         escape.is_err(),
@@ -72,7 +66,6 @@ fn host_fs_is_default_deny_without_a_workspace() {
         return;
     };
 
-    // No workspace → every host-fs op denied.
     let mut tool = ToolExtension::instantiate(
         &engine,
         "tool.fs",

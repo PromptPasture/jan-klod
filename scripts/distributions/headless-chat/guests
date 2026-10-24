@@ -1,6 +1,4 @@
-# A chat channel and nothing that touches the machine. No file tools, no
-# execution, no UI client — it is reached over Telegram
-# (`jan-klod-gateway telegram`), not looked at.
+# Chat only, no machine access. Reached over Telegram (`jan-klod-gateway telegram`).
 provider-openai
 provider-anthropic
 interceptor-intent-router

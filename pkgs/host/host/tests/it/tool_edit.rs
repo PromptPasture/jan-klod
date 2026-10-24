@@ -1,5 +1,4 @@
-//! Tool-edit: view → replace → reject cycle. Anchors apply partial edits,
-//! stale anchors rejected, file untouched. Offline. Skips when guest not staged.
+//! Anchored view, replace and insert; stale anchors are rejected without writing.
 
 use jk_wasm::host_fs::Workspace;
 use jk_wasm::host_process::ProcessRunner;
@@ -17,7 +16,6 @@ fn edit_component(engine: &Engine) -> Option<Component> {
     Some(Component::from_file(engine, &path).expect("component compiles"))
 }
 
-/// Extract anchor from view's line (format: `anchor|lineno|text`).
 fn anchor_at(view: &str, lineno: usize) -> String {
     let line = view.lines().nth(lineno - 1).expect("line is in the view");
     line.split('|')
@@ -51,7 +49,6 @@ fn hash_anchored_edit_applies_and_a_stale_anchor_is_rejected() {
     )
     .expect("tool instantiates");
 
-    // View gives one anchor per line.
     let view = tool
         .invoke(r#"{"op":"view","path":"main.rs"}"#)
         .expect("view succeeds");
@@ -62,7 +59,6 @@ fn hash_anchored_edit_applies_and_a_stale_anchor_is_rejected() {
     );
     let body = anchor_at(&view, 2);
 
-    // Replace touches only anchored line.
     let applied = tool
         .invoke(&format!(
             r#"{{"op":"replace","path":"main.rs","start":"{body}","contents":"    let x = 42;"}}"#
@@ -75,7 +71,6 @@ fn hash_anchored_edit_applies_and_a_stale_anchor_is_rejected() {
         "only the anchored line changed"
     );
 
-    // Stale anchor refused (file untouched).
     let before = std::fs::read_to_string(workspace_dir.join("main.rs")).unwrap();
     let stale = tool
         .invoke(&format!(
@@ -96,7 +91,6 @@ fn hash_anchored_edit_applies_and_a_stale_anchor_is_rejected() {
         "a rejected edit writes nothing"
     );
 
-    // Insert re-anchored against current file.
     let view = tool
         .invoke(r#"{"op":"view","path":"main.rs"}"#)
         .expect("view succeeds");

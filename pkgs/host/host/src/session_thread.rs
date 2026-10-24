@@ -1,57 +1,13 @@
-//! One thread owns the session; everything else reaches it by message (#223).
-//!
-//! `AgentSession` is `!Send`, so it cannot be handed to a worker: the thread
-//! that built it has to keep it. The seam therefore runs the other way
-//! round — the owning thread becomes a **loop that serves jobs**, and the
-//! accepting, reading and polling move off it. `acp.rs:237` has done this
-//! for the ACP pipe since Phase 13 (*"Reader thread: hands lines over.
-//! Holds no session"*); this generalises it so any number of threads can
-//! ask for work without holding the thing they are asking about.
-//!
-//! # Generic over what is owned, deliberately
-//!
-//! Nothing here mentions `AgentSession`. The module is about threading, and
-//! a seam that named the session could only be tested by booting a fleet —
-//! so its failure modes would be tested least where they matter most. `T`
-//! carries **no `Send` bound**, which is the property that makes it usable
-//! for a `!Send` session at all, and [`tests::the_owned_value_need_not_be_send`]
-//! is compiled proof of it.
-//!
-//! # A job is a closure, not a command
-//!
-//! `serve.rs` alone has seven routes, and `rpc.rs`, `mcp.rs` and `acp.rs`
-//! have their own verbs. An enum mirroring them would be a second dispatch
-//! table to keep in step with the first, and every new route would mean
-//! touching both. So a job is `FnOnce(&mut T)` and the existing handlers
-//! keep the signatures they already have.
-//!
-//! The cost, stated because a later slice will meet it: the queue is
-//! opaque. Nothing can inspect a pending job, prioritise one, or cancel
-//! one. Phase 20's remaining slices do not need to; anything that does will
-//! have to give jobs a shape.
+//! One thread owns the session (`AgentSession` is `!Send`); everything else reaches it through a job queue.
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-/// Work for the thread that owns a `T`.
-///
-/// Returns how to deliver its answer rather than delivering it, so the
-/// loop can run its between-jobs hook *first*. Otherwise a caller is
-/// unblocked while the hook is still running and can race it — which is
-/// exactly what happened when a session's next request arrived before
-/// the previous turn's install had been adopted (#231).
+/// Returns how to deliver its answer so the loop can run its between-jobs hook first; otherwise a caller races the hook.
 type Job<T> = Box<dyn FnOnce(&mut T) -> Deliver + Send>;
 
-/// Hands a finished job's answer to whoever is waiting.
 type Deliver = Box<dyn FnOnce() + Send>;
 
-/// What arrives on the queue: work, or the end of it.
-///
-/// A loop that ended only when its last handle dropped could not be
-/// stopped by whoever owns it — an outstanding clone, held by a caller
-/// that has not finished, keeps the thread alive and makes a shutdown
-/// that waits for it hang. So stopping is a message rather than a
-/// refcount: the owner says when, and late callers learn from the closed
-/// channel afterwards (#229).
+/// Queue message: work, or stop (a message, so an outstanding clone cannot hang shutdown).
 pub enum Task<T> {
     /// Run this against the owned value.
     Work(Job<T>),
@@ -59,20 +15,12 @@ pub enum Task<T> {
     Stop,
 }
 
-/// Why a job produced no answer.
-///
-/// Distinguished rather than merged into one error, because they call for
-/// different reactions: a stopped loop will never serve anything again and
-/// the caller should stop asking, while a panicked job says nothing about
-/// the next one.
+/// Why a job produced no answer; a stopped loop is final, a panicked job says nothing about the next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoAnswer {
-    /// The owning loop is gone — it returned, or its thread died. Every
-    /// later call will fail the same way.
+    /// The owning loop is gone; every later call fails the same way.
     Stopped,
-    /// The job itself panicked. The loop survived and the next job will
-    /// run; **the owned value may have been left mid-change**, which is the
-    /// unavoidable part and the reason this is not silently retried here.
+    /// The job panicked and the owned value may be left mid-change, so it is not retried.
     Panicked,
 }
 
@@ -87,21 +35,12 @@ impl std::fmt::Display for NoAnswer {
 
 impl std::error::Error for NoAnswer {}
 
-/// A handle to the thread owning a `T`. Cheap to clone, safe to send, and
-/// **shareable**: `&Jobs` works from several threads at once.
-///
-/// The `Mutex` is what makes it `Sync`. `mpsc::Sender` is `Send` but not
-/// `Sync`, and an HTTP framework wants handler state that every request
-/// can borrow — so the choice is a lock held for the length of a `send`,
-/// or a handle that has to be cloned before it can be shared. The lock is
-/// smaller, and a `send` onto an unbounded channel does not block.
+/// A cloneable, `Sync` handle to the thread owning a `T`; its `Mutex` is held only for a non-blocking `send`.
 pub struct Jobs<T> {
     hand: std::sync::Mutex<Sender<Task<T>>>,
 }
 
 impl<T> Clone for Jobs<T> {
-    // Derived `Clone` would demand `T: Clone`, which is wrong: the handle
-    // holds a channel, never a `T`.
     fn clone(&self) -> Self {
         Self {
             hand: std::sync::Mutex::new(self.sender()),
@@ -109,8 +48,7 @@ impl<T> Clone for Jobs<T> {
     }
 }
 
-/// A handle and the queue its loop reads. The `T` is supplied later, by
-/// whichever thread owns it, so that a `!Send` value never has to move.
+/// A handle plus the queue its loop reads; `T` is supplied later so a `!Send` value never moves.
 #[must_use]
 pub fn queue<T>() -> (Jobs<T>, Receiver<Task<T>>) {
     let (hand, jobs) = channel();
@@ -123,11 +61,7 @@ pub fn queue<T>() -> (Jobs<T>, Receiver<Task<T>>) {
 }
 
 impl<T> Jobs<T> {
-    /// A sender of our own, recovering from a poisoned lock.
-    ///
-    /// Poisoning here means a panic while cloning a `Sender`, which leaves
-    /// nothing half-built; refusing every later job over it would turn one
-    /// panicked request into a dead surface.
+    /// A sender of our own, recovering from a poisoned lock: a panic while cloning a `Sender` leaves nothing half-built.
     fn sender(&self) -> Sender<Task<T>> {
         self.hand
             .lock()
@@ -135,17 +69,10 @@ impl<T> Jobs<T> {
             .clone()
     }
 
-    /// Run `job` on the owning thread and wait for what it returns.
-    ///
-    /// Blocks the calling thread, which is the point: a request handler
-    /// wants its answer, and the thread it blocks is no longer the one
-    /// holding the session — so other requests are served meanwhile.
+    /// Runs `job` on the owning thread and waits for its result; only the caller blocks.
     ///
     /// # Errors
-    /// [`NoAnswer::Stopped`] if the loop is gone, [`NoAnswer::Panicked`] if
-    /// the job panicked. Neither blocks forever: the reply channel closes
-    /// in both cases, which is what a caller waiting on a dead thread needs
-    /// and what an unguarded `recv` would not give it.
+    /// [`NoAnswer::Stopped`] if the loop is gone, [`NoAnswer::Panicked`] if the job panicked.
     pub fn run<R, F>(&self, job: F) -> Result<R, NoAnswer>
     where
         F: FnOnce(&mut T) -> R + Send + 'static,
@@ -153,21 +80,8 @@ impl<T> Jobs<T> {
     {
         let (answer, wait) = channel();
         let boxed: Job<T> = Box::new(move |owned| {
-            // Caught here rather than around the loop below, so a panic
-            // cannot escape *and* the caller learns which of the two
-            // things happened. Unwind safety is asserted because the
-            // alternative is requiring it of every caller: a panic mid-job
-            // may leave `owned` half-changed, which `NoAnswer::Panicked`
-            // exists to report rather than hide.
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || job(owned)));
-            // Handed back rather than sent: the loop delivers it once
-            // its hook has run, so nothing a caller does next can race
-            // work that belongs to this turn.
-            //
-            // The receiver may already be gone (a caller that stopped
-            // waiting). Its answer is dropped, not an error: the work was
-            // done either way.
             Box::new(move || {
                 let _ = answer.send(outcome.map_err(|_| NoAnswer::Panicked));
             })
@@ -175,16 +89,10 @@ impl<T> Jobs<T> {
         self.sender()
             .send(Task::Work(boxed))
             .map_err(|_| NoAnswer::Stopped)?;
-        // A closed channel here means the job never sent: the loop died
-        // between accepting the job and running it.
         wait.recv().unwrap_or(Err(NoAnswer::Stopped))
     }
 
-    /// Queue `job` without waiting for it.
-    ///
-    /// For work whose result nobody reads — the session's own bookkeeping.
-    /// A panic inside is still contained by [`Self::run`]'s guard, because
-    /// this goes through the same box.
+    /// Queues `job` without waiting, for work nobody reads.
     ///
     /// # Errors
     /// [`NoAnswer::Stopped`] if the loop is gone.
@@ -201,35 +109,18 @@ impl<T> Jobs<T> {
             .map_err(|_| NoAnswer::Stopped)
     }
 
-    /// Tell the loop to return once it reaches this point in the queue.
-    ///
-    /// Work already queued still runs — a stop that discarded it would
-    /// lose answers callers are waiting for. Afterwards the loop's thread
-    /// ends and the channel closes, so later callers get
-    /// [`NoAnswer::Stopped`] without anyone having to tell them.
+    /// Tells the loop to return once it reaches this point; queued work still runs.
     pub fn stop(&self) {
         let _ = self.sender().send(Task::Stop);
     }
 }
 
-/// Serve jobs against `owned` until told to stop, or until every handle
-/// is dropped.
-///
-/// The caller owns the `T` and never gives it up — which is the whole
-/// reason this works for a `!Send` session. Two ways out: [`Jobs::stop`],
-/// for an owner shutting down while callers still hold handles, and the
-/// last handle dropping, which is what a short-lived surface does.
+/// Serves jobs against `owned` until told to stop or every handle drops.
 pub fn serve<T>(owned: &mut T, jobs: &Receiver<Task<T>>) {
     serve_each(owned, jobs, |_| {});
 }
 
 /// [`serve`], with `after` run on the owned value once per job.
-///
-/// The hook exists for work that belongs *between* jobs rather than
-/// inside one — a session noticing what its turn installed, for instance
-/// (#231). Putting it here rather than at each call site means every
-/// transport gets it: a route added later cannot forget, because it is
-/// not a route's decision.
 pub fn serve_each<T, F>(owned: &mut T, jobs: &Receiver<Task<T>>, mut after: F)
 where
     F: FnMut(&mut T),
@@ -238,9 +129,6 @@ where
         match task {
             Task::Work(job) => {
                 let deliver = job(owned);
-                // Hook first, answer second: a caller must not be able to
-                // act on this turn's answer before the work that belongs
-                // to the turn has finished.
                 after(owned);
                 deliver();
             }
@@ -253,8 +141,6 @@ where
 mod tests {
     use super::{queue, serve, NoAnswer};
 
-    /// The ordinary case: a job runs where the value lives, and its result
-    /// comes back to a thread that never touched it.
     #[test]
     fn a_job_runs_on_the_owning_thread_and_its_answer_comes_back() {
         let (jobs, queued) = queue::<Vec<String>>();
@@ -265,7 +151,6 @@ mod tests {
                     owned.len()
                 })
                 .expect("the loop is running");
-            // Dropping the handle is what ends the loop below.
             drop(jobs);
             pushed
         });
@@ -277,9 +162,6 @@ mod tests {
         assert_eq!(owned, vec!["from the job".to_string()]);
     }
 
-    /// The property the whole seam exists for: what is owned never has to
-    /// be `Send`. `Rc` is not, so this is a compile-time assertion written
-    /// as a test — if a `T: Send` bound appeared, this would stop building.
     #[test]
     fn the_owned_value_need_not_be_send() {
         let (jobs, queued) = queue::<std::rc::Rc<std::cell::RefCell<u32>>>();
@@ -297,11 +179,6 @@ mod tests {
         assert_eq!(caller.join().expect("finished"), Ok(42));
     }
 
-    /// A caller must never wait on a loop that will not answer.
-    ///
-    /// This is the failure this seam would otherwise add to the process: a
-    /// request thread blocked forever on a dead session is worse than the
-    /// single-threadedness it replaces, because nothing reports it.
     #[test]
     fn a_handle_whose_loop_has_stopped_says_so_rather_than_blocking() {
         let (jobs, queued) = queue::<u32>();
@@ -313,12 +190,7 @@ mod tests {
         );
     }
 
-    /// A panicking job does not take the loop with it, and its caller is
-    /// told which of the two things happened.
-    ///
-    /// The second half is the part worth testing: a seam that reported
-    /// every failure as "stopped" would have every surface give up on a
-    /// session that is still perfectly alive.
+    /// Reporting a panic as "stopped" would make surfaces abandon live sessions.
     #[test]
     fn a_panicking_job_is_contained_and_the_next_one_still_runs() {
         let (jobs, queued) = queue::<u32>();
@@ -341,8 +213,6 @@ mod tests {
         assert_eq!(owned, 8);
     }
 
-    /// Two threads queue work against one owner, which is the property the
-    /// rest of Phase 20 is built on.
     #[test]
     fn two_threads_queue_work_without_either_holding_the_value() {
         let (jobs, queued) = queue::<Vec<u32>>();

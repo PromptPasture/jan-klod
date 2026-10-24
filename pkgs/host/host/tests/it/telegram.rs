@@ -1,6 +1,4 @@
-//! Telegram message drives a turn (offline). Boots Runtime, runs `poll_once`
-//! with injected fetch (canned `getUpdates`, captured `sendMessage`).
-//! Skips when guests not staged.
+//! Telegram messages drive a turn offline, through `poll_once` with an injected fetch.
 
 use std::cell::RefCell;
 
@@ -40,7 +38,6 @@ extensions:
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Injected HTTP: getUpdates → one message, sendMessage captured.
     let sent: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let fetch = |_method: &str, url: &str, _headers: &[(&str, &str)], body: Option<&[u8]>| {
         if url.contains("getUpdates") {
@@ -78,7 +75,6 @@ extensions:
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Mock provider: requests write, then reports done (gate has something to confirm).
 fn write_then_answer_http() -> jk_wasm::route::HttpFn {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
@@ -117,8 +113,6 @@ fn write_then_answer_http() -> jk_wasm::route::HttpFn {
     })
 }
 
-/// Headless asks: confirmation as message, next message answers. Messages from
-/// other chats mid-question are deferred, not dropped.
 #[test]
 fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
     let ext_dir = common::repo_root().join("ext");
@@ -145,7 +139,6 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
         if url.contains("getUpdates") {
             let n = polls.get();
             polls.set(n + 1);
-            // Poll 0: request. Poll 1 (blocked turn): "yes" + unrelated chat message.
             let result = if n == 0 {
                 serde_json::json!([{
                     "update_id": 100,
@@ -175,8 +168,6 @@ fn a_confirmation_is_asked_in_the_chat_and_answered_by_the_next_message() {
     assert_confirmation_flow(&sent, next, &dir);
 }
 
-/// Telegram sender allowlist: unlisted sender is refused before session creation (#257).
-/// Listed sender drives a turn normally. The principal is available for downstream.
 #[test]
 fn telegram_sender_allowlist_refuses_unlisted_and_accepts_listed() {
     let ext_dir = common::repo_root().join("ext");
@@ -208,10 +199,8 @@ extensions:
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Allowlist only sender 999.
     let allowed_senders = vec![999i64];
 
-    // Injected HTTP: getUpdates → two messages (one unlisted, one listed).
     let sent: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let fetch = |_method: &str, url: &str, _headers: &[(&str, &str)], body: Option<&[u8]>| {
         if url.contains("getUpdates") {
@@ -241,7 +230,6 @@ extensions:
     assert_eq!(next, 102, "offset advances past both updates");
 
     let sent = sent.into_inner();
-    // Only the listed sender (999) should get a reply; unlisted sender (888) should not.
     assert_eq!(
         sent.len(),
         1,
@@ -261,7 +249,6 @@ extensions:
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Config with provider, interceptors, tool.fs jailed to dir.
 fn write_confirmation_config(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -292,8 +279,6 @@ workspace: {}
     config
 }
 
-/// Verify confirmation flow: asked in right chat, standing options offered,
-/// file+content named, write after reply, unrelated chat's message survived.
 fn assert_confirmation_flow(sent: &[String], next: i64, dir: &std::path::Path) {
     let question = sent
         .iter()
@@ -307,7 +292,6 @@ fn assert_confirmation_flow(sent: &[String], next: i64, dir: &std::path::Path) {
         question.contains("always"),
         "the standing options are offered: {question}"
     );
-    // Chat surface: no terminal, question must carry whole decision (file + contents).
     assert!(
         question.contains("note.txt") && question.contains("hi"),
         "the question names the file and shows the content: {question}"
@@ -322,7 +306,6 @@ fn assert_confirmation_flow(sent: &[String], next: i64, dir: &std::path::Path) {
         "hi"
     );
 
-    // Other chat's message deferred, not lost to offset advance.
     assert!(
         sent.iter().any(|m| m.contains("\"chat_id\":777")),
         "the unrelated chat still got a turn: {sent:?}"

@@ -1,28 +1,6 @@
-//! Permission rules — pure Rust, unit-tested natively.
-//!
-//! Two checks gate a tool call, both driven by a [`Policy`] the component builds
-//! from its `config.yaml` section:
-//!
-//! 1. **Scope check** ([`Policy::args_escape_scope`]): any string argument contains
-//!    a path that would leave the workspace — an absolute path (`/…`) or a
-//!    component that traverses upward (`..`).
-//!
-//! 2. **Allowlist check** ([`Policy::is_known_safe`]): the call is one of the
-//!    read-only operations the operator has named. Anything else is confirmed.
-//!
-//! ## Why an allowlist
-//!
-//! A denylist of dangerous verbs missed `tool-edit`'s `view`/`replace`/`insert` ops —
-//! none matched `write` or `shell`, so file edits went through ungated. A denylist
-//! can only catch known verbs; an allowlist gates anything unclassified by construction.
-//! Cost: new tools prompt until added to the list — the right direction for the mistake.
+//! Permission rules, pure Rust: scope check first, then an allowlist (a denylist missed `tool-edit`'s ops).
 
-/// Calls that run without confirmation: read-only operations of the shipped fleet,
-/// as `name` (every op) or `name:op`.
-///
-/// Deliberately short and boring. `git` is a bare name because its op set is
-/// closed and read-only; `fs` is not, because it can mutate. `fetch` is absent —
-/// it's egress, and a coding agent reaching the network is worth one question.
+/// `git` is allowed by name (closed, read-only op set), `fs` only per op, and `fetch` is absent: egress should prompt.
 const DEFAULT_SAFE_CALLS: &[&str] = &[
     "find",
     "fs:read",
@@ -32,20 +10,14 @@ const DEFAULT_SAFE_CALLS: &[&str] = &[
     "proc-probe",
 ];
 
-/// A resolved permission policy: the three checks read from these fields rather
-/// than module constants, so the same rules serve both defaults and config overrides.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
-    /// Calls that proceed unasked, as `name` or `name:op` (lowercase).
     safe_calls: Vec<String>,
-    /// When true, absolute-path arguments do not trip the scope check.
     allow_absolute_paths: bool,
-    /// When true, `..` traversal in path arguments does not trip the scope check.
     allow_parent_traversal: bool,
 }
 
 impl Default for Policy {
-    /// The built-in policy: the read-only fleet allowed, both scope checks on.
     fn default() -> Self {
         Self {
             safe_calls: DEFAULT_SAFE_CALLS.iter().map(|s| (*s).to_owned()).collect(),
@@ -56,16 +28,7 @@ impl Default for Policy {
 }
 
 impl Policy {
-    /// Build a policy from an extension config section (the JSON object from
-    /// `host-config::all`). Recognised keys, each optional:
-    ///
-    /// - `safe-calls`: array of `name` / `name:op` — **replaces** the default
-    ///   allowlist. An empty array confirms every call.
-    /// - `allow-absolute-paths`: bool — default `false`.
-    /// - `allow-parent-traversal`: bool — default `false`.
-    ///
-    /// Missing or wrong-typed keys fall back to defaults. String lists are
-    /// lowercased so matching stays case-insensitive.
+    /// An empty `safe-calls` confirms every call; wrong-typed keys fall back to defaults.
     #[must_use]
     pub fn from_config(section: &serde_json::Value) -> Self {
         let default = Self::default();
@@ -82,14 +45,7 @@ impl Policy {
         }
     }
 
-    /// Whether this call is one the operator has declared read-only.
-    ///
-    /// Matches the [`scope_key`] (`fs:read`, `edit:view`, `shell:cargo`) or the
-    /// bare tool name, so an entry can allow a whole tool or one of its ops.
-    /// A tool with a closed read-only op set (`git`) is allowed by name; one that
-    /// can mutate (`fs`) is allowed only per op.
-    ///
-    /// Unparseable arguments cannot be classified, so they are not safe.
+    /// Unparseable arguments are never safe.
     #[must_use]
     pub fn is_known_safe(&self, name: &str, arguments: &str) -> bool {
         let key = scope_key(name, arguments);
@@ -99,14 +55,9 @@ impl Policy {
             .any(|entry| *entry == key || *entry == name)
     }
 
-    /// Whether any **path-bearing** argument (see [`PATH_KEYS`]) escapes the
-    /// workspace: an absolute path (starts with `/`) or a component that traverses
-    /// upward (`..`). Either check can be disabled via policy toggles.
-    ///
-    /// Non-JSON or non-object arguments are treated as safe.
+    /// Non-JSON or non-object arguments are safe.
     #[must_use]
     pub fn args_escape_scope(&self, arguments: &str) -> bool {
-        // Both toggles on -> nothing to check.
         if self.allow_absolute_paths && self.allow_parent_traversal {
             return false;
         }
@@ -120,12 +71,7 @@ impl Policy {
             .any(|s| self.path_escapes(s))
     }
 
-    /// Run both checks and report the concern that governs the call.
-    ///
-    /// **Scope check runs first — that's the security property.**
-    /// [`Concern::EscapesScope`] is un-rememberable; if a narrower concern won,
-    /// `{"op":"write","path":"/etc/passwd"}` could be waved through by a prior
-    /// "always allow fs:write".
+    /// Scope runs first, so a prior "always allow fs:write" cannot cover `/etc/passwd`.
     #[must_use]
     pub fn review(&self, name: &str, arguments: &str) -> Option<Concern> {
         if self.args_escape_scope(arguments) {
@@ -139,18 +85,13 @@ impl Policy {
         }
     }
 
-    /// Whether a path-bearing argument escapes the workspace root.
-    ///
-    /// Checked per whitespace-separated token, not the whole string — a `command`
-    /// like `cat /etc/passwd` doesn't start with `/`, so testing the full string
-    /// would miss the embedded path.
+    /// Each whitespace token is checked too, so `cat /etc/passwd` is caught.
     fn path_escapes(&self, s: &str) -> bool {
         std::iter::once(s)
             .chain(s.split_whitespace())
             .any(|token| self.token_escapes(token))
     }
 
-    /// The escape test for a single path-like token, honouring the toggles.
     fn token_escapes(&self, token: &str) -> bool {
         if !self.allow_absolute_paths && token.starts_with('/') {
             return true;
@@ -162,7 +103,6 @@ impl Policy {
     }
 }
 
-/// Read `key` as an array of strings, lowercased. Returns `None` when absent or not an array.
 fn string_list(section: &serde_json::Value, key: &str) -> Option<Vec<String>> {
     let arr = section.get(key)?.as_array()?;
     Some(
@@ -172,11 +112,7 @@ fn string_list(section: &serde_json::Value, key: &str) -> Option<Vec<String>> {
     )
 }
 
-/// Whether a path argument names a file that conventionally holds credentials.
-///
-/// `fs:read` is allowlisted, so it runs silently — fine for source, wrong for `.env`,
-/// since everything a tool returns is sent to the model provider. This catches the
-/// explicit read; `guest-fs` separately skips these files for `find`/`grep`.
+/// `fs:read` is allowlisted, so this stops a silent read of `.env`: tool output goes to the model provider.
 fn names_a_credential_file(arguments: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
         return false;
@@ -187,10 +123,7 @@ fn names_a_credential_file(arguments: &str) -> bool {
     })
 }
 
-/// The name test, kept in step with `guest_fs::is_credential_file`.
-///
-/// Duplicated rather than shared: a permission rule must not be changeable by
-/// editing an unrelated tool's helper.
+/// Duplicated on purpose from `guest_fs::is_credential_file`: an unrelated helper edit must not change a permission rule.
 fn credential_name(name: &str) -> bool {
     const NAMES: [&str; 8] = [
         ".env",
@@ -211,15 +144,7 @@ fn credential_name(name: &str) -> bool {
         || lower.starts_with("id_ecdsa")
 }
 
-/// Argument keys whose values may name a location on disk.
-///
-/// Scanning every string is wrong once a tool carries content and paths:
-/// `tool-edit`'s `{"contents": "// edited"}` starts with `/`, so an unscoped
-/// check flags a code comment as a scope escape. `command` is included because
-/// a command line embeds paths (`cat /etc/passwd`).
-///
-/// This isn't the enforcement — `host-fs` is path-jailed host-side.
-/// This surfaces escapes to the user before the tool runs.
+/// Scanning every string would flag `tool-edit`'s `contents` as an escape; a prompt aid, not enforcement.
 const PATH_KEYS: &[&str] = &[
     "path",
     "paths",
@@ -232,7 +157,6 @@ const PATH_KEYS: &[&str] = &[
     "args",
 ];
 
-/// Collect string values that sit under a path-bearing key, at any depth.
 fn path_values(value: &serde_json::Value) -> Vec<&str> {
     fn walk<'a>(value: &'a serde_json::Value, under_path_key: bool, out: &mut Vec<&'a str>) {
         match value {
@@ -260,20 +184,14 @@ fn path_values(value: &serde_json::Value) -> Vec<&str> {
     out
 }
 
-/// Why a call needs confirming — and, crucially, whether that reason is one a
-/// standing decision may cover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Concern {
-    /// The call is not on the read-only allowlist.
     NotKnownSafe,
-    /// An argument names a path outside the workspace.
     EscapesScope,
-    /// An argument names a file that conventionally holds credentials.
     TouchesCredentials,
 }
 
 impl Concern {
-    /// A caller-facing explanation naming the tool.
     #[must_use]
     pub fn describe(self, tool: &str) -> String {
         match self {
@@ -290,22 +208,14 @@ impl Concern {
         }
     }
 
-    /// Whether "don't ask again" may apply to this concern.
-    ///
-    /// Standing decisions cover a *kind of action*; a scope escape or credential
-    /// touch is about a *specific argument*, which a blanket approval must never
-    /// cover (e.g. "always allow fs:write" must not cover `/etc/passwd`).
+    /// An escape or credential touch concerns one argument, which a blanket approval must never cover.
     #[must_use]
     pub const fn is_rememberable(self) -> bool {
         !matches!(self, Self::EscapesScope | Self::TouchesCredentials)
     }
 }
 
-/// The key a standing decision is filed under: the *kind* of action, not the
-/// exact arguments and not the bare tool (too broad).
-///
-/// A multi-op tool keys on its `op` (`fs:write`), a command runner on the program
-/// it runs (`shell:cargo`), anything else on its name.
+/// Keyed on the kind of action, not arguments: `fs:write`, `shell:cargo`.
 #[must_use]
 pub fn scope_key(name: &str, arguments: &str) -> String {
     let value = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
@@ -313,7 +223,6 @@ pub fn scope_key(name: &str, arguments: &str) -> String {
         return format!("{name}:{}", op.to_lowercase());
     }
     if let Some(command) = value.get("command").and_then(serde_json::Value::as_str) {
-        // The program only: `shell:cargo`, so the key still matches on the next call.
         let program = command.split_whitespace().next().unwrap_or(command);
         let program = program.rsplit('/').next().unwrap_or(program);
         return format!("{name}:{}", program.to_lowercase());
@@ -321,17 +230,10 @@ pub fn scope_key(name: &str, arguments: &str) -> String {
     name.to_lowercase()
 }
 
-/// A one-line description of what the call will actually do.
-///
-/// A confirmation prompt is only meaningful if the human can see what they're
-/// approving, not just that it's unclassified. Everything here comes from the
-/// model, so it is sanitised (see [`one_line`]) — otherwise a crafted argument
-/// could forge its own line in the prompt.
+/// Model-supplied text goes through [`one_line`], so it cannot forge a prompt line.
 #[must_use]
 pub fn summarise(name: &str, arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
-        // Unparseable arguments are already a reason to ask; say so plainly
-        // rather than rendering the raw bytes.
         return format!("`{name}` with arguments that are not valid JSON");
     };
     let field = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
@@ -358,8 +260,6 @@ pub fn summarise(name: &str, arguments: &str) -> String {
                 },
             ),
             "replace" | "insert" => match field("contents") {
-                // An empty `contents` is a deletion, which is worth saying in
-                // those words rather than showing an empty quotation.
                 Some("") => format!("delete lines in {where_}"),
                 Some(text) => format!("{op} in {where_}: \"{}\"", one_line(text, 100)),
                 None => format!("{op} in {where_}"),
@@ -374,11 +274,7 @@ pub fn summarise(name: &str, arguments: &str) -> String {
     }
 }
 
-/// A human-readable byte count.
-///
-/// Integer arithmetic rather than a float divide: this is a label in a
-/// confirmation dialog, and `1536 B` reading as `1.5 kB` needs one decimal,
-/// not the precision a `usize`-to-`f64` cast quietly spends.
+/// Integer arithmetic keeps the one decimal exact without a float cast.
 fn bytes(n: usize) -> String {
     if n < 1024 {
         return format!("{n} B");
@@ -388,12 +284,7 @@ fn bytes(n: usize) -> String {
     format!("{whole}.{tenths} kB")
 }
 
-/// Collapse `text` onto one bounded line that cannot forge prompt structure.
-///
-/// Control characters (newlines above all) become spaces so nothing the model
-/// supplies can start its own line; whitespace runs collapse so padding can't
-/// push the question off screen; result is truncated. Backticks and quotes are
-/// left as-is — mangling them would misreport the content.
+/// Control characters and whitespace runs become single spaces, so model text cannot start a prompt line.
 #[must_use]
 pub fn one_line(text: &str, limit: usize) -> String {
     let mut out = String::with_capacity(text.len().min(limit) + 1);
@@ -417,17 +308,10 @@ pub fn one_line(text: &str, limit: usize) -> String {
     out
 }
 
-/// How many refusals of the same kind of call before it is refused outright.
-///
-/// Each retry re-prompts the user; three is generous for a misunderstanding and
-/// short of prompt fatigue.
+/// Three is generous for a misunderstanding and short of prompt fatigue.
 pub const REFUSALS_BEFORE_STANDING_DENY: u32 = 3;
 
-/// What the model is told when a call is refused, and what to do about it.
-///
-/// States what happened *and* what to do instead — a bare "denied" leaves the
-/// model no alternative but to retry. The standing case reads differently so
-/// the model knows retrying is pointless.
+/// Says what to do instead; the standing case says retrying is pointless.
 #[must_use]
 pub fn denial_message(what: &str, standing: bool) -> String {
     if standing {
@@ -444,22 +328,16 @@ pub fn denial_message(what: &str, standing: bool) -> String {
     }
 }
 
-/// What the driver answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
-    /// Allow this one call.
     Once,
-    /// Allow this kind of call for the rest of the run.
     Always,
-    /// Deny this one call.
     No,
-    /// Deny this kind of call for the rest of the run.
     Never,
 }
 
 impl Answer {
-    /// Parse a driver's answer. **Anything unrecognised denies** — the safe
-    /// default for a permission gate.
+    /// Anything unrecognised denies.
     #[must_use]
     pub fn parse(answer: &str) -> Self {
         match answer.trim().to_lowercase().as_str() {
@@ -470,13 +348,11 @@ impl Answer {
         }
     }
 
-    /// Whether the call may run.
     #[must_use]
     pub const fn approves(self) -> bool {
         matches!(self, Self::Once | Self::Always)
     }
 
-    /// The verdict to remember for this scope, if any.
     #[must_use]
     pub const fn standing(self) -> Option<Verdict> {
         match self {
@@ -487,17 +363,13 @@ impl Answer {
     }
 }
 
-/// A remembered decision for a scope key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
-    /// Run without asking again.
     Allow,
-    /// Block without asking again.
     Deny,
 }
 
 impl Verdict {
-    /// The stored representation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -506,8 +378,7 @@ impl Verdict {
         }
     }
 
-    /// Read a stored value back. **An unrecognised value is not a verdict**, so
-    /// corrupted or half-written entries fall back to asking rather than allowing.
+    /// An unrecognised value is not a verdict, so corrupt entries ask.
     #[must_use]
     pub fn parse(stored: &str) -> Option<Self> {
         match stored.trim() {
@@ -523,8 +394,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Content is not a path: `{"contents":"// edited"}` starts with a slash, so
-    /// scanning every string would flag a code comment as a scope escape.
     #[test]
     fn replacement_text_is_not_mistaken_for_a_path() {
         let policy = Policy::default();
@@ -541,22 +410,18 @@ mod tests {
                 !policy.args_escape_scope(&args),
                 "{contents:?} is file content, not a path"
             );
-            // Still gated — just for the right reason, and rememberably.
             assert_eq!(policy.review("edit", &args), Some(Concern::NotKnownSafe));
         }
-        // A real escape in the path argument still trips, even beside such content.
         assert!(
             policy.args_escape_scope(r#"{"op":"replace","path":"/etc/passwd","contents":"// x"}"#)
         );
     }
 
-    /// Command lines embed paths, so they stay in scope.
     #[test]
     fn a_command_naming_an_outside_path_is_an_escape() {
         let policy = Policy::default();
         let args = r#"{"command":"cat /etc/passwd"}"#;
         assert!(policy.args_escape_scope(args));
-        // Therefore un-rememberable: "always allow shell:cat" must not approve reading anything.
         assert_eq!(policy.review("shell", args), Some(Concern::EscapesScope));
         assert!(!Concern::EscapesScope.is_rememberable());
     }
@@ -591,9 +456,6 @@ mod tests {
         );
     }
 
-    /// The summary renders model-supplied text, so it is an injection surface
-    /// aimed at the human — in the one dialog whose entire purpose is to be
-    /// trustworthy.
     #[test]
     fn a_summary_cannot_forge_a_second_prompt() {
         let hostile = concat!(
@@ -606,7 +468,6 @@ mod tests {
             "no newline can be smuggled in: {text}"
         );
         assert!(!text.contains('\r'), "nor a carriage return: {text}");
-        // The text is still shown, but cannot start its own line.
         assert!(text.contains("Allow tool"), "and nothing is hidden: {text}");
     }
 
@@ -653,15 +514,12 @@ mod tests {
                 "{args:?} modifies a file and must be confirmed"
             );
         }
-        // Viewing is allowed so the model can anchor edits without prompting per look.
         assert_eq!(
             policy.review("edit", r#"{"op":"view","path":"src/main.rs"}"#),
             None
         );
     }
 
-    /// The property the allowlist exists for: unclassified capabilities are gated,
-    /// not waved through because no denylist entry matched.
     #[test]
     fn a_tool_nobody_has_classified_is_confirmed() {
         let policy = Policy::default();
@@ -679,7 +537,6 @@ mod tests {
         }
     }
 
-    /// Egress is not read-only, even though it does not touch the workspace.
     #[test]
     fn fetching_a_url_is_confirmed() {
         let policy = Policy::default();
@@ -689,7 +546,6 @@ mod tests {
         );
     }
 
-    /// Reading source is silent; reading credentials is not.
     #[test]
     fn a_credential_read_is_confirmed_and_never_remembered() {
         let policy = Policy::default();
@@ -706,11 +562,8 @@ mod tests {
                 "{path} holds secrets and everything a tool returns goes to the provider"
             );
         }
-        // Un-rememberable, for the same reason a scope escape is: "always allow fs:read"
-        // must not become standing approval to read every secret.
         assert!(!Concern::TouchesCredentials.is_rememberable());
 
-        // Ordinary source stays frictionless — a gate that asks about `main.rs` gets switched off.
         assert_eq!(
             policy.review("fs", r#"{"op":"read","path":"src/main.rs"}"#),
             None
@@ -721,8 +574,6 @@ mod tests {
         );
     }
 
-    /// A write to a credential file is gated by the stronger concern:
-    /// otherwise `always allow fs:write` would cover overwriting `.env`.
     #[test]
     fn a_credential_write_outranks_the_rememberable_concern() {
         let policy = Policy::default();
@@ -738,7 +589,6 @@ mod tests {
             ("find", r#"{"pattern":"**/*.rs"}"#),
             ("fs", r#"{"op":"read","path":"src/main.rs"}"#),
             ("fs", r#"{"op":"grep","pattern":"fn main"}"#),
-            // `git` is allowed by bare name: its op set is closed and read-only.
             ("git", r#"{"op":"status"}"#),
             ("git", r#"{"op":"log"}"#),
             ("proc-probe", "{}"),
@@ -754,9 +604,6 @@ mod tests {
     #[test]
     fn arguments_that_cannot_be_classified_are_not_safe() {
         let policy = Policy::default();
-        // The old checks answered "not dangerous" for malformed JSON. An
-        // allowlist cannot classify it either — but the fail-closed reading of
-        // "cannot classify" is to ask.
         assert_eq!(policy.review("fs", "not json"), Some(Concern::NotKnownSafe));
     }
 
@@ -771,12 +618,10 @@ mod tests {
             "widening for cargo must not widen for curl"
         );
 
-        // An empty list confirms everything — the strictest setting, and reachable.
         let strict = Policy::from_config(&json!({ "safe-calls": [] }));
         assert_eq!(strict.review("find", "{}"), Some(Concern::NotKnownSafe));
     }
 
-    /// A denial the model can act on, and distinct once it's standing.
     #[test]
     fn a_denial_tells_the_model_what_to_do_instead() {
         let once = denial_message("write to `a.txt`", false);
@@ -786,7 +631,6 @@ mod tests {
         let standing = denial_message("write to `a.txt`", true);
         assert!(standing.contains("rest of the session"), "{standing}");
         assert!(standing.contains("do not attempt it again"), "{standing}");
-        // The two must differ: "ask the user" and "stop asking" are opposite instructions.
         assert_ne!(once, standing);
     }
 
@@ -810,7 +654,6 @@ mod tests {
         assert!(!Answer::Never.approves());
         assert_eq!(Answer::Always.standing(), Some(Verdict::Allow));
         assert_eq!(Answer::Never.standing(), Some(Verdict::Deny));
-        // A one-off answer leaves nothing behind.
         assert_eq!(Answer::Once.standing(), None);
         assert_eq!(Answer::No.standing(), None);
     }
@@ -819,7 +662,6 @@ mod tests {
     fn an_unreadable_stored_verdict_falls_back_to_asking() {
         assert_eq!(Verdict::parse("allow"), Some(Verdict::Allow));
         assert_eq!(Verdict::parse("deny"), Some(Verdict::Deny));
-        // Corrupt/half-written/legacy values must not read as approval.
         for junk in ["", "yes", "true", "1", "ALLOW", "allowed"] {
             assert_eq!(Verdict::parse(junk), None, "{junk:?} must not be a verdict");
         }
@@ -828,9 +670,6 @@ mod tests {
     #[test]
     fn a_scope_escape_outranks_a_rememberable_concern() {
         let policy = Policy::default();
-        // Both an unclassified call AND a path escape. If the former were
-        // reported, a prior "always allow fs:write" would wave through a write to
-        // /etc/passwd.
         let concern = policy.review("fs", r#"{"op":"write","path":"/etc/passwd"}"#);
         assert_eq!(concern, Some(Concern::EscapesScope));
         assert!(
@@ -838,7 +677,6 @@ mod tests {
             "an escape is never remembered"
         );
 
-        // In-workspace, the narrower rememberable concern surfaces as usual.
         assert_eq!(
             policy.review("fs", r#"{"op":"write","path":"src/main.rs"}"#),
             Some(Concern::NotKnownSafe)
@@ -857,14 +695,11 @@ mod tests {
 
     #[test]
     fn a_standing_decision_is_keyed_by_the_kind_of_action() {
-        // Multi-op tools key on the op, so approving reads never approves writes.
         assert_eq!(scope_key("fs", r#"{"op":"write","path":"a"}"#), "fs:write");
         assert_ne!(
             scope_key("fs", r#"{"op":"write","path":"a"}"#),
             scope_key("fs", r#"{"op":"delete","path":"a"}"#)
         );
-        // The same kind of action keys the same regardless of its arguments —
-        // otherwise "always" would never match a second time.
         assert_eq!(
             scope_key("fs", r#"{"op":"write","path":"a"}"#),
             scope_key("fs", r#"{"op":"write","path":"b","contents":"x"}"#)
@@ -881,7 +716,6 @@ mod tests {
             scope_key("shell", r#"{"command":"/usr/bin/cargo"}"#),
             "shell:cargo"
         );
-        // Approving `cargo` for the run must not also approve `curl`.
         assert_ne!(
             scope_key("shell", r#"{"command":"cargo"}"#),
             scope_key("shell", r#"{"command":"curl"}"#)
@@ -897,7 +731,6 @@ mod tests {
     #[test]
     fn a_mutating_op_on_an_allowed_tool_is_still_confirmed() {
         let policy = Policy::default();
-        // `fs:read` being safe must not make `fs` safe.
         for args in [
             r#"{"op": "write", "path": "out.txt", "contents": "x"}"#,
             r#"{"op": "WRITE", "path": "out.txt"}"#,
@@ -976,8 +809,6 @@ mod tests {
     fn config_replaces_the_allowlist_rather_than_extending_it() {
         let policy = Policy::from_config(&json!({ "safe-calls": ["ping"] }));
         assert!(policy.is_known_safe("ping", "{}"));
-        // The defaults are gone — replaced, not extended. Narrowing this way is
-        // safe in the direction that matters: it can only add prompts.
         assert!(!policy.is_known_safe("find", r#"{"pattern":"*"}"#));
         assert!(!policy.is_known_safe("fs", r#"{"op":"read","path":"a"}"#));
     }
@@ -986,12 +817,10 @@ mod tests {
     fn scope_toggles_relax_checks() {
         let abs_ok = Policy::from_config(&json!({ "allow-absolute-paths": true }));
         assert!(!abs_ok.args_escape_scope(r#"{"path": "/etc/passwd"}"#));
-        // Traversal still gated.
         assert!(abs_ok.args_escape_scope(r#"{"path": "../secret"}"#));
 
         let trav_ok = Policy::from_config(&json!({ "allow-parent-traversal": true }));
         assert!(!trav_ok.args_escape_scope(r#"{"path": "../secret"}"#));
-        // Absolute still gated.
         assert!(trav_ok.args_escape_scope(r#"{"path": "/etc/passwd"}"#));
 
         let both = Policy::from_config(

@@ -7,7 +7,6 @@ publish.workspace = true
 description = "content-policy interceptor: matches configured patterns against tool arguments and model output, and blocks, asks, or redacts on the rule's decision."
 
 [lib]
-# A reactor component: exports interceptor-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]

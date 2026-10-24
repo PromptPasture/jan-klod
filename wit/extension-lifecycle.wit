@@ -1,7 +1,6 @@
 package jan-klod:interfaces@0.4.0;
 
-/// Standard lifecycle every extension exports so the host can initialise,
-/// start, stop, and health-check it uniformly.
+/// Lifecycle every extension exports, so the host can init, start, stop, and health-check it uniformly.
 interface extension-lifecycle {
     /// Liveness reported by an extension.
     enum health-status {
@@ -31,12 +30,9 @@ interface extension-lifecycle {
     health: func() -> health-status;
 }
 
-/// Category-neutral world the core instantiates to drive the *universal*
-/// lifecycle (`init` → `start` → …) on any guest, regardless of what category
-/// interface it also exports. The core grants the full host-capability set so a
-/// single instantiation target serves every extension; a guest imports only the
-/// capabilities it actually uses. Category contracts (`provider-world`,
-/// `tool-world`, …) remain the worlds guests are *authored* against.
+/// Category-neutral world the core instantiates to drive the *universal* lifecycle on any guest.
+/// Grants the full host-capability set so one target serves every extension.
+/// Category worlds (`provider-world`, `tool-world`, …) are what guests are *authored* against.
 world extension-world {
     import host-log;
     import host-config;

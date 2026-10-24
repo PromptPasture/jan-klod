@@ -5,9 +5,7 @@ import (
 	"time"
 )
 
-// Probe reports whether the core answers a `GET` at healthURL with 200 within
-// `timeout` — the liveness check run after a flip to confirm the swapped core
-// actually booted and can serve.
+// Probe reports whether `GET healthURL` returns 200 within `timeout`: the post-flip liveness check.
 func Probe(healthURL string, timeout time.Duration) bool {
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Get(healthURL)
@@ -18,8 +16,7 @@ func Probe(healthURL string, timeout time.Duration) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// ProbeWithRetries polls Probe up to `attempts` times, `interval` apart, giving a
-// freshly-restarted core time to come up. Returns true on the first success.
+// ProbeWithRetries polls Probe up to `attempts` times, `interval` apart, while a core is still starting.
 func ProbeWithRetries(healthURL string, attempts int, interval time.Duration) bool {
 	for i := 0; i < attempts; i++ {
 		if Probe(healthURL, interval) {

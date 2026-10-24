@@ -1,45 +1,24 @@
-//! The interceptor contract and the two backends a loop calls out to.
-//!
-//! The host-side mirror of `wit/interceptor.wit` — [`Phase`], [`HookState`],
-//! [`Decision`], the [`Interceptor`] trait — plus [`Completer`] and
-//! [`ToolInvoker`], the seams a turn reaches a model and a tool through.
-//! Plain types with no Component-Model dependency: the wasm guest adapters
-//! implement these traits, the loop that drives them consumes them, and
-//! neither has to name the other ([decisions/2026-07-01-thin-loop-interceptors]).
-//!
-//! They live here, not beside the loop, because the adapters and the loop are
-//! separate crates and the traits are the only thing both must agree on (#181).
-//! Keeping a trait with its consumer would make the adapters depend on the loop
-//! and the loop on the adapters it composes.
-//!
-//! [`Dispatcher`] is the phase-agnostic engine over that contract: at each
-//! [`Phase`] it calls every subscribed interceptor in load order and applies the
-//! fail-closed / fail-open error policy. It holds no policy and no Wasmtime, so
-//! it sits with the contract — the adapters' tests drive it as the loop does.
-//! Ordering is structural, never config-driven: *across* phases the loop calls
-//! [`Dispatcher::dispatch`] once per phase in [`Phase`] declaration order;
-//! *within* one phase, the load order interceptors were registered in.
+//! Host-side mirror of `wit/interceptor.wit`: the interceptor contract, backends and [`Dispatcher`].
 
 use crate::contributions::{ArgumentValue, Contributions, InvokeError, InvokeOutcome};
 use crate::turn::{Driver, Message, ToolCall, ToolOutcome, UserPrompt};
 
-/// The lifecycle points, in dispatch order. Mirrors the `phase` enum in
-/// `wit/interceptor.wit`.
+/// The lifecycle points, in dispatch order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    /// Per run, before the agentic loop; may short-circuit to a direct answer.
+    /// Before the agentic loop; may short-circuit to a direct answer.
     BeforeLoop,
-    /// Request-shaping: pick the model first.
+    /// Picks the model.
     SelectModel,
-    /// Request-shaping: trim/compress history to the model's budget.
+    /// Trims history to the model's budget.
     SelectContext,
-    /// Request-shaping: fix the tool set.
+    /// Fixes the tool set.
     SelectTools,
-    /// Raw assistant output in hand, before core parses/validates it.
+    /// Raw assistant output, before core parses it.
     AfterResponse,
-    /// A tool is about to be invoked. Allow / block / modify / ask.
+    /// A tool is about to run: allow, block, modify or ask.
     ToolCall,
-    /// A tool has returned. Modify the result or terminate the loop.
+    /// A tool has returned; may modify the result or end the loop.
     ToolResult,
     /// The final answer is assembled.
     Finalize,
@@ -47,7 +26,7 @@ pub enum Phase {
     PrepareNextTurn,
 }
 
-/// A tool the model may call (mirrors `llm-types.tool-definition`).
+/// A tool the model may call.
 #[derive(Debug, Clone)]
 pub struct ToolDefinition {
     /// Tool name.
@@ -58,8 +37,7 @@ pub struct ToolDefinition {
     pub parameters_schema: String,
 }
 
-/// The outbound completion being assembled — the mutable state the
-/// request-shaping phases read and replace (mirrors `interceptor.pending-request`).
+/// The outbound completion being assembled, which the request-shaping phases replace.
 #[derive(Debug, Clone)]
 pub struct PendingRequest {
     /// `None` until `select-model` sets it.
@@ -68,8 +46,7 @@ pub struct PendingRequest {
     pub messages: Vec<Message>,
     /// Tools offered to the model.
     pub tools: Vec<ToolDefinition>,
-    /// Constrained-decoding grammar; core supplies a default an interceptor may
-    /// override or clear.
+    /// Constrained-decoding grammar; core's default may be overridden or cleared.
     pub grammar: Option<String>,
     /// Token cap for the completion.
     pub max_tokens: Option<u32>,
@@ -77,11 +54,7 @@ pub struct PendingRequest {
     pub temperature: Option<f32>,
 }
 
-/// Whether the loop actually dispatches `phase`.
-///
-/// The match is **exhaustive on purpose**: adding a [`Phase`] variant won't
-/// compile until someone says here whether the loop reaches it — otherwise an
-/// extension could silently subscribe to a phase that never runs.
+/// Whether the loop dispatches `phase`; exhaustive so a new [`Phase`] must be classified.
 #[must_use]
 pub const fn is_dispatched(phase: Phase) -> bool {
     match phase {
@@ -97,7 +70,7 @@ pub const fn is_dispatched(phase: Phase) -> bool {
     }
 }
 
-/// Every phase the contract declares, for tests that walk them all.
+/// Every phase the contract declares.
 pub const ALL_PHASES: [Phase; 9] = [
     Phase::BeforeLoop,
     Phase::SelectModel,
@@ -117,11 +90,11 @@ pub struct UserTurn {
     pub session: String,
     /// The raw user message.
     pub user_message: String,
-    /// Optional principal identifying the user (from session store).
+    /// Principal identifying the user, from the session store.
     pub principal: Option<String>,
 }
 
-/// Raw model output before parsing (handed at `after-response`).
+/// Raw model output before parsing, handed at `after-response`.
 #[derive(Debug, Clone)]
 pub struct RawResponse {
     /// The raw assistant text.
@@ -137,8 +110,7 @@ pub struct FinalAnswer {
     pub text: String,
 }
 
-/// Phase-specific state handed to an interceptor. The active case always matches
-/// the phase being dispatched (mirrors `interceptor.hook-state`).
+/// Phase-specific state handed to an interceptor; the active case matches the dispatched phase.
 #[derive(Debug, Clone)]
 pub enum HookState {
     /// `before-loop` payload.
@@ -161,14 +133,14 @@ pub enum HookState {
     PrepareNextTurn(PendingRequest),
 }
 
-/// Why an action was blocked (surfaced to the user / transcript).
+/// Why an action was blocked, surfaced to the user.
 #[derive(Debug, Clone)]
 pub struct BlockReason {
     /// Human-readable reason.
     pub message: String,
 }
 
-/// What an interceptor decided (mirrors `interceptor.decision`).
+/// What an interceptor decided.
 #[derive(Debug, Clone)]
 pub enum Decision {
     /// No change; continue.
@@ -177,12 +149,11 @@ pub enum Decision {
     Replace(HookState),
     /// Stop this action (deny a tool call, short-circuit the loop).
     Block(BlockReason),
-    /// Ask the driver, then resume (the engine re-invokes with `answer` set).
+    /// Ask the driver, then re-invoke with `answer` set.
     Ask(UserPrompt),
 }
 
-/// An interceptor's internal failure — distinct from a `Block` *decision*
-/// (mirrors `interceptor.interceptor-error`).
+/// An interceptor's internal failure, distinct from a `Block` decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterceptorError {
     /// Unhandled internal error.
@@ -193,7 +164,7 @@ pub enum InterceptorError {
     DependencyFailed,
 }
 
-/// Input to a single dispatch (mirrors `interceptor.intercept-input`).
+/// Input to a single dispatch.
 #[derive(Debug, Clone)]
 pub struct InterceptInput {
     /// The phase being dispatched.
@@ -204,9 +175,7 @@ pub struct InterceptInput {
     pub answer: Option<String>,
 }
 
-/// One interceptor the engine can drive. A wasm guest adapter owns a `Store` +
-/// generated bindings and implements this by calling the guest's exports; tests
-/// implement it with plain stubs.
+/// One interceptor the engine can drive; a wasm guest adapter or a test stub.
 pub trait Interceptor {
     /// Stable id, used in logs and fail-closed reasons.
     fn id(&self) -> &str;
@@ -217,17 +186,10 @@ pub trait Interceptor {
     /// Decide, for one dispatch.
     ///
     /// # Errors
-    /// Returns [`InterceptorError`] when the interceptor itself malfunctions
-    /// (not to be confused with [`Decision::Block`], a normal outcome). The
-    /// engine applies the fail-closed-at-`tool-call` policy.
+    /// [`InterceptorError`] when the interceptor itself malfunctions, not for a block.
     fn intercept(&mut self, input: &InterceptInput) -> Result<Decision, InterceptorError>;
 
-    /// What this extension contributes to a client's interface, if anything.
-    ///
-    /// Defaulted to nothing, because contributing is opt-in at every level:
-    /// most interceptors do not export `client-surface`, and a host that
-    /// required every implementer to say "none" would make the absence of a
-    /// declaration look like an omission rather than the answer it is.
+    /// What this extension contributes to a client's interface; nothing by default.
     fn contributions(&mut self) -> Option<crate::contributions::Contributions> {
         None
     }
@@ -235,9 +197,7 @@ pub trait Interceptor {
     /// Run a contribution this extension declared.
     ///
     /// # Errors
-    /// [`crate::contributions::InvokeError::Unknown`] when nothing of that name
-    /// is contributed — which is also the default, since an extension that
-    /// declares nothing can run nothing.
+    /// `Unknown` when nothing of that name is contributed (the default).
     fn invoke_contribution(
         &mut self,
         _name: &str,
@@ -250,19 +210,15 @@ pub trait Interceptor {
 /// One model completion: the assistant text plus any tool calls it emitted.
 #[derive(Debug, Clone, Default)]
 pub struct Completion {
-    /// Assistant text (may be empty when the model only emitted tool calls).
+    /// Assistant text; may be empty when only tool calls were emitted.
     pub text: String,
     /// Tool calls the model wants run before it continues.
     pub tool_calls: Vec<ToolCall>,
-    /// Why the model stopped (provider spelling: `stop`, `length`, `tool_calls`, …).
-    /// Empty if not provided. Kept (not discarded) because `length` means the answer
-    /// is cut off mid-thought—a truncated answer that looks finished is actionable wrong.
-    /// See [`TRUNCATED`].
+    /// Why the model stopped, in the provider's spelling; empty if not provided.
     pub finish_reason: String,
 }
 
-/// Finish-reasons indicating model ran out of room, not finished.
-/// `length` is OpenAI-compatible spelling; raw `max_tokens` also accepted.
+/// Finish reasons meaning the model ran out of room.
 pub const TRUNCATED: [&str; 2] = ["length", "max_tokens"];
 
 impl Completion {
@@ -273,7 +229,7 @@ impl Completion {
     }
 }
 
-/// Completion backend; implemented by provider extension. Fallback chain tries in order.
+/// Completion backend implemented by a provider extension; fallbacks are tried in order.
 pub trait Completer {
     /// Stable id, used in fallback diagnostics.
     fn id(&self) -> &str;
@@ -281,39 +237,25 @@ pub trait Completer {
     /// Complete the assembled request.
     ///
     /// # Errors
-    /// Returns a human-readable provider failure. The conductor treats any error
-    /// as a fallback trigger and tries the next completer in the chain.
+    /// A human-readable provider failure; the conductor tries the next completer.
     fn complete(&mut self, request: &PendingRequest) -> Result<Completion, String>;
 }
 
-/// Result of invoking a tool: content and whether it failed.
-/// Previously (#162), no way to distinguish failure except reading prose meant for humans.
+/// Result of invoking a tool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolInvocation {
-    /// The tool's result, or a human-readable description of why it failed.
+    /// The tool's result, or why it failed.
     pub content: String,
     /// Whether the call failed.
     pub failed: bool,
 }
 
-/// A tool backend: routes a tool call to the extension that implements it.
+/// Routes a tool call to the extension that implements it.
 pub trait ToolInvoker {
-    /// Invoke `call`. `None` means no tool matched (skip-if-absent);
-    /// conductor reports as failed result, doesn't abort the turn.
+    /// Invoke `call`; `None` means no tool matched, which the conductor reports as a failed result.
     fn invoke(&mut self, call: &ToolCall) -> Option<ToolInvocation>;
 
-    /// Invoke `call`, letting the tool ask the user first if it can (#216).
-    ///
-    /// Default: ignore the driver and behave like [`Self::invoke`]. Only a
-    /// fleet holding components that export `tool-askable` has anything to
-    /// do with it, and the default means adding this broke no
-    /// implementation.
-    ///
-    /// The driver is **passed, not stored**, which is the whole reason this
-    /// is a separate method rather than state like
-    /// [`Self::bind_session`]. A fleet that held a driver across a turn
-    /// would be holding a second mutable borrow of it, and a tool would be
-    /// able to ask outside a tool call.
+    /// Invoke `call`, letting the tool ask the user via `driver`; defaults to [`Self::invoke`].
     fn invoke_asking(
         &mut self,
         call: &ToolCall,
@@ -322,21 +264,11 @@ pub trait ToolInvoker {
         self.invoke(call)
     }
 
-    /// Tell the fleet which session the calls in this turn belong to.
-    ///
-    /// Default: ignore it. Only a fleet whose guests keep session-scoped
-    /// state needs this, and a no-op default means adding it broke no
-    /// implementation (#215).
-    ///
-    /// Called once per turn by the loop, which is the only place a tool
-    /// is dispatched from. A fleet that needs a session and is not given one
-    /// **refuses** rather than falling back to shared state, so forgetting
-    /// this is an error rather than a silent leak between sessions.
+    /// Tells the fleet which session this turn's calls belong to; a no-op by default.
     fn bind_session(&mut self, _session: &str) {}
 }
 
-/// A [`ToolInvoker`] with no tools — every call is absent. Used for turns that
-/// offer no tools (e.g. the simple/inline path).
+/// A [`ToolInvoker`] with no tools.
 pub struct NoTools;
 impl ToolInvoker for NoTools {
     fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
@@ -349,29 +281,23 @@ impl ToolInvoker for NoTools {
 pub enum Outcome {
     /// Every subscribed interceptor allowed the phase to continue.
     Proceeded,
-    /// An interceptor blocked (or a `tool-call` interceptor failed closed).
+    /// An interceptor blocked, or a `tool-call` interceptor failed closed.
     Blocked(BlockReason),
 }
 
-/// The dispatch engine: a fixed, load-ordered set of interceptors.
+/// Dispatches phases to a fixed, load-ordered set of interceptors.
 pub struct Dispatcher {
     interceptors: Vec<Box<dyn Interceptor>>,
 }
 
 impl Dispatcher {
-    /// Build a dispatcher from interceptors in load (registration) order — the
-    /// sole source of intra-phase ordering.
+    /// Builds a dispatcher; `interceptors` order is the intra-phase dispatch order.
     #[must_use]
     pub fn new(interceptors: Vec<Box<dyn Interceptor>>) -> Self {
         Self { interceptors }
     }
 
-    /// What the loaded extensions contribute to a client's interface, in load
-    /// order, skipping those that contribute nothing.
-    ///
-    /// Read on demand rather than cached at boot: an extension may report a
-    /// change after an invocation, and a set read once would then be stale in
-    /// every client at the same time.
+    /// What the loaded extensions contribute, in load order, skipping empty sets.
     pub fn contributions(&mut self) -> Vec<Contributions> {
         self.interceptors
             .iter_mut()
@@ -383,8 +309,7 @@ impl Dispatcher {
     /// Run a contribution, routed by the declaring extension's id.
     ///
     /// # Errors
-    /// [`InvokeError::Unknown`] when no loaded extension
-    /// has that id, or it contributes no such name.
+    /// [`InvokeError::Unknown`] when no loaded extension has that id or contributes that name.
     pub fn invoke_contribution(
         &mut self,
         extension: &str,
@@ -398,15 +323,7 @@ impl Dispatcher {
             .invoke_contribution(name, arguments)
     }
 
-    /// Dispatch one `phase`: call each subscribed interceptor in load order,
-    /// threading `state` (a `Replace` swaps it), honouring `Block` (short-circuit)
-    /// and `Ask` (suspend → `driver.ask` → resume the *same* interceptor with the
-    /// answer set).
-    ///
-    /// Error policy (per `wit/interceptor.wit`): if an interceptor returns `Err`,
-    /// **fail closed at [`Phase::ToolCall`]** (treat as a block — a broken
-    /// permission gate must never fail open) and **fail open elsewhere** (log and
-    /// proceed so one faulty interceptor cannot wedge the loop).
+    /// Dispatches `phase` to each subscribed interceptor; an `Err` fails closed at [`Phase::ToolCall`], open elsewhere.
     pub fn dispatch(
         &mut self,
         phase: Phase,
@@ -441,8 +358,6 @@ impl Dispatcher {
                                 ),
                             });
                         }
-                        // Fail open: log-and-proceed. (Event-bus emission is wired
-                        // when the wasm adapter lands.)
                         break;
                     }
                 }
@@ -456,7 +371,6 @@ impl Dispatcher {
 mod phase_tests {
     use super::{is_dispatched, ALL_PHASES};
 
-    /// The contract may not declare a phase the loop never reaches.
     #[test]
     fn every_declared_phase_is_one_the_loop_dispatches() {
         for phase in ALL_PHASES {
@@ -467,7 +381,6 @@ mod phase_tests {
         }
     }
 
-    /// `ALL_PHASES` must not drift from the enum it enumerates.
     #[test]
     fn the_phase_list_covers_every_variant() {
         let mut seen = ALL_PHASES.to_vec();

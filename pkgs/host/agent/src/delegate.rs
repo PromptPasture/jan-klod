@@ -1,18 +1,4 @@
-//! Outbound `agent-*` ACP delegation.
-//!
-//! Model emits a `delegate` tool call (`{ "agent", "task", "context"? }`).
-//! [`AgentDelegate`] resolves the agent to its ACP endpoint and forwards to an
-//! injected [`AgentTransport`], returning the remote agent's answer.
-//! Wire format is transport-specific; the seam is unit-tested offline.
-//!
-//! Inbound delegation (core called *by* another ACP orchestrator) is just the
-//! host-side REST surface (`jk_host::serve`).
-//!
-//! # Not wired
-//!
-//! `Runtime::build_agent` never instantiates the `agent` category; `delegate`
-//! calls get "no tool named `delegate`". Kept unused but harmless; needs a
-//! transport and one line in `build_agent` to activate.
+//! Outbound `agent-*` ACP delegation through an injected [`AgentTransport`]; not wired into `Runtime::build_agent`.
 
 use std::collections::HashMap;
 
@@ -20,37 +6,33 @@ use jk_protocol::intercept::ToolDefinition;
 use jk_protocol::intercept::ToolInvoker;
 use jk_protocol::turn::ToolCall;
 
-/// The tool name the model uses to delegate to another agent.
+/// The tool name the model uses to delegate.
 pub const DELEGATE_TOOL: &str = "delegate";
 
-/// Carries a task to a remote agent's ACP endpoint and returns the answer.
-/// Injected for testability without a live agent; ACP-over-HTTP is one impl.
+/// Sends a task to a remote agent's ACP endpoint.
 pub trait AgentTransport {
-    /// Delegate `task` (with optional JSON `context`) to the agent at `endpoint`.
+    /// Delegates `task` (with optional JSON `context`) to the agent at `endpoint`.
     ///
     /// # Errors
-    /// Human-readable error if the agent is unreachable, rejects the task,
-    /// times out, or speaks a bad protocol.
+    /// Human-readable error if the agent is unreachable, rejects the task, or fails.
     fn delegate(&self, endpoint: &str, task: &str, context: Option<&str>)
         -> Result<String, String>;
 }
 
-/// [`ToolInvoker`] that services `delegate` calls by forwarding to a remote agent.
-/// Non-`delegate` calls return `None` (composable).
+/// [`ToolInvoker`] that services `delegate` calls.
 pub struct AgentDelegate<T> {
     transport: T,
-    /// Agent id → ACP endpoint (from `config.yaml`).
     agents: HashMap<String, String>,
 }
 
 impl<T: AgentTransport> AgentDelegate<T> {
-    /// Build a delegator with the known `agents` (id → endpoint).
+    /// Delegate over `transport` to the named `agents` (name to endpoint).
     #[must_use]
     pub const fn new(transport: T, agents: HashMap<String, String>) -> Self {
         Self { transport, agents }
     }
 
-    /// Tool definition to advertise to the model.
+    /// The `delegate` tool as advertised to the model.
     #[must_use]
     pub fn tool_definition() -> ToolDefinition {
         ToolDefinition {
@@ -75,7 +57,7 @@ impl<T: AgentTransport> AgentDelegate<T> {
 impl<T: AgentTransport> ToolInvoker for AgentDelegate<T> {
     fn invoke(&mut self, call: &ToolCall) -> Option<jk_protocol::intercept::ToolInvocation> {
         if call.name != DELEGATE_TOOL {
-            return None; // skip if not ours
+            return None;
         }
         let args: serde_json::Value = serde_json::from_str(&call.arguments).ok()?;
         let agent = args.get("agent").and_then(serde_json::Value::as_str)?;
@@ -106,7 +88,6 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    /// Transport that records calls and returns a canned answer.
     struct StubTransport {
         seen: RefCell<Vec<(String, String)>>,
         reply: Result<String, String>,

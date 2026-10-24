@@ -1,11 +1,4 @@
-//! `GET /ws` exists, is guarded, and negotiates (#226, closing #43).
-//!
-//! The socket carries the same protocol as stdio because it is dispatched
-//! by the same function — `rpc::command`. So what is worth testing here is
-//! not that `protocol/hello` produces the right answer (`rpc.rs`'s own
-//! tests cover that) but that a *WebSocket* reaches it: the upgrade
-//! happens, the token rule applies to it like every other route, and a
-//! frame in produces a frame out.
+//! `GET /ws` is token-guarded and negotiates the protocol (#226, closes #43).
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use jk_agent::Runtime;
@@ -19,7 +12,6 @@ use std::collections::HashMap;
 
 const TOKEN: &str = "ws-token";
 
-/// An agent with nothing but a provider: this is about the socket.
 fn booted(tag: &str) -> Option<(common::TempDir, std::sync::Arc<Agents>)> {
     if !common::guests_staged(&["provider-openai.wasm"]) {
         return None;
@@ -52,8 +44,6 @@ extensions:
     Some((guard, agents))
 }
 
-/// Connect, send `frames`, and collect what comes back — one runtime per
-/// call, because the test's thread is the session's and cannot be async.
 fn talk(port: u16, token: Option<&str>, frames: Vec<String>) -> Result<Vec<String>, String> {
     let token = token.map(str::to_owned);
     tokio::runtime::Builder::new_current_thread()
@@ -96,12 +86,10 @@ fn talk(port: u16, token: Option<&str>, frames: Vec<String>) -> Result<Vec<Strin
         })
 }
 
-/// A framed request, ready to send.
 fn frame(id: u32, method: &str) -> String {
     serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method }).to_string()
 }
 
-/// [`talk`], for frames that are not all text.
 fn talk_mixed(port: u16, frames: Vec<Message>) -> Result<Vec<String>, String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -127,12 +115,6 @@ fn talk_mixed(port: u16, frames: Vec<Message>) -> Result<Vec<String>, String> {
         })
 }
 
-/// Send `frames` and read until the socket closes, so a turn's
-/// notifications are collected as well as its answers.
-///
-/// Unlike [`talk`], which reads one answer per frame: a turn emits
-/// notifications *while* it runs, and counting them one-to-one against
-/// what was sent would deadlock on the first one.
 fn talk_until(port: u16, frames: Vec<String>, gap: std::time::Duration, done: &str) -> Vec<String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -145,15 +127,9 @@ fn talk_until(port: u16, frames: Vec<String>, gap: std::time::Duration, done: &s
                 .expect("connects");
             for frame in frames {
                 socket.send(Message::text(frame)).await.expect("sends");
-                // Let the previous frame take effect: a `turn/cancel`
-                // sent before the turn has started would arrive as an
-                // ordinary command and be answered, not act on a turn.
                 tokio::time::sleep(gap).await;
             }
             let mut seen = Vec::new();
-            // Stops at `done` rather than on a drain timeout, so the time
-            // this takes is the turn's and not the reader's — which is
-            // what lets a caller assert on elapsed.
             while let Ok(Some(Ok(message))) =
                 tokio::time::timeout(std::time::Duration::from_secs(30), socket.next()).await
             {
@@ -185,11 +161,6 @@ fn hello() -> String {
     .to_string()
 }
 
-/// The socket exists, and one frame in produces one frame out.
-///
-/// The answer's *content* is `rpc`'s and is tested there. What this shows
-/// is that a WebSocket frame reached it at all — the upgrade, the
-/// dispatch, and the way back.
 #[test]
 fn a_client_connects_and_negotiates_the_protocol() {
     let Some((_guard, agents)) = booted("hello") else {
@@ -213,11 +184,6 @@ fn a_client_connects_and_negotiates_the_protocol() {
     );
 }
 
-/// The token rule reaches the socket, because the upgrade happens behind
-/// the same layer every other route is behind.
-///
-/// Its control is the test above: without a working connection, "refused"
-/// would be indistinguishable from "the socket does not exist".
 #[test]
 fn the_socket_is_refused_without_the_token() {
     let Some((_guard, agents)) = booted("token") else {
@@ -249,14 +215,6 @@ fn the_socket_is_refused_without_the_token() {
     );
 }
 
-/// A verb that needs the session is answered over the socket, and the
-/// handshake it needed first is remembered across frames.
-///
-/// The second half is socket-specific and is the part worth testing: the
-/// negotiated flag lives in the connection loop and is handed into each
-/// job and read back out, because a job cannot borrow it. If that came
-/// back wrong, every command after the first would be refused — which is
-/// exactly what a client would report as "it works once".
 #[test]
 fn a_session_verb_is_answered_and_the_handshake_is_remembered() {
     let Some((_guard, agents)) = booted("verbs") else {
@@ -290,8 +248,6 @@ fn a_session_verb_is_answered_and_the_handshake_is_remembered() {
     );
 }
 
-/// A command before the handshake is refused — the protocol's rule, not
-/// the socket's, and it reaches the socket because the dispatch is shared.
 #[test]
 fn a_command_before_the_handshake_is_refused() {
     let Some((_guard, agents)) = booted("premature") else {
@@ -308,13 +264,6 @@ fn a_command_before_the_handshake_is_refused() {
     );
 }
 
-/// A frame that is not this protocol is answered, and **the connection
-/// continues** — `rpc::serve`'s rule, and the reason one bad client
-/// cannot take a session down.
-///
-/// Three kinds in one connection: not JSON, JSON that is not a request,
-/// and a binary frame. The frame after them all is the assertion: it is
-/// answered normally, so none of the three closed the socket.
 #[test]
 fn a_bad_frame_is_answered_and_the_connection_survives_it() {
     let Some((_guard, agents)) = booted("bad-frames") else {
@@ -349,8 +298,6 @@ fn a_bad_frame_is_answered_and_the_connection_survives_it() {
     );
 }
 
-/// An agent whose first completion calls a gated tool, so a turn parks on
-/// an `ask` — and whose second finishes.
 fn booted_asking(tag: &str) -> Option<(common::TempDir, std::sync::Arc<Agents>)> {
     let needed = [
         "provider-openai.wasm",
@@ -414,20 +361,8 @@ extensions:
     Some((guard, agents))
 }
 
-/// A turn over the socket: it streams, it asks in band, and the answer
-/// arrives on the same connection.
-///
-/// This is what a WebSocket buys over SSE plus POST — #43 said so in its
-/// own correction, and until now nothing demonstrated it. The answer goes
-/// down the *same socket* the question came up, which over REST needs a
-/// second connection and a route.
 #[test]
 fn a_turn_streams_and_its_ask_is_answered_in_band() {
-    // Long on purpose: if the in-band answer works the turn finishes in
-    // about a second, and if it does not this test takes the whole
-    // timeout. The elapsed assertion below is what tells them apart —
-    // "all done" alone cannot, since the mock provider says it either
-    // way.
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");
     let started = std::time::Instant::now();
     let Some((_guard, agents)) = booted_asking("turn") else {
@@ -468,16 +403,6 @@ fn a_turn_streams_and_its_ask_is_answered_in_band() {
     );
 }
 
-/// A `turn/cancel` is read **while the turn runs**, which is the other
-/// thing a WebSocket buys over SSE plus POST.
-///
-/// Two assertions, and the second is the control. The cancel being
-/// *accepted* (`cancelling: true`) proves the frame was read mid-turn
-/// rather than queued behind it — a socket that only dispatched between
-/// turns would answer this after the turn had already finished. And the
-/// turn's own answer proves the cancel *did* something: it ends stopped,
-/// not with the "all done" the mock provider would have produced if the
-/// turn had run to completion.
 #[test]
 fn a_turn_is_cancelled_over_the_same_socket_while_it_runs() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");

@@ -1,62 +1,31 @@
-//! The frame's regions (#97, #104), as a pure function of the terminal size.
-//!
-//! [`regions`] takes nothing but `(width, height)` and returns which of the
-//! header, sidebar and status bar exist and where — so #104's Acceptance can
-//! test the responsive table (120×32, 90×30, 70×24, 50×18, 60×8) without a
-//! terminal at all. The transcript/composer split inside [`Frame::content`]
-//! stays where it was: that boundary depends on the composer's *content*
-//! (#148 already made it grow with the buffer), which this function has no way
-//! to know and does not try to.
+//! The frame's regions as a pure function of terminal size.
 
 use ratatui::layout::Rect;
 
-/// The sidebar's fixed width, exactly as #104's Scope states it.
 const SIDEBAR_WIDTH: u16 = 28;
-/// Below this many rows for the transcript+composer area, there is nothing a
-/// normal frame can show — #104's "the transcript never goes below 5 rows".
 const MIN_TRANSCRIPT_HEIGHT: u16 = 5;
-/// The smallest a bordered composer can be: one row of text, two of border.
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 
-/// Frame regions for one `(width, height)` (#104's responsive table).
-///
-/// `header` and `sidebar` are `None` where hidden. `content` is transcript+composer
-/// (split later depends on composer buffer, not terminal size).
+/// The frame's regions for one terminal size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Frame {
     /// The one-row header, when the terminal is tall enough for it.
     pub header: Option<Rect>,
     /// The 28-column sidebar, when the terminal is both wide and tall enough.
     pub sidebar: Option<Rect>,
-    /// The transcript+composer area — always present, even when
-    /// [`Frame::too_small`] means it holds a "terminal too small" panel
-    /// instead of the normal panes.
+    /// The transcript and composer area, always present (see [`Frame::too_small`]).
     pub content: Rect,
     /// The one-row status bar.
     pub status: Rect,
-    /// `content` cannot fit a transcript and a composer at their smallest —
-    /// draw the "terminal too small" panel there instead of the normal frame.
+    /// `content` cannot fit a transcript and composer: draw the "terminal too small" panel instead.
     pub too_small: bool,
-    /// 60–79 columns: the header (when shown) collapses to session id + turn
-    /// state, and the status bar shows fewer hints.
+    /// 60–79 columns: the header collapses and the status bar shows fewer hints.
     pub collapsed_header: bool,
-    /// Below 60 columns: single column, the transcript loses its border, and
-    /// the composer stays one row until it is focused.
+    /// Below 60 columns: single column, borderless transcript.
     pub single_column: bool,
 }
 
-/// The frame's regions for `width` × `height`, implementing #97's responsive
-/// table exactly as #104 quotes it:
-///
-/// | Width | Behaviour |
-/// |---|---|
-/// | ≥ 100 | as drawn |
-/// | 80–99 | sidebar hidden |
-/// | 60–79 | header collapses; fewer status hints |
-/// | < 60 | single column, transcript loses its border, composer 1 row until focused |
-///
-/// Height: below 20 rows drop the sidebar, then the header, before the
-/// transcript loses height.
+/// The frame's regions for `width` × `height`.
 #[must_use]
 pub fn regions(width: u16, height: u16) -> Frame {
     let header_visible = height >= 20;
@@ -122,12 +91,10 @@ pub fn regions(width: u16, height: u16) -> Frame {
 mod tests {
     use super::{regions, Frame};
 
-    /// Whether two rects share a cell.
     fn overlaps(a: ratatui::layout::Rect, b: ratatui::layout::Rect) -> bool {
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
     }
 
-    /// No overlaps, no regions exceed terminal bounds ("clipped mid-glyph" starts with bad rect).
     fn assert_tiles_cleanly(frame: Frame, width: u16, height: u16) {
         let mut present: Vec<ratatui::layout::Rect> = vec![frame.content, frame.status];
         present.extend(frame.header);
@@ -195,7 +162,6 @@ mod tests {
         assert_tiles_cleanly(frame, 50, 18);
     }
 
-    /// Acceptance: a render at 60×8 is the "terminal too small" panel.
     #[test]
     fn sixty_by_eight_is_too_small() {
         let frame = regions(60, 8);
@@ -206,7 +172,6 @@ mod tests {
         assert_tiles_cleanly(frame, 60, 8);
     }
 
-    /// Above tests check the acceptance's four points; this sweeps wider to ensure invariant holds.
     #[test]
     fn regions_never_overlap_or_run_past_the_terminal_at_any_size() {
         for width in [10, 30, 59, 60, 79, 80, 99, 100, 200] {

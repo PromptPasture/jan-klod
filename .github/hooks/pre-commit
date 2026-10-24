@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
-# Pre-commit hook — markdown lint + compilation + tests (fast gate).
+# Pre-commit hook: markdown lint, then build and unit tests (fast gate).
 # Skip with: git commit --no-verify
 #
-# The gate sequence itself lives in the root Makefile's `gate-commit` target,
-# not here — `.github/workflows/ci.yml` and a developer running `make
-# gate-commit` by hand call the same target, so this hook cannot drift from
-# CI the way #65 did. Since #79, `gate-commit`'s `make test` is unit tests
-# only: the host workspace's `#[cfg(test)]` units, the guests' native tests,
-# and the Go supervisor's `go vet`/`go test`. The host integration suite
-# (pkgs/host/host/tests/it/, ~160 tests) needs the `integration` cargo feature, which
-# `gate-commit` does not pass — that suite runs at `git push` instead, via
-# `pre-push`'s `gate-push` target (`make gate`).
+# The sequence lives in the Makefile's `gate-commit` target, shared with CI.
+# Integration tests are not in it; they run at push (pre-push).
 
 set -euo pipefail
 
@@ -23,9 +16,7 @@ cd "$ROOT"
 
 STAGED="$(git diff --cached --name-only --diff-filter=ACM)"
 
-# A commit that stages a .md file runs `make lint-docs` (#234). That needs
-# Node; without it the commit fails rather than passing unlinted, since CI
-# would refuse the same file anyway.
+# Fail rather than skip: CI rejects unlinted markdown anyway.
 if grep -q '\.md$' <<<"$STAGED"; then
   if ! command -v npx >/dev/null; then
     printf "${RED}✗${RST} .md files staged but npx is not on PATH — install Node 22 (see docs/guides/development-setup.md).\n" >&2
@@ -37,11 +28,9 @@ if grep -q '\.md$' <<<"$STAGED"; then
   fi
 fi
 
-# Skip the build gate unless the commit touches something Rust build output depends
-# on, so doc/workflow-only commits skip it. wit/ is included because guest
-# crates read it at compile time via wit_bindgen::generate!. This reads the
-# staged diff, so it belongs in the hook rather than the Makefile target: a
-# target has no notion of what is staged.
+# Skip the build gate unless the staged diff touches Rust build inputs (wit/
+# is read at compile time by guest crates). Needs the staged diff, so it
+# stays in the hook, not the Makefile.
 if ! grep -qE '\.rs$|Cargo\.(toml|lock)$|^wit/' <<<"$STAGED"; then
   exit 0
 fi

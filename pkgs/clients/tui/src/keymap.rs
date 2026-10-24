@@ -1,14 +1,9 @@
-//! The one keybinding table (#97, #104).
-//!
-//! One `const` table → status bar hint + help overlay (#105) → no disagreement.
-//! [`hint`] takes table argument (not just [`BINDINGS`]) so tests can substitute
-//! a different table and verify the hint derives from the table (not hand-written).
+//! The one keybinding table.
 
-/// Which state a binding applies in (four mirror [`crate::app::Turn`];
-/// [`Self::DialogClosed`] is fifth—prompt pending after Esc—reads keys differently).
+/// The state a binding applies in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Context {
-    /// Nothing running. The composer's text is a new message.
+    /// Nothing running.
     Idle,
     /// A turn is running and text is arriving.
     Streaming,
@@ -23,11 +18,7 @@ pub enum Context {
 /// One row of [`BINDINGS`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Binding {
-    /// The key or chord, as shown to a user — e.g. `"Ctrl+C"`.
-    ///
-    /// Empty for a row that names a state rather than a key (`Cancelling`'s
-    /// only row: nothing is pressed to *reach* it, it is already true). [`hint`]
-    /// renders such a row as [`Binding::action`] alone.
+    /// The key or chord, e.g. `"Ctrl+C"`; empty for a state row.
     pub keys: &'static str,
     /// What the key does, in the words the status bar shows.
     pub action: &'static str,
@@ -35,10 +26,7 @@ pub struct Binding {
     pub context: Context,
 }
 
-/// One row per binding, in the order the status bar shows them.
-///
-/// This is the whole of what the status bar and (19h) the help overlay may
-/// say about a keybinding — see the module docs for why that is the point.
+/// One row per binding, in status-bar order.
 pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Enter",
@@ -50,11 +38,6 @@ pub const BINDINGS: &[Binding] = &[
         action: "quit",
         context: Context::Idle,
     },
-    // #105: the three dialogs, all reachable from `Idle`. Each also works
-    // outside it — the ask dialog is the only thing that ever refuses these
-    // keys, and `App` itself declines to open a second dialog under it — but
-    // one row is enough to make the key discoverable, which is the whole
-    // problem 19h's Why section opens on.
     Binding {
         keys: "Ctrl+S",
         action: "switch session",
@@ -70,9 +53,6 @@ pub const BINDINGS: &[Binding] = &[
         action: "quit",
         context: Context::Idle,
     },
-    // The fourth: reachable only where 19g's layout hid the sidebar's own
-    // pane — pointless otherwise, which is why it is one row rather than
-    // wired to always act (see `tui::sidebar_dialog_keys`'s docs).
     Binding {
         keys: "Ctrl+B",
         action: "sidebar (narrow widths)",
@@ -120,10 +100,7 @@ pub const BINDINGS: &[Binding] = &[
     },
 ];
 
-/// Render hint string for `context` from matching `table` entries, joined with " · ".
-///
-/// Takes `table` as argument (not [`BINDINGS`] directly) so tests can verify
-/// the hint derives from the table, not a hand-written duplicate.
+/// The hint for `context` from `table`, joined with " · ".
 #[must_use]
 pub fn hint(table: &[Binding], context: Context) -> String {
     table
@@ -140,7 +117,7 @@ pub fn hint(table: &[Binding], context: Context) -> String {
         .join(" · ")
 }
 
-/// Narrow form of [`hint`]: first binding only (#104's 60–79 band, "fewer status hints").
+/// The first matching binding only, for narrow widths.
 #[must_use]
 pub fn hint_narrow(table: &[Binding], context: Context) -> String {
     table
@@ -171,12 +148,6 @@ pub fn status_hint_narrow(context: Context) -> String {
 mod tests {
     use super::{hint, hint_narrow, status_hint, Binding, Context, BINDINGS};
 
-    /// #104's Acceptance line 3, driven exactly as it is worded: change a
-    /// table entry and observe the hint change. A hand-written duplicate of
-    /// the status line would pass this table's own test and fail nothing —
-    /// which is why the assertion is against [`hint`] itself, called with a
-    /// table this test controls, not against a literal the status bar happens
-    /// to also produce.
     #[test]
     fn the_hint_changes_when_the_table_entry_changes() {
         const ORIGINAL: &[Binding] = &[Binding {

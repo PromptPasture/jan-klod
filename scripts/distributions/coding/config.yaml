@@ -1,11 +1,9 @@
 # jan-klod — coding distribution.
 #
-# A coding agent: models, the interceptor set, file and git tools, skills.
-# Commands are off until you turn them on; when you do, they are confined.
+# Commands are off until enabled. When enabled, they are confined.
 #
 # Export OPENAI_API_KEY before starting.
 
-# --- providers -------------------------------------------------------------
 extensions:
   provider:
     openai:
@@ -19,7 +17,6 @@ extensions:
       api-key: ${ANTHROPIC_API_KEY}
       model: claude-sonnet-4-6
 
-  # --- the turn's shaping phases -------------------------------------------
   interceptor:
     intent-router:
       enabled: true
@@ -33,23 +30,16 @@ extensions:
       enabled: true
     permission:
       enabled: true
-    # Content policy. `permission` above asks whether an action may happen;
-    # this looks at what the text says. Keys and the full rule reference:
-    # pkgs/host/config/docs/configuration.md#guardrails.
+    # Content policy: looks at what the text says. `permission` above asks whether an action may happen.
+    # Keys and the full rule reference: pkgs/host/config/docs/configuration.md#guardrails.
     guardrails:
       enabled: true
-      # Redaction only, and deliberately so. A `deny-tool-arguments` rule needs
-      # something to refuse: this distribution enables no shell (`execution` is
-      # off below) and its `git` is read-only — status, diff, log, show, branch,
-      # with commit/push/checkout/reset refused by the tool itself. A rule with
-      # no reachable target is a demonstration, not a guardrail. Deployments
-      # that turn commands on should add one; the root config.yaml shows how.
+      # Redaction only. No `deny-tool-arguments` rule: nothing here reaches a target to refuse (no shell; `git` is
+      # read-only and refuses commit, push, checkout and reset itself). A rule with no reachable target would be a
+      # demonstration. Add one when commands are turned on; the root config.yaml shows how.
       #
-      # These two are shapes that cannot be anything else, and both reach the
-      # transcript by the ordinary route: the agent reads a file, the key is in
-      # it, and the answer is written to the session log and every attached
-      # client. Redacting at the boundary keeps a credential from outliving the
-      # turn that happened to see it.
+      # Both rules match shapes that cannot be anything else. They reach the transcript when the agent reads a file
+      # containing the key, so redacting at the boundary keeps a credential from outliving the turn that saw it.
       redact:
         - pattern: "sk-[A-Za-z0-9]{16,}"
           with: "[redacted api key]"
@@ -58,12 +48,10 @@ extensions:
           with: "[redacted github token]"
           reason: "a GitHub token, and this distribution ships git tooling"
 
-  # --- skills ---------------------------------------------------------------
   registry:
     skills:
       enabled: true
 
-  # --- file and git tools ---------------------------------------------------
   tool:
     fs:
       enabled: true
@@ -80,10 +68,7 @@ storage:
 registry:
   trusted-keys: []
 
-# Commands are denied. Turning this on is a deliberate act: read
-# docs/concepts/security-model.md's "Command effects" row first, because on
-# macOS and Linux a command is then confined, and elsewhere the confirmation
-# prompt is the only barrier.
+# Commands are denied. Enabling them is deliberate: read docs/concepts/security-model.md's "Command effects" row first.
 execution:
   enabled: false
   sandbox:

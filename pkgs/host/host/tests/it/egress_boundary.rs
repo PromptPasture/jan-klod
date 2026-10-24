@@ -1,15 +1,4 @@
-//! Network-granted components cannot reach their own machine. `tool-fetch`'s SSRF
-//! guard runs in-sandbox, catching confused models not malicious omissions.
-//! Tests assert on real HTTP server request counts, not errors, distinguishing a
-//! real boundary from guest-side courtesy.
-//!
-//! Tests drive `fetch_within` (host backend) directly: honest guests self-censor
-//! before boundary exercised, so testing through one vacuates assertions.
-//!
-//! Verifies: policy from `config.yaml` refuses unconfigured locals, permits
-//! operator-named ones at the function every backend calls; and
-//! [`every_guest_facing_backend_goes_through_the_policy`] ensures no backend
-//! reverts to the unbounded client.
+//! Network-granted components cannot reach their own machine; asserted on real server hit counts via `fetch_within`.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -22,19 +11,13 @@ use jk_agent::Runtime;
 
 use crate::common;
 
-/// Long enough to bound failure, not healthy requests, so it doesn't pace the
-/// test. Mirrors `local_model.rs` `FakeOllama` constant.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 
-/// Loopback server counting requests, answering all — so successful guest
-/// escapes see plausible replies, not connection errors.
+/// Loopback server that counts requests and answers all of them, so an escape would see a plausible reply.
 struct Sentinel {
     port: u16,
     hits: Arc<AtomicU32>,
     stop: Arc<AtomicU32>,
-    /// I/O failures. Discarding them let it answer before reading, the defect
-    /// in #78 and #83. Tests trusting `hits()` must assert this is empty
-    /// first.
     faults: Arc<Mutex<Vec<String>>>,
 }
 
@@ -42,9 +25,6 @@ impl Sentinel {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
-        // Listener stays blocking: BSD `accept()` inherits `O_NONBLOCK` (#78).
-        // Non-blocking listeners made sockets non-blocking on macOS, blocking on
-        // Linux. Drop unblocks accept by connecting, no poll-sleep races.
         let hits = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicU32::new(0));
         let faults = Arc::new(Mutex::new(Vec::new()));
@@ -55,40 +35,29 @@ impl Sentinel {
                 log.push(format!("{what}: {e:?}"));
             }
         };
-        thread::spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok((mut socket, _)) => {
-                        // Drop's connection carries no request, leave before
-                        // counting.
-                        if stopped.load(Ordering::Relaxed) != 0 {
-                            break;
-                        }
-                        counted.fetch_add(1, Ordering::Relaxed);
-                        // Read whole request under deadline before answering: one
-                        // `read` may return partial/nothing, answering early
-                        // leaves rest unread. Close sends RST not FIN, RST
-                        // discards written response — client sees failure for
-                        // already-counted hit.
-                        if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
-                            fault("set_read_timeout", &e);
-                        }
-                        if let Err(e) = common::read_request(&mut socket) {
-                            fault("read_request", &e);
-                            continue;
-                        }
-                        if let Err(e) = socket.write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret",
-                        ) {
-                            fault("write_all", &e);
-                        }
-                    }
-                    // Listener that can't accept serves nothing — break rather
-                    // than spin. Tests read `faults` before trusting sentinel.
-                    Err(e) => {
-                        fault("accept", &e);
+        thread::spawn(move || loop {
+            match listener.accept() {
+                Ok((mut socket, _)) => {
+                    if stopped.load(Ordering::Relaxed) != 0 {
                         break;
                     }
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    if let Err(e) = socket.set_read_timeout(Some(REQUEST_DEADLINE)) {
+                        fault("set_read_timeout", &e);
+                    }
+                    if let Err(e) = common::read_request(&mut socket) {
+                        fault("read_request", &e);
+                        continue;
+                    }
+                    if let Err(e) = socket.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret",
+                    ) {
+                        fault("write_all", &e);
+                    }
+                }
+                Err(e) => {
+                    fault("accept", &e);
+                    break;
                 }
             }
         });
@@ -104,9 +73,6 @@ impl Sentinel {
         self.hits.load(Ordering::Relaxed)
     }
 
-    /// Assert sentinel's I/O succeeded so `hits()` reflects read requests, not
-    /// blind answers. Call before trusting `hits()` — same as `FakeOllama`: a
-    /// silent read discard let endpoints answer unread requests.
     fn assert_no_faults(&self) {
         let faults = self.faults.lock().expect("not poisoned").clone();
         assert!(
@@ -120,7 +86,6 @@ impl Sentinel {
 impl Drop for Sentinel {
     fn drop(&mut self) {
         self.stop.store(1, Ordering::Relaxed);
-        // Unblock the accept loop.
         let _ = TcpStream::connect(("127.0.0.1", self.port));
     }
 }
@@ -150,8 +115,6 @@ extensions:
     path
 }
 
-/// Policy derived from `config`, then one request through host's real HTTP
-/// backend — the exact function served to guest's `host-http`.
 fn request_through_the_host(config: &std::path::Path, url: &str) -> Result<(), ()> {
     let runtime = Runtime::boot(config, common::repo_root().join("ext")).expect("boots");
     let policy = runtime.egress_policy();
@@ -175,7 +138,6 @@ fn a_live_local_service_is_not_reachable() {
     );
 
     sentinel.assert_no_faults();
-    // Boundary vs. courtesy: server never saw any request.
     assert_eq!(
         sentinel.hits(),
         0,
@@ -185,8 +147,6 @@ fn a_live_local_service_is_not_reachable() {
     );
 }
 
-/// Rule is per-origin, not a global switch: self-hosted models on loopback
-/// need reachability.
 #[test]
 fn an_endpoint_named_in_config_is_reachable() {
     let dir = std::env::temp_dir().join(format!("jk-egress-ok-{}", std::process::id()));
@@ -194,7 +154,6 @@ fn an_endpoint_named_in_config_is_reachable() {
     let _guard = common::TempDir(dir.clone());
 
     let sentinel = Sentinel::start();
-    // How operators name local Ollama or MCP servers.
     let allow = format!(
         "\nnetwork:\n  allow:\n    - http://127.0.0.1:{}\n",
         sentinel.port
@@ -206,14 +165,10 @@ fn an_endpoint_named_in_config_is_reachable() {
         request_through_the_host(&config, &url).is_ok(),
         "the named origin answers"
     );
-    // Before trusting `hits()`: unread-request answers (#83 shape) can pass
-    // count while assertion failed for socket reasons.
     sentinel.assert_no_faults();
     assert_eq!(sentinel.hits(), 1, "and the request actually arrived");
 }
 
-/// Provider `base-url` is an allowlisted endpoint — the common case for local
-/// model config; no need to name it twice.
 #[test]
 fn a_providers_base_url_is_allowed_without_naming_it_again() {
     let dir = std::env::temp_dir().join(format!("jk-egress-base-{}", std::process::id()));
@@ -249,7 +204,6 @@ extensions:
     assert_eq!(sentinel.hits(), 1);
 }
 
-/// Granting one origin must not open the machine.
 #[test]
 fn a_grant_covers_one_origin_and_not_its_neighbours() {
     let dir = std::env::temp_dir().join(format!("jk-egress-nb-{}", std::process::id()));
@@ -273,12 +227,8 @@ fn a_grant_covers_one_origin_and_not_its_neighbours() {
     );
 }
 
-/// Every host-http serving point must consult policy. One backend calling
-/// unbounded client reopens hole undetected by above tests. Scans for unbounded
-/// `http::fetch` instead.
 #[test]
 fn every_guest_facing_backend_goes_through_the_policy() {
-    // Scanned, not hard-coded — literal list misses new backends added later.
     let core = common::repo_root().join("pkgs/host/wasm/src");
     let mut backends = Vec::new();
     for entry in std::fs::read_dir(&core)
@@ -290,8 +240,6 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             continue;
         }
         let text = std::fs::read_to_string(&path).expect("a jk-wasm source is readable");
-        // Host-side implementations of guest's `host-http` import, any binding
-        // module name.
         if text.contains("_http::Host for") {
             backends.push((path, text));
         }
@@ -310,13 +258,10 @@ fn every_guest_facing_backend_goes_through_the_policy() {
             .to_string_lossy()
             .into_owned();
         for (number, line) in text.lines().enumerate() {
-            // Code only — skip comments would flag ban prose.
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") {
                 continue;
             }
-            // `contains` not `starts_with`: call sites `let result = crate::http::fetch(`.
-            // Trailing `(` excludes `fetch_within(`.
             assert!(
                 !line.contains("crate::http::fetch(") && !line.contains("jk_wasm::http::fetch("),
                 "{name}:{} calls the unbounded client. A guest's egress must go \
@@ -327,13 +272,6 @@ fn every_guest_facing_backend_goes_through_the_policy() {
         }
     }
 
-    // Other entry: callers *handing* guests the unbounded client. Providers and
-    // tools get HttpFn from builders, so binary passing `Box::new(http::fetch)`
-    // reopens hole without touching scanned files.
-    //
-    // `expect` not silent `continue`: hand-named files; rename moving one out
-    // leaves check green with nothing scanned (happened with `ui/` → `tui/`).
-    // Missing file = broken test, not absent binary.
     for binary in ["pkgs/host/host/src/main.rs", "pkgs/clients/tui/src/main.rs"] {
         let path = common::repo_root().join(binary);
         let text = std::fs::read_to_string(&path)
@@ -354,9 +292,6 @@ fn every_guest_facing_backend_goes_through_the_policy() {
     }
 }
 
-// ---- Redirects (#107) ----
-
-/// Server answering all requests with `302` to `target`, counts hits.
 pub fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
     let port = listener.local_addr().expect("has an address").port();
@@ -386,9 +321,6 @@ pub fn redirector_to(target: String) -> (u16, Arc<AtomicU32>) {
     (port, hits)
 }
 
-/// Permitted origins cannot redirect to refused ones. The redirector is
-/// explicitly allowed so policy says yes to caller's URL. Beyond that, the
-/// redirect's doing — the policy never saw it.
 #[test]
 fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
     let forbidden = common::Countable::start();
@@ -396,42 +328,32 @@ fn a_permitted_origin_cannot_redirect_to_a_refused_one() {
     let (redirect_port, redirect_hits) = redirector_to(target);
     let entry = format!("http://127.0.0.1:{redirect_port}/start");
 
-    // Redirector operator-named; sentinel is not.
     let policy = jk_wasm::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{redirect_port}"));
 
     let outcome = jk_wasm::http::fetch_within(&policy, "GET", &entry, &[], None, 2_000);
 
-    // Control: request reached permitted origin, so hits == 0 can't mean nothing
-    // happened.
     assert_eq!(
         redirect_hits.load(Ordering::SeqCst),
         1,
         "the permitted origin was reached — otherwise this test proves nothing"
     );
 
-    // Caller gets *policy* refusal, not 302. Per-hop loop changed this: #107's
-    // first box declined-then-surfaced; now hop checked and refused (safe,
-    // legible).
     assert_eq!(
         outcome.err(),
         Some(jk_wasm::http::WireError::ConnectionFailed),
         "the refused hop is reported as the policy refusing it"
     );
 
-    // The assertion this test exists for.
     forbidden.only_hit();
 }
 
-/// Server redirecting once, then serving — records headers and method of all
-/// requests to assert what survived hops.
 struct Hops {
     port: u16,
     seen: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Hops {
-    /// First request gets `status` and `Location`, rest get `200 landed`.
     fn start(status: u16, location: String) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds loopback");
         let port = listener.local_addr().expect("has an address").port();
@@ -471,11 +393,8 @@ impl Hops {
     }
 }
 
-/// Redirects to permitted destinations still follow — fix for #107 isn't
-/// "break all redirects".
 #[test]
 fn a_redirect_to_a_permitted_destination_is_followed() {
-    // Same origin: one grant covers both hops.
     let hops = Hops::start(302, "/landed".to_owned());
     let policy = jk_wasm::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{}", hops.port));
@@ -498,10 +417,6 @@ fn a_redirect_to_a_permitted_destination_is_followed() {
     );
 }
 
-/// `Authorization` doesn't survive redirects. ureq stripped it
-/// (`RedirectAuthHeaders::Never`); hand-following means deliberate stripping,
-/// else API keys leak to redirect targets — credential leak introduced by
-/// policy-bypass fix.
 #[test]
 fn credentials_do_not_survive_a_redirect() {
     let hops = Hops::start(302, "/landed".to_owned());
@@ -534,8 +449,6 @@ fn credentials_do_not_survive_a_redirect() {
     );
 }
 
-/// `302` turns POST→GET, drops body; `307` preserves method and body. Silent
-/// when wrong: request succeeds with unexpected method/body.
 #[test]
 fn a_302_becomes_a_get_and_a_307_keeps_the_post() {
     for (status, expected) in [(302_u16, "GET"), (307, "POST")] {

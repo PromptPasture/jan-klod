@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Assemble a self-contained jan-klod bundle: core binary + selected guests +
-# pre-filled config + README, tarred as jan-klod-<version>-<os>-<arch>.tar.gz.
+# Assemble a self-contained bundle (binaries, guests, config, README) and tar it
+# as jan-klod-<version>-<os>-<arch>.tar.gz.
 #
 # Usage: bundle.sh <core-binary> <ui-binary> <ext-dir> <config> <out-dir> [<skills-dir>]
 #
@@ -18,8 +18,7 @@ SKILLS_DIR="${6:-}"
 VERSION="${JK_VERSION:-0.1.0}"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
-# A distribution's archive carries its name, or three `make bundle DIST=` runs
-# would overwrite one file and the third would look like all of them.
+# Per-distribution archive names, so `make bundle DIST=` runs do not overwrite each other.
 SUFFIX="${JK_DIST:+-$JK_DIST}"
 NAME="jan-klod-${VERSION}-${OS}-${ARCH}${SUFFIX}"
 DIR="${OUT}/${NAME}"
@@ -29,11 +28,8 @@ mkdir -p "$DIR/ext"
 cp "$GATEWAY_BIN" "$DIR/jan-klod-gateway"
 cp "$UI_BIN" "$DIR/jan-klod"
 cp "$CONFIG" "$DIR/config.yaml"
-# Exclude tool-escape-probe: a test-only sandbox-escape instrument, inert
-# unless enabled, but a bad look to ship in a release.
-# Each component's manifest travels with it: the runtime refuses a component
-# that ships without one, so a bundle carrying only `.wasm` files would install
-# and then refuse to boot.
+# tool-escape-probe is a test-only sandbox-escape instrument; never ship it.
+# Manifests travel with their components: boot refuses one without its manifest.
 if [ -d "$EXT_DIR" ]; then
 	find "$EXT_DIR" -maxdepth 1 \
 		\( -name '*.wasm' -o -name '*.manifest.toml' \) \
@@ -41,18 +37,14 @@ if [ -d "$EXT_DIR" ]; then
 		-exec cp {} "$DIR/ext/" \;
 fi
 
-# Copy bundled skills from the distribution's skills/ directory if present.
-# Skills are optional; absence is not an error.
 if [ -n "$SKILLS_DIR" ] && [ -d "$SKILLS_DIR" ]; then
 	mkdir -p "$DIR/skills"
 	find "$SKILLS_DIR" -maxdepth 1 -name '*.md' -exec cp {} "$DIR/skills/" \;
 fi
 
-# Verify the assembled bundle before tarring: a missing guest degrades silently
-# (the runtime just skips what it can't find), so check with the real resolver
-# instead of shipping a bundle that's quietly less capable than its config claims.
-#
-# API key env vars are placeholders — verify never calls a provider, but config
+# Verify with the real resolver before tarring: a missing guest otherwise
+# degrades silently at runtime.
+# Key env vars are placeholders: verify never calls a provider, but config
 # expansion fails on an unset key.
 ( cd "$DIR" && OPENAI_API_KEY="${OPENAI_API_KEY:-unset}" \
 	ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-unset}" \

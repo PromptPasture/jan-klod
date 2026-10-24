@@ -1,13 +1,4 @@
-//! #59: a `tool-*` guest is compiled at boot but not instantiated until the
-//! fleet is asked for something.
-//!
-//! Direct, mechanism-level proof: not an indirect signal (RSS, timing) but a
-//! flag on the fleet itself, checked before and after each trigger.
-//! `ToolFleet`/`ToolExtension` are untouched — every other test in `tool_fleet.rs`
-//! still builds a fleet from an already-live `ToolExtension` — `LazyToolFleet`
-//! defers the instantiate step above them that those tests take for granted.
-//!
-//! Skips (passes as a no-op) when `tool-fs.wasm` isn't staged in `ext/`.
+//! #59: a `tool-*` guest is compiled at boot but not instantiated until first use. Checked via a flag on the fleet.
 
 use jk_protocol::intercept::ToolInvoker;
 use jk_protocol::turn::ToolCall;
@@ -27,7 +18,6 @@ fn call(name: &str, arguments: &str) -> ToolCall {
     }
 }
 
-/// A workspace opened in a fresh temp dir, cleaned up on drop.
 fn workspace(tag: &str) -> (Workspace, common::TempDir) {
     let dir = std::env::temp_dir().join(format!("jk-lazyfleet-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -56,15 +46,11 @@ fn a_pending_tool_is_not_instantiated_until_metadata_is_asked_for() {
         false,
     );
 
-    // Compiled (by the caller, above) is not instantiated: pushing a pending
-    // tool must not run the guest.
     assert!(
         !fleet.is_instantiated(),
         "a freshly-pushed pending tool must not be live yet"
     );
 
-    // Metadata request triggers it — the `select-tools` advertising path
-    // in `build_agent`.
     let names = fleet.tool_names().expect("the pending tool instantiates");
     assert_eq!(names, vec!["fs".to_string()]);
     assert!(
@@ -95,8 +81,6 @@ fn a_pending_tool_is_not_instantiated_until_invoked() {
     );
     assert!(!fleet.is_instantiated());
 
-    // First `invoke` triggers it — the actual `tool-call` dispatch path,
-    // distinct from advertising.
     let result = fleet.invoke(&call(
         "fs",
         r#"{"op":"write","path":"a.txt","contents":"hi"}"#,

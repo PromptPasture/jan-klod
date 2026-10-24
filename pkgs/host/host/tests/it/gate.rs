@@ -1,20 +1,4 @@
-//! Exit gates that prove the full loop end-to-end, offline.
-//!
-//! *Phase 2* — real `Runtime`, two provider instances, all five v1 interceptors.
-//! The primary provider always fails so the turn only completes via fallback,
-//! proving intent → shaping → completion-with-fallback → answer. A second test
-//! drives `ReAct` + permission (tool call → driver approves → result fed back).
-//!
-//! *Phase 8* — same, plus `tool-fs` + a workspace. The provider emits a write
-//! tool call that the fleet dispatches to the real guest, which writes through
-//! `host-fs` — proving model → permission → fleet → host-fs → answer.
-//!
-//! *Phase 20* — two sessions over REST at the same time: one parked on a
-//! confirmation while the other streams to completion, then the first
-//! answered and finishing. Its control is the same pair in **one**
-//! session, where they serialise.
-//!
-//! All skip when guests are not staged in `ext/`.
+//! End-to-end exit gates (Phases 2, 8, 20), run offline against a mock provider.
 
 use std::cell::Cell;
 use std::io::{BufRead, BufReader, Write};
@@ -33,10 +17,6 @@ use jk_wasm::route::HttpFn;
 use crate::common;
 use std::collections::HashMap;
 
-// ── Phase 2 helpers ──────────────────────────────────────────────────────────
-
-/// An `host-http` backend that always fails the connection — the primary provider
-/// uses this so the completion must fall back to the secondary.
 fn failing_http() -> HttpFn {
     Box::new(|_m, _u, _h, _b, _t| Err(WireError::ConnectionFailed))
 }
@@ -50,9 +30,6 @@ const PHASE2_GUESTS: &[&str] = &[
     "interceptor-permission.wasm",
 ];
 
-/// The integrated `ReAct` + permission path: a provider that first emits a tool call
-/// then a final answer, gated by the real `interceptor-permission` guest whose
-/// `ask` the driver approves, with a canned tool result fed back into the loop.
 fn tool_then_answer_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -86,7 +63,6 @@ fn tool_then_answer_http() -> HttpFn {
     })
 }
 
-/// Driver approving every `ask`, counting invocations.
 struct CountingApprovingDriver(Arc<AtomicU32>);
 impl Driver for CountingApprovingDriver {
     fn ask(&mut self, _prompt: &UserPrompt) -> String {
@@ -95,7 +71,6 @@ impl Driver for CountingApprovingDriver {
     }
 }
 
-/// Tool backend returning canned result, counting calls.
 struct CountingTools(Arc<AtomicU32>);
 impl ToolInvoker for CountingTools {
     fn invoke(&mut self, _call: &ToolCall) -> Option<ToolInvocation> {
@@ -107,8 +82,6 @@ impl ToolInvoker for CountingTools {
     }
 }
 
-// ── Phase 8 helpers ──────────────────────────────────────────────────────────
-
 const PHASE8_GUESTS: &[&str] = &[
     "provider-openai.wasm",
     "interceptor-intent-router.wasm",
@@ -119,7 +92,6 @@ const PHASE8_GUESTS: &[&str] = &[
     "tool-fs.wasm",
 ];
 
-/// Provider: fs write call (completion 0), then final answer (completion 1).
 fn tool_calling_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -149,15 +121,12 @@ fn tool_calling_http() -> HttpFn {
     })
 }
 
-/// Driver approving every permission ask (user clicking "allow").
 struct ApprovingDriver;
 impl Driver for ApprovingDriver {
     fn ask(&mut self, _prompt: &UserPrompt) -> String {
         "yes".to_string()
     }
 }
-
-// ── Phase 2 tests ────────────────────────────────────────────────────────────
 
 #[test]
 fn phase2_exit_gate() {
@@ -205,7 +174,6 @@ routing:
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
 
-    // Call 0: primary fails. Call 1: secondary succeeds.
     let call = Cell::new(0u32);
     let factory = || {
         let n = call.get();
@@ -218,7 +186,6 @@ routing:
     };
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Multi-step: intent-router agentic, shaping runs, fallback to secondary.
     let out = agent.run(
         "gate-session",
         "Refactor the module and run the whole test suite",
@@ -232,7 +199,6 @@ routing:
         "the loop drives shaping + provider fallback to a grounded answer"
     );
 
-    // Greeting short-circuits via intent router (before-loop path).
     let greeting = agent.run("gate-session", "hello");
     assert_eq!(
         greeting,
@@ -319,8 +285,6 @@ routing:
     );
 }
 
-// ── Phase 8 tests ────────────────────────────────────────────────────────────
-
 #[test]
 fn phase8_exit_gate_tool_runs_through_the_loop() {
     let ext_dir = common::repo_root().join("ext");
@@ -373,14 +337,12 @@ workspace: {ws}
         .build_agent(&factory)
         .expect("agent boots with tools");
 
-    // The tool is advertised to the model.
     assert!(
         agent.tool_names().contains(&"fs".to_string()),
         "fleet: {:?}",
         agent.tool_names()
     );
 
-    // fs write trips permission gate; driver approves; tool runs (ask→approve).
     let out = agent.run_driven(&mut ApprovingDriver, "gate-8", "please write out.txt");
     assert_eq!(
         out,
@@ -391,19 +353,11 @@ workspace: {ws}
         "the loop returns a grounded answer after the tool ran"
     );
 
-    // Tool wrote file through host-fs to workspace.
     let written =
         std::fs::read_to_string(workspace.join("out.txt")).expect("the tool wrote the file");
     assert_eq!(written, "hello from the tool");
 }
 
-// ── Phase 20 helpers ─────────────────────────────────────────────────────────
-
-/// A runtime whose first completion per session calls a gated tool, so a
-/// turn parks — unless the message says otherwise.
-///
-/// The *message* decides, not the session: both sessions get the same
-/// provider, so what differs between them is only what they asked for.
 fn phase20_fixture(
     tag: &str,
 ) -> Option<(
@@ -450,9 +404,6 @@ extensions:
     let factory = std::sync::Arc::new(|| -> HttpFn {
         Box::new(move |_m, _u, _h, body, _t| {
             let asked = String::from_utf8_lossy(body.unwrap_or_default()).into_owned();
-            // A turn that has already had its tool call answered says
-            // "denied" or "yes" in its history; only the first completion
-            // of a "use bash" message asks for the tool.
             let wants_tool = asked.contains("use bash") && !asked.contains("tool_call_id");
             let reply = if wants_tool {
                 serde_json::json!({"choices":[{"message":{"role":"assistant","tool_calls":[
@@ -476,7 +427,6 @@ extensions:
     Some((guard, agents, surface))
 }
 
-/// Open an SSE turn and keep the socket, so more can be read from it later.
 fn phase20_open_stream(port: u16, session: &str, message: &str) -> TcpStream {
     let body = serde_json::json!({ "message": message }).to_string();
     let request = format!(
@@ -492,13 +442,10 @@ fn phase20_open_stream(port: u16, session: &str, message: &str) -> TcpStream {
     stream
 }
 
-/// Read from `stream` until `needle` appears, or the stream ends.
 fn phase20_read_until(stream: &TcpStream, needle: &str) -> String {
     phase20_read_for(stream, needle, Duration::from_secs(30))
 }
 
-/// [`phase20_read_until`] with a deadline, for asserting something did
-/// **not** arrive in a window.
 fn phase20_read_for(stream: &TcpStream, needle: &str, within: Duration) -> String {
     stream
         .set_read_timeout(Some(within))
@@ -519,7 +466,6 @@ fn phase20_read_for(stream: &TcpStream, needle: &str, within: Duration) -> Strin
     }
 }
 
-/// `POST /session/{id}/answer`, returning the raw response.
 fn phase20_answer(port: u16, session: &str, answer: &str) -> String {
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(
@@ -535,22 +481,6 @@ fn phase20_answer(port: u16, session: &str, answer: &str) -> String {
     response
 }
 
-// ── Phase 20 ─────────────────────────────────────────────────────────────────
-
-/// Phase 20's exit gate:
-///
-/// > Two clients drive turns in two sessions **concurrently** over REST,
-/// > with an `ask` answered in one while the other streams.
-///
-/// Parked is the only dependable "still running": against a canned
-/// provider a computing turn finishes in milliseconds, so a test built on
-/// one would be racing itself. A turn parked on the permission gate holds
-/// still for as long as the answer timeout allows, which makes "while the
-/// other was going" a fact rather than a hope — and it is what the gate
-/// says anyway.
-///
-/// **Overlap, not ordering.** "B finished before A" is satisfied by luck.
-/// "B finished while A was still parked" is the sentence.
 #[test]
 fn phase20_exit_gate_two_sessions_at_once() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "60");
@@ -559,16 +489,13 @@ fn phase20_exit_gate_two_sessions_at_once() {
     };
 
     let (streamed, answered) = surface.serve_while(&agents, HashMap::new(), |port| {
-        // A parks: the permission gate asks, and nothing answers yet.
         let parked = phase20_open_stream(port, "gate-a", "use bash to clean up");
         let asked = phase20_read_until(&parked, "event: prompt");
         assert!(asked.contains("event: prompt"), "A never parked: {asked}");
 
-        // B runs to completion *while A is parked*. This is the gate.
         let streaming = phase20_open_stream(port, "gate-b", "just answer");
         let streamed = phase20_read_until(&streaming, "event: done");
 
-        // Only now is A answered.
         let ack = phase20_answer(port, "gate-a", "yes");
         assert!(ack.contains("accepted"), "the answer was refused: {ack}");
         let answered = phase20_read_until(&parked, "event: done");
@@ -585,12 +512,6 @@ fn phase20_exit_gate_two_sessions_at_once() {
     );
 }
 
-/// The control, one changed string: **both messages in one session**.
-///
-/// Same fixture, same timings, same order — and they serialise, because
-/// one session is one agent. Without this the test above passes on any
-/// arrangement where B happens to be quick, including the one Phase 20
-/// was filed to replace.
 #[test]
 fn phase20_one_session_still_serialises_the_same_two_turns() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "20");
@@ -605,8 +526,6 @@ fn phase20_one_session_still_serialises_the_same_two_turns() {
             "the first turn never parked"
         );
         let second = phase20_open_stream(port, "same", "just answer");
-        // Short: the point is that it does *not* arrive while the first
-        // session's turn is parked.
         let early = phase20_read_for(&second, "event: done", Duration::from_millis(1500));
         let ack = phase20_answer(port, "same", "yes");
         assert!(ack.contains("accepted") || ack.contains("409"), "{ack}");

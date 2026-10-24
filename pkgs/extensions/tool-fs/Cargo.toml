@@ -7,7 +7,6 @@ publish.workspace = true
 description = "fs tool: read / write / grep a workspace file through host-fs, dispatched by an `op` argument."
 
 [lib]
-# A reactor component: exports tool-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]

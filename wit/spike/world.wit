@@ -1,15 +1,9 @@
 package jan-klod:spike@0.1.0;
 
-/// Throwaway gate world for Slice 1a (go/no-go). Proves the Rust + Wasmtime
-/// host can load a TinyGo-built component and call an exported function across
-/// the Component Model boundary. Kept out of the canonical
-/// `jan-klod:interfaces` package on purpose — delete this directory together
-/// with `pkgs/extensions/spike/` once the gate verdict is recorded.
+/// Throwaway gate world for Slice 1a (go/no-go): proves a Rust + Wasmtime host can load a TinyGo component.
+/// Kept out of `jan-klod:interfaces` on purpose; delete with `pkgs/extensions/spike/` once the verdict is recorded.
 world spike {
-    /// TinyGo's `wasip2` runtime imports `wasi:cli/*` (environment, stdio,
-    /// clocks, …) for startup. Our overriding world must re-expose those or
-    /// `wasm-tools component new` can't resolve them — the known TinyGo quirk
-    /// Slice 1a exists to settle. The host satisfies them via `wasmtime-wasi`.
+    /// TinyGo's wasip2 runtime imports `wasi:cli/*` at startup; re-expose them or `wasm-tools component new` fails.
     include wasi:cli/imports@0.2.0;
 
     /// Echo the prompt back. The host prints whatever this returns.

@@ -1,43 +1,18 @@
-//! `interceptor-persona` — personality as data, read from configuration.
-//!
-//! Personas are opaque text descriptions of preferred behavior. This extension
-//! reads a configured default persona at init and injects it into each turn's
-//! context before model selection.
-//!
-//! ## Why an extension, and why `select-model`
-//!
-//! Persona is policy — it lives in a swappable guest rather than core.
-//! It runs at `select-model` (not `select-context`) because that phase runs first:
-//! the persona must be in the message list when `interceptor-context` measures
-//! the token budget, or those tokens go uncounted.
-//!
-//! ## Scope (this slice)
-//!
-//! Reads the configured `default` persona; per-principal selection comes later
-//! when Phase 28c lands. If no valid persona is found, defaults to a helpful
-//! built-in text and logs a warning.
+//! `interceptor-persona`: injects the configured persona at `select-model`, before the token budget is measured.
 
-// Pure logic: unit-tested natively; CM glue compiles for wasm32 only.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod persona {
     use serde_json::Value;
 
-    /// The built-in helpful persona, used when config supplies no personas.
     pub const DEFAULT_HELPFUL: &str =
         "You are helpful, concise, and focused on solving the user's problem.";
 
-    /// Persona configuration deserialized from extension config.
     #[derive(Clone, Debug)]
     pub struct PersonaConfig {
-        /// The persona text in force: the configured default, or the built-in
-        /// one. The other personas are resolved at parse time and not kept —
-        /// nothing reads them afterwards.
         pub default: String,
     }
 
     impl PersonaConfig {
-        /// Parse `PersonaConfig` from the extension's config section (JSON).
-        /// Returns None if no valid config, along with an optional warning message.
         pub fn from_config(raw_json: &str) -> (Option<Self>, Option<String>) {
             let config_value: Value = match serde_json::from_str(raw_json) {
                 Ok(v) => v,
@@ -53,7 +28,6 @@ mod persona {
                 return (None, Some("Persona config is not an object".to_string()));
             };
 
-            // Check if enabled (default false)
             let enabled = config_obj
                 .get("enabled")
                 .and_then(serde_json::Value::as_bool)
@@ -63,7 +37,6 @@ mod persona {
                 return (None, None);
             }
 
-            // Parse personalities map
             let mut personalities = std::collections::HashMap::new();
             if let Some(personas_value) = config_obj.get("personalities") {
                 if let Some(personas_obj) = personas_value.as_object() {
@@ -75,19 +48,15 @@ mod persona {
                 }
             }
 
-            // Get default persona name (default to "helpful" if not specified)
             let default_name = config_obj
                 .get("default")
                 .and_then(|v| v.as_str())
                 .unwrap_or("helpful")
                 .to_string();
 
-            // Resolve the default persona text
             let default_text = personalities
                 .get(&default_name)
                 .cloned()
-                // No custom personas, or the named default is not among them:
-                // the built-in text serves (the warning below says which case).
                 .unwrap_or_else(|| DEFAULT_HELPFUL.to_string());
 
             let warning = if !personalities.contains_key(&default_name) && !personalities.is_empty()
@@ -199,7 +168,6 @@ mod component {
     use bindings::jan_klod::interfaces::llm_types::{Message, Role};
 
     thread_local! {
-        /// The resolved persona configuration.
         static PERSONA_CONFIG: RefCell<Option<persona::PersonaConfig>> = const { RefCell::new(None) };
     }
 
@@ -213,7 +181,6 @@ mod component {
         fn init(_ctx: ExtensionContext) -> Result<(), String> {
             let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
 
-            // Extract the persona section from the full config
             let persona_json = serde_json::from_str::<serde_json::Value>(&raw)
                 .ok()
                 .and_then(|config_value| {
@@ -262,7 +229,6 @@ mod component {
 
     impl Interceptor for Component {
         fn subscribed_phases() -> Vec<Phase> {
-            // Before `select-context`, so the budget counts these tokens.
             vec![Phase::SelectModel]
         }
 
@@ -273,29 +239,23 @@ mod component {
             };
 
             let Some(config) = PERSONA_CONFIG.with(|slot| slot.borrow().clone()) else {
-                // Persona not configured; pass through
                 return Ok(Decision::Proceed);
             };
 
-            // Check if a persona message already exists (from driver or previous interceptor)
             if request
                 .messages
                 .iter()
                 .any(|m| m.content.starts_with("## Persona\n"))
             {
-                // Simple check: avoid duplicating persona instructions
                 return Ok(Decision::Proceed);
             }
 
-            // Insert persona as a user-facing context message, after system but before other content.
-            // Use a distinct role to distinguish from standing instructions.
             let persona_msg = Message {
                 role: Role::User,
                 content: format!("## Persona\n{}", config.default),
                 tool_call_id: None,
             };
 
-            // Find the position after the system message, if present
             let insert_pos = usize::from(
                 request
                     .messages
@@ -310,7 +270,6 @@ mod component {
 
     impl ClientSurface for Component {
         fn contribute() -> Contributions {
-            // This extension does not expose any commands or status items
             Contributions {
                 commands: vec![],
                 status_items: vec![],
@@ -319,7 +278,6 @@ mod component {
         }
 
         fn invoke(_name: String, _arguments: Vec<ArgumentValue>) -> Result<Outcome, InvokeError> {
-            // No commands to invoke
             Err(InvokeError::Unknown)
         }
     }

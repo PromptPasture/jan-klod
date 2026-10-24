@@ -1,24 +1,9 @@
 #!/bin/sh
-# Self-test for scripts/ext-new.sh.
-#
-# Two claims, and they are different claims:
-#
-#   1. Every kind generates a crate naming the right world and the right trait,
-#      and every kind with a TypeScript or Python template names what its
-#      world expects. Cheap — no build — so it covers all nine templates on
-#      every `make test`, where compiling them all would not be affordable
-#      enough to run that often.
-#
-#   2. The committed `tool-hello` is still **exactly** what the generator emits.
-#      That is the drift check. Without it the committed example slowly becomes
-#      a crate somebody hand-edited, and the template it is supposed to
-#      demonstrate is whatever the generator does now — two different things
-#      with one name. The same shape `protocol.schema.json`'s drift test uses:
-#      regenerate, compare, fail on a difference.
-#
-# Claim 2 is why `tool-hello` is committed at all. Claim 1 is why the other four
-# kinds are not: a text check catches a broken template, and `make extensions`
-# catches a broken *build* for the one kind that is a real member.
+# Self-test for scripts/ext-new.sh. Two claims:
+#   1. Every kind names the right world and trait, and the TS/Py templates export
+#      what their world expects. Text-checked: a build per template is too slow for `make test`.
+#   2. The committed tool-hello is exactly what the generator emits (drift check).
+#      tool-hello is committed for claim 2; the other kinds are not.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,11 +28,7 @@ check_kind() {
         echo "ext-new-selftest: $kind does not implement $trait" >&2
         exit 1
     }
-    # No `todo!()`: a template whose first build panics teaches the wrong thing
-    # first, and this is the only check that says so without compiling.
-    # Comments stripped first: the module doc *mentions* `todo!()` to say the
-    # stubs do not use one, and a naive grep reads its own explanation as the
-    # thing it forbids.
+    # Comments stripped first: the module doc mentions todo!() to say it is not used.
     ! grep -v '^[[:space:]]*//' "$lib" | grep -q 'todo!' || {
         echo "ext-new-selftest: $kind left a todo!() in the template" >&2
         exit 1
@@ -63,11 +44,7 @@ check_kind registry-mcp    mcp-registry-world   McpRegistry
 
 echo "ext-new-selftest: the TypeScript templates export what their world wants"
 
-# The TS path is claim 1 only. There is no claim-2 twin for it: the committed
-# `tool-hello-ts` greets by name so the gate can find its words in a
-# transcript, and a generated stub that did that would be a template teaching
-# a behaviour instead of a shape. `tool-hello` mirrors the generator;
-# `tool-hello-ts` does not, on purpose.
+# TS is claim 1 only: tool-hello-ts greets by name, which a generated stub must not do.
 check_ts_kind() {
     kind="$1"
     export_name="$2"
@@ -81,15 +58,12 @@ check_ts_kind() {
             exit 1
         }
     done
-    # `throw` is the TypeScript `todo!()`: it makes the first invocation a
-    # trap the host reports as a guest crash. Comments stripped for the same
-    # reason as above.
+    # throw is the TypeScript todo!(); comments stripped as above.
     ! grep -v '^[[:space:]]*[/*]' "$guest" | grep -q 'throw ' || {
         echo "ext-new-selftest: ts/$kind left a throw in the template" >&2
         exit 1
     }
-    # The generator substitutes the name; a leftover placeholder would ship a
-    # tool the model sees as NAME_PLACEHOLDER.
+    # A leftover placeholder would ship a tool named NAME_PLACEHOLDER.
     ! grep -q 'NAME_PLACEHOLDER' "$guest" || {
         echo "ext-new-selftest: ts/$kind did not substitute NAME_PLACEHOLDER" >&2
         exit 1
@@ -112,11 +86,8 @@ fi
 
 echo "ext-new-selftest: the Python templates implement what their world wants"
 
-# Same claim as the TypeScript block, one step stronger: `componentize-py`
-# generates bindings, so the stub names classes that must exist in the
-# generated `wit_world` package. Checked as text here for the same reason the
-# Rust kinds are — a build per kind is not affordable on every `make test` —
-# and the componentize step is what proves it for real.
+# Stub class names must exist in the generated wit_world package; text-checked
+# here, and componentize proves it for real.
 check_py_kind() {
     kind="$1"
     class_name="$2"
@@ -130,9 +101,7 @@ check_py_kind() {
             exit 1
         }
     done
-    # `raise` is the Python `todo!()`. `NotImplementedError` in particular is
-    # what the generated `Protocol`s raise, so a stub that inherited without
-    # overriding would trap on first call and look like a host bug.
+    # raise is the Python todo!(): an inherited, unoverridden Protocol method would raise.
     ! grep -v '^[[:space:]]*#' "$app" | grep -q 'raise ' || {
         echo "ext-new-selftest: py/$kind left a raise in the template" >&2
         exit 1
@@ -145,8 +114,7 @@ check_py_kind() {
         echo "ext-new-selftest: py/$kind pyproject.toml does not name $name" >&2
         exit 1
     }
-    # Syntax, which the other two languages get from their compilers here and
-    # Python does not get until componentize time.
+    # Syntax: Python is otherwise only checked at componentize time.
     python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$app" || {
         echo "ext-new-selftest: py/$kind is not valid Python" >&2
         exit 1

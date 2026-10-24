@@ -7,7 +7,6 @@ publish.workspace = true
 description = "system-prompt interceptor: prepends the standing instructions a turn is run under, at select-model so the context budget accounts for them."
 
 [lib]
-# A reactor component: exports interceptor-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]

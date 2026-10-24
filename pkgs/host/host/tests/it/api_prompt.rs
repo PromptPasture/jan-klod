@@ -1,5 +1,4 @@
 //! Mid-turn confirmation over HTTP. Permission gate parks, asking via SSE.
-//! Answer arrives on separate connection. `AgentSession` !Send on main thread.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -16,7 +15,6 @@ use jk_wasm::route::HttpFn;
 use crate::common;
 use std::collections::HashMap;
 
-/// Set short answer timeout for fast failure
 fn short_answer_timeout() {
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "5");
 }
@@ -28,7 +26,6 @@ const GUESTS: [&str; 4] = [
     "interceptor-permission.wasm",
 ];
 
-/// First completion calls dangerous tool (gate asks), then final answer
 fn tool_then_answer_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -87,7 +84,6 @@ extensions:
     config
 }
 
-/// POST `answer` for `session`, return HTTP response.
 fn post_answer(port: u16, session: &str, answer: &str) -> String {
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(
@@ -103,7 +99,6 @@ fn post_answer(port: u16, session: &str, answer: &str) -> String {
     response
 }
 
-/// A plain GET, returning the raw response.
 fn get(port: u16, path: &str) -> String {
     let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
@@ -133,8 +128,6 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
     let surface = Surface::bind("127.0.0.1:0").expect("binds an ephemeral port");
     let port = surface.port();
 
-    // Client A: read frames. On `prompt` frame, client B answers on second
-    // connection while stream stays open.
     let (stream_text, answered) = surface.serve_while(&agents, HashMap::new(), move |_| {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connects");
         let body = r#"{"message":"use bash to clean up, then report"}"#;
@@ -153,7 +146,6 @@ fn a_confirmation_is_asked_over_sse_and_answered_on_a_second_connection() {
             let Ok(line) = line else { break };
             collected.push_str(&line);
             collected.push('\n');
-            // Prompt frame is cue: turn is parked waiting.
             if line.starts_with("event: prompt") && !answered {
                 answered = true;
                 let ack = post_answer(port, "p-1", "yes");
@@ -215,7 +207,6 @@ fn an_answer_with_nothing_pending_is_refused() {
         .expect("serves the stray answer");
     let response = client.join().expect("client thread");
 
-    // Route exists but nothing to answer returns 409, not 404 (no fake endpoint).
     assert!(response.contains("409"), "conflict status: {response}");
     assert!(
         response.contains("no confirmation is pending"),
@@ -223,16 +214,6 @@ fn an_answer_with_nothing_pending_is_refused() {
     );
 }
 
-/// A bystander is **served** while another session is confirming (#225).
-///
-/// This is the direction that was impossible: `wait_for_answer` used to own
-/// the socket while a turn was parked and refuse every other caller with
-/// `409 no confirmation is pending` — a status about the *server's*
-/// single-threadedness, dressed as a statement about the caller's request.
-///
-/// The behaviour it replaces never had a test, which is how it survived
-/// being obviously wrong. This is that test, written in the direction that
-/// now works rather than the one that used to fail.
 #[test]
 fn a_bystander_is_served_while_another_session_is_confirming() {
     short_answer_timeout();
@@ -267,7 +248,6 @@ fn a_bystander_is_served_while_another_session_is_confirming() {
         for line in reader.lines() {
             let Ok(line) = line else { break };
             if line.starts_with("event: prompt") && bystander.is_empty() {
-                // Mid-confirmation, from somewhere else entirely.
                 bystander = get(port, "/health");
                 let _ = post_answer(port, "b-1", "yes");
             }
@@ -289,13 +269,6 @@ fn a_bystander_is_served_while_another_session_is_confirming() {
     );
 }
 
-/// A request that *does* need the session waits for it and is then served —
-/// it is not refused either.
-///
-/// The distinction matters and is the honest limit of this slice: a
-/// bystander needing nothing from the session is answered immediately,
-/// while one needing it queues behind the turn. Queued is not refused, and
-/// `409` was refused.
 #[test]
 fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
     short_answer_timeout();
@@ -330,9 +303,6 @@ fn a_request_needing_the_busy_session_is_queued_rather_than_refused() {
         for line in reader.lines() {
             let Ok(line) = line else { break };
             if line.starts_with("event: prompt") && waiting.is_none() {
-                // Needs the session, which is parked — so this one cannot
-                // be answered until the turn finishes. It must still not
-                // be refused.
                 waiting = Some(thread::spawn(move || get(port, "/sessions")));
                 let _ = post_answer(port, "q-1", "yes");
             }

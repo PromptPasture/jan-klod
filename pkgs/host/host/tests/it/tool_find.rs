@@ -1,5 +1,4 @@
-//! Tool-find: glob over nested tree (recursive, pruned build dir, jailed).
-//! Offline. Skips when guest not staged.
+//! Glob walks nested trees, prunes build dirs by default and stays inside the workspace jail.
 
 use jk_wasm::host_fs::Workspace;
 use jk_wasm::host_process::ProcessRunner;
@@ -50,7 +49,6 @@ fn glob_walks_the_workspace_and_respects_the_jail() {
     )
     .expect("tool instantiates");
 
-    // No-slash pattern recursive; target/ pruned by default.
     let found = tool.invoke(r#"{"pattern":"*.rs"}"#).expect("glob succeeds");
     let paths: Vec<&str> = found.lines().collect();
     assert_eq!(
@@ -59,7 +57,6 @@ fn glob_walks_the_workspace_and_respects_the_jail() {
         "recursive + pruned: {found}"
     );
 
-    // Name pruned dir to opt in.
     let named = tool
         .invoke(r#"{"pattern":"target/**/*.rs"}"#)
         .expect("glob succeeds");
@@ -68,7 +65,6 @@ fn glob_walks_the_workspace_and_respects_the_jail() {
         vec!["target/debug/build.rs"]
     );
 
-    // Path scopes walk; pattern relative to it, results are not.
     let scoped = tool
         .invoke(r#"{"pattern":"*.rs","path":"src/util"}"#)
         .expect("glob succeeds");
@@ -77,7 +73,6 @@ fn glob_walks_the_workspace_and_respects_the_jail() {
         vec!["src/util/helper.rs"]
     );
 
-    // No match is explicit, not empty.
     let empty = tool
         .invoke(r#"{"pattern":"**/*.zig"}"#)
         .expect("glob succeeds");
@@ -86,7 +81,6 @@ fn glob_walks_the_workspace_and_respects_the_jail() {
         "empty result must say so: {empty}"
     );
 
-    // Walk cannot escape jail (path override refused).
     let escape = tool.invoke(r#"{"pattern":"*","path":".."}"#);
     assert!(
         escape.is_err(),

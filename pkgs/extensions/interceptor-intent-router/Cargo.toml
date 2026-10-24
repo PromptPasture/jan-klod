@@ -7,14 +7,10 @@ publish.workspace = true
 description = "before-loop interceptor: layered intent router (language -> heuristics -> LLM classifier) that blocks the agentic loop for simple prompts and proceeds for agentic ones."
 
 [lib]
-# A reactor component: exports interceptor-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen.workspace = true
-# Pure-Rust language detection for the intent router's tier-1 gate (no model
-# call). Non-English input bypasses the English-only heuristics — see
-# src/router/language.rs.
 whatlang.workspace = true
 
 [lints]

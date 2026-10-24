@@ -1,9 +1,4 @@
-//! Path-jailed workspace directory for `host-fs`.
-//!
-//! Paths are workspace-relative; absolute paths and `..` escapes rejected.
-//! Default-deny: unconfigured means all ops return `Denied`.
-//!
-//! Caveat: lexical jailing only (no symlink escapes detected).
+//! Path-jailed workspace for `host-fs`: lexical jailing only (no symlink escape detection), default-deny when unconfigured.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -122,7 +117,6 @@ impl Workspace {
     }
 }
 
-/// Lexically normalize a path (fold `.` and `..`).
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -174,7 +168,6 @@ mod tests {
     #[test]
     fn inner_relative_paths_resolve_inside_the_root() {
         let (_dir, ws) = workspace();
-        // Relative paths that stay inside are allowed (e.g., `a/../b`).
         assert!(ws.resolve("a/../b.txt").is_ok());
         ws.write("a/../b.txt", "x").unwrap();
         assert!(ws.exists("b.txt"));
@@ -194,7 +187,6 @@ mod tests {
         assert_eq!(names, vec!["a.txt".to_string(), "z.txt".to_string()]);
     }
 
-    /// Self-cleaning temp dir (minimal, no dev-deps).
     mod tempdir_guard {
         use std::path::{Path, PathBuf};
 
@@ -204,7 +196,6 @@ mod tests {
         pub struct TempDir(PathBuf);
         impl TempDir {
             pub fn new() -> Self {
-                // PID + counter for collision-free parallel test isolation.
                 let base = std::env::temp_dir().join(format!(
                     "jk-fs-{}-{}",
                     std::process::id(),

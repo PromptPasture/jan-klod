@@ -1,5 +1,4 @@
-//! `jan-klod-gateway --version` and `--help` (#247): both answer and exit 0
-//! instead of falling through to the boot plan, which read them as a config path.
+//! `jan-klod-gateway --version` and `--help` answer and exit 0 instead of falling through to the boot plan.
 
 use std::process::Command;
 

@@ -1,33 +1,14 @@
 #!/usr/bin/env sh
-# Generate ext/<name>.manifest.toml for each staged guest component.
-#
-# A manifest declares what a component needs, so a registry can say "asks for
-# network" before download and the host can refuse a component whose
-# declaration and reality disagree (that refusal is a later slice; nothing
-# reads these yet).
-#
-# `capabilities` is read from the component itself rather than from anything a
-# guest author writes, which is the point: a declaration derived from the
-# artifact cannot drift from it. Three traps in that reading, all easy to get
-# wrong and all silent:
-#
-#   * The WIT output lists a world's *exports* too — `extension-lifecycle` and
-#     `tool-callable` are what a guest implements, not what it needs. Only the
-#     top-level `world root { … }` block's `import` lines count.
-#   * Imports include type-only packages (`llm-types`, `store-types`). Those
-#     are shapes; nothing is granted by importing one. Listing them would tell
-#     an operator to grant `llm-types`, which means nothing and reads like
-#     something. Only `host-*` interfaces are capabilities.
-#   * **The reading is only as tight as the toolchain that produced the
-#     imports.** `wit-bindgen` emits an import for what a guest's code uses,
-#     so a Rust manifest is a statement of need. ComponentizeJS emits one for
-#     every interface in the world, so a JavaScript guest's manifest is its
-#     *world* — the most it could ask for, not what it asks for. `tool-hello`
-#     declares `host-log`; `tool-hello-ts` does the same work and declares all
-#     five. Still true that neither can claim more than its artifact; not true
-#     that both can be read as need (#210).
+# Generate ext/<name>.manifest.toml for each staged guest. `capabilities` is read
+# from the component's own imports, so a manifest cannot claim more or less than
+# its artifact.
 #
 # Usage: manifests.sh <extensions-dir> <ext-out-dir> <wit-dir> <guest>...
+#
+# Only host-* imports of the top-level world block count: exports and type-only
+# packages (llm-types, store-types) are not capabilities.
+# A JS guest imports its whole world (componentize-js), so its manifest is an
+# upper bound, not a statement of need.
 set -eu
 
 EXT_SRC="$1"
@@ -35,9 +16,7 @@ OUT="$2"
 WIT="$3"
 shift 3
 
-# Sibling scripts are found relative to this one, not to the caller's cwd —
-# every invocation here comes through an absolute path from a Makefile or the
-# selftest, and both run from different directories.
+# Siblings resolve from this script, not the caller's cwd.
 HERE="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 
 command -v wasm-tools >/dev/null 2>&1 || {
@@ -49,11 +28,7 @@ command -v jaq >/dev/null 2>&1 || {
     exit 1
 }
 
-# One `jan-klod:interfaces` version, or none: once two WIT files disagree there
-# is no answer to "which is the api-version", so refuse rather than pick.
-# `wit-version.sh` is that reader, and it is a separate script because the
-# version is read from two places now — here, and the check that a `wit/` edit
-# bumped it. Two copies of this parser would be two answers.
+# wit-version.sh refuses on disagreement, so there is one api-version or none.
 API_VERSION="$(sh "$HERE/wit-version.sh" "$WIT")" || exit 1
 
 METADATA="$(cargo metadata --no-deps --format-version 1 \
@@ -72,18 +47,13 @@ for guest in "$@"; do
         jaq -r --arg n "$guest" '.packages[] | select(.name == $n) | .version')"
     description="$(printf '%s' "$METADATA" |
         jaq -r --arg n "$guest" '.packages[] | select(.name == $n) | .description // ""')"
-    # A guest need not be a cargo package: a non-Rust one carries its own
-    # manifest instead, and the name, version and description come from there.
-    # Read rather than defaulted — a component whose manifest said "0.0.0"
-    # because nobody could find its version is worse than no manifest.
+    # Non-cargo guests carry their own version. Read, never defaulted: a
+    # fabricated version is worse than none.
     if [ -z "$version" ] && [ -f "$EXT_SRC/$guest/package.json" ]; then
         version="$(jaq -r '.version // ""' "$EXT_SRC/$guest/package.json")"
         description="$(jaq -r '.description // ""' "$EXT_SRC/$guest/package.json")"
     fi
-    # Same rule, `pyproject.toml`'s spelling of it. Read with `tomllib` rather
-    # than a regex: `version` appears under more than one table in a real
-    # pyproject, and a grep that picked the wrong one would be silently wrong
-    # in the file whose whole job is to not be.
+    # tomllib, not a regex: `version` appears under more than one pyproject table.
     if [ -z "$version" ] && [ -f "$EXT_SRC/$guest/pyproject.toml" ]; then
         version="$(python3 -c 'import sys,tomllib
 p = tomllib.load(open(sys.argv[1], "rb")).get("project", {})
@@ -99,12 +69,9 @@ print(p.get("description", ""))' "$EXT_SRC/$guest/pyproject.toml")"
         exit 1
     }
 
-    # `provider-openai` -> provider. The category is already the naming rule the
-    # component resolver uses (`ext/<category>-<type>.wasm`), so it is read from
-    # the name rather than stated twice and allowed to disagree.
+    # provider-openai -> provider, following the resolver's `<category>-<type>` naming.
     kind="${guest%%-*}"
 
-    # The world block only, then its imports, then the host capabilities.
     capabilities="$(wasm-tools component wit "$wasm" |
         awk '/^world root \{/,/^\}/' |
         sed -n 's|^  import jan-klod:interfaces/\(host-[a-z-]*\)@.*|\1|p' |
@@ -120,12 +87,10 @@ print(p.get("description", ""))' "$EXT_SRC/$guest/pyproject.toml")"
         echo "version = \"$version\""
         echo "api-version = \"$API_VERSION\""
         echo "kind = \"$kind\""
-        # Escaped, because a description is prose and prose contains quotes.
         printf 'description = "%s"\n' \
             "$(printf '%s' "$description" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
         if [ -z "$capabilities" ]; then
-            # An empty list, not an absent key: "needs nothing" is a claim worth
-            # making, and a missing key reads as "nobody filled this in".
+            # Empty list, not an absent key: "needs nothing" is a claim.
             echo "capabilities = []"
         else
             echo "capabilities = ["

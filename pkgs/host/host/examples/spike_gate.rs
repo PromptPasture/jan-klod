@@ -1,7 +1,5 @@
-//! Load TinyGo `spike` component, call `complete`, echo result.
-//! Runnable by hand; automated check via `tests/it/polyglot.rs`.
+//! Loads the TinyGo `spike` component, calls `complete` and echoes the result.
 
-// bindgen!-generated code; exempt from workspace lints
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 use wasmtime::component::{Component, Linker};

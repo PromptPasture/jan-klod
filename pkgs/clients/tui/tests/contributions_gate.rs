@@ -1,18 +1,5 @@
 #![allow(missing_docs)]
-//! #190's acceptance: at 120×32 and 60×20, with `NO_COLOR=1`, contributions
-//! render, are invocable, and lose no information — and a hostile label
-//! renders inert.
-//!
-//! Shaped like `phase19_gate.rs`, for the same reason it exists: an exit
-//! criterion written as prose is a criterion nobody runs (#130, #133).
-//!
-//! # Why a hand-built contribution rather than a real guest
-//!
-//! `pkgs/host/host/tests/it/client_surface.rs` already drives a real component's
-//! declarations through the host and out to a client. What is under test here
-//! is the **renderer** — at two terminal sizes, in two themes, against text an
-//! honest extension would never send. A wasm build in the way of that would
-//! add no coverage and a great deal of setup.
+//! Gate: contributions render, invoke and stay inert at 120×32 and 60×20 with `NO_COLOR=1`.
 
 use jk_protocol::{Contributions, StatusItem, SurfaceCommand};
 use jk_tui::app::App;
@@ -21,7 +8,6 @@ use jk_tui::sidebar::{self, SessionInfo};
 use jk_tui::theme::{Depth, GlyphSet, Mode, Theme};
 use jk_tui::wrap::width as cells;
 
-/// The gate's themes: coloured, and what `NO_COLOR=1` on 16 colours gives.
 const fn themes() -> [(&'static str, Theme); 2] {
     [
         (
@@ -35,8 +21,6 @@ const fn themes() -> [(&'static str, Theme); 2] {
     ]
 }
 
-/// One extension contributing a command and a status item, as the host
-/// reports them.
 fn contributed(name: &str, status: &str) -> Vec<Contributions> {
     vec![Contributions {
         extension: "interceptor.system".to_owned(),
@@ -64,7 +48,6 @@ fn plain(lines: &[ratatui::text::Line<'_>]) -> String {
         .join("\n")
 }
 
-/// An app with the contribution loaded and the command menu open.
 fn with_menu_open(sets: &[Contributions]) -> App {
     let mut app = App::default();
     app.set_contributions(sets);
@@ -94,8 +77,6 @@ fn contributions_render_at_both_sizes_in_both_themes() {
         );
 
         for (name, theme) in themes() {
-            // The sidebar pane is the one with a width of its own; at 60×20 it
-            // may be collapsed, in which case the dialog draws the same view.
             let pane = usize::from(frame.sidebar.map_or(frame.content.width, |s| s.width))
                 .saturating_sub(2);
             let text = plain(&sidebar::view(&app, info, pane, theme));
@@ -122,9 +103,6 @@ fn contributions_render_at_both_sizes_in_both_themes() {
     }
 }
 
-/// "Loses no information": what colour carries is also in text, so the two
-/// themes render the same characters. The same property `phase19_gate.rs`
-/// asserts for a turn, asserted for contributions.
 #[test]
 fn colour_carries_nothing_a_colourless_render_loses() {
     let app = with_menu_open(&contributed("prompt", "built-in"));
@@ -143,9 +121,6 @@ fn colour_carries_nothing_a_colourless_render_loses() {
     );
 }
 
-/// Invocable: choosing the entry raises the ask the event loop sends. The
-/// transport is not exercised here — `pkgs/host/host/tests/it/client_surface.rs` does
-/// that end to end; this is the client half.
 #[test]
 fn a_contributed_command_can_be_chosen_from_the_menu() {
     let mut app = with_menu_open(&contributed("prompt", "built-in"));
@@ -159,9 +134,6 @@ fn a_contributed_command_can_be_chosen_from_the_menu() {
     );
 }
 
-/// The hostile case, through the real projection rather than the sanitiser's
-/// own unit tests: those prove the function strips, this proves nothing
-/// downstream puts it back.
 #[test]
 fn a_hostile_label_renders_inert_at_both_sizes() {
     let hostile = "pr\x1b[2Jompt";
@@ -187,7 +159,6 @@ fn a_hostile_label_renders_inert_at_both_sizes() {
                 );
             }
         }
-        // And the menu, which draws from the same store.
         for entry in app.menu_entries() {
             assert!(
                 !entry.name.contains('\u{1b}') && !entry.summary.contains('\u{1b}'),

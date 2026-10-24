@@ -1,61 +1,10 @@
-//! The conversation, derived from the log.
-//!
-//! A pure function over rows: no store, no I/O, nothing to mock. Produces the
-//! `Vec<Message>` a following turn replays, derived from [`crate::event_log`]
-//! instead of a separate transcript.
-//!
-//! # What each row becomes, and why
-//!
-//! The rule is *what the model saw*. A row never in the conversation is not
-//! invented into one; a row that was is placed as `conductor::run_turn` places
-//! it (the authority these mappings read off):
-//!
-//! | Row | Becomes | Why |
-//! |---|---|---|
-//! | `user-message` | `Role::User` | the turn's input |
-//! | `follow-up` | `Role::User` | steering injected as a user message |
-//! | `done` | `Role::Assistant` | the authoritative answer |
-//! | `tool-result` | `Role::Tool` + `tool_call_id` | exactly how the loop feeds results back |
-//! | `text-delta` | *dropped* | a preview `done` carries |
-//! | `tool-invoked` | *dropped* | the request is not a message; only its result is |
-//! | `warning` | *dropped* | operational notice, never in the conversation |
-//! | `ask` / `answer` | *dropped* | the model never saw them — see below |
-//!
-//! **An `ask` is not a conversation turn.** It is a question put to the *user*
-//! by an interceptor over a side channel the model has no part in; it never
-//! reaches `PendingRequest.messages`. Rendering it as an assistant message puts
-//! words in the model's mouth; rendering the answer as a user message makes a
-//! permission click look like user input. Both are dropped: a replayed turn must
-//! not teach the model that it asked "Run `rm -rf /`?".
-//!
-//! # Known limits
-//!
-//! Dropping `text-delta` in favour of `done` means agentic turns' *intermediate*
-//! assistant texts — what the model said before calling a tool — are not in the
-//! transcript. This matches the transcript it replaces, which stored only the
-//! user message and final answer; nothing regresses, but "the whole conversation"
-//! is what an event log invites you to assume.
-//!
-//! A `user-message` row holds the message the model actually received after
-//! `before-loop` could `replace` it, not necessarily what a caller asked to send
-//! (#84). This replays that exact message, correct for feeding into a following
-//! turn.
-//!
-//! Logs written before #84 was fixed may hold the as-asked message where a
-//! `before-loop` interceptor rewrote it. The row's *kind* didn't change, only
-//! what a live turn puts in it, so old rows still decode and replay fine. No
-//! interceptor in `config.yaml` rewrites messages, so in practice no session is
-//! actually affected.
+//! Pure projection of log rows to `Message`s; only what the model saw is replayed, so `ask`, `answer`, `text-delta` and `warning` are dropped.
 
 use crate::event_log::{decode_record, Record, KIND_USER_MESSAGE};
 use crate::store::LoggedEvent;
 use jk_protocol::turn::{Message, Role};
 
-/// The conversation a session's log describes, oldest first.
-///
-/// Undecidable rows are skipped, not fatal: a log written by a newer build
-/// reads as much as this build understands. Skipped silently—the log itself
-/// remains the record for auditing what was dropped.
+/// The conversation a session's log describes, oldest first; unreadable rows are skipped.
 #[must_use]
 pub fn transcript(events: &[LoggedEvent]) -> Vec<Message> {
     placed_transcript(events)
@@ -64,17 +13,7 @@ pub fn transcript(events: &[LoggedEvent]) -> Vec<Message> {
         .collect()
 }
 
-/// [`transcript`], with each message paired to the log position it came from.
-///
-/// **Every message projects from exactly one event**, so each seq belongs to
-/// that event—`message_for` takes one `Record`, returns at most one `Message`,
-/// never folding. This lets a client name fork points: `session/fork`'s
-/// `at-seq` is inclusive, so forking at the seq beside a message yields a
-/// transcript ending with that message
-/// ([#106](https://github.com/PromptPasture/jan-klod/issues/106)).
-///
-/// Seqs are **sparse**: `Ask`, `Answer`, `TextDelta`, `ToolInvoked`, `Warning`
-/// all project to no message, so a seq is a log position, not a list index.
+/// [`transcript`] with each message paired to its log seq, a valid inclusive fork point; seqs are sparse.
 #[must_use]
 pub fn placed_transcript(events: &[LoggedEvent]) -> Vec<(u64, Message)> {
     events
@@ -86,15 +25,7 @@ pub fn placed_transcript(events: &[LoggedEvent]) -> Vec<(u64, Message)> {
         .collect()
 }
 
-/// The tail of `events` holding at most the last `turns` turns.
-///
-/// A turn begins at a `user-message` row; bounds are over turns, not rows.
-/// Rows aren't a fixed per-turn count—one tool call adds two—so row-based
-/// bounds cut turns in half and give the model conversations starting with an
-/// orphaned tool result.
-///
-/// `turns == 0` returns an empty slice. A log with no `user-message` rows is
-/// returned whole: one turn in progress, not zero.
+/// Last `turns` turns of `events`, counted by `user-message` rows so tool results are not orphaned.
 #[must_use]
 pub fn last_turns(events: &[LoggedEvent], turns: u32) -> &[LoggedEvent] {
     if turns == 0 {
@@ -113,10 +44,6 @@ pub fn last_turns(events: &[LoggedEvent], turns: u32) -> &[LoggedEvent] {
     &events[starts[starts.len() - keep]..]
 }
 
-/// The message one record contributes, or `None` when it contributes nothing.
-///
-/// Exhaustive over [`Record`] and [`jk_protocol::turn::Event`] with no wildcard,
-/// so new kinds cannot be silently dropped—the decision must be written here.
 fn message_for(record: Record) -> Option<Message> {
     use jk_protocol::turn::Event;
     match record {
@@ -125,10 +52,6 @@ fn message_for(record: Record) -> Option<Message> {
             content,
             tool_call_id: None,
         }),
-        // None of these is conversation. An `Ask` and its `Answer` happened
-        // between the host and the user, and an `ExtensionLoaded` between
-        // turns — the model was told none of them, so replaying any into a
-        // transcript would invent a turn that did not happen.
         Record::Ask { .. } | Record::Answer(_) | Record::ExtensionLoaded { .. } => None,
         Record::Event(event) => match event {
             Event::Done { text, .. } => Some(Message {
@@ -153,7 +76,6 @@ mod tests {
     use jk_protocol::turn::{Event, ToolCall, ToolOutcome};
     use serde_json::json;
 
-    /// Builds rows as the store does; tests never depend on `seq` beyond row order.
     fn row(seq: u64, kind: &str, payload: String) -> LoggedEvent {
         LoggedEvent {
             session: "s1".to_owned(),
@@ -169,9 +91,6 @@ mod tests {
         row(seq, kind, payload)
     }
 
-    /// The transcript it replaces stored `{user, answer}` per turn, so a simple
-    /// turn must yield exactly those two messages—otherwise every following turn
-    /// changes when swapping to this.
     #[test]
     fn a_simple_turn_is_the_user_message_and_the_answer() {
         let log = vec![
@@ -197,8 +116,6 @@ mod tests {
         assert_eq!(messages[1].content, "pong");
     }
 
-    /// Results are tied to their calls as `run_tool_calls` does: `Role::Tool`
-    /// message with the call's `tool_call_id`.
     #[test]
     fn a_tool_result_carries_its_call_id() {
         let log = vec![
@@ -246,8 +163,6 @@ mod tests {
         );
     }
 
-    /// Permission prompts are between interceptor and user only; must not become
-    /// something the model said or the user said to it.
     #[test]
     fn a_permission_prompt_and_its_answer_are_not_conversation() {
         let log = vec![
@@ -330,8 +245,6 @@ mod tests {
         assert!(transcript(&log).is_empty());
     }
 
-    /// Unreadable rows are skipped, not fatal. Failing the whole projection
-    /// would hide an entire history for one undecodable row.
     #[test]
     fn an_undecodable_row_is_skipped_not_fatal() {
         let log = vec![
@@ -365,8 +278,7 @@ mod tests {
         assert!(transcript(&[]).is_empty());
     }
 
-    /// Order comes from `seq`; projection doesn't re-sort. Out-of-order logs are
-    /// store bugs, and hiding them here makes them unfindable.
+    /// Order comes from `seq`; out-of-order logs are store bugs, so this does not re-sort.
     #[test]
     fn messages_follow_the_order_of_the_rows() {
         let log = vec![
@@ -401,8 +313,6 @@ mod bound_tests {
     use jk_protocol::turn::{Event, ToolOutcome};
     use serde_json::json;
 
-    /// Each turn is user message, tool result, answer—three rows; a row-based
-    /// bound visibly cuts a turn open.
     fn log_of(turns: usize) -> Vec<LoggedEvent> {
         let mut rows = Vec::new();
         for turn in 0..turns {
@@ -459,8 +369,6 @@ mod bound_tests {
         );
     }
 
-    /// Row-based bounds would start conversations with orphaned tool results;
-    /// this asserts they don't.
     #[test]
     fn a_bounded_conversation_never_opens_with_a_tool_result() {
         let log = log_of(9);
@@ -480,8 +388,6 @@ mod bound_tests {
         assert_eq!(last_turns(&[], 20), []);
     }
 
-    /// Logs with no turn boundary (all events) are one turn in progress;
-    /// returning nothing would lose it.
     #[test]
     fn a_log_with_no_turn_boundary_is_returned_whole() {
         let (kind, payload) = encode(&Event::Warning("standalone".to_owned()));
@@ -495,8 +401,6 @@ mod bound_tests {
         assert_eq!(last_turns(&log, 20).len(), 1);
     }
 
-    /// `follow-up` is a user message but not a turn boundary—steering continues
-    /// a turn rather than starting one, so it doesn't consume the bound.
     #[test]
     fn steering_does_not_start_a_new_turn() {
         let mut log = log_of(1);

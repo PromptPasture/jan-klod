@@ -1,6 +1,4 @@
-//! Tool-fetch with canned HTTP (offline). Public URL fetched as text, SSRF guard
-//! refuses dangerous addresses before network. Verified by call counting, not
-//! just refusal message. Skips when guest not staged.
+//! Fetch reduces HTML to text over a canned client, and the SSRF guard refuses internal addresses before any request.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -93,19 +91,12 @@ fn blocked_addresses_never_reach_the_network() {
     };
 
     for blocked in [
-        // Agent's own REST surface.
         r#"{"url":"http://127.0.0.1:8787/sessions"}"#,
-        // Cloud metadata (credentials).
         r#"{"url":"http://169.254.169.254/latest/meta-data/"}"#,
-        // LAN.
         r#"{"url":"http://192.168.1.1/admin"}"#,
-        // Not HTTP.
         r#"{"url":"file:///etc/passwd"}"#,
-        // Loopback + hostname.
         r#"{"url":"http://localhost:8787/"}"#,
-        // Loopback + credential prefix.
         r#"{"url":"http://example.com@127.0.0.1/"}"#,
-        // Loopback + alternate encoding.
         r#"{"url":"http://2130706433/"}"#,
     ] {
         let out = tool
@@ -117,7 +108,6 @@ fn blocked_addresses_never_reach_the_network() {
         );
     }
 
-    // No requests made (guard before client).
     assert_eq!(
         calls.load(Ordering::Relaxed),
         0,
@@ -134,7 +124,6 @@ fn a_tool_without_granted_egress_cannot_reach_the_network_at_all() {
     let path = common::repo_root().join("ext").join("tool-fetch.wasm");
     let component = Component::from_file(&engine, &path).expect("component compiles");
 
-    // No client (like config without `network: true`). Importing isn't granting.
     let mut tool = ToolExtension::instantiate(
         &engine,
         "tool.fetch",

@@ -1,9 +1,4 @@
-//! State persists across runtime restarts.
-//!
-//! Boots a runtime, runs a turn (persisted to SQLite), drops the runtime,
-//! boots a fresh one against the same DB, and verifies the transcript survives.
-//!
-//! Skips if guests are not staged in `ext/`.
+//! A transcript persisted to SQLite survives a runtime restart.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
@@ -43,7 +38,6 @@ extensions:
     )
     .unwrap();
 
-    // First boot: run a turn, persisted to SQLite.
     {
         let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
         let factory = || common::canned_http("first answer");
@@ -54,18 +48,15 @@ extensions:
             matches!(out, RunResult::Answered { .. }),
             "the turn completes"
         );
-        // Turn is two messages (question + answer) because transcript projects
-        // from the event log, not one `{user, answer}` row per turn.
         assert_eq!(
             agent.transcript("chat-1").len(),
             2,
             "the turn's question and answer are recorded"
         );
-    } // runtime + agent (and the SQLite connection) dropped here
+    }
 
     assert!(db_path.exists(), "the store persisted a database file");
 
-    // Second boot against the same DB: transcript survives.
     {
         let runtime = Runtime::boot(&config, &ext_dir).expect("runtime reboots");
         let factory = || common::canned_http("unused");
@@ -86,11 +77,6 @@ extensions:
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Relative `storage.path` resolves against config, not cwd.
-///
-/// Installed jan-klod runs from any user directory. Against cwd, the default
-/// `jan-klod.db` would scatter across directories; against config, there is
-/// one store per deployment (invisible in checkout where both paths coincide).
 #[test]
 fn a_relative_storage_path_resolves_against_the_config_not_the_cwd() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -127,7 +113,6 @@ extensions:
         dir.join("jan-klod.db").exists(),
         "store lands beside config.yaml"
     );
-    // cwd is process-wide; parallel tests can't chdir to `elsewhere` safely.
     assert!(
         !elsewhere.join("jan-klod.db").exists(),
         "not in a sibling directory"

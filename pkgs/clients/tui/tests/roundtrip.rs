@@ -1,6 +1,4 @@
-//! `send_turn` against a real socket — stands up a canned HTTP server (standing in
-//! for `jan-klod serve`) and drives the client through one round-trip, asserting it
-//! sends a well-formed request and reads the answer back.
+//! `send_turn` against a real socket: a canned HTTP server stands in for `jan-klod serve`.
 
 use std::thread;
 
@@ -12,7 +10,6 @@ fn send_turn_round_trips_against_a_server() {
     let port = server.server_addr().to_ip().expect("ip addr").port();
     let addr = format!("127.0.0.1:{port}");
 
-    // Server thread: read the request body, assert it carries the message, reply.
     let server_thread = thread::spawn(move || {
         let mut request = server.recv().expect("receives request");
         let mut body = String::new();

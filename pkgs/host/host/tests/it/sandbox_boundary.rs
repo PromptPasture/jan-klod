@@ -1,14 +1,4 @@
-//! What a component gets when nobody grants it anything. `wasmtime_wasi`'s
-//! linker wires filesystem and socket support fully; what keeps a guest out is
-//! the `WasiCtx` defaults (no preopens, deny-all `SocketAddrCheck`) — not something
-//! these tests see directly when exercising cooperative guests.
-//!
-//! So `tool-escape-probe` doesn't ask: it calls raw `std::net::TcpStream`,
-//! `std::io::stdin`, `std::fs::read_to_string` directly, and these tests assert
-//! each attempt is refused — the socket case against a real listening server's
-//! own request count, not the guest's self-reported error.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! A component with no grants gets no ambient authority. `tool-escape-probe`
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -25,8 +15,6 @@ use crate::common;
 
 const PROBE: &str = "tool-escape-probe.wasm";
 
-/// A loopback server that counts connections to answer "did the packet leave?"
-/// via the listener, not the sandbox's error message.
 struct Sentinel {
     port: u16,
     hits: Arc<AtomicU32>,
@@ -66,8 +54,6 @@ impl Drop for Sentinel {
     }
 }
 
-/// Instantiate the probe with **nothing** granted: no workspace, no process
-/// runner, no `host-http`. Whatever it manages is ambient authority.
 fn probe(engine: &Engine) -> Option<ToolExtension> {
     if !common::guests_staged(&[PROBE]) {
         return None;
@@ -115,8 +101,6 @@ fn a_guest_cannot_open_its_own_socket() {
     );
 }
 
-/// The same, aimed off-box. A guest that cannot reach loopback but *can* reach
-/// the internet has no sandbox, only a firewall rule.
 #[test]
 fn a_guest_cannot_open_a_socket_to_a_public_address() {
     let engine = Engine::default();
@@ -147,13 +131,8 @@ fn a_guest_cannot_read_the_hosts_filesystem() {
     }
 }
 
-/// The guest gets no environment because `WasiCtxBuilder::inherit_env` isn't
-/// called, a dependency default like the socket check. Secrets are set before
-/// the guest runs to confirm this isn't just an empty environment.
 #[test]
 fn a_guest_cannot_read_the_hosts_environment() {
-    // Set before guest instantiation: `inherit_env` snapshots when the
-    // `WasiCtx` is built, so setting after wouldn't catch inheritance being on.
     std::env::set_var("OPENAI_API_KEY", "sk-guest-env-must-not-leak");
     std::env::set_var("JAN_KLOD_TOKEN", "bearer-guest-env-must-not-leak");
     let engine = Engine::default();
@@ -171,7 +150,6 @@ fn a_guest_cannot_read_the_hosts_environment() {
         "and gets no environment at all: {report}"
     );
 
-    // A guest sees only its own argv[0], not the host's config or bind address.
     let args = tool.invoke(r#"{"op":"args"}"#).unwrap_or_else(|err| err);
     for ours in ["--bind", "config.yaml", "serve", "--live"] {
         assert!(
@@ -181,23 +159,13 @@ fn a_guest_cannot_read_the_hosts_environment() {
     }
 }
 
-/// stdin is the one the host was giving away: a guest could read the terminal
-/// `jan-klod-gateway ask` runs in, including a permission answer.
-///
-/// This test feeds itself real input rather than asking the probe to read an
-/// empty test-harness stdin — "0 bytes" from empty is indistinguishable from a
-/// real boundary, so the parent re-executes with a secret piped in and checks
-/// the child rejects it.
 const SECRET: &str = "TOPSECRET-USER-KEYSTROKES";
-/// Set on the re-executed child so it runs the probe instead of the parent half.
 const CHILD: &str = "JK_STDIN_PROBE_CHILD";
-/// This test's own function name, for the `--exact` filter it re-executes with.
 const TEST_NAME: &str = "a_guest_gets_no_standard_input";
 
 #[test]
 fn a_guest_gets_no_standard_input() {
     if std::env::var(CHILD).is_ok() {
-        // Child half: read stdin through the guest and report.
         let engine = Engine::default();
         let Some(mut tool) = probe(&engine) else {
             return;
@@ -210,8 +178,6 @@ fn a_guest_gets_no_standard_input() {
         return;
     }
 
-    // libtest's `--exact` matches the module-qualified path (not the bare name),
-    // derived via `module_path!()` to avoid desync on module moves.
     let test_path = module_path!().split_once("::").map_or_else(
         || TEST_NAME.to_owned(),
         |(_, module)| format!("{module}::{TEST_NAME}"),

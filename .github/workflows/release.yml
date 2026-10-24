@@ -1,18 +1,14 @@
 name: Release
 
-# Builds cross-platform bundles and publishes a GitHub release when a version
-# tag (v*) is pushed. Each platform job produces one .tar.gz per distribution
-# in dist/ and uploads them as release assets via the GitHub CLI.
-
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write   # needed to create/upload release assets
-  pages: write      # the registry index is published to GitHub Pages
-  id-token: write   # actions/deploy-pages authenticates with OIDC
+  contents: write
+  pages: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -37,11 +33,6 @@ jobs:
             os: darwin
             arch: arm64
             target: aarch64-apple-darwin
-          # No Intel macOS entry, on purpose: Intel Macs are not supported
-          # (decided 2026-09-19, #236, when GitHub's retirement of `macos-13`
-          # left the `v0.0.1` dry run queued forever on that leg). `install.sh`
-          # refuses `darwin/x86_64` with the same sentence, so a user hears it
-          # from the installer rather than from a 404.
 
     steps:
       - uses: actions/checkout@v4
@@ -58,13 +49,6 @@ jobs:
         with:
           workspaces: .
 
-      # `make extensions` generates each guest's capability manifest with
-      # `scripts/manifests.sh`, which refuses to run without `wasm-tools` (it
-      # reads the component's imports out of `wasm-tools component wit`) and
-      # `jaq` (it reads versions out of `cargo metadata`). ci.yml installs both
-      # for the same reason; this workflow did not, and the first tag ever
-      # pushed (`v0.0.1`, 2026-09-19, #236) failed on every runner at exactly
-      # that line. Same pins as ci.yml — keep them in step with versions.mk.
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-tools@1.258.0
@@ -72,20 +56,6 @@ jobs:
         with:
           tool: jaq@2.3.0
 
-      # These two used to run the other way round — the fetch first, then the
-      # install — so `wkg` did not exist when `wkg wit fetch` was called, and
-      # `|| true` on both meant nothing said so (#166). `wit/spike/deps` was
-      # therefore never populated on a release, and could not be: the same shape
-      # as #130, where a gate that does not run looks exactly like one that
-      # passes.
-      #
-      # Same prebuilt, same pin as ci.yml and ci-macos.yml, and for the reason
-      # ci.yml gives: `wit/wkg.lock` is a resolution of some registry state, and
-      # a newer wkg is not guaranteed to reproduce it. `cargo install wkg
-      # --locked` pinned wkg's *own* Cargo.lock rather than which wkg you get,
-      # so the release leg was free to resolve a different tool from the leg
-      # that validates the lockfile — and it recompiled from source every run to
-      # do it. Keep the tag in step with WKG_VERSION in versions.mk.
       - name: Install wkg (WIT package manager)
         uses: jaxxstorm/action-install-gh-release@v1
         with:
@@ -96,29 +66,9 @@ jobs:
           chmod: 0755
           cache: enable
 
-      # `make -C pkgs/extensions spike-deps` rather than an inline `cd wit &&
-      # wkg …`, so this calls the target a developer calls and the two cannot
-      # drift. No `|| true`: if the deps cannot be fetched, the guests that need
-      # them do not build, and finding that out here beats finding it out in the
-      # build step with a confusing error.
       - name: Fetch WIT spike deps
         run: make -C pkgs/extensions spike-deps
 
-      # One job per platform, three archives out of it — not a 4x3 matrix.
-      #
-      # The expensive half of this job is per *platform*: two toolchains, every
-      # guest built to wasm32-wasip2, and the release binaries. `make bundle
-      # DIST=` after that is staging plus tar. So three archives here cost
-      # roughly what one costs, where twelve jobs would triple the expensive
-      # half — and half these runners are macOS, which bills at 10x on a private
-      # repository (see .github/AGENTS.md, and #95). Splitting this into the
-      # cross product would spend most of its extra minutes on the most
-      # expensive runners for no extra coverage.
-      #
-      # Keep in step with `DISTRIBUTIONS` in scripts/install.sh:
-      # `docs_match_config::the_installer_offers_the_distributions_the_release_builds`
-      # fails the build if the two disagree, rather than letting a user find out
-      # at a 404.
       - name: Build bundles (one per distribution)
         env:
           JK_VERSION: ${{ github.ref_name }}
@@ -135,54 +85,6 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
-      # The registry index, and the files its entries describe (#139).
-      #
-      # **One leg of the matrix, not four.** A guest is compiled to
-      # `wasm32-wasip2`, so `ext/` is the same bytes whichever runner built it
-      # — four copies would be four identical artifacts, and their digests
-      # would have to agree for the index to mean anything anyway. Linux
-      # x86_64 is the cheapest of the four (the macOS runners bill at 10x on a
-      # private repository; see .github/AGENTS.md).
-      #
-      # `make bundle` above already built the guests into `ext/`, so this adds
-      # a generator run and a tar, not a build.
-      #
-      # `make registry-index` **by name**: the published index has to be the
-      # one that target produces, or the index and the drift check that proves
-      # it deterministic would be checking different things. And a gate called
-      # only through an aggregate target is one that quietly stops running
-      # (#130).
-      #
-      # `REGISTRY_URL` is where these files will be served from once the
-      # `release` job has deployed them — the `ext/` path under the Pages site
-      # — and it must stay in step with `registry.url` in config.yaml, which
-      # names `index.json` at that site's root.
-      # ---- Signing the components (#93) ----
-      #
-      # **Before the index, necessarily.** `registry_index::signature_beside`
-      # reads `<component>.minisig` off disk as it builds each entry, so a
-      # component signed after this point would be described by an entry saying
-      # `"signature": ""` — the index would publish "nothing vouches for these
-      # bytes" about bytes that are in fact signed.
-      #
-      # **Per file, never per archive.** `ext install` verifies a `.minisig`
-      # beside each of a component *and* its manifest, so a component someone
-      # extracts from a signed tarball arrives in `ext/` with no signature of
-      # its own and is refused. Signing only the archives would leave
-      # first-party components uninstallable by this project's own installer —
-      # 16c-3 box 2's decision, and the reason both files get their own.
-      #
-      # Skipped, loudly, when the key is not configured: a key is the
-      # repository owner's to generate and its private half must never pass
-      # through a build log. Until then this produces an **unsigned release
-      # that says it is unsigned**, and an index that honestly reports
-      # `"signature": ""`.
-      #
-      # Pinned by version *and* digest, unlike everything else here (which
-      # versions.mk pins by version alone). This is the tool that establishes
-      # provenance for every other artefact; fetching it over TLS and checking
-      # nothing would trust the CA system for exactly the thing the signature
-      # exists to stop trusting.
       - name: Sign the components
         if: matrix.os == 'linux' && matrix.arch == 'x86_64'
         env:
@@ -215,13 +117,6 @@ jobs:
             REGISTRY_URL="https://promptpasture.github.io/jan-klod/ext"
           cat dist/index.json
 
-      # The index and the artefacts it describes travel together: an index
-      # published without them names URLs that 404, and a publisher serves
-      # **four files per component at plain paths** — `<name>.wasm`,
-      # `<name>.manifest.toml` and a `.minisig` for each. The two signatures
-      # are not produced yet (#93 is deferred until before the first release),
-      # so what ships today is the unsigned pair and an index that says
-      # `"signature": ""` rather than pretending otherwise.
       - name: Upload the registry artifact
         if: matrix.os == 'linux' && matrix.arch == 'x86_64'
         uses: actions/upload-artifact@v4
@@ -238,19 +133,13 @@ jobs:
     name: Publish GitHub release
     needs: build
     runs-on: ubuntu-latest
-    # `actions/deploy-pages` requires the job to declare the `github-pages`
-    # environment — it is how the deployment is attributed and how the site URL
-    # comes back. It applies to the whole job rather than the step, so creating
-    # a release now also passes through whatever protection rules that
-    # environment carries. It has none today; adding one would gate releases,
-    # which is worth knowing before somebody adds it for a different reason.
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # needed for changelog generation
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v4
         with:
@@ -264,30 +153,6 @@ jobs:
           sha256sum *.tar.gz > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      # ---- Signing (#93) ----
-      #
-      # **What a signature adds over the checksums above.** `SHA256SUMS.txt`
-      # proves the download was not corrupted; it does not prove the bundle is
-      # ours, because the checksums come from the same release as the bundle and
-      # whoever can serve one can serve both. Only a signature under a key
-      # published somewhere else closes that.
-      #
-      # Skipped, loudly, when `MINISIGN_SECRET_KEY` is not configured — which is
-      # the state until the repository owner generates a signing identity, since
-      # a key is theirs to make and the private half must never pass through a
-      # build log. A missing key therefore produces an **unsigned release that
-      # says it is unsigned**, rather than a failed one or a silently unsigned
-      # one.
-      #
-      # Pinned by version *and* digest. Everything else here is pinned by
-      # version (versions.mk, #131); this one is also digest-checked because it
-      # is the tool that establishes provenance for everything else, and a
-      # signing tool fetched over TLS and otherwise unchecked would be trusting
-      # the CA system for the one thing this whole step exists to stop trusting.
-      # The secret reaches the script as an **environment variable**, never as
-      # `${{ secrets.… }}` interpolated into the script text: interpolation
-      # splices the key's own bytes into a shell program, where a newline or a
-      # quote changes what runs, and puts it somewhere `set -x` would echo.
       - name: Install minisign
         id: minisign
         env:
@@ -308,15 +173,6 @@ jobs:
           minisign -v
           echo "available=true" >> "$GITHUB_OUTPUT"
 
-      # The archives only. The **components** are signed in the `build` job
-      # instead, and that is an ordering constraint rather than a preference:
-      # `registry_index::signature_beside` reads `<component>.minisig` off disk
-      # while generating the index, so a component signed here — after the index
-      # exists — would be described by an entry saying `"signature": ""`.
-      #
-      # `-H` is the prehashed form. Not optional: the verifier
-      # (`minisign-verify`) refuses the legacy `Ed` algorithm, which
-      # `a_legacy_format_signature_is_refused` pins.
       - name: Sign the release archives
         if: steps.minisign.outputs.available == 'true'
         env:
@@ -326,10 +182,6 @@ jobs:
           printf '%s\n' "$MINISIGN_SECRET_KEY" > /tmp/minisign.key
           chmod 0600 /tmp/minisign.key
           for f in dist/*.tar.gz dist/SHA256SUMS.txt; do
-            # An empty password on stdin: the key is a repository secret, so it
-            # is generated with `minisign -G -W` (no password). A password would
-            # need a second secret and buys nothing — the protection is that the
-            # secret is a secret.
             printf '\n' | minisign -S -H -s /tmp/minisign.key -m "$f" -t "jan-klod $GITHUB_REF_NAME"
           done
           shred -u /tmp/minisign.key
@@ -339,7 +191,6 @@ jobs:
         id: changelog
         run: |
           TAG="${GITHUB_REF_NAME}"
-          # Grab commits since the previous tag for the release notes.
           PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           if [ -n "$PREV" ]; then
             NOTES=$(git log --oneline "${PREV}..HEAD" | head -30)
@@ -349,12 +200,6 @@ jobs:
           printf '%s\n' "$NOTES" > /tmp/release_notes.txt
           echo "notes_file=/tmp/release_notes.txt" >> "$GITHUB_OUTPUT"
 
-      # The asset list is built from what exists: `gh release create` refuses a
-      # glob that matches nothing, and `dist/*.minisig` matches nothing on an
-      # unsigned run — so the "publishes UNSIGNED with a warning" path above
-      # never actually published until the `v0.0.1` dry run hit it (#236). An
-      # unsigned release is marked as a pre-release, so nobody mistakes it for
-      # a box.
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -370,61 +215,26 @@ jobs:
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
             "${flags[@]}" "${assets[@]}"
 
-      # ---- The registry, published where `registry.url` points (#139) ----
-      #
-      # Here rather than in a job of its own, and rather than a fourth workflow:
-      # this job already runs on ubuntu-latest with the artifacts downloaded, so
-      # publishing costs a Jekyll build and an upload instead of another runner
-      # (#95's cost trade, recorded in .github/AGENTS.md).
-      #
-      # **After the release is created, deliberately.** A Pages deploy has more
-      # ways to fail than a release upload does — Pages has to be enabled on the
-      # repository, and a private repository needs a plan that allows a site —
-      # and a failure here should leave the archives published rather than take
-      # the release down with it. The run goes red either way, which is the
-      # honest signal.
-      #
-      # `registry` is downloaded into a separate directory from the bundles
-      # above: the site needs `ext/` as a directory, and merging it into `dist/`
-      # would put components beside the tarballs for no reason.
       - name: Download the registry artifact
         uses: actions/download-artifact@v4
         with:
           name: registry
           path: registry/
 
-      # `pages/` is Jekyll source (`_config.yml` names a `remote_theme`), so it
-      # is built rather than uploaded as-is. The index and the components are
-      # copied into the built site afterwards: they are static files Jekyll has
-      # no business processing, and `_site` is what actually gets served.
       - name: Build the landing page
         uses: actions/jekyll-build-pages@v1
         with:
           source: pages
           destination: _site
 
-      # The layout `registry.url` and `REGISTRY_URL` both assume:
-      #   <site>/index.json      the index
-      #   <site>/ext/<name>.wasm the components it names, at plain paths
-      # Plain paths matter: `ext install` derives the manifest and signature
-      # URLs by resolving a relative reference against the component's, so a
-      # query or a redirect in the way would break the companions.
       - name: Assemble the registry into the site
         run: |
           cp registry/dist/index.json _site/index.json
           mkdir -p _site/ext
           cp registry/ext/*.wasm registry/ext/*.manifest.toml _site/ext/
-          # The signatures, which `ext install` resolves as siblings of the
-          # component's URL. Without them a signed index describes files whose
-          # `.minisig` 404s, and every first-party install is refused as
-          # unsigned. A glob that matches nothing is not fatal: an unsigned
-          # release is a state this workflow supports (#93).
           cp registry/ext/*.minisig _site/ext/ 2>/dev/null || true
           ls -l _site/ext | head
 
-      # `enablement: true` turns Pages on via the API if it is not on already,
-      # which it is not today — so the first tagged release is also what creates
-      # the site.
       - name: Configure Pages
         uses: actions/configure-pages@v5
         with:

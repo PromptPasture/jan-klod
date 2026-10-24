@@ -10,7 +10,6 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::common;
 
-/// `tool-world`: for testing host-secrets-probe.
 mod tool_bind {
     wasmtime::component::bindgen!({
         path: "../../../wit",
@@ -18,7 +17,6 @@ mod tool_bind {
     });
 }
 
-/// Host backing the guest's imports: config section and host-secrets.
 struct TestHost {
     wasi: WasiCtx,
     table: ResourceTable,
@@ -52,7 +50,6 @@ impl tool_bind::jan_klod::interfaces::host_log::Host for TestHost {
         _message: String,
         _fields: Vec<tool_bind::jan_klod::interfaces::host_log::LogField>,
     ) {
-        // Discard logs for test simplicity
     }
 }
 
@@ -191,21 +188,17 @@ impl tool_bind::jan_klod::interfaces::host_storage::Host for TestHost {
 
 impl tool_bind::jan_klod::interfaces::host_secrets::Host for TestHost {
     fn get(&mut self, name: String) -> std::result::Result<String, tool_bind::jan_klod::interfaces::host_secrets::SecretsError> {
-        // Check if the instance is granted the secrets capability.
         match self.section.get("secrets") {
             Some(s) => {
-                // Check if it's the boolean true (will be "true" as a JSON string)
                 if s != "true" {
                     return Err(tool_bind::jan_klod::interfaces::host_secrets::SecretsError::Denied);
                 }
             }
             None => {
-                // Not granted
                 return Err(tool_bind::jan_klod::interfaces::host_secrets::SecretsError::Denied);
             }
         }
 
-        // Attempt to read from environment
         match std::env::var(&name) {
             Ok(value) => Ok(value),
             Err(std::env::VarError::NotPresent) => Err(tool_bind::jan_klod::interfaces::host_secrets::SecretsError::NotFound),
@@ -214,7 +207,6 @@ impl tool_bind::jan_klod::interfaces::host_secrets::Host for TestHost {
     }
 }
 
-/// Load a staged component (must be built first via `make extensions`).
 fn staged_component(engine: &Engine, filename: &str) -> Option<Component> {
     let mut path = common::ext_path();
     path.push(filename);
@@ -224,7 +216,6 @@ fn staged_component(engine: &Engine, filename: &str) -> Option<Component> {
     Component::from_file(engine, &path).ok()
 }
 
-/// Without the grant, a guest calling host-secrets gets `denied` every time.
 #[test]
 fn a_guest_without_the_grant_is_denied_every_secret() {
     let engine = Engine::default();
@@ -232,7 +223,6 @@ fn a_guest_without_the_grant_is_denied_every_secret() {
         return;
     };
 
-    // Create a config without secrets: true
     let host = TestHost::new(json!({}));
 
     let mut linker: Linker<TestHost> = Linker::new(&engine);
@@ -257,7 +247,6 @@ fn a_guest_without_the_grant_is_denied_every_secret() {
     let _ = lifecycle.call_init(&mut store, &ctx).expect("init");
     let _ = lifecycle.call_start(&mut store).expect("start");
 
-    // Call the tool with a secret name; should be denied
     let result = tool.call_invoke(&mut store, r#"{"name":"TEST_SECRET"}"#).expect("invoke");
     match result {
         Ok(output) => assert!(output.contains("DENIED:"), "Expected denial, got: {}", output),
@@ -265,15 +254,10 @@ fn a_guest_without_the_grant_is_denied_every_secret() {
     }
 }
 
-/// An ungranted guest cannot enumerate or list secrets; read-only by name.
 #[test]
 fn an_ungranted_guest_cannot_enumerate_secrets() {
-    // The interface itself provides no enumeration capability, so this is verified
-    // by the absence of enumeration methods in the WIT definition.
-    // The test above (without grant) covers the access control aspect.
 }
 
-/// When granted but a secret name is absent, `not-found` is returned.
 #[test]
 fn an_absent_secret_returns_not_found() {
     let engine = Engine::default();
@@ -281,7 +265,6 @@ fn an_absent_secret_returns_not_found() {
         return;
     };
 
-    // Create a config with secrets: true
     let host = TestHost::new(json!({"secrets": true}));
 
     let mut linker: Linker<TestHost> = Linker::new(&engine);
@@ -306,7 +289,6 @@ fn an_absent_secret_returns_not_found() {
     let _ = lifecycle.call_init(&mut store, &ctx).expect("init");
     let _ = lifecycle.call_start(&mut store).expect("start");
 
-    // Call the tool with a non-existent secret; should return not-found
     let result = tool.call_invoke(&mut store, r#"{"name":"NONEXISTENT_SECRET"}"#).expect("invoke");
     match result {
         Ok(output) => assert!(output.contains("not-found"), "Expected not-found, got: {}", output),
@@ -314,7 +296,6 @@ fn an_absent_secret_returns_not_found() {
     }
 }
 
-/// When granted and the secret exists, the value is returned.
 #[test]
 fn a_granted_guest_reading_an_extant_secret_returns_the_value() {
     let engine = Engine::default();
@@ -322,10 +303,8 @@ fn a_granted_guest_reading_an_extant_secret_returns_the_value() {
         return;
     };
 
-    // Set an environment variable for the test
     std::env::set_var("TEST_SECRET_PROBE", "secret-value-123");
 
-    // Create a config with secrets: true
     let host = TestHost::new(json!({"secrets": true}));
 
     let mut linker: Linker<TestHost> = Linker::new(&engine);
@@ -350,7 +329,6 @@ fn a_granted_guest_reading_an_extant_secret_returns_the_value() {
     let _ = lifecycle.call_init(&mut store, &ctx).expect("init");
     let _ = lifecycle.call_start(&mut store).expect("start");
 
-    // Call the tool with the existent secret; should return the value
     let result = tool.call_invoke(&mut store, r#"{"name":"TEST_SECRET_PROBE"}"#).expect("invoke");
     match result {
         Ok(output) => assert!(output.contains("secret-value-123"), "Expected value, got: {}", output),

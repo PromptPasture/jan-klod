@@ -7,7 +7,6 @@ publish.workspace = true
 description = "select-tools interceptor: a thin pass-through that exposes the active tool set to the loop; per-step narrowing is a later refinement."
 
 [lib]
-# A reactor component: exports interceptor-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]

@@ -1,15 +1,4 @@
-//! An extension's contributions, from the guest to a client and back.
-//!
-//! `interceptor-system` declares a command and a status item; the host reads
-//! them off the component and the rpc surface carries them. Unit tests cover
-//! each half — what the guest builds, what the host maps — and neither shows
-//! that a client attaching to a real runtime is handed anything.
-//!
-//! The third test is the one that will rot first: a client that ignores
-//! contributions must run turns exactly as before. `wit/client-surface.wit`
-//! promises it, and a renderer added later is what would break it.
-//!
-//! Skips if guests are not staged in `ext/`; build with `make ext`.
+//! An extension's contributions reach a client over the rpc surface; a client that ignores them runs turns as before.
 
 use std::io::Cursor;
 
@@ -19,11 +8,8 @@ use jk_protocol::{jsonrpc, Notification, PROTOCOL_VERSION};
 
 use crate::common;
 
-/// Guests these tests need: a provider to answer, and the one extension that
-/// contributes anything.
 const GUESTS: [&str; 2] = ["provider-openai.wasm", "interceptor-system.wasm"];
 
-/// An offline agent, with `interceptor-system` on when `contributing`.
 fn booted(tag: &str, contributing: bool) -> Option<(common::TempDir, jk_agent::AgentSession)> {
     if !common::guests_staged(&GUESTS) {
         return None;
@@ -58,7 +44,6 @@ extensions:
     Some((dir, agent))
 }
 
-/// Drive a scripted exchange and hand back what the core wrote, in order.
 fn exchange(agent: &mut jk_agent::AgentSession, script: &[String]) -> Vec<String> {
     let input = Cursor::new(script.join("\n").into_bytes());
     let mut output = Vec::new();
@@ -70,14 +55,12 @@ fn exchange(agent: &mut jk_agent::AgentSession, script: &[String]) -> Vec<String
         .collect()
 }
 
-/// The `protocol/hello` frame, at whatever version this build speaks.
 fn hello() -> String {
     format!(
         r#"{{"jsonrpc":"2.0","id":1,"method":"protocol/hello","params":{{"version":"{PROTOCOL_VERSION}"}}}}"#
     )
 }
 
-/// The contributions notification in `lines`, if one was sent.
 fn contributions(lines: &[String]) -> Option<Notification> {
     lines
         .iter()
@@ -86,7 +69,6 @@ fn contributions(lines: &[String]) -> Option<Notification> {
         .find(|notification| matches!(notification, Notification::SurfaceContributions { .. }))
 }
 
-/// A response's result, or a panic naming the error.
 fn result(line: &str) -> serde_json::Value {
     let response: jsonrpc::Response = serde_json::from_str(line).expect("a response");
     match response.outcome {
@@ -111,7 +93,6 @@ fn a_client_is_told_what_is_contributed_as_soon_as_it_connects() {
         .iter()
         .find(|set| set.extension == "interceptor.system")
         .expect("interceptor.system contributes");
-    // Named by the host from the instance id, not by the guest about itself.
     assert_eq!(system.extension, "interceptor.system");
     assert!(
         system
@@ -131,8 +112,6 @@ fn a_client_is_told_what_is_contributed_as_soon_as_it_connects() {
     );
 }
 
-/// Nothing enabled contributes, so nothing is said. An absent notification and
-/// an empty one mean the same thing, and the quiet case is the common one.
 #[test]
 fn a_runtime_whose_extensions_contribute_nothing_says_nothing() {
     let Some((_dir, mut agent)) = booted("quiet", false) else {
@@ -164,8 +143,6 @@ fn invoking_a_contributed_command_answers_from_the_extension() {
         .next()
         .expect("the invocation is answered");
     let outcome = result(answered);
-    // `verbose` asks for the whole prompt, and the built-in text opens with
-    // this line — so the answer came from the guest, not from a stub here.
     assert!(
         outcome["text"]
             .as_str()
@@ -180,8 +157,6 @@ fn invoking_a_contributed_command_answers_from_the_extension() {
     );
 }
 
-/// A name nobody contributed is the caller's mistake, and is refused as one
-/// rather than silently succeeding.
 #[test]
 fn invoking_something_nobody_contributes_is_refused() {
     let Some((_dir, mut agent)) = booted("unknown", true) else {
@@ -206,12 +181,6 @@ fn invoking_something_nobody_contributes_is_refused() {
     assert_eq!(error.code, jsonrpc::METHOD_NOT_FOUND);
 }
 
-/// The degradation guarantee: contributions are additive, and a client that
-/// never reads the notification takes the same turn as one that does.
-///
-/// Asserted by comparing two runtimes — one whose extension contributes and
-/// one where it is off — rather than by a client that looks away, because
-/// "ignored it" is not observable and "same answer either way" is.
 #[test]
 fn a_client_that_ignores_contributions_runs_the_same_turn() {
     let Some((_with_dir, mut contributing)) = booted("turn-with", true) else {

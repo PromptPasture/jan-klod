@@ -1,43 +1,23 @@
 #!/bin/sh
-# Prepare the crate the end-to-end self-extension test compiles (#221).
+# Prepare the crate the end-to-end self-extension test compiles.
 #
-# The chain test compiles a **real component** — wit-bindgen, our `tool-world`,
-# an exported tool — inside `self-extend`'s jail, where the network is denied.
-# Two things have to be true before that build can succeed offline, and neither
-# is something a test can arrange from inside the jail:
+# The test builds a real component inside self-extend's jail, which denies the
+# network. Two things must exist first, and only an online run outside the jail
+# can provide them: a lock file (offline resolution of an unfetched crate fails),
+# and fetched crates (extraction writes under CARGO_HOME, outside the jail's
+# writable workspace). The build below does both; the jailed build then needs no network.
 #
-#   1. a lock file, because resolution picks the newest compatible version
-#      rather than a cached one, and offline resolution of a fresh crate fails
-#      on the first version nobody fetched;
-#   2. the crates themselves *fetched and extracted*, because extraction writes
-#      under `CARGO_HOME`, which is outside the workspace the jail allows
-#      writes to.
+# Not `cargo vendor`: a lock plus the shared cargo cache is about 1 MB, against
+# 34 MB for vendoring, and needs no config redirect.
 #
-# So this runs once, online, outside the jail: it writes the crate, locks it,
-# and builds it — the build is what extracts. Afterwards the test's own jailed
-# build needs nothing from the network.
-#
-# ## Why not `cargo vendor`
-#
-# Vendoring is what an air-gapped operator does and what #192 measured: 34 MB,
-# 47 crates, copied into the workspace. Measured here, a lock plus the shared
-# cargo cache costs about **1 MB** of `.crate` files that every other build on
-# the machine can use, and needs no `.cargo/config.toml` redirect. Reads are
-# unrestricted inside the jail and `CARGO_HOME` is already in `BASE_ENV`, so
-# the cache is reachable without granting anything. On a machine where disk is
-# the scarce resource, that is the cheaper of the two by a factor of thirty.
-#
-# The fixture's own `target/` is removed at the end: the jailed build makes its
-# own inside the test's workspace, and 168 MB to keep a copy nothing reads is
-# the wrong trade.
+# target/ is removed at the end: 168 MB that nothing reads.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="${1:-$ROOT/.fixtures/self-extend-guest}"
 
 mkdir -p "$DIR/src" "$DIR/wit"
-# The whole package, because `generate!` parses every file in the directory.
-# No `deps/`: nothing in it references an external package.
+# All of wit/: generate! parses every file in the directory.
 cp "$ROOT"/wit/*.wit "$DIR/wit/"
 
 cat > "$DIR/Cargo.toml" <<'MANIFEST'
@@ -124,11 +104,9 @@ mod glue {
 SOURCE
 
 cd "$DIR"
-# Online, once: resolve and fetch. Writes Cargo.lock.
+# Online: resolve and fetch, writing Cargo.lock.
 cargo fetch --target wasm32-wasip2
-# Offline from here, and the build is what extracts the sources the jailed
-# build will read. Also the proof the fixture compiles at all — a fixture that
-# only *looks* right would fail inside the jail, where the diagnosis is worse.
+# Offline build: extracts the sources and proves the fixture compiles.
 cargo build --offline --locked --target wasm32-wasip2
 test -f target/wasm32-wasip2/debug/self_built.wasm || {
     echo "self-extend-fixture: the fixture did not build" >&2

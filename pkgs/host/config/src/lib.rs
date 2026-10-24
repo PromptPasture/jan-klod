@@ -1,16 +1,4 @@
-//! Loader for `config.yaml`.
-//!
-//! Extensions group by category (`provider`, `store`, …); each entry is one *instance*.
-//! The core interprets two keys:
-//!
-//! * `enabled` — load the instance (default `false`).
-//! * `type` — wasm discriminator; component is `ext/<category>-<type>.wasm`.
-//!   Defaults to entry name (`provider.openai` → `provider-openai.wasm`);
-//!   multiple instances may share one `type`.
-//!
-//! Everything else is opaque domain config: expanded `${VAR}` and passed to the
-//! instance via `host-config`. Top-level agent keys (`providers`, `routing`, …)
-//! are preserved for `manager-agent-loop`; the core has no routing logic.
+//! Loader for `config.yaml`: extensions grouped by category, each entry one instance.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -41,7 +29,7 @@ impl FromStr for OutputFormat {
 }
 
 impl OutputFormat {
-    /// Return the string representation of this format.
+    /// The `output-format` string for this format.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -62,18 +50,12 @@ impl Observability {
     /// Parse observability config from a top-level value.
     ///
     /// # Errors
-    /// Returns error if:
-    /// - the value is not a mapping (`ObservabilityNotMap`)
-    /// - `output-format` is not a string (`ObservabilityFormatNotString`)
-    /// - `output-format` has an invalid value like `plain` (`InvalidOutputFormat`)
-    ///
-    /// Returns `Ok` with `OutputFormat::Human` default if `output-format` is absent.
+    /// Value is not a mapping, or `output-format` is not a valid string.
     pub fn from_value(value: &Value) -> Result<Self, ConfigError> {
         let Value::Object(obs) = value else {
             return Err(ConfigError::ObservabilityNotMap);
         };
 
-        // Get the output-format key, defaulting to Human if absent
         match obs.get("output-format") {
             None => Ok(Self {
                 output_format: OutputFormat::Human,
@@ -116,8 +98,7 @@ pub struct ExtensionInstance {
     pub component: String,
     /// Whether the core should load this instance.
     pub enabled: bool,
-    /// Opaque config section (the entry minus `enabled`/`type`), env-expanded
-    /// for enabled instances. Served back through `host-config`.
+    /// Opaque config section minus `enabled`/`type`; env-expanded when enabled.
     pub config: Value,
 }
 
@@ -134,8 +115,7 @@ impl ExtensionInstance {
 pub struct Config {
     /// Every declared instance, ordered by `(category, name)`.
     pub instances: Vec<ExtensionInstance>,
-    /// Top-level keys excluding `extensions` (e.g. `providers`, `routing`),
-    /// preserved for agent-loop. Always an object.
+    /// Top-level keys other than `extensions`, kept for agent-loop; always an object.
     pub agent: Value,
     /// Observability configuration (structured logging format).
     pub observability: Observability,
@@ -145,7 +125,7 @@ impl Config {
     /// Parse `config.yaml` from disk.
     ///
     /// # Errors
-    /// [`ConfigError::Read`] (file not readable) or [`Config::from_yaml`] parse errors.
+    /// [`ConfigError::Read`] or [`Config::from_yaml`] parse errors.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -155,15 +135,10 @@ impl Config {
         Self::from_yaml(&text)
     }
 
-    /// Fetch a top-level key without expanding instance variables.
-    ///
-    /// [`Config::from_path`] expands `${VAR}` in enabled instances and fails on
-    /// unset, wrong for reading unrelated keys. `ext install` needs
-    /// `registry.trusted-keys` (no provider API key required). Uses the same
-    /// YAML parse as [`Config::from_path`], stopping before instance expansion.
+    /// Fetch a top-level key without `${VAR}` expansion, so unset variables do not fail.
     ///
     /// # Errors
-    /// [`ConfigError::Read`], [`ConfigError::Yaml`], or [`ConfigError::RootNotMap`].
+    /// [`ConfigError::Read`], [`ConfigError::Parse`], or [`ConfigError::RootNotMap`].
     pub fn top_level(path: impl AsRef<Path>, key: &str) -> Result<Option<Value>, ConfigError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -180,8 +155,7 @@ impl Config {
     /// Parse `config.yaml` from a string.
     ///
     /// # Errors
-    /// [`ConfigError`] if YAML is invalid, structure is not category→instance,
-    /// enabled instance has unterminated `${` / unset `${VAR}`, or multiple stores enabled.
+    /// [`ConfigError`] on invalid YAML, wrong structure, unset `${VAR}`, or multiple enabled stores.
     pub fn from_yaml(yaml: &str) -> Result<Self, ConfigError> {
         let root: Value = serde_yaml_ng::from_str(yaml)?;
         let Value::Object(mut root) = root else {
@@ -193,14 +167,12 @@ impl Config {
         let instances = parse_instances(extensions)?;
         validate(&instances)?;
 
-        // Parse observability configuration or use default.
         let observability = if let Some(obs_value) = root.remove("observability") {
             Observability::from_value(&obs_value)?
         } else {
             Observability::default()
         };
 
-        // Whatever remains at the top level is opaque agent-behaviour config.
         Ok(Self {
             instances,
             agent: Value::Object(root),
@@ -240,7 +212,6 @@ fn parse_instances(extensions: Value) -> Result<Vec<ExtensionInstance>, ConfigEr
             };
             let component = format!("{category}-{kind}");
             let mut config = Value::Object(entry);
-            // Only enabled instances need secrets resolved; disabled may reference unset ${VAR}.
             if enabled {
                 expand_env(&mut config, &id)?;
             }
@@ -273,7 +244,6 @@ fn validate(instances: &[ExtensionInstance]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Recursively expand `${VAR}` references in every string within `value`.
 fn expand_env(value: &mut Value, id: &str) -> Result<(), ConfigError> {
     match value {
         Value::String(s) => {
@@ -296,8 +266,7 @@ fn expand_env(value: &mut Value, id: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Replace every `${NAME}` in `s` with its environment value.
-/// Returns `None` if no expansions. Errors on unterminated `${` or unset variables.
+/// Returns `None` when `s` has no `${`; errors on unterminated `${` or unset variable.
 fn expand_str(s: &str, id: &str) -> Result<Option<String>, ConfigError> {
     if !s.contains("${") {
         return Ok(None);

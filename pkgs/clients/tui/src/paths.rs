@@ -1,31 +1,4 @@
-//! `@` path completion (#153).
-//!
-//! # Offers path, reads nothing
-//!
-//! Accepted text = plain path inserted in message (client never opens files).
-//! File reading, context = core concerns (policy in `interceptor-*` guests, not clients).
-//!
-//! # The fragment can be anywhere in the message
-//!
-//! This is the first difference from the `/` menu. A command is the whole
-//! buffer, so #152 derives "is the menu open" from the buffer's shape. A path
-//! reference is mid-sentence — `look at @src/main.rs and tell me` — so the
-//! fragment is the run from the last `@` back to the caret, and it ends at the
-//! first whitespace because a path with a space in it is not what `@` is for.
-//!
-//! # Two bounds, and one of them has to be visible
-//!
-//! The walk honours `.gitignore` and stops at [`MAX_ENTRIES`]. That cap is the
-//! interesting one: [#145](https://github.com/PromptPasture/jan-klod/issues/145)
-//! is open right now because a bounded walk elsewhere in this repository answers
-//! from the first 500 files and the caller cannot tell. [`Completion::truncated`]
-//! exists so this list cannot make the same mistake quietly.
-//!
-//! # Why `..` cannot be walked into
-//!
-//! Structural: walk descends from working directory only; `@../secret` matches nothing.
-//! Check on typed string can't catch all spellings. Client-side rule = **convenience,
-//! not security** (sandbox checks are advice, not boundaries).
+//! `@` path completion.
 
 use std::path::Path;
 
@@ -37,15 +10,11 @@ pub const MAX_ENTRIES: usize = 50;
 pub struct Completion {
     /// Paths relative to the working directory.
     pub entries: Vec<String>,
-    /// Set when [`MAX_ENTRIES`] cut the list short. A list that stops silently
-    /// is a list a caller believes is complete.
+    /// Set when [`MAX_ENTRIES`] cut the list short.
     pub truncated: bool,
 }
 
-/// The fragment being completed: the run from the last `@` back to the caret.
-///
-/// `None` when the caret is not in one — no `@` before it, or whitespace
-/// between the two, which means the reference has ended.
+/// The run from the last `@` to the caret, or `None` if there is no `@` or whitespace intervenes.
 #[must_use]
 pub fn fragment(text: &str, caret: usize) -> Option<&str> {
     let head = text.get(..caret)?;
@@ -55,18 +24,11 @@ pub fn fragment(text: &str, caret: usize) -> Option<&str> {
 }
 
 /// Paths under `root` matching `fragment`, honouring `.gitignore`.
-///
-/// A **substring** match, unlike the `/` menu's prefix: `@main` should find
-/// `src/main.rs`, which a prefix never would, and a path fragment is a hint
-/// about a file rather than the start of its name.
 #[must_use]
 pub fn complete(root: &Path, fragment: &str) -> Completion {
     let mut entries = Vec::new();
     let mut truncated = false;
 
-    // Lazy walk: cap stops traversal (not trimming)—faster on large repos.
-    // `require_git(false)` essential: respects `.gitignore` outside git repos too.
-    // By default, `WalkBuilder` only honors `.gitignore` in git repos.
     for found in ignore::WalkBuilder::new(root)
         .hidden(true)
         .require_git(false)
@@ -97,20 +59,7 @@ pub fn complete(root: &Path, fragment: &str) -> Completion {
 mod tests {
     use super::{complete, fragment, Completion, MAX_ENTRIES};
 
-    /// Distinguishes two trees built in the same microsecond.
-    ///
-    /// The name used to be process id + `SystemTime::now().as_nanos()`, which
-    /// reads as unique and is not: macOS's clock has **microsecond**
-    /// granularity, so `as_nanos()` there always ends in three zeros and 179 of
-    /// 200 consecutive readings are identical. Rust runs these tests as threads
-    /// of one process, so two that called `tree()` together got the same pid
-    /// and the same reading, and therefore *the same directory* — one test's
-    /// 70 `fileNNN.txt` fixtures landing in another's tree, and whichever
-    /// finished first deleting the other's root mid-walk with `remove_dir_all`.
-    ///
-    /// That made `the_entry_cap_binds_and_says_so` fail about one run in six,
-    /// and only when run alongside its siblings — never alone, which is the
-    /// signature of shared state rather than of a wrong assertion.
+    /// The name must not come from the clock: trees collided at macOS's microsecond resolution.
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     fn tree() -> std::path::PathBuf {
@@ -119,10 +68,6 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        // The counter restarts every process, so a run whose test panicked
-        // before its `remove_dir_all` leaves a tree that a later run with a
-        // recycled pid would inherit. Start from nothing rather than from
-        // whatever survived.
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(root.join("src")).expect("tree");
         std::fs::create_dir_all(root.join("target")).expect("tree");
@@ -140,19 +85,14 @@ mod tests {
         let text = "look at @src/ma";
         assert_eq!(fragment(text, text.len()), Some("src/ma"));
 
-        // Mid-message, with more after the caret.
         let mid = "see @src/lib.rs and also";
         assert_eq!(fragment(mid, 15), Some("src/lib.rs"));
 
-        // A space ends the reference.
         assert_eq!(fragment("see @src and", 12), None);
-        // No `@` at all.
         assert_eq!(fragment("plain words", 11), None);
-        // The `@` itself offers everything.
         assert_eq!(fragment("@", 1), Some(""));
     }
 
-    /// Acceptance line 1: an ignored path is not offered.
     #[test]
     fn gitignored_paths_are_not_offered() {
         let root = tree();
@@ -175,7 +115,6 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// Acceptance line 2, and it holds structurally rather than by a check.
     #[test]
     fn dot_dot_cannot_be_walked_into() {
         let root = tree();
@@ -201,7 +140,6 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// Acceptance line 3: the cap binds, and the user can tell.
     #[test]
     fn the_entry_cap_binds_and_says_so() {
         let root = tree();

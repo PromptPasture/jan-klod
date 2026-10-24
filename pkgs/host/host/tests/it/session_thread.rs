@@ -1,16 +1,4 @@
-//! A real `AgentSession`, served through the seam, from threads that never
-//! hold it (#223).
-//!
-//! `session_thread.rs`'s own tests own an `i32` and an `Rc`, which is what
-//! makes its failure modes testable at all. This is the other half: the
-//! value the seam exists for is a booted session with a provider and a
-//! store, and the property being shown is the one the rest of Phase 20
-//! rests on — **two turns, two sessions, queued from two threads, neither
-//! of which can touch the session**.
-//!
-//! That last clause is enforced by the compiler rather than asserted: a
-//! `Jobs<AgentSession>` handle is all either thread has, and `AgentSession`
-//! is `!Send`, so a thread that tried to hold one would not build.
+//! A real `AgentSession` is served through the seam from threads that never hold it (`AgentSession` is `!Send`).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -20,8 +8,6 @@ use jk_host::session_thread::{queue, serve};
 
 use crate::common;
 
-/// A runtime with a provider and nothing else: this is about threading, not
-/// about what a turn can do.
 fn booted(tag: &str) -> Option<(common::TempDir, AgentSession, Arc<AtomicU32>)> {
     if !common::guests_staged(&["provider-openai.wasm"]) {
         return None;
@@ -56,8 +42,6 @@ extensions:
     )
     .expect("writes the config");
 
-    // Counts completions, so "both turns really ran" is a fact about the
-    // provider being called twice rather than about two strings coming back.
     let completions = Arc::new(AtomicU32::new(0));
     let counter = Arc::clone(&completions);
     let factory = move || -> jk_wasm::route::HttpFn {
@@ -79,12 +63,6 @@ extensions:
     Some((guard, agent, completions))
 }
 
-/// The acceptance: two turns in two sessions, queued from two threads,
-/// neither holding the session.
-///
-/// Today's surface cannot express this at all — `serve_authed` owns the
-/// session on the thread that accepts, so whoever runs a turn *is* the
-/// server. Both callers here hold a `Jobs` handle and nothing else.
 #[test]
 fn two_threads_queue_turns_in_two_sessions_without_holding_the_session() {
     let Some((_guard, mut agent, completions)) = booted("two-turns") else {
@@ -92,8 +70,6 @@ fn two_threads_queue_turns_in_two_sessions_without_holding_the_session() {
     };
     let (jobs, queued) = queue::<AgentSession>();
 
-    // Spawned before `serve` starts, and eagerly: a lazy iterator would
-    // spawn them after the loop had already ended for want of handles.
     let mut callers = Vec::new();
     for session in ["s1", "s2"] {
         let jobs = jobs.clone();
@@ -103,7 +79,6 @@ fn two_threads_queue_turns_in_two_sessions_without_holding_the_session() {
             })
         }));
     }
-    // The loop ends when the last handle goes; the callers hold clones.
     drop(jobs);
 
     serve(&mut agent, &queued);
@@ -126,11 +101,6 @@ fn two_threads_queue_turns_in_two_sessions_without_holding_the_session() {
     );
 }
 
-/// Both sessions are still there afterwards, in the store.
-///
-/// A seam that ran the turns on one thread but lost track of which session
-/// they belonged to would pass the test above: the answers are identical by
-/// construction. This reads them back by id.
 #[test]
 fn each_queued_turn_landed_in_its_own_session() {
     let Some((_guard, mut agent, _)) = booted("two-sessions") else {

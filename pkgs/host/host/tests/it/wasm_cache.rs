@@ -1,23 +1,9 @@
-//! Wasmtime's built-in compile cache (#60), proven through the real boot
-//! path: `Runtime::boot` twice against the same `config.yaml`/`ext/` skips
-//! Cranelift the second time, and mutating a guest's bytes between boots
-//! produces a fresh miss rather than a stale hit.
-//!
-//! `pkgs/host/wasm/src/wasm_cache.rs`'s unit tests exercise the mechanism directly
-//! against Wasmtime's API — with synthetic WAT components — and cover the
-//! "changing the Wasmtime version" acceptance (two crate versions cannot both
-//! link into one binary). This file proves the claim end-to-end through
-//! `Runtime::boot`, with a real staged guest's bytes.
-//!
-//! Skips (passes as a no-op) when the guest is not staged in `ext/`.
+//! The Wasmtime compile cache through `Runtime::boot`: a second boot skips Cranelift, changed guest bytes miss.
 
 use jk_agent::Runtime;
 
 use crate::common;
 
-/// A private copy of `tool-fs.wasm` (+ manifest) this file can mutate freely —
-/// the shared `ext/` is read by concurrent tests, and one corrupts its copy's
-/// bytes on purpose.
 fn copy_tool_fs(dir: &std::path::Path) -> std::path::PathBuf {
     let real_ext = common::repo_root().join("ext");
     let ext = dir.join("ext");
@@ -31,9 +17,7 @@ fn copy_tool_fs(dir: &std::path::Path) -> std::path::PathBuf {
     ext
 }
 
-/// One enabled instance (`tool.fs`), so exactly one component is compiled per
-/// boot and the cache's hit/miss counters have an unambiguous size to check
-/// against.
+/// One enabled instance, so each boot compiles exactly one component and the hit/miss counts are unambiguous.
 fn config_for(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("config.yaml");
     std::fs::write(
@@ -44,10 +28,6 @@ fn config_for(dir: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
-/// Append a trailing custom wasm section: a standard way to change a
-/// component's bytes without touching imports/exports, so the manifest
-/// cross-check still passes. Confirmed locally with `wasm-tools validate` and
-/// `wasmtime compile` before this test was written.
 fn append_custom_section(path: &std::path::Path) {
     let mut bytes = std::fs::read(path).expect("reads the staged component");
     let name = b"jk-cache-test";
@@ -56,7 +36,7 @@ fn append_custom_section(path: &std::path::Path) {
     content.push(u8::try_from(name.len()).expect("a short fixed name fits in one byte"));
     content.extend_from_slice(name);
     content.extend_from_slice(&payload);
-    bytes.push(0x00); // custom section id
+    bytes.push(0x00);
     bytes.push(u8::try_from(content.len()).expect("this content is well under 128 bytes"));
     bytes.extend_from_slice(&content);
     std::fs::write(path, bytes).expect("writes the mutated component back");
@@ -80,8 +60,6 @@ fn a_second_boot_against_the_same_config_dir_skips_cranelift() {
         first.report()
     );
 
-    // Same `config_dir` → same default cache dir, so this is genuinely "the
-    // second boot after a cold one", not two unrelated caches.
     let second = Runtime::boot(&config, &ext).expect("warm boot loads from the cache");
     assert_eq!(
         second.compile_cache_stats(),

@@ -1,34 +1,14 @@
-//! `tool-git` — **read-only** repository inspection through `host-process`.
-//!
-//! Exposes `git` tool with ops:
-//! - `status` → porcelain status + branch
-//! - `diff` → working or staged diff
-//! - `log` → one-line history
-//! - `show` → one commit
-//! - `branch` → local branches
-//!
-//! Closed op set prevents arbitrary command execution. Only git runs; only the
-//! five read-only ops are reachable. No `commit`, `checkout`, `reset`, `push`.
-//!
-//! Reading a repo is not side-effect-free: Git's config can run code (fsmonitor,
-//! hooksPath, diff/textconv drivers). Every invocation disables these paths (HARDENING)
-//! so untrusted repos stay safe. Argv construction is pure Rust (unit-tested);
-//! glue for wasm32 only.
+//! `tool-git`: read-only repository inspection (`status`, `diff`, `log`, `show`, `branch`) through `host-process`.
 
-/// Largest `log` page. Past this the answer is not history, it is a data dump.
 const MAX_COUNT: u64 = 200;
-/// Default `log` page.
 const DEFAULT_COUNT: u64 = 20;
-/// Longest accepted `rev`/`path` argument — a bound on argv, not on taste.
 const MAX_ARG_LEN: usize = 200;
 
-// Pure logic: unit-tested natively; the CM glue only compiles for wasm32.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod git {
     use crate::{DEFAULT_COUNT, MAX_ARG_LEN, MAX_COUNT};
 
-    /// Flags prepended to every invocation, disabling hooks that let a checkout run code.
-    /// Covers: fsmonitor, hooksPath, ext transports, pager, textconv/diff drivers.
+    /// Flags prepended to every invocation, disabling config that lets a repo run code.
     pub const HARDENING: [&str; 8] = [
         "--no-pager",
         "-c",
@@ -40,23 +20,14 @@ mod git {
         "--no-optional-locks",
     ];
 
-    /// What the caller asked for, already extracted from the JSON arguments.
     pub struct Request<'a> {
-        /// The operation name (one of the five allowlisted subcommands).
         pub op: &'a str,
-        /// Optional pathspec to narrow `diff`/`log`.
         pub path: Option<&'a str>,
-        /// Revision for `show`.
         pub rev: Option<&'a str>,
-        /// Whether `diff` should read the index rather than the working tree.
         pub staged: bool,
-        /// How many commits `log` returns.
         pub count: Option<u64>,
     }
 
-    /// Build the argument vector for `git`, or explain the refusal.
-    /// # Errors
-    /// Caller-facing message when op is not allowlisted or arguments fail validation.
     pub fn argv(req: &Request) -> Result<Vec<String>, String> {
         let mut out: Vec<String> = HARDENING.iter().map(|s| (*s).to_string()).collect();
         match req.op {
@@ -103,7 +74,7 @@ mod git {
         Ok(out)
     }
 
-    /// Append `-- <path>` so git reads it as a pathspec and never as a flag.
+    /// So git reads it as a pathspec and never as a flag.
     fn push_pathspec(out: &mut Vec<String>, path: Option<&str>) -> Result<(), String> {
         let Some(path) = path else { return Ok(()) };
         let path = validate(path, "path")?;
@@ -115,14 +86,7 @@ mod git {
         Ok(())
     }
 
-    /// Reject arguments that git would read as options, plus anything outside the
-    /// characters revisions and paths are actually made of.
-    ///
-    /// A leading `-` is the whole risk: `rev` and `path` are the only
-    /// caller-supplied argv entries, and `--upload-pack=…`-style options are how
-    /// a value becomes a command. The charset check also excludes shell
-    /// metacharacters, defence-in-depth even though `host-process` never
-    /// involves a shell.
+    /// Rejects a leading `-` (git would read it as an option) and characters revisions do not use.
     fn validate(value: &str, what: &str) -> Result<String, String> {
         if value.is_empty() || value.len() > MAX_ARG_LEN {
             return Err(format!("{what} must be 1..={MAX_ARG_LEN} characters"));
@@ -141,11 +105,7 @@ mod git {
         Ok(value.to_string())
     }
 
-    /// Format a finished run for the model.
-    ///
-    /// A non-zero exit is information (not a repository, unknown revision), so
-    /// it comes back as a readable result rather than an opaque tool error the
-    /// model cannot act on.
+    /// A non-zero exit comes back as a readable result, not a tool error the model cannot act on.
     pub fn render(code: i32, stdout: &str, stderr: &str) -> String {
         let body = if stdout.trim().is_empty() && code == 0 {
             "(no output)".to_string()
@@ -178,7 +138,6 @@ mod git {
             }
         }
 
-        /// The arguments after the hardening prefix — what git actually does.
         fn tail(args: &[String]) -> Vec<&str> {
             args[HARDENING.len()..].iter().map(String::as_str).collect()
         }
@@ -272,7 +231,6 @@ mod git {
 
         #[test]
         fn an_argument_that_looks_like_an_option_is_refused() {
-            // The classic: a "revision" that is really `git show --upload-pack=…`.
             let err = argv(&Request {
                 rev: Some("--upload-pack=sh"),
                 ..req("show")
@@ -459,8 +417,6 @@ mod component {
                 count: value.get("count").and_then(serde_json::Value::as_u64),
             };
 
-            // A refused argument is a recoverable, self-correctable answer — the
-            // model is told what is wrong, not just that something was.
             let args = match git::argv(&request) {
                 Ok(args) => args,
                 Err(message) => return Ok(format!("REFUSED: {message}")),

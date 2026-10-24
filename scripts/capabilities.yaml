@@ -88,7 +88,7 @@ groups:
       - registry-skills
       - registry-mcp
 
-# Guests not yet shipped: built but not yet in the distributed registry, or Phase 30 planned guests
+# Guests not yet in the distributed registry.
 pending:
   interceptor-guardrails:
     description: "Content filtering: redaction of secrets and blocked patterns (built, not yet shipped)"

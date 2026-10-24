@@ -1,38 +1,10 @@
-//! A Python component answers a real tool call, through the real loop.
-//!
-//! `polyglot_ts.rs` proves a second language reaches the contracts. This
-//! proves a third, and it proves one thing that one could not: the host
-//! instantiates a component that imports **raw WASI**.
-//!
-//! # Why the imports matter here and did not there
-//!
-//! `CPython`'s standard library needs `wasi:filesystem`, `wasi:sockets` and
-//! `wasi:cli` to initialise, and `componentize-py` has no flag to drop them —
-//! where the `TypeScript` guest's `wasi:http` could be disabled and had to be,
-//! since the host refuses to link it. These the host *does* link, through
-//! `wasmtime_wasi::p2::add_to_linker_sync`, and denies at the context:
-//! `WasiCtxBuilder::new()` configures no preopens and refuses every socket
-//! address. `sandbox_boundary.rs` asserts those refusals against a guest that
-//! reaches for them on purpose; this test asserts the other half, that a guest
-//! which merely *imports* them still loads and works.
-//!
-//! # Why it skips rather than committing a fixture
-//!
-//! The component is **18.5 MB** — larger than the `TypeScript` guest's 12.7 MB,
-//! because it carries `CPython` — so it is built where the toolchain exists and
-//! skipped where it does not (#188). The toolchain itself is the cheap half at
-//! 50 MB, against 326 MB for `jco`.
-//!
-//! `JK_REQUIRE_GUESTS=1` does **not** force this one, for the reason
-//! `polyglot_ts.rs` gives: that flag means "the Rust guests must be staged".
+//! A Python component answers a real tool call; it imports raw WASI that the host links and denies at the context.
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
 
 use crate::common;
 
-/// The component this test needs, which `make -C pkgs/extensions py-guest`
-/// stages when `componentize-py` is present.
 const PY_COMPONENT: &str = "tool-hello-py.wasm";
 
 #[test]
@@ -54,9 +26,6 @@ fn a_python_tool_answers_a_real_tool_call() {
     );
     std::fs::create_dir_all(&dir.0).expect("creates the temp dir");
     let config = dir.0.join("config.yaml");
-    // `tool.hello-py` resolves to `ext/tool-hello-py.wasm` by the same naming
-    // rule every other instance uses. That is the claim under test: the host
-    // has no idea this one was written in Python.
     std::fs::write(
         &config,
         "
@@ -77,8 +46,6 @@ extensions:
     )
     .expect("writes the config");
 
-    // First the model calls the tool, then it answers in words — the same two
-    // completions `tool_wiring.rs` uses to drive a fleet dispatch.
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let factory = move || -> jk_wasm::route::HttpFn {
         let calls = std::sync::Arc::clone(&calls);
@@ -101,9 +68,6 @@ extensions:
         })
     };
 
-    // Booting is itself an assertion: this component imports `wasi:sockets`
-    // and `wasi:filesystem`, and a linker missing either would fail here the
-    // way the TypeScript guest failed on `wasi:http` before it was disabled.
     let runtime = Runtime::boot(&config, &ext_dir).expect("the runtime boots with a Python guest");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
     let out = agent.run("py-1", "greet polyglot");
@@ -112,8 +76,6 @@ extensions:
         "the turn completed: {out:?}"
     );
 
-    // The guest's own words, not the host's: `tool-hello-py` builds this
-    // string, so finding it in the transcript means the component ran.
     let recorded = agent
         .transcript("py-1")
         .iter()

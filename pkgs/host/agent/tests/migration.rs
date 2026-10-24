@@ -1,24 +1,10 @@
-//! The upgrade path: a database written before the event log existed becomes
-//! readable again.
-//!
-//! `event_log`'s own unit tests cover the conversion. What this asserts is the
-//! part they cannot — that the **boot path runs it**, so an operator upgrading
-//! does not have to know it exists. Acceptance line 3 of #45 removed the
-//! `entries` transcript write, and without this those sessions are neither
-//! listed nor readable while their rows sit there unread.
-//!
-//! The fixture is built with `rusqlite` directly, so it is the old schema
-//! holding the old rows rather than a simulation of them. No extensions are
-//! enabled: this is about the store, and a provider guest would only add a
-//! reason for the test to skip.
+//! Boot converts a pre-event-log database, so an upgraded install stays readable.
 
 use jk_agent::Runtime;
 use jk_session::store::Store;
 use jk_wasm::http::WireError;
 use jk_wasm::route::HttpFn;
 
-/// A database as an install from before the log would have it: the `entries`
-/// table alone, holding two turns of one session, with their own timestamps.
 fn old_database(path: &std::path::Path) {
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.execute_batch(
@@ -57,8 +43,6 @@ fn a_database_from_before_the_log_is_readable_after_a_boot() {
     std::fs::write(&config, format!("\nstorage:\n  path: {}\n", db.display())).unwrap();
 
     let runtime = Runtime::boot(&config, dir.join("ext")).expect("runtime boots");
-    // No provider is enabled, so this is never called; it exists because
-    // `build_agent` takes a factory.
     let factory = || -> HttpFn { Box::new(|_m, _u, _h, _b, _t| Err(WireError::ConnectionFailed)) };
     let agent = runtime.build_agent(&factory).expect("agent boots");
 
@@ -91,8 +75,6 @@ fn a_database_from_before_the_log_is_readable_after_a_boot() {
         log.iter().map(|r| r.ts).collect::<Vec<_>>()
     );
 
-    // The old rows are left in place. Deleting them would make the migration
-    // unrepeatable and irreversible in the same step, and they cost nothing.
     assert!(
         store.get("history", "turn-1").is_ok(),
         "the transcript rows are not destroyed by the conversion"

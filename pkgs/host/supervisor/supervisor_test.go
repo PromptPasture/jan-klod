@@ -19,7 +19,7 @@ func TestStandbyAndPlan(t *testing.T) {
 }
 
 func TestResolveAndAfterHealth(t *testing.T) {
-	u := Plan(Blue) // from=blue, to=green
+	u := Plan(Blue)
 	if u.Resolve(true) != Green {
 		t.Fatal("healthy resolve should keep the new slot")
 	}
@@ -42,7 +42,6 @@ func TestStateLoadDefaultAndRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 
-	// Missing file defaults to blue-active.
 	got, err := LoadState(path)
 	if err != nil || got.Active != Blue {
 		t.Fatalf("default state wrong: %+v err=%v", got, err)

@@ -1,6 +1,5 @@
 #![allow(missing_docs)]
-//! `--version` and `--help` against the built binary (#247): both answer and
-//! exit 0, without starting a gateway.
+//! `--version` and `--help` against the built binary: both exit 0 without starting a gateway.
 use std::process::Command;
 
 fn run(flag: &str) -> String {

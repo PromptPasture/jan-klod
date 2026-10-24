@@ -1,29 +1,4 @@
-//! Each named distribution boots with its own config (#114).
-//!
-//! A distribution is a guest list plus a `config.yaml` under
-//! `scripts/distributions/`. `make bundle DIST=<name>` assembles them and
-//! `scripts/bundle.sh` runs `jan-klod-gateway verify` inside the assembled
-//! directory *before* tarring — so archives that don't boot are never produced.
-//!
-//! **This is the repeatable half.** Running `make bundle` three times by hand
-//! proves three archives booted once, on one machine, the day somebody
-//! remembered. These tests ask the same question of every distribution on every
-//! `make gate`, which is what Acceptance line 2 means by "asserted per
-//! distribution, since three archives that are never booted is exactly the check
-//! that reads green while proving nothing".
-//!
-//! What it does **not** cover is the tarball's shape — the layout an installed
-//! bundle has on disk. `installed_layout.rs` covers that once, for the default
-//! bundle, by assembling a real prefix and asking the running gateway for
-//! `/health`.
-//!
-//! Distributions are discovered by reading the directory, not listed here, so
-//! the fourth one is covered when added.
-//!
-//! Offline: `verify` never calls a provider, and the API-key variables are set
-//! to placeholders exactly as `bundle.sh` does.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! Every distribution under `scripts/distributions/` boots offline and its guest list agrees with its config.
 
 use std::path::{Path, PathBuf};
 
@@ -31,7 +6,6 @@ use jk_agent::Runtime;
 
 use crate::common;
 
-/// Every distribution under `scripts/distributions/`, by name.
 fn distributions() -> Vec<String> {
     let dir = common::repo_root().join("scripts/distributions");
     let mut names: Vec<String> = std::fs::read_dir(&dir)
@@ -50,8 +24,6 @@ fn distributions() -> Vec<String> {
     names
 }
 
-/// Stage one distribution's guests the way `make bundle DIST=` does, by running
-/// the same script instead of reimplementing it.
 fn stage(name: &str, into: &Path) {
     let root = common::repo_root();
     let status = std::process::Command::new("sh")
@@ -64,8 +36,6 @@ fn stage(name: &str, into: &Path) {
     assert!(status.success(), "dist-stage.sh failed for {name}");
 }
 
-/// `bundle.sh`'s placeholder keys. `verify` resolves config but never calls a
-/// provider, so any value works.
 fn set_placeholder_keys() {
     for var in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] {
         if std::env::var(var).is_err() {
@@ -80,12 +50,6 @@ fn scratch(tag: &str) -> (PathBuf, common::TempDir) {
     (dir.clone(), common::TempDir(dir))
 }
 
-/// Acceptance line 2: every distribution boots offline with its own config.
-///
-/// One test over all of them rather than three tests: the set is read from
-/// disk, so a per-distribution test would either be generated or would go stale
-/// the moment a fourth is added. The assertion names which failed — that's
-/// what a separate test would have bought.
 #[test]
 fn every_distribution_boots_with_its_own_config() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-system.wasm"]) {
@@ -107,12 +71,6 @@ fn every_distribution_boots_with_its_own_config() {
             panic!("distribution `{name}` does not boot with its own config: {err}")
         });
 
-        // **Booting is not enough, and finding that out is why this is here.**
-        // An enabled instance missing its component does not fail boot — it's
-        // simply never loaded. So a distribution could enable `tool.fs`, omit
-        // `tool-fs` from its guest list, boot green, and hand a user an install
-        // where the tool they came for silently does not exist. The guest list
-        // and the config have to agree, and only this checks it.
         let parsed = jk_config::Config::from_path(&config)
             .unwrap_or_else(|err| panic!("distribution `{name}`'s config parses: {err}"));
         let missing: Vec<String> = parsed
@@ -133,21 +91,10 @@ fn every_distribution_boots_with_its_own_config() {
     }
 }
 
-/// `headless-chat` runs no commands, and this guards against that.
-///
-/// Decision (b) on #114: the config states `execution: enabled: false` once, in
-/// the form that means it, rather than stacking `require: true` with a
-/// contradictory sandbox mode to deny twice. A second lock whose label lies
-/// about *why* would invite the next reader to delete it while "fixing" a
-/// sandbox this distribution never asked for. This test is the belt-and-braces
-/// instead — it fails loudly where a second lock would hold quietly.
 #[test]
 fn headless_chat_does_not_run_commands() {
     let config = common::repo_root().join("scripts/distributions/headless-chat/config.yaml");
     let text = std::fs::read_to_string(&config).expect("the config is readable");
-    // The `execution:` block specifically — `enabled:` appears under every
-    // provider and interceptor too, so searching for `enabled: false` anywhere
-    // could match elsewhere.
     let block = text.split_once("\nexecution:").map_or_else(
         || {
             panic!(
@@ -168,8 +115,6 @@ fn headless_chat_does_not_run_commands() {
         setting, "false",
         "headless-chat runs no commands, so its execution block must say so"
     );
-    // The tools that would need it are absent too, so a careless `enabled: true`
-    // still reaches nothing — but the line above states the intent.
     let guests = std::fs::read_to_string(
         common::repo_root().join("scripts/distributions/headless-chat/guests"),
     )

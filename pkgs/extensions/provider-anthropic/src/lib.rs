@@ -1,8 +1,4 @@
-//! `provider-anthropic` — Anthropic Messages API implementation.
-//!
-//! Posts to `/v1/messages` via `host-http`. System messages go to the top-level `system`
-//! field; tool results become `{"role":"user","content":[{"type":"tool_result",…}]}`.
-//! Maps `401/403` → `AuthFailed`, `429` → `RateLimited`. Never logs `api-key`.
+//! `provider-anthropic`: Anthropic Messages API over `host-http`; never logs `api-key`.
 
 #[allow(
     unsafe_code,
@@ -35,9 +31,8 @@ use bindings::jan_klod::interfaces::host_http::{self, HttpError, HttpHeader, Htt
 use bindings::jan_klod::interfaces::host_log::{self, LogLevel};
 use bindings::jan_klod::interfaces::host_secrets;
 
-/// Anthropic API version header value.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Fallback max-tokens when the request omits it (Anthropic requires the field).
+/// Fallback when the request omits max-tokens, which Anthropic requires.
 const DEFAULT_MAX_TOKENS: u32 = 8192;
 
 #[derive(Clone, Default)]
@@ -74,7 +69,6 @@ fn next_handle() -> StreamHandle {
     })
 }
 
-/// Read `obj[key]` as an owned string, defaulting to empty.
 fn str_field(obj: &Value, key: &str) -> String {
     obj.get(key)
         .and_then(Value::as_str)
@@ -82,12 +76,9 @@ fn str_field(obj: &Value, key: &str) -> String {
         .to_owned()
 }
 
-/// Convert a WIT message to Anthropic API JSON.
-/// System messages are extracted separately; tool results become `{"role":"user","content":[{"type":"tool_result",…}]}`.
 fn message_to_json(msg: &Message) -> Value {
     match msg.role {
         Role::System => {
-            // Should be stripped before this is called; fallback so conversation makes sense.
             json!({"role": "user", "content": msg.content})
         }
         Role::User => json!({"role": "user", "content": msg.content}),
@@ -106,7 +97,6 @@ fn message_to_json(msg: &Message) -> Value {
     }
 }
 
-/// Convert a WIT `ToolDefinition` to Anthropic's `{name, description, input_schema}`.
 fn tool_to_json(tool: &ToolDefinition) -> Value {
     let input_schema: Value =
         serde_json::from_str(&tool.parameters_schema).unwrap_or_else(|_| json!({}));
@@ -117,8 +107,6 @@ fn tool_to_json(tool: &ToolDefinition) -> Value {
     })
 }
 
-/// Build the Anthropic `/v1/messages` request body.
-/// Extracts the first `Role::System` message to the top-level `system` field; others go to `messages`.
 fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     let mut obj = Map::new();
     obj.insert("model".to_owned(), json!(model));
@@ -127,7 +115,6 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
         json!(request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
     );
 
-    // Extract system prompt to top level (not in messages).
     let system: Option<String> = request
         .messages
         .iter()
@@ -158,11 +145,9 @@ fn build_request_body(model: &str, request: &CompletionRequest) -> Value {
     Value::Object(obj)
 }
 
-/// Parse an Anthropic `/v1/messages` response into a chunk queue.
 fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| ProviderError::Transient)?;
 
-    // Surface API errors in a 200 body.
     if value.get("type").and_then(Value::as_str) == Some("error") {
         let kind = value
             .pointer("/error/type")
@@ -215,7 +200,6 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
         .and_then(Value::as_str)
         .unwrap_or("end_turn")
         .to_owned();
-    // Normalize to the core's finish-reason vocabulary.
     let finish = match stop_reason.as_str() {
         "tool_use" => "tool-calls",
         "max_tokens" => "length",
@@ -225,7 +209,6 @@ fn parse_response(body: &[u8]) -> Result<VecDeque<CompletionChunk>, ProviderErro
     Ok(chunks)
 }
 
-/// Describe a `host-http` error in words, not a Rust identifier (e.g. `HttpError::ConnectionFailed`).
 const fn describe_http(err: HttpError) -> &'static str {
     match err {
         HttpError::ConnectionFailed => {
@@ -250,8 +233,6 @@ const fn map_http_error(err: HttpError) -> ProviderError {
         HttpError::ClientError(401 | 403) => ProviderError::AuthFailed,
         HttpError::ClientError(404) => ProviderError::ModelNotFound,
         HttpError::ClientError(429) => ProviderError::RateLimited,
-        // Not transient: refused connection, DNS failure, or TLS error means the address is wrong,
-        // server is down, or egress is denied. Retrying won't fix these.
         HttpError::ConnectionFailed | HttpError::Timeout | HttpError::TlsError => {
             ProviderError::Unreachable
         }
@@ -269,8 +250,6 @@ impl Lifecycle for Component {
         let raw = host_config::all().unwrap_or_else(|_| "{}".to_owned());
         let section: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
 
-        // Determine the API key: prefer `api-key-secret` (read through host-secrets)
-        // over `api-key`, falling back to `api-key` when the secret is not available.
         let api_key = section
             .get("api-key-secret")
             .and_then(Value::as_str)
@@ -286,7 +265,6 @@ impl Lifecycle for Component {
             api_key,
             model: config_str(&section, "model"),
         };
-        // Never log the api-key.
         log(
             LogLevel::Info,
             &format!(

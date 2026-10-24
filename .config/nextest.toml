@@ -1,35 +1,10 @@
 # cargo-nextest configuration for the host workspace. Deliberately near-empty:
-# the runner is the point, not tuning it. Every test target here runs under it —
-# `make test`, `make harness`, `make gate`.
+# the runner is the point, not tuning it. Every test target runs under it.
 
 [profile.default]
-# Warn at 60s, and **never terminate**.
-#
-# Not terminating is the part that matters. nextest's own default is a 60s
-# period *with* `on-timeout = "fail"`, and `prompt_disconnect`'s
-# `a_disconnected_client_does_not_hold_the_turn_open` sets
-# JK_ANSWER_TIMEOUT_SECS to 120 deliberately: a regression is a turn that runs
-# to the deadline and then fails its own `elapsed < 30s` assertion with a
-# message naming the cause. Killing it at 60s replaces that message with a bare
-# timeout. Omitting `on-timeout` disables termination — verified, not assumed: a
-# test that ran past this period was marked SLOW and passed.
-#
-# The period is 120s, and it got there by being wrong twice — a warning that
-# fires on a healthy run is one people stop reading, so the threshold has to sit
-# above what this suite legitimately does. It was 30s first, then 60s, and
-# `installed_layout::an_installed_gateway_verifies_its_own_components_from_anywhere`
-# printed SLOW on every single `make gate` at both. Measured under sustained
-# load, the five `installed_layout` tests take 40-61s each: every one spawns a
-# real gateway, and a gateway Cranelift-compiles all 18 staged components before
-# it answers (the cold-start cost #60 exists to remove). Any threshold below
-# ~90s is noise here.
-#
-# The marker earns little either way — the tests that trip it are slow by nature
-# — but it cannot simply be dropped, because omitting `slow-timeout` inherits
-# nextest's default, which *terminates*. An explicit period with no `on-timeout`
-# is the way to keep termination off.
-#
-# What bounds a genuinely hung test is the CI job instead: the exit-gate job
-# carries `timeout-minutes` (.github/workflows/ci.yml), so a hang costs that
-# much and the SLOW lines name the test, rather than six hours (#246).
+# Warn at 60s but never terminate: a kill would replace a slow test's own failure
+# message with a bare timeout. Omitting `on-timeout` keeps termination off.
+# 120s because lower thresholds print SLOW on healthy runs. `slow-timeout` must be
+# explicit, since omitting it inherits nextest's terminating default. Real hangs are
+# bounded by the CI job's timeout-minutes (.github/workflows/ci.yml).
 slow-timeout = { period = "120s" }

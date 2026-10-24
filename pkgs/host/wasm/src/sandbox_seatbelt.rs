@@ -1,25 +1,11 @@
-//! Seatbelt: confine a command via `sandbox-exec`.
-//!
-//! macOS's unprivileged sandbox (no entitlement, helper, or root). **Deprecated**
-//! but present on all macOS; no unprivileged replacement. [`crate::sandbox`]
-//! reports "nothing" honestly when missing.
-//!
-//! # Profile: deny-by-default with minimal grants
-//!
-//! `(deny default)`, then shell essentials: `process-exec`, `process-fork`,
-//! `sysctl-read`, `file-read*`. Reads allowed wholesale (confinement targets
-//! **effects**—writes change the machine, reads don't per the security model).
-//!
-//! Commands needing Mach services (git, cargo) fail under this profile with
-//! visible errors about what was denied—the right direction to fail.
+//! Seatbelt backend: confines a command via macOS `sandbox-exec`; deny-by-default, reads allowed wholesale.
 
 use std::path::Path;
 use std::process::Command;
 
 use crate::sandbox::{SandboxBackend, SandboxError, SandboxPolicy};
 
-/// The profile applier. An absolute path on purpose: resolving `sandbox-exec`
-/// through `PATH` would let a `PATH` entry decide what confines a command.
+/// The profile applier; absolute so a `PATH` entry cannot decide what confines a command.
 pub(crate) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
 /// Confines a command with a Seatbelt profile.
@@ -31,26 +17,13 @@ impl SandboxBackend for SeatbeltBackend {
         "Seatbelt"
     }
 
-    /// Rebuild `command` as `sandbox-exec -p <profile> -- <command>`.
-    ///
-    /// # This must be called before the command is configured
-    ///
-    /// Only the program and its arguments are carried over, because they are
-    /// the only parts a `Command` can be read back: there is no getter for
-    /// stdio, and `get_envs` reports the *changes* to the environment without
-    /// saying whether `env_clear` was called. Copying what can be read would
-    /// therefore silently drop the stdio wiring an output cap depends on. So the
-    /// caller confines first and applies cwd, environment and stdio afterwards —
-    /// those all belong to the outer `sandbox-exec` process anyway, which is the
-    /// one being spawned.
+    /// Rebuild `command` as `sandbox-exec -p <profile> -- <command>`; apply cwd, env and stdio afterwards.
     fn confine(&self, command: Command, policy: &SandboxPolicy) -> Result<Command, SandboxError> {
         let profile = profile(policy)?;
         let mut wrapped = Command::new(SANDBOX_EXEC);
         wrapped
             .arg("-p")
             .arg(profile)
-            // `--` so a command whose own first argument starts with `-` is not
-            // read as another sandbox-exec flag.
             .arg("--")
             .arg(command.get_program())
             .args(command.get_args());
@@ -58,33 +31,15 @@ impl SandboxBackend for SeatbeltBackend {
     }
 }
 
-/// Write access to `/dev/null`, granted to every command rather than
-/// configured by anyone (#212).
-///
-/// `2>/dev/null` is in most shell invocations a model produces, and without
-/// this the *shell* fails on the redirect before the program runs — so the
-/// command never executes and the error names `/dev/null` rather than
-/// anything the operator wrote. The failure cascades badly: `xcode-select`
-/// redirects its probe this way, so a refused `/dev/null` is reported as a
-/// missing `clang`.
-///
-/// This grants nothing. `/dev/null` is a sink: a write to it discloses
-/// nothing, persists nothing and reaches nothing, which makes it the one path
-/// where `file-write*` is definitionally void. It is `literal` rather than
-/// `subpath` so it grants that device and not `/dev`.
+/// Without it `2>/dev/null` makes the shell fail first; `literal`, not `subpath`, so only that device is covered.
 const DEV_NULL_RULE: &str = "(allow file-write* (literal \"/dev/null\"))\n";
 
 /// The Seatbelt profile for `policy`.
 ///
 /// # Errors
-/// [`SandboxError::Refused`] when a `writable` path cannot be resolved or
-/// cannot be written into a profile faithfully. Both refuse rather than
-/// approximate: a grant this generator silently mangles is a grant the operator
-/// believes they have.
+/// [`SandboxError::Refused`] when a `writable` path cannot be resolved or faithfully written; never approximated.
 pub fn profile(policy: &SandboxPolicy) -> Result<String, SandboxError> {
     let mut profile = String::from("(version 1)\n(deny default)\n");
-    // The minimum a shell needs to start. See the module docs for why reads are
-    // not narrowed here.
     profile.push_str("(allow process-exec)\n(allow process-fork)\n(allow sysctl-read)\n");
     profile.push_str("(allow file-read*)\n");
     profile.push_str(DEV_NULL_RULE);
@@ -100,20 +55,7 @@ pub fn profile(policy: &SandboxPolicy) -> Result<String, SandboxError> {
     Ok(profile)
 }
 
-/// A `writable` path as Seatbelt will see it: symlinks resolved.
-///
-/// **This is the whole reason to canonicalize, and it was found by probing
-/// rather than by reading.** Seatbelt matches `(subpath …)` against the
-/// resolved path, and on macOS `/tmp` is a symlink to `/private/tmp` (as is
-/// `/var`). A profile granting write to `/tmp/x/work` denies a write to
-/// `/tmp/x/work/ok` — and denies it with "Operation not permitted", which is
-/// indistinguishable from the sandbox working. Every temp directory a test
-/// makes is under `/tmp`, so an uncanonicalized profile would have passed a
-/// suite asserting that escapes are denied while also denying everything the
-/// operator allowed.
-///
-/// A path that does not exist cannot be resolved, so it is refused. Writing the
-/// unresolved path instead would produce exactly the silent non-grant above.
+/// Seatbelt matches `(subpath ...)` against the resolved path, and `/tmp` is a symlink into `/private`.
 fn resolve(path: &Path) -> Result<String, SandboxError> {
     let resolved = path.canonicalize().map_err(|err| {
         SandboxError::Refused(format!(
@@ -132,15 +74,7 @@ fn resolve(path: &Path) -> Result<String, SandboxError> {
     })
 }
 
-/// A path as an SBPL string literal, or a refusal.
-///
-/// SBPL is s-expressions, so a path containing `"` would close the literal
-/// early and the rest of it would be **read as policy** — an injection into a
-/// security decision, by way of a directory name. Escaping is not attempted:
-/// this generator would be guessing at another language's escape rules, and a
-/// guess that is subtly wrong here does not fail loudly, it silently widens the
-/// sandbox. A path that cannot be written literally is refused instead, which
-/// costs an exotic directory name the `os` mode and costs nothing else.
+/// A `"` in the path would close the literal and inject policy, so such paths are refused, not escaped.
 fn quote(path: &str) -> Result<String, SandboxError> {
     if let Some(bad) = path
         .chars()
@@ -161,7 +95,6 @@ mod tests {
     use crate::sandbox::{SandboxBackend, SandboxError, SandboxMode, SandboxPolicy};
     use std::path::PathBuf;
 
-    /// A policy over a directory that exists, since the generator resolves.
     fn policy_over(dir: &std::path::Path) -> SandboxPolicy {
         SandboxPolicy {
             mode: SandboxMode::Os,
@@ -171,7 +104,6 @@ mod tests {
         }
     }
 
-    /// Removes the directory on drop, panic or not.
     struct TempDir(PathBuf);
     impl Drop for TempDir {
         fn drop(&mut self) {
@@ -200,9 +132,6 @@ mod tests {
         );
     }
 
-    /// `/dev/null` is granted to every policy, including one that asked for
-    /// nothing — it is substrate, not a grant (#212). `literal`, so it is that
-    /// device and not `/dev`.
     #[test]
     fn dev_null_is_writable_without_anyone_asking() {
         let dir = temp_dir("devnull");
@@ -227,10 +156,6 @@ mod tests {
             .contains("(allow network*)"));
     }
 
-    /// The finding this module exists to remember: Seatbelt matches the resolved
-    /// path, so the profile must carry the resolved path. On macOS the temp dir
-    /// is under `/tmp`, a symlink to `/private/tmp`, and the unresolved form
-    /// silently grants nothing.
     #[test]
     fn a_writable_path_reaches_the_profile_symlink_resolved() {
         let dir = temp_dir("resolve");
@@ -243,8 +168,6 @@ mod tests {
         );
     }
 
-    /// A grant that cannot be resolved is refused, because writing the
-    /// unresolved path would grant nothing while looking granted.
     #[test]
     fn a_writable_path_that_does_not_exist_is_refused() {
         let dir = temp_dir("missing");
@@ -255,8 +178,6 @@ mod tests {
         assert!(reason.contains("cannot be resolved"), "{reason}");
     }
 
-    /// SBPL is s-expressions: a `"` in a directory name would close the literal
-    /// and the remainder would be read as policy.
     #[test]
     fn a_path_that_would_inject_sbpl_is_refused_rather_than_escaped() {
         for hostile in [
@@ -276,9 +197,6 @@ mod tests {
         );
     }
 
-    /// The wrapper carries the program and its arguments and nothing else, per
-    /// `confine`'s contract — there is no getter for stdio, so anything else
-    /// would be a silent loss.
     #[test]
     fn the_command_is_wrapped_with_the_profile_and_a_double_dash() {
         let dir = temp_dir("wrap");
@@ -301,8 +219,6 @@ mod tests {
         );
     }
 
-    /// A policy the generator refuses must refuse the *command*, not hand back
-    /// an unwrapped one — the failure the trait's docs call worse than none.
     #[test]
     fn a_refused_profile_refuses_the_command() {
         let dir = temp_dir("refused");

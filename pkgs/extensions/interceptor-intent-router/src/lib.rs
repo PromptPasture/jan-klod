@@ -1,34 +1,12 @@
-//! `interceptor-intent-router` — the default `before-loop` interceptor.
-//!
-//! Every prompt is classified `simple` vs `agentic` before the agentic loop
-//! runs. It exports the `interceptor` interface and subscribes to `before-loop`:
-//!
-//! - `simple` (greeting, ack, single-fact question) → [`Decision::Block`],
-//!   short-circuiting the loop; the core answers inline.
-//! - `agentic` (tools, planning, multi-step) → [`Decision::Proceed`], entering it.
-//!
-//! The classification uses the layered router ([`router`]): a pure-Rust language
-//! gate + English heuristics settle obvious cases with no model call;
-//! anything else goes to a constrained-decoding call on the routed `llm-provider`.
-//! `agentic` is the safe default — a prompt we cannot classify never wrongly skips.
-//!
-//! The router is pure Rust with no WIT dependency, so it is unit-tested natively;
-//! the Component-Model glue below only compiles for `wasm32`.
+//! `interceptor-intent-router`: default `before-loop` interceptor; `simple` prompts are answered inline, `agentic` proceeds.
 
-// The router's only non-test consumer is the wasm32 `component` below, so a
-// host `cargo test` sees its items as dead — a target-conditional false
-// positive, not a real one.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod router;
 
-// Depends on generated WIT bindings, whose ABI shims only compile for `wasm32`;
-// gating it keeps a native `cargo test` building just `router` + its tests.
 #[cfg(target_arch = "wasm32")]
 mod component {
     use crate::router::{self, Intent};
 
-    // Generated Component-Model bindings; lint exemptions (incl. the `unsafe` ABI
-    // shims) scoped to the macro output.
     #[allow(
         unsafe_code,
         missing_docs,
@@ -55,20 +33,15 @@ mod component {
         self, CompletionChunk, CompletionRequest, Message, Role,
     };
 
-    /// System prompt for the tier-3 classifier. The grammar ([`router::CLASSIFIER_GRAMMAR`])
-    /// constrains the output.
     const CLASSIFIER_SYSTEM: &str = "You are an intent classifier. Reply with exactly one word. \
         Answer 'simple' when the message is a greeting, acknowledgement, or a single-fact question \
         answerable directly. Answer 'agentic' when it needs tools, planning, or multiple steps.";
 
-    /// Forward a line to the core's log pipeline, tagged with this component's name.
     fn log(level: LogLevel, message: &str) {
         host_log::log(level, "interceptor-intent-router", message, &[]);
     }
 
-    /// Tier-3 classifier: one constrained-decoding call to the routed provider.
-    /// On any provider failure it defaults to [`Intent::Agentic`] — never skip the
-    /// loop for a prompt we could not classify.
+    /// Any provider failure defaults to [`Intent::Agentic`].
     fn llm_classify(prompt: &str) -> Intent {
         let request = CompletionRequest {
             model: String::new(),
@@ -100,15 +73,13 @@ mod component {
         router::parse_intent(&text)
     }
 
-    /// Drain a provider stream handle to its concatenated text, then close it.
-    /// Tool-call chunks are ignored (the classifier never emits them).
+    /// Tool-call chunks are ignored; the classifier never emits them.
     fn drain_text(handle: llm_provider::StreamHandle) -> String {
         let mut text = String::new();
         loop {
             match llm_provider::next_chunk(handle) {
                 Some(CompletionChunk::TextDelta(delta)) => text.push_str(&delta),
                 Some(CompletionChunk::ToolCallRequest(_)) => {}
-                // Stream end or an exhausted/closed handle: stop draining.
                 Some(CompletionChunk::Done(_)) | None => break,
             }
         }
@@ -116,7 +87,6 @@ mod component {
         text
     }
 
-    /// The single type implementing every interface `interceptor-world` exports.
     struct Component;
 
     impl Lifecycle for Component {
@@ -143,22 +113,16 @@ mod component {
     }
 
     impl Interceptor for Component {
-        /// One phase only: decide, before the agentic loop runs, whether it needs
-        /// to run at all.
         fn subscribed_phases() -> Vec<Phase> {
             vec![Phase::BeforeLoop]
         }
 
-        /// Classify the user's turn. `simple` blocks the loop (the core answers
-        /// inline); `agentic` proceeds into it. Any other phase state is a host
-        /// dispatch error we could not act on — reported as `invalid-state`.
+        /// Any other state is a host dispatch error (`invalid-state`).
         fn intercept(input: InterceptInput) -> Result<Decision, InterceptorError> {
             let HookState::BeforeLoop(turn) = input.state else {
                 log(LogLevel::Error, "dispatched with non-before-loop state");
                 return Err(InterceptorError::InvalidState);
             };
-            // Cheap tiers (language + heuristics) settle obvious prompts with no
-            // model call; otherwise the provider-backed classifier decides.
             match router::classify(&turn.user_message, llm_classify) {
                 Intent::Simple => {
                     log(
@@ -178,8 +142,6 @@ mod component {
         }
     }
 
-    // The `export!` macro emits the component's `unsafe extern "C"` ABI shims at
-    // its call site, so scope the binding lints (incl. `unsafe_code`) to this glue.
     #[allow(
         unsafe_code,
         missing_docs,

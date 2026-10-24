@@ -2,9 +2,6 @@
 use jk_protocol::SSE_FRAME_KINDS;
 use jk_tui::{parse_frame, StreamEvent};
 
-/// The guard #81 needs, and the one that did not exist when #81 happened:
-/// a frame kind the core can send but this client has no answer for. Unknown
-/// kinds became silent drops. This test ensures no new frame kinds are missed.
 #[test]
 fn every_sse_frame_kind_the_core_emits_is_handled() {
     for kind in SSE_FRAME_KINDS {
@@ -40,8 +37,6 @@ fn parse_frame_maps_each_event_kind() {
             failed: false,
         })
     );
-    // The `failed` flag is read, not merely carried (#162) — a frame saying
-    // the call failed must not arrive as one that succeeded.
     assert_eq!(
         parse_frame(
             "tool-result",
@@ -53,9 +48,6 @@ fn parse_frame_maps_each_event_kind() {
             failed: true,
         })
     );
-    // A core older than the flag sends no `failed` key. That is a compatible
-    // mismatch, not malformed: refusing it would turn a version disagreement
-    // into a broken turn. Its failures then render as successes (backward compat).
     assert_eq!(
         parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#),
         Some(StreamEvent::ToolResult {
@@ -78,10 +70,6 @@ fn parse_frame_maps_each_event_kind() {
     );
 }
 
-/// The regression this file holds: `tool-result` had no arm, so every tool
-/// result in a healthy turn took the fallback and reached the user as error.
-/// Separate from the mapping test because this is an invariant about the
-/// fallback itself, not the shape — stays true if fields change.
 #[test]
 fn a_tool_result_is_never_reported_as_an_error() {
     let ev = parse_frame("tool-result", r#"{"id":"c1","content":"42"}"#);
@@ -91,14 +79,9 @@ fn a_tool_result_is_never_reported_as_an_error() {
     );
 }
 
-/// A kind this client does not know is dropped, not reported. Means the core
-/// is newer, or a frame was added without updating it. Neither is a failed
-/// turn (#81 precedent). Drift is caught by tests instead.
 #[test]
 fn an_unknown_kind_is_dropped_rather_than_shown_as_a_failure() {
     assert_eq!(parse_frame("weird", "{}"), None);
-    // Including one that looks plausible: this is the case that actually
-    // happens, a core one frame ahead of its client.
     assert_eq!(
         parse_frame("tool-progress", r#"{"id":"c1","pct":40}"#),
         None
@@ -133,7 +116,6 @@ fn parse_frame_reads_a_prompt_with_its_options() {
 
 #[test]
 fn a_prompt_without_options_still_parses() {
-    // A future/odd prompt must not turn into an Error the user cannot answer.
     assert_eq!(
         parse_frame(
             "prompt",
@@ -148,8 +130,6 @@ fn a_prompt_without_options_still_parses() {
     );
 }
 
-/// #103's first design point, at the SSE surface: the session on the frame is
-/// what the client must answer with — not necessarily its own current one.
 #[test]
 fn parse_frame_carries_the_prompts_own_session() {
     let data = r#"{"question":"Proceed?","default":"no","session":"a-different-session"}"#;

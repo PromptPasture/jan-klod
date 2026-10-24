@@ -1,13 +1,9 @@
 #!/bin/sh
-# Stage one distribution's guests into a directory a bundle can be built from.
+# Stage one distribution's guests and their manifests from <ext-src> into <out-dir>.
 #
 # Usage: dist-stage.sh <dist> <ext-src> <out-dir>
 #
-# Copies each component named in scripts/distributions/<dist>/guests, and the
-# manifest beside it, from <ext-src> into <out-dir>. A name that is not there is
-# an error rather than a smaller archive: a distribution that silently ships
-# fewer guests than it lists is a distribution nobody can reason about, and the
-# thing it is missing is exactly what its user will reach for.
+# A listed guest that is not staged is an error, never a smaller archive.
 set -eu
 
 DIST="${1:?usage: dist-stage.sh <dist> <ext-src> <out-dir>}"
@@ -31,9 +27,7 @@ while IFS= read -r line; do
         exit 1
     }
     cp "$SRC/$name.wasm" "$OUT/"
-    # The manifest travels with the component. Without it boot refuses the
-    # component outright (16a), so an archive missing one is an archive that
-    # does not start.
+    # Boot refuses a component without its manifest.
     [ -f "$SRC/$name.manifest.toml" ] || {
         echo "dist-stage: $name has no manifest in $SRC — run \`make extensions\`" >&2
         exit 1

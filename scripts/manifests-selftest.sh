@@ -1,11 +1,7 @@
 #!/usr/bin/env sh
-# Check that the manifest checks can fail.
-#
-# `manifests-verify.sh` runs on every build and passes, which says nothing on
-# its own: a verifier that accepts everything passes too. This tampers with a
-# copy of the staged manifests, four ways, and requires a refusal each time —
-# so the guard is a standing guarantee rather than something confirmed by hand
-# once and trusted afterwards.
+# Check that manifests-verify.sh can fail: tamper with a copy of the staged
+# manifests four ways and require a refusal each time. A verifier that passes
+# everything also passes on every build, so passing alone proves nothing.
 #
 # Usage: manifests-selftest.sh <ext-dir>
 set -eu
@@ -18,11 +14,8 @@ mkdir -p "$WORK"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
-# Absent manifests are a legitimate state — a clone where nobody has run
-# `make ext` yet — so this skips rather than fails, the same way every
-# integration test skips on unstaged guests. And the same escape hatch applies:
-# `JK_REQUIRE_GUESTS=1` turns the skip into a failure, so the gate cannot go
-# green on a check that quietly did nothing.
+# No manifests (a clone without `make ext`) skips. JK_REQUIRE_GUESTS=1 turns the
+# skip into a failure, so the gate cannot pass on a check that did nothing.
 [ -f "$EXT/tool-fs.manifest.toml" ] || {
     if [ -n "${JK_REQUIRE_GUESTS:-}" ]; then
         echo "manifests-selftest: $EXT has no manifests and JK_REQUIRE_GUESTS is set" >&2
@@ -32,7 +25,6 @@ trap cleanup EXIT
     exit 0
 }
 
-# Each case: a description, and a sed applied to tool-fs's manifest.
 refuses() {
     what="$1"
     shift
@@ -67,15 +59,11 @@ refuses "an export listed as a capability" add_export
 refuses "a manifest missing api-version" drop_key
 refuses "a missing manifest" remove_manifest
 
-# And the generator's own refusal: two WIT package versions have no answer to
-# "which is the api-version", so it must not pick one.
+# Two WIT versions have no api-version: the generator must refuse, not pick one.
 mkdir -p "$WORK/wit"
 cp "$ROOT/wit/host-fs.wit" "$ROOT/wit/host-log.wit" "$WORK/wit/"
-# Rewrite whatever version is there to a fixed unlikely one, rather than
-# spelling the pair. This read `s/@0.1.0;/@0.2.0;/` until wit/ was bumped to
-# 0.2.0, at which point the tamper was a no-op, the two files agreed, and the
-# self-test reported that a disagreement had been "ACCEPTED" — a fixture that
-# encodes the number it is testing against fails the moment that number moves.
+# Replace whatever version wit/ declares, so the tamper stays a real disagreement
+# after the version is bumped.
 sed -i.bak 's/^package jan-klod:interfaces@.*;/package jan-klod:interfaces@9.9.9;/' \
     "$WORK/wit/host-log.wit"
 rm -f "$WORK/wit/host-log.wit.bak"
@@ -84,10 +72,8 @@ if sh "$ROOT/scripts/manifests.sh" "$ROOT/pkgs/extensions" "$EXT" "$WORK/wit" to
     echo "manifests-selftest: disagreeing WIT versions were ACCEPTED" >&2
     exit 1
 fi
-# A non-zero exit is not enough on its own. The version is read by a separate
-# script now, so a missing `wit-version.sh` — or a typo in the path to it —
-# fails non-zero too, and this case would report "refused" while the generator
-# was merely broken. Require the refusal to be *about* the version.
+# Non-zero exit alone is not enough: a broken wit-version.sh also fails. Require
+# the refusal to be about the version.
 grep -q 'more than one package version' "$WORK/gen" || {
     echo "manifests-selftest: the generator refused, but not over the version:" >&2
     cat "$WORK/gen" >&2
@@ -95,8 +81,7 @@ grep -q 'more than one package version' "$WORK/gen" || {
 }
 printf '  refused: %s\n' "disagreeing jan-klod:interfaces versions in wit/"
 
-# The tampering above never touched $EXT, but a generator run just did — leave
-# the staged manifests as the real `wit/` describes them.
+# Leave the staged manifests matching the real wit/.
 sh "$ROOT/scripts/manifests.sh" "$ROOT/pkgs/extensions" "$EXT" "$ROOT/wit" tool-fs >/dev/null
 
 echo "manifests-selftest: 5 refusals, as required"

@@ -7,7 +7,6 @@ publish.workspace = true
 description = "select-model interceptor: classifies the request into a task type via a constrained llm-provider call, resolves the routing table (task -> provider/model) from host-config, and sets the model."
 
 [lib]
-# A reactor component: exports interceptor-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]

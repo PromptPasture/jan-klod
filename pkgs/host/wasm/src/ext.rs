@@ -1,8 +1,4 @@
-//! Component lifecycle: install, list, remove from `ext/`.
-//!
-//! Checks integrity (via [`crate::inspect`]), SHA-256, minisign. Remote fetch is
-//! #92; first-party signatures are #93. `list` reads manifests for declared
-//! capabilities.
+//! Component lifecycle in `ext/`: verified install, list and remove.
 
 use std::path::{Path, PathBuf};
 
@@ -12,34 +8,23 @@ use wasmtime::Engine;
 use crate::manifest::{manifest_path, Manifest};
 use crate::{inspect, Verdict};
 
-/// The extension of a staged component.
 const COMPONENT_EXT: &str = "wasm";
 
-/// What `install` verifies beyond component well-formedness.
-///
-/// Digest optional but enforced when supplied. Only evidence if received via
-/// different route than bytes (release notes, repo page). Local path: operator
-/// computing self-digest proves nothing. **Invariant: never nothing** — digest
-/// required where signature is waived (see [`Checks::allow_unsigned`]).
+/// Provenance checks `install` applies; a digest is required wherever the signature is waived.
 #[derive(Debug, Clone, Default)]
 pub struct Checks {
-    /// Expected SHA-256 (component only, not manifest; case-insensitive).
-    /// Signature covers both and establishes provenance; [`crate::inspect`]
-    /// bounds tampered manifests.
+    /// Expected SHA-256 of the component only (case-insensitive).
     pub sha256: Option<String>,
 
-    /// Minisign public keys (base64), from `registry.trusted-keys`.
-    /// Empty = nothing trusted (default-deny, not "skip check").
+    /// Minisign public keys (base64); empty trusts nothing.
     pub trusted_keys: Vec<String>,
 
-    /// Waive signature requirement (requires digest; see [`Checks::sha256`]).
+    /// Waive the signature requirement; needs a digest.
     pub allow_unsigned: bool,
 }
 
 impl Checks {
-    /// Read `registry.trusted-keys` from top-level `registry` block
-    /// (not `extensions.registry` which holds `skills`/`mcp`).
-    /// Strict: malformed entries must fail (never silently drop or widen).
+    /// Read `registry.trusted-keys` from the top-level `registry` block.
     ///
     /// # Errors
     /// [`ExtError::TrustedKeysNotAList`] if `trusted-keys` is not a string list.
@@ -63,13 +48,11 @@ impl Checks {
         })
     }
 
-    /// Read grant from `config.yaml` (here, not gateway: config crate dependency).
-    /// Same division as [`crate::Runtime::boot`].
+    /// Read the checks from `config.yaml`.
     ///
     /// # Errors
-    /// [`ExtError::Config`] if file can't be read/parsed or [`Checks::from_config`] refuses.
+    /// [`ExtError::Config`] if the file cannot be read or parsed, or [`Checks::from_config`] refuses.
     pub fn from_config_path(path: &Path) -> Result<Self, ExtError> {
-        // top_level: avoid expanding ${VAR} in enabled instances (no provider API key needed).
         let registry =
             jk_config::Config::top_level(path, "registry").map_err(|err| ExtError::Config {
                 path: path.display().to_string(),
@@ -79,7 +62,6 @@ impl Checks {
     }
 }
 
-/// A SHA-256 digest as lowercase hex.
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes.iter().fold(String::new(), |mut out, byte| {
@@ -88,26 +70,20 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Whether `install` argument is remote (http/https only; others are paths).
+/// Whether an `install` argument is an http/https URL rather than a path.
 #[must_use]
 pub fn looks_remote(spec: &str) -> bool {
     let lower = spec.to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
-/// Refuse remote sources the policy would not permit, before bytes move.
-///
-/// Uses [`crate::egress::EgressPolicy::public_only`] (not runtime version):
-/// origins trusted for model calls ≠ places to fetch components from.
-/// Runtime version needs booted runtime (expensive: expands ${VAR} in instances).
-/// Private component sources currently refused, no grant yet.
+/// Refuse non-public remote sources; uses `public_only`, not the runtime policy, which trusts model origins.
 ///
 /// # Errors
-/// [`ExtError::RefusedByPolicy`] naming the URL and policy rationale.
+/// [`ExtError::RefusedByPolicy`] naming the URL and rationale.
 pub fn check_remote(url: &str) -> Result<(), ExtError> {
     crate::egress::EgressPolicy::public_only()
         .check(url)
-        // Addresses unused: refusal before bytes move; fetch re-checks per hop.
         .map(|_| ())
         .map_err(|err| ExtError::RefusedByPolicy {
             url: url.to_owned(),
@@ -115,17 +91,10 @@ pub fn check_remote(url: &str) -> Result<(), ExtError> {
         })
 }
 
-/// Remote install fetch list (URL names component; siblings inferred).
-///
-/// Convention: `https://h/p/tool-fs.wasm` → `tool-fs.manifest.toml`,
-/// `tool-fs.wasm.minisig`, `tool-fs.manifest.toml.minisig` (unless unsigned).
-/// Mirrors on-disk layout; one rule covers both cases.
-/// Signatures conditional: unsigned means no `.minisig` files to fetch.
+/// Infers sibling URLs: `tool-fs.wasm` -> `tool-fs.manifest.toml`, plus `.minisig` unless unsigned.
 ///
 /// # Errors
-/// [`ExtError::NotAWasm`] unless URL ends in `.wasm`.
-/// [`ExtError::OpaqueUrl`] for query/fragment (relative reference drops queries,
-/// access tokens would silently disappear from sibling URLs).
+/// [`ExtError::NotAWasm`] unless the URL ends in `.wasm`; [`ExtError::OpaqueUrl`] for a query or fragment.
 fn wanted(url: &str, allow_unsigned: bool) -> Result<Vec<(String, String)>, ExtError> {
     let parsed = url::Url::parse(url).map_err(|_| ExtError::NotAWasm {
         path: url.to_owned(),
@@ -170,10 +139,7 @@ fn wanted(url: &str, allow_unsigned: bool) -> Result<Vec<(String, String)>, ExtE
         .collect()
 }
 
-/// Policy-bound HTTP client for remote installs (single construction, no weak pass).
-///
-/// Every redirect re-checked (#107); `Authorization` doesn't survive hops.
-/// Testable with fake client; [`install_from_url`] takes it as argument.
+/// HTTP client for remote installs; every redirect is re-checked and `Authorization` is dropped on hops.
 #[must_use = "the policy-bound client does nothing until it is handed to an installer"]
 pub fn policy_bound_http() -> crate::route::HttpFn {
     Box::new(|method, url, headers, body, timeout| {
@@ -188,16 +154,10 @@ pub fn policy_bound_http() -> crate::route::HttpFn {
     })
 }
 
-/// Fetch a component and companions, then install as if on-disk (download adds
-/// bytes location, nothing else; goes through [`install`] unchanged).
-///
-/// `http` injected for testability. Policy not injected: [`check_remote`] checks
-/// all URLs first; caller's `http` should be policy-bound (checks per hop).
-/// Both: first gives operator a message, second holds on redirect.
+/// Fetch a component and its companions, then install as if from disk.
 ///
 /// # Errors
-/// [`ExtError::RefusedByPolicy`] if policy denies, [`ExtError::Fetch`] on
-/// request failure/non-200, [`wanted`] errors, or [`install`] refusals.
+/// Policy or fetch failure, an unusable URL, or any [`install`] refusal.
 pub fn install_from_url(
     dir: &Path,
     url: &str,
@@ -207,7 +167,6 @@ pub fn install_from_url(
     let wanted = wanted(url, checks.allow_unsigned)?;
     let incoming = staging_dir();
     let _ = std::fs::remove_dir_all(&incoming);
-    // Private dir: unverified component/signature staged before checking.
     crate::wasm_cache::ensure_private_dir(&incoming).map_err(|source| ExtError::Staging {
         path: incoming.display().to_string(),
         source,
@@ -219,11 +178,9 @@ pub fn install_from_url(
     outcome
 }
 
-/// Counter for distinct staging dirs per call (macOS clock granularity: #165).
 static NEXT_STAGING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Staging dir per call (not per process: #168). Per-process would wipe
-/// neighbours' half-fetched files.
+/// Per call, not per process: a per-process dir would wipe neighbours' half-fetched files.
 fn staging_dir() -> PathBuf {
     std::env::temp_dir().join(format!(
         "jk-ext-fetch-{}-{}",
@@ -232,14 +189,12 @@ fn staging_dir() -> PathBuf {
     ))
 }
 
-/// Fetch wanted files into `incoming`, return component name.
 fn fetch_all(
     incoming: &Path,
     wanted: &[(String, String)],
     http: &crate::route::HttpFn,
 ) -> Result<String, ExtError> {
     for (remote, file) in wanted {
-        // Check each URL (manifest and signature URLs are destinations too).
         check_remote(remote)?;
         let response = http("GET", remote, &[], None, 0).map_err(|err| ExtError::Fetch {
             url: remote.clone(),
@@ -267,15 +222,13 @@ fn fetch_all(
         })
 }
 
-/// File's detached signature path (`<file>.minisig`).
 fn signature_path(file: &Path) -> PathBuf {
     let mut name = file.as_os_str().to_os_string();
     name.push(".minisig");
     PathBuf::from(name)
 }
 
-/// Verify `content` (staged bytes) against `.minisig` (beside operator's original).
-/// Prehashed signatures only: legacy format (raw file) not accepted (no project usage).
+/// Prehashed signatures only; the legacy raw-file format is not accepted.
 fn verify_signature(
     content: &Path,
     beside: &Path,
@@ -304,7 +257,6 @@ fn verify_signature(
 
     for (index, key) in keys.iter().enumerate() {
         let key = minisign_verify::PublicKey::from_base64(key.trim()).map_err(|err| {
-            // Unparseable operator key: show error, don't skip to "untrusted".
             ExtError::MalformedTrustedKey {
                 index,
                 detail: err.to_string(),
@@ -320,38 +272,36 @@ fn verify_signature(
     })
 }
 
-/// Whether text looks like a SHA-256 digest (64 hex chars; errors reported as
-/// malformed before comparison, not mismatch).
 fn looks_like_a_digest(text: &str) -> bool {
     text.len() == 64 && text.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Install staging dir (inside `ext/` so final move is same-filesystem rename).
+/// Inside `ext/` so the final move is a same-filesystem rename.
 const STAGING: &str = ".staging";
 
-/// Component manifest status (three states: present, absent, broken).
+/// Component manifest status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Declaration {
-    /// Manifest reads.
+    /// Present and readable.
     Present(Manifest),
-    /// No manifest file beside component.
+    /// No manifest beside the component.
     Absent,
-    /// Manifest present but unusable (reason included).
+    /// Present but unusable; carries the reason.
     Broken(String),
 }
 
-/// Staged component and its manifest status.
+/// A staged component and its manifest status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
-    /// File stem (name for [`remove`]).
+    /// File stem, as [`remove`] takes it.
     pub name: String,
     /// Component file.
     pub component: PathBuf,
-    /// Manifest or reason there isn't one.
+    /// Manifest, or why there is none.
     pub declaration: Declaration,
 }
 
-/// Extension operation failure.
+/// An extension operation failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ExtError {
     /// Extension directory unreadable.
@@ -363,15 +313,10 @@ pub enum ExtError {
         #[source]
         source: std::io::Error,
     },
-    /// The file stem names no category this runtime dispatches (#222).
-    ///
-    /// Refused here rather than at adoption, because the stem is known
-    /// before a byte moves: a component that could never be called should
-    /// not reach `ext/` at all, and the person or model that chose the name
-    /// is still holding it.
+    /// The stem names no category this runtime dispatches; refused before a byte moves.
     #[error("{reason}")]
     UncategorisedStem {
-        /// What `categorise` said, which names the categories that exist.
+        /// What `categorise` said.
         reason: String,
     },
     /// Nothing by that name is staged.
@@ -399,11 +344,10 @@ pub enum ExtError {
     RefusedByPolicy {
         /// The URL as given.
         url: String,
-        /// What the policy said, for the operator to match against the rule.
+        /// What the policy said.
         detail: String,
     },
-    /// A remote URL carries a query or fragment, which sibling derivation
-    /// would silently drop.
+    /// Remote URL has a query or fragment, which sibling derivation would drop.
     #[error(
         "{url} carries a query or fragment. The manifest and signature URLs are \
          derived from this one, and a relative reference drops a query — so they \
@@ -447,7 +391,7 @@ pub enum ExtError {
     MalformedDigest {
         /// What was passed.
         given: String,
-        /// Its length, since a truncated paste is the usual cause.
+        /// Its length; a truncated paste is the usual cause.
         length: usize,
     },
     /// The component's bytes are not the ones the digest describes.
@@ -476,7 +420,7 @@ pub enum ExtError {
     /// A configured trusted key cannot be read as a minisign public key.
     #[error("`registry.trusted-keys` entry {index} is not a minisign public key: {detail}")]
     MalformedTrustedKey {
-        /// Which entry, so the operator can find it in `config.yaml`.
+        /// Index of the entry.
         index: usize,
         /// What the parser objected to.
         detail: String,
@@ -498,13 +442,7 @@ pub enum ExtError {
         /// What the parser objected to.
         detail: String,
     },
-    /// No trusted key verifies this signature.
-    ///
-    /// One error for "wrong key" and "wrong bytes" **on purpose**: the
-    /// distinction is not one an installer can draw honestly. A signature that
-    /// no trusted key accepts is untrusted, and guessing which half is at fault
-    /// would mean reporting a key id from an untrusted file as if it meant
-    /// something.
+    /// No trusted key verifies this signature; wrong key and wrong bytes are deliberately indistinguishable.
     #[error(
         "the signature for {path} is not valid under any key in \
          `registry.trusted-keys` ({keys} configured)"
@@ -512,7 +450,7 @@ pub enum ExtError {
     Untrusted {
         /// The file whose signature did not verify.
         path: String,
-        /// How many keys were tried — `0` is the usual cause, and says so.
+        /// How many keys were tried; `0` is the usual cause.
         keys: usize,
     },
     /// `--allow-unsigned` without the digest that must accompany it.
@@ -526,7 +464,7 @@ pub enum ExtError {
     NotAComponent {
         /// The file that failed to compile.
         path: String,
-        /// Wasmtime's complaint, boxed as `CoreError::Load` boxes it.
+        /// Wasmtime's error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
@@ -583,17 +521,10 @@ pub enum ExtError {
     },
 }
 
-/// Every staged component in `dir`, sorted by name.
-///
-/// A single unusable manifest does not fail the whole listing — it is reported
-/// against its own component as [`Declaration::Broken`]. Refusing to list
-/// anything because one file has a typo would break the command precisely when
-/// it is most wanted, since a broken manifest is a reason to run `list`.
+/// Every staged component in `dir`, sorted by name; an unusable manifest is [`Declaration::Broken`].
 ///
 /// # Errors
-/// [`ExtError::Unreadable`] if `dir` cannot be read at all. A directory that
-/// does not exist is *not* an error: nothing staged is a legitimate state, and
-/// it lists as empty.
+/// [`ExtError::Unreadable`] if `dir` cannot be read; a missing directory lists as empty.
 pub fn list(dir: &Path) -> Result<Vec<Installed>, ExtError> {
     if !dir.exists() {
         return Ok(Vec::new());
@@ -632,36 +563,20 @@ pub fn list(dir: &Path) -> Result<Vec<Installed>, ExtError> {
 }
 
 /// What [`remove`] deleted.
-///
-/// An enum rather than two booleans so that "neither" cannot be expressed:
-/// [`remove`] refuses that case with [`ExtError::NotInstalled`], and a struct
-/// of two flags would leave every caller with a fourth branch to handle that
-/// can never happen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Removed {
-    /// The component and its manifest, as a healthy install has both.
+    /// The component and its manifest.
     Both,
-    /// A component that had no manifest — the boot path would have refused it.
+    /// A component with no manifest.
     ComponentOnly,
-    /// A manifest with no component beside it: an orphan declaration.
+    /// A manifest with no component: an orphan.
     ManifestOnly,
 }
 
-/// Delete a staged component **and** its manifest.
-///
-/// Both, always. Removing only the component leaves a manifest that the next
-/// `list` believes and that describes nothing — an orphan declaration is a
-/// worse state than either file alone, because it reads as a component that is
-/// merely misplaced.
-///
-/// Either file may already be missing, and the pair that was actually deleted
-/// is reported rather than assumed: that is how a caller can say "removed an
-/// orphan manifest" instead of implying a component was there.
+/// Delete a staged component and its manifest together; a lone manifest would mislead `list`.
 ///
 /// # Errors
-/// [`ExtError::NotInstalled`] when neither file exists — nothing was asked for
-/// that could be removed. [`ExtError::Undeletable`] if a file that is there
-/// cannot be deleted.
+/// [`ExtError::NotInstalled`] if neither file exists, [`ExtError::Undeletable`] if one cannot be deleted.
 pub fn remove(dir: &Path, name: &str) -> Result<Removed, ExtError> {
     let component = dir.join(format!("{name}.{COMPONENT_EXT}"));
     let manifest = manifest_path(&component);
@@ -675,9 +590,6 @@ pub fn remove(dir: &Path, name: &str) -> Result<Removed, ExtError> {
         });
     }
 
-    // The component first: while both exist, a failure part-way leaves the
-    // manifest describing a component that is gone, which `list` reports as
-    // broken staging rather than silently.
     if had_component {
         std::fs::remove_file(&component).map_err(|source| ExtError::Undeletable {
             path: component.display().to_string(),
@@ -693,39 +605,15 @@ pub fn remove(dir: &Path, name: &str) -> Result<Removed, ExtError> {
     Ok(match (had_component, had_manifest) {
         (true, true) => Removed::Both,
         (true, false) => Removed::ComponentOnly,
-        // The `!had_component && !had_manifest` case returned above, so this
-        // arm is the manifest-only one and the match stays wildcard-free.
         (false, _) => Removed::ManifestOnly,
     })
 }
 
 /// Install the component at `source` into `dir`, or refuse and change nothing.
 ///
-/// The order is the point: everything is assembled and checked in
-/// `ext/.staging/<name>/`, and only a component that passed every check is
-/// moved into `ext/`. Nothing half-verified is ever visible to a boot, which is
-/// the difference between this and `cp`.
-///
-/// # What is checked here, and what is not
-///
-/// Structural integrity only — the file is a component, a manifest is beside
-/// it, and the manifest matches the component's real imports, decided by the
-/// same [`crate::inspect`] boot uses so an install cannot accept what boot
-/// refuses. **Provenance is not checked yet**: the checksum and signature are
-/// later boxes of
-/// [#91](https://github.com/PromptPasture/jan-klod/issues/91). Until they land
-/// this verifies that a component is well-formed and honest about itself, not
-/// that it came from anyone in particular.
-///
 /// # Errors
-/// A distinct [`ExtError`] for each way it can refuse, because four refusals
-/// that all said "install failed" would leave the operator no better off than
-/// `cp` did. In every case `dir` is left exactly as it was and the staging
-/// directory is removed.
+/// A distinct [`ExtError`] per refusal; `dir` is unchanged and staging removed.
 pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, ExtError> {
-    // Argument validation first, before a single byte is copied: waiving the
-    // signature without a digest would leave nothing at all vouching for these
-    // bytes, and that combination is refused rather than quietly accepted.
     if checks.allow_unsigned && checks.sha256.is_none() {
         return Err(ExtError::DigestRequiredWhenUnsigned);
     }
@@ -744,18 +632,10 @@ pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, 
             path: source.display().to_string(),
         });
     };
-    // The same rule `Runtime::adopt_installed` applies, called rather than
-    // restated: a stem naming no category installs, adopts, reports success
-    // and is never callable (#222). Checked before the digest and the
-    // signature, because none of that work is worth doing for bytes that
-    // cannot be dispatched.
     crate::categorise(&name).map_err(|reason| ExtError::UncategorisedStem { reason })?;
 
     let landing = dir.join(format!("{name}.{COMPONENT_EXT}"));
     if landing.exists() {
-        // Refused rather than replaced. An install that silently overwrites is
-        // an upgrade path nobody asked for, and the component it replaced is
-        // the one the running config was verified against.
         return Err(ExtError::AlreadyInstalled {
             name,
             dir: dir.display().to_string(),
@@ -763,29 +643,19 @@ pub fn install(dir: &Path, source: &Path, checks: &Checks) -> Result<Installed, 
     }
 
     let staging = dir.join(STAGING).join(&name);
-    // A leftover from an interrupted run must not be mistaken for this one's
-    // work, so the directory starts empty every time.
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|source| ExtError::Staging {
         path: staging.display().to_string(),
         source,
     })?;
 
-    // From here on every exit goes through `staged`, which removes the staging
-    // directory whatever the outcome — an install that refuses must not leave
-    // its workings behind for the next one to trip over.
     let outcome = stage_and_check(&staging, source, &name, checks);
     let _ = std::fs::remove_dir_all(&staging);
-    // Prune `.staging` itself when this was the only occupant; it is an
-    // implementation detail and `list` should not have to know to skip it.
     let _ = std::fs::remove_dir(dir.join(STAGING));
     outcome
 }
 
-/// Check `staged` against an expected digest, if one was given.
-///
-/// Against the **staged copy** rather than the source: those bytes are the ones
-/// that would land, so a copy that went wrong is caught here too.
+/// Checks the staged copy: those are the bytes that would land.
 fn verify_digest(staged: &Path, shown: &Path, expected: Option<&str>) -> Result<(), ExtError> {
     let Some(expected) = expected else {
         return Ok(());
@@ -812,12 +682,6 @@ fn verify_digest(staged: &Path, shown: &Path, expected: Option<&str>) -> Result<
     }
 }
 
-/// Compile the staged component and cross-check its manifest, mapping each
-/// verdict to the refusal an operator needs to see.
-///
-/// Compiling it *is* the "is this a component" check — the same call the boot
-/// path makes, with the same default engine, so a file that installs is a file
-/// that loads.
 fn check_structure(staged: &Path, shown: &Path) -> Result<(), ExtError> {
     let engine = Engine::default();
     let component =
@@ -832,8 +696,6 @@ fn check_structure(staged: &Path, shown: &Path) -> Result<(), ExtError> {
         })?;
     match inspected.verdict {
         Verdict::Consistent => Ok(()),
-        // Staged above, so this is unreachable in practice; treated as the
-        // refusal it is rather than papered over with a wildcard arm.
         Verdict::NoManifest => Err(ExtError::NoManifest {
             path: shown.display().to_string(),
         }),
@@ -849,7 +711,6 @@ fn check_structure(staged: &Path, shown: &Path) -> Result<(), ExtError> {
     }
 }
 
-/// Copy into `staging`, check, and move into place on success.
 fn stage_and_check(
     staging: &Path,
     source: &Path,
@@ -870,13 +731,8 @@ fn stage_and_check(
         source: err,
     })?;
 
-    // Integrity before anything else: cheapest check first, and no reason to
-    // compile bytes already known to be the wrong ones.
     verify_digest(&staged_component, source, checks.sha256.as_deref())?;
 
-    // The manifest travels with the component, and its absence is refused
-    // rather than tolerated: `allow-unmanifested` exists for a component
-    // already on disk, not as a way to put a new one there.
     let source_manifest = manifest_path(source);
     if !source_manifest.exists() {
         return Err(ExtError::NoManifest {
@@ -889,22 +745,6 @@ fn stage_and_check(
         source: err,
     })?;
 
-    // Provenance, over **both** files and before the component is compiled.
-    //
-    // Both, because a manifest carries no provenance of its own: it is trusted
-    // at boot purely for sitting beside the component, so signing the `.wasm`
-    // alone would verify the artefact while trusting an attacker's description
-    // of what it may ask the host for. That is worse than no signature, because
-    // it looks like one.
-    //
-    // The signatures are read from beside the *source* and checked against the
-    // *staged* bytes — the ones that will land — so a copy that went wrong
-    // fails here too. They are not carried into `ext/`: nothing at runtime
-    // reads them, and a file the runtime ignores does not belong beside the
-    // ones it loads.
-    //
-    // When the signature is waived, the digest checked above is the only
-    // evidence there is — which is why `install` refuses the flag without one.
     if !checks.allow_unsigned {
         verify_signature(
             &staged_component,
@@ -922,12 +762,6 @@ fn stage_and_check(
 
     check_structure(&staged_component, source)?;
 
-    // **Manifest first.** Between the two renames one file is in `ext/` without
-    // the other, and the two orders are not equally safe: a component that
-    // arrives before its manifest is a component a concurrent boot could load
-    // *unmanifested* if `allow-unmanifested` is set, while a manifest that
-    // arrives first describes nothing and is inert — `list` reports it as an
-    // orphan and boot never looks for it.
     let landed_manifest = manifest_path(&dir.join(format!("{name}.{COMPONENT_EXT}")));
     std::fs::rename(&staged_manifest, &landed_manifest).map_err(|err| ExtError::Landing {
         path: landed_manifest.display().to_string(),
@@ -935,8 +769,6 @@ fn stage_and_check(
     })?;
     let landed_component = dir.join(format!("{name}.{COMPONENT_EXT}"));
     if let Err(err) = std::fs::rename(&staged_component, &landed_component) {
-        // The manifest is already in place; take it back out so a failure
-        // here leaves `ext/` as it was rather than holding an orphan.
         let _ = std::fs::remove_file(&landed_manifest);
         return Err(ExtError::Landing {
             path: landed_component.display().to_string(),
@@ -960,7 +792,6 @@ mod tests {
     use super::{install, list, remove, staging_dir, Checks, Declaration, ExtError, Removed};
     use std::path::{Path, PathBuf};
 
-    /// Removes the directory on drop, panic or not.
     struct TempDir(PathBuf);
     impl Drop for TempDir {
         fn drop(&mut self) {
@@ -975,8 +806,6 @@ mod tests {
         TempDir(dir)
     }
 
-    /// A component file and, optionally, the manifest beside it. The bytes are
-    /// never parsed by `list`, which reads declarations rather than components.
     fn stage(dir: &Path, name: &str, manifest: Option<&str>) {
         std::fs::write(dir.join(format!("{name}.wasm")), b"\0asm").expect("writes a component");
         if let Some(body) = manifest {
@@ -1008,7 +837,6 @@ mod tests {
             "tool-abc",
             Some(&manifest_for("tool-abc", "\"host-fs\"")),
         );
-        // Not a component, so not staged — `list` must not report it.
         std::fs::write(dir.0.join("notes.txt"), "ignored").expect("writes a stray file");
 
         let staged = list(&dir.0).expect("lists");
@@ -1033,8 +861,6 @@ mod tests {
         );
     }
 
-    /// The two unhappy manifests are distinguished, because the fixes differ:
-    /// one needs generating, the other needs correcting.
     #[test]
     fn a_missing_manifest_and_an_unusable_one_are_different_states() {
         let dir = temp_dir("declarations");
@@ -1066,8 +892,6 @@ mod tests {
         assert_eq!(list(&dir.0).expect("lists"), []);
     }
 
-    /// An orphan manifest is removable on its own, and says so — otherwise the
-    /// only way to clear one would be by hand.
     #[test]
     fn each_file_can_be_removed_without_the_other() {
         let dir = temp_dir("partial");
@@ -1088,15 +912,6 @@ mod tests {
         );
     }
 
-    /// Checks that get past the signature gate, for tests about something else.
-    ///
-    /// The installer requires a signature by default, and these fixtures are
-    /// fabricated bytes with no key to sign them — so they take the supported
-    /// waiver: `allow_unsigned` plus the digest it demands. The digest is
-    /// computed here rather than asserted, so this is a gate being opened, not
-    /// a check being tested; the digest's own correctness is covered by
-    /// `ext_install::a_correct_digest_installs_and_a_tampered_byte_is_refused`,
-    /// which takes its expected value from the system's hasher instead.
     fn waived(file: &Path) -> Checks {
         let bytes = std::fs::read(file).expect("reads the file being waived");
         Checks {
@@ -1106,11 +921,6 @@ mod tests {
         }
     }
 
-    /// Every file in `dir`, with its bytes — the "did `ext/` change" oracle.
-    ///
-    /// Compared instead of reading the code, per the plan: an install that
-    /// refuses must leave the directory *byte-identical*, and a rollback that
-    /// re-creates a file with different contents would pass a name-only check.
     fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
         let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir)
             .expect("reads the directory")
@@ -1133,13 +943,10 @@ mod tests {
         files
     }
 
-    /// A refusal must leave nothing behind: not the component, not a manifest,
-    /// and not the staging directory the attempt used.
     fn refuses_and_changes_nothing(tag: &str, prepare: impl Fn(&Path) -> PathBuf) -> ExtError {
         let dir = temp_dir(tag);
         let ext = dir.0.join("ext");
         std::fs::create_dir_all(&ext).expect("creates ext/");
-        // One innocent bystander, so "unchanged" means something.
         stage(
             &ext,
             "tool-present",
@@ -1193,9 +1000,6 @@ mod tests {
         );
     }
 
-    /// The four refusals must be *distinguishable*, which is the whole reason
-    /// each has its own variant — `install failed` four times would leave the
-    /// operator no better off than `cp`.
     #[test]
     fn each_refusal_says_something_different() {
         let dir = temp_dir("distinct");
@@ -1241,9 +1045,6 @@ mod tests {
         );
     }
 
-    /// A digest that cannot be a digest is its own refusal, not a mismatch —
-    /// a truncated paste is the usual cause, and "your digest is 63 characters"
-    /// is more useful than showing two strings that differ.
     #[test]
     fn a_digest_that_is_not_a_digest_is_refused_as_malformed() {
         let dir = temp_dir("malformed-digest");
@@ -1253,9 +1054,7 @@ mod tests {
         std::fs::write(&source, b"\0asm").expect("writes a component");
 
         for bad in [
-            // 63 characters: one short, the classic truncated paste.
             "016481a6eb79d32a82af4a1f7d49af56b11af9431870a857016e4696e62aca2",
-            // 64 characters, one of them not hex.
             "z16481a6eb79d32a82af4a1f7d49af56b11af9431870a857016e4696e62aca26",
             "",
             "sha256:016481a6",
@@ -1275,7 +1074,6 @@ mod tests {
                 "{bad:?} is malformed, not a mismatch: {err:?}"
             );
         }
-        // And none of those attempts left anything behind.
         assert!(!ext.join(super::STAGING).exists());
         assert_eq!(list(&ext).expect("lists"), []);
     }
@@ -1307,18 +1105,6 @@ mod tests {
         assert_eq!(name, "tool-nope");
     }
 
-    /// #168: the staging directory is per call and private.
-    ///
-    /// Both halves matter and neither is observable from `install_from_url`'s
-    /// return value, so this drives the naming and the mode directly rather
-    /// than through a fetch.
-    ///
-    /// The name used to be `jk-ext-fetch-<pid>`, and `install_from_url`
-    /// `remove_dir_all`s it at both ends — so two installs in one process
-    /// deleted each other's half-fetched files. That is what made
-    /// `ext_install::a_remote_install_fetches_the_pair_and_both_signatures`
-    /// fail intermittently with a `.minisig` that had been downloaded and then
-    /// removed by a neighbour.
     #[test]
     fn two_installs_in_one_process_do_not_share_a_staging_directory() {
         let first = staging_dir();
@@ -1329,9 +1115,6 @@ mod tests {
              ends — the second install would delete the first's downloads"
         );
 
-        // And what lands there is a component and its signature *before*
-        // verification, so the directory must not be a world-readable drop box
-        // at a guessable path.
         for dir in [&first, &second] {
             crate::wasm_cache::ensure_private_dir(dir).expect("staging dir is creatable");
         }

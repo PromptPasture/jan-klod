@@ -1,13 +1,4 @@
-//! The outbound surfaces the `jan-klod-gateway` binary serves.
-//!
-//! A surface is a transport: it accepts a request in some wire idiom, drives a
-//! kernel [`AgentSession`](jk_agent::AgentSession), and writes the result
-//! back in that idiom. None of it is agent behaviour, which is why it lives
-//! here rather than in the kernel — `jk-agent` loads extensions, runs the
-//! loop and owns the session; this crate only exposes it (#179).
-//!
-//! The binary is the only production caller. The modules are public because the
-//! integration tests drive a surface directly, without a subprocess.
+//! Outbound transports over a kernel `AgentSession`, public so tests can drive them in-process.
 
 pub mod acp;
 pub mod config_write;
@@ -19,6 +10,4 @@ pub mod session_thread;
 pub mod sessions;
 pub mod setup;
 pub mod telegram;
-// Private: the socket is reached through `serve`'s router, never named by
-// a caller. `pub` items inside stay crate-visible.
 mod ws;

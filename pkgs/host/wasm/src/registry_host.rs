@@ -1,8 +1,4 @@
-//! Host adapter for `registry-skills` and `registry-mcp` extensions.
-//!
-//! Each registry gets its own `bindgen!` block, host state, and instantiation
-//! path (like `tool_host`). Both types share a `RegistryFleet` implementing
-//! `ToolInvoker` so the conductor dispatches skill and MCP calls the same way.
+//! Host adapter for `registry-skills` and `registry-mcp` extensions, sharing a `RegistryFleet` that implements `ToolInvoker`.
 
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
@@ -10,8 +6,6 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 use crate::host_fs::{FsError, Workspace};
 use crate::CoreError;
-
-// ─── skills world bindgen ────────────────────────────────────────────────────
 
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod skills_bind {
@@ -24,8 +18,6 @@ mod skills_bind {
 use skills_bind::jan_klod::interfaces::host_config as sk_config;
 use skills_bind::jan_klod::interfaces::host_fs as sk_fs;
 use skills_bind::jan_klod::interfaces::host_log as sk_log;
-
-// ─── mcp world bindgen ───────────────────────────────────────────────────────
 
 #[allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 mod mcp_bind {
@@ -40,8 +32,6 @@ use mcp_bind::jan_klod::interfaces::host_event as mcp_event;
 use mcp_bind::jan_klod::interfaces::host_http as mcp_http;
 use mcp_bind::jan_klod::interfaces::host_log as mcp_log;
 use mcp_bind::jan_klod::interfaces::host_process as mcp_proc;
-
-// ─── skills host state ───────────────────────────────────────────────────────
 
 struct SkillsHost {
     wasi: WasiCtx,
@@ -147,21 +137,13 @@ const fn to_sk_fs_err(err: FsError) -> sk_fs::FsError {
     }
 }
 
-// ─── mcp host state ──────────────────────────────────────────────────────────
-
 struct McpHost {
     wasi: WasiCtx,
     table: ResourceTable,
     component_id: String,
     config_json: String,
-    /// Bounded egress destinations, even though talking to third-party servers
-    /// is the whole purpose.
     egress: crate::egress::EgressPolicy,
-    /// Bounded command runner for the long-lived half of `host-process` (#110).
-    /// Registries hold stdio MCP servers open, never run to completion.
     process: crate::host_process::ProcessRunner,
-    /// Long-lived children; same type and lifetime guarantee as `tool_host`.
-    /// Instance children die with it for the same reason tool children do.
     children: crate::host_process::Children,
 }
 
@@ -263,13 +245,10 @@ const fn to_mcp_http_err(err: &crate::http::WireError) -> mcp_http::HttpError {
 }
 
 impl mcp_event::Host for McpHost {
-    /// One-way: host records guest reports, no delivery.
     fn publish(&mut self, topic: String, payload: String) {
         eprintln!("EVENT [{}] {topic}: {payload}", self.component_id);
     }
 }
-
-// ─── SkillsExtension ─────────────────────────────────────────────────────────
 
 /// An instantiated `registry-skills` extension.
 pub struct SkillsExtension {
@@ -282,7 +261,7 @@ impl SkillsExtension {
     /// Instantiate and start a `registry-skills` guest.
     ///
     /// # Errors
-    /// Returns [`CoreError`] if wiring, instantiation, or lifecycle fail.
+    /// [`CoreError`] if wiring, instantiation or lifecycle fails.
     pub fn instantiate(
         engine: &Engine,
         id: &str,
@@ -345,7 +324,7 @@ impl SkillsExtension {
     /// Invoke a skill by name with JSON arguments.
     ///
     /// # Errors
-    /// Returns an error string if the skill errors or the guest traps.
+    /// An error string if the skill errors or the guest traps.
     pub fn invoke(&mut self, name: &str, arguments: &str) -> Result<String, String> {
         let reg = self.world.jan_klod_interfaces_skill_registry();
         match reg.call_invoke(&mut self.store, name, arguments) {
@@ -356,12 +335,8 @@ impl SkillsExtension {
     }
 }
 
-// ─── McpExtension ────────────────────────────────────────────────────────────
-
-/// An instantiated `registry-mcp` extension.
 impl mcp_proc::Host for McpHost {
-    /// Registries hold servers open, not run commands to completion, so this is
-    /// refused. Declaring it is unavoidable: worlds import interfaces, not functions.
+    /// Refused: registries hold servers open rather than run commands to completion.
     fn exec(
         &mut self,
         _command: String,
@@ -431,7 +406,7 @@ impl McpExtension {
     /// Instantiate and start a `registry-mcp` guest.
     ///
     /// # Errors
-    /// Returns [`CoreError`] if wiring, instantiation, or lifecycle fail.
+    /// [`CoreError`] if wiring, instantiation or lifecycle fails.
     pub fn instantiate(
         engine: &Engine,
         id: &str,
@@ -498,9 +473,8 @@ impl McpExtension {
     /// Invoke an MCP tool (qualified name `server_id::tool_name`).
     ///
     /// # Errors
-    /// Returns an error string if the tool errors or the guest traps.
+    /// An error string if the tool errors or the guest traps.
     pub fn invoke_tool(&mut self, qualified_name: &str, arguments: &str) -> Result<String, String> {
-        // Strip the server prefix; the MCP registry resolves by bare tool name per-server.
         let bare = qualified_name.split("::").last().unwrap_or(qualified_name);
         let reg = self.world.jan_klod_interfaces_mcp_registry();
         match reg.call_invoke_tool(&mut self.store, bare, arguments) {
@@ -510,8 +484,6 @@ impl McpExtension {
         }
     }
 }
-
-// ─── RegistryFleet ───────────────────────────────────────────────────────────
 
 /// Skill metadata (mirrors `skill-info` WIT record).
 #[derive(Debug, Clone)]
@@ -541,7 +513,6 @@ pub struct McpToolMeta {
 pub struct RegistryFleet {
     skills: Vec<SkillsExtension>,
     mcp: Vec<McpExtension>,
-    /// Cached tool metadata: name → extension index.
     skill_names: Vec<(String, usize)>,
     mcp_names: Vec<(String, usize)>,
 }
@@ -576,13 +547,12 @@ impl RegistryFleet {
         }
     }
 
-    /// Tool metadata for all skills (as `crate::tool_host::ToolMeta`-like tuples).
+    /// Tool metadata for all skills, as `(name, description, schema)`.
     #[must_use]
     pub fn skill_metas(&mut self) -> Vec<(String, String, String)> {
         let mut out = Vec::new();
         for (idx, ext) in self.skills.iter_mut().enumerate() {
             for meta in ext.list_skills() {
-                // Keep cache in sync
                 if !self.skill_names.iter().any(|(n, _)| *n == meta.name) {
                     self.skill_names.push((meta.name.clone(), idx));
                 }
@@ -598,7 +568,6 @@ impl RegistryFleet {
         let mut out = Vec::new();
         for (idx, ext) in self.mcp.iter_mut().enumerate() {
             for meta in ext.list_tools() {
-                // Keep cache in sync
                 if !self.mcp_names.iter().any(|(n, _)| *n == meta.name) {
                     self.mcp_names.push((meta.name.clone(), idx));
                 }
@@ -622,7 +591,6 @@ impl jk_protocol::intercept::ToolInvoker for RegistryFleet {
         &mut self,
         call: &jk_protocol::turn::ToolCall,
     ) -> Option<jk_protocol::intercept::ToolInvocation> {
-        // Check skills first
         if let Some((_, idx)) = self.skill_names.iter().find(|(n, _)| n == &call.name) {
             let idx = *idx;
             return Some(match self.skills[idx].invoke(&call.name, &call.arguments) {
@@ -636,7 +604,6 @@ impl jk_protocol::intercept::ToolInvoker for RegistryFleet {
                 },
             });
         }
-        // Then MCP tools
         if let Some((_, idx)) = self.mcp_names.iter().find(|(n, _)| n == &call.name) {
             let idx = *idx;
             return Some(
@@ -656,9 +623,6 @@ impl jk_protocol::intercept::ToolInvoker for RegistryFleet {
     }
 }
 
-// ─── LazyRegistryFleet ───────────────────────────────────────────────────────
-
-/// A pending `registry-skills` instance—compiled, not instantiated.
 struct PendingSkills {
     id: String,
     component: Component,
@@ -666,24 +630,16 @@ struct PendingSkills {
     workspace: Option<Workspace>,
 }
 
-/// A pending `registry-mcp` instance—compiled, not instantiated.
 struct PendingMcp {
     id: String,
     component: Component,
     config_json: String,
     egress: crate::egress::EgressPolicy,
-    /// Carried not rebuilt: the runner is the boot path's confinement decision;
-    /// registries must get the same one tools get.
+    /// Carried, not rebuilt: the boot path's confinement decision, so registries get the one tools get.
     process: crate::host_process::ProcessRunner,
 }
 
-/// A registry fleet with compiled guests, not yet instantiated (#59).
-///
-/// Mirrors [`crate::tool_host::LazyToolFleet`]—see its doc for why pending
-/// resolves together and the trade-off finer-grained laziness needs.
-///
-/// In shipped `config.yaml`, both `registry.skills` and `registry.mcp` are
-/// disabled, so this fleet is usually empty and `ensure` never runs.
+/// A registry fleet with compiled guests, instantiated on first use.
 pub struct LazyRegistryFleet {
     engine: Engine,
     pending_skills: Vec<PendingSkills>,
@@ -743,7 +699,6 @@ impl LazyRegistryFleet {
         self.live.is_some()
     }
 
-    /// Instantiate every pending registry (once, memoized); hand back live fleet.
     fn ensure(&mut self) -> Result<&mut RegistryFleet, CoreError> {
         if self.live.is_none() {
             let mut skills = Vec::with_capacity(self.pending_skills.len());
@@ -772,11 +727,10 @@ impl LazyRegistryFleet {
         Ok(self.live.as_mut().expect("just set above"))
     }
 
-    /// Combined tool metadata (skills + MCP), instantiating the pending set if
-    /// this is the first call.
+    /// Combined tool metadata (skills + MCP), instantiating the pending set on first call.
     ///
     /// # Errors
-    /// Returns [`CoreError`] if a pending registry fails to instantiate or start.
+    /// [`CoreError`] if a pending registry fails to instantiate or start.
     pub fn all_metas(&mut self) -> Result<Vec<(String, String, String)>, CoreError> {
         Ok(self.ensure()?.all_metas())
     }
@@ -789,8 +743,6 @@ impl jk_protocol::intercept::ToolInvoker for LazyRegistryFleet {
     ) -> Option<jk_protocol::intercept::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
-            // Like LazyToolFleet: instantiation failures feed back as this call's
-            // result, not an abort.
             Err(err) => Some(jk_protocol::intercept::ToolInvocation {
                 content: format!("registry fleet failed to instantiate: {err}"),
                 failed: true,

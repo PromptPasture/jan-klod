@@ -1,15 +1,11 @@
-//! Tests must belong to buildable crates. `tests/` beside a **virtual**
-//! manifest gets silently skipped by cargo (no compilation = green test).
-//! Walks all `tests/` dirs and flags those beside virtual manifests.
+//! Flags `tests/` dirs beside a virtual manifest, which cargo would silently skip.
 
 use std::path::{Path, PathBuf};
 
 use crate::common;
 
-/// Directories that are not ours to police.
 const IGNORED: [&str; 4] = ["target", ".git", "node_modules", "ext"];
 
-/// Collect all `tests/` dirs under root.
 fn test_dirs(root: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -31,7 +27,6 @@ fn test_dirs(root: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// Does dir have package manifest (not bare workspace)?
 fn is_package(dir: &Path) -> Option<bool> {
     let manifest = dir.join("Cargo.toml");
     let text = std::fs::read_to_string(manifest).ok()?;
@@ -51,9 +46,7 @@ fn every_tests_directory_belongs_to_a_crate_cargo_builds() {
     let mut orphans = Vec::new();
     for dir in &dirs {
         let Some(parent) = dir.parent() else { continue };
-        // Beside package manifest (cargo builds) or no manifest (fixture).
         if is_package(parent) == Some(false) {
-            // tests/ beside virtual manifest: cargo builds nothing.
             orphans.push(dir.clone());
         }
     }

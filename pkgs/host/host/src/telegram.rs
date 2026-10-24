@@ -1,16 +1,4 @@
-//! Telegram bot integration (headless). Bot API is outbound HTTP only
-//! (`getUpdates` long-poll, `sendMessage` POST); no `host-socket` needed.
-//! HTTP injected as [`Fetch`] closure for offline testing.
-//!
-//! Message → turn → answer (chat id = session id).
-//!
-//! ## Confirmations in chat
-//!
-//! Headless path still gates on permissions. [`ChatDriver`] asks as a message,
-//! treats next user message as answer, long-polls `getUpdates` while blocked.
-//!
-//! Other chats' updates deferred, not dropped (preserve poll offset), run after
-//! current turn. Wait bounded by [`MAX_ANSWER_POLLS`]; expiry takes prompt default.
+//! Telegram bot (headless): `getUpdates` long-poll and `sendMessage` over an injected [`Fetch`]; chat id is session id.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -25,7 +13,7 @@ use jk_protocol::turn::{Driver, UserPrompt};
 pub struct Update {
     /// Monotonic update id (drives the poll offset).
     pub update_id: i64,
-    /// Sender id from message.from.id (used for principal and allowlist check).
+    /// Sender id, checked against the allowlist and used as the principal.
     pub sender_id: i64,
     /// Chat to reply to — also used as the loop session id.
     pub chat_id: i64,
@@ -33,25 +21,16 @@ pub struct Update {
     pub text: String,
 }
 
-/// The outbound HTTP the poller needs: `(method, url, headers, body) -> body`.
-/// Injected so tests can feed canned Telegram responses. The binary backs it with
-/// the real `host-http` client.
+/// The outbound HTTP the poller needs: `(method, url, headers, body) -> body`. Injected so tests can feed canned responses.
 pub type Fetch<'a> =
     &'a dyn Fn(&str, &str, &[(&str, &str)], Option<&[u8]>) -> Result<Vec<u8>, String>;
 
-/// Long-poll seconds passed to `getUpdates` (server holds the request open).
 const LONG_POLL_SECS: u32 = 30;
 
-/// How many long-polls a turn waits for its confirmation before giving up and
-/// taking the prompt's default.
-///
-/// Bounded by *polls* rather than wall-clock so the behaviour is identical under a
-/// canned `fetch` in a test and a real 30s-blocking one in production: four polls
-/// is roughly two minutes on the wire, and exactly four iterations in a test.
+/// Long-polls a turn waits for its answer, counted in polls so a canned test `fetch` behaves like the real one.
 const MAX_ANSWER_POLLS: u32 = 4;
 
-/// Parse a `getUpdates` response body into the text messages it carries.
-/// Non-message updates (edits, joins, non-text) are skipped.
+/// Parses a `getUpdates` body into its text messages, skipping non-message updates.
 #[must_use]
 pub fn parse_updates(body: &[u8]) -> Vec<Update> {
     let value: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
@@ -72,25 +51,16 @@ pub fn parse_updates(body: &[u8]) -> Vec<Update> {
         .collect()
 }
 
-/// The next poll offset after handling `updates`: one past the highest update id,
-/// or `None` when there was nothing to advance past.
+/// Next poll offset: one past the highest update id, or `None` when there was nothing to advance past.
 #[must_use]
 pub fn next_offset(updates: &[Update]) -> Option<i64> {
     updates.iter().map(|u| u.update_id).max().map(|max| max + 1)
 }
 
-/// One poll cycle: fetch updates from `offset`, drive each message through the
-/// loop, send the answer back, and return the next offset (unchanged if idle).
-///
-/// `allowed_senders`: The list of sender ids permitted to drive turns. Senders not
-/// on the list are refused before a session is created, as per #257 (Telegram sender
-/// allowlist). An empty list denies all senders; the allowlist is loaded from config
-/// and defaults to empty (deny all) if the telegram section is absent. If 22b (#185)
-/// has moved the bot to a guest, the allowlist moves to the guest's config and the
-/// principal storage moves to the guest's session context — same rule.
+/// One poll cycle returning the next offset; `allowed_senders` (empty denies all) gates who may drive turns.
 ///
 /// # Errors
-/// Returns a transport error string if `getUpdates` or a `sendMessage` fails.
+/// Transport error string if `getUpdates` or a `sendMessage` fails.
 pub fn poll_once(
     agent: &mut AgentSession,
     fetch: Fetch,
@@ -101,16 +71,11 @@ pub fn poll_once(
     let body = fetch("GET", &get_updates_url(token, offset), &[], None)?;
     let updates = parse_updates(&body);
 
-    // The offset and the deferred queue are shared with the driver: a turn that
-    // stops to ask a question polls for its answer, which consumes updates the
-    // outer loop must not re-fetch (offset) or lose (deferred).
     let cursor = Rc::new(Cell::new(next_offset(&updates).unwrap_or(offset)));
     let deferred = Rc::new(RefCell::new(Vec::new()));
 
     let mut queue: VecDeque<Update> = updates.into_iter().collect();
     while let Some(update) = queue.pop_front() {
-        // Check sender against allowlist (empty by default denies all).
-        // Refuse before a session is created (#257).
         if let Some(allowed) = allowed_senders {
             if !allowed.contains(&update.sender_id) {
                 eprintln!(
@@ -136,21 +101,18 @@ pub fn poll_once(
                 RunResult::Failed(reason) => format!("(sorry — the turn failed: {reason})"),
             };
         send_message(fetch, token, update.chat_id, &answer)?;
-        // Anything that arrived while this turn was waiting runs next, in order.
         queue.extend(deferred.borrow_mut().drain(..));
     }
 
     Ok(cursor.get())
 }
 
-/// The `getUpdates` long-poll URL for `offset`.
 fn get_updates_url(token: &str, offset: i64) -> String {
     format!(
         "https://api.telegram.org/bot{token}/getUpdates?timeout={LONG_POLL_SECS}&offset={offset}"
     )
 }
 
-/// Send `text` to `chat_id`.
 fn send_message(fetch: Fetch, token: &str, chat_id: i64, text: &str) -> Result<(), String> {
     let url = format!("https://api.telegram.org/bot{token}/sendMessage");
     let payload = serde_json::json!({ "chat_id": chat_id, "text": text }).to_string();
@@ -163,16 +125,11 @@ fn send_message(fetch: Fetch, token: &str, chat_id: i64, text: &str) -> Result<(
     Ok(())
 }
 
-/// Puts an interceptor's question to the chat and waits for the user's next
-/// message there to answer it.
 struct ChatDriver<'a> {
     fetch: Fetch<'a>,
     token: &'a str,
-    /// The chat being asked — only its messages answer the question.
     chat_id: i64,
-    /// Shared poll offset, advanced as this driver consumes updates.
     cursor: Rc<Cell<i64>>,
-    /// Updates from other chats seen while waiting, to run after this turn.
     deferred: Rc<RefCell<Vec<Update>>>,
 }
 
@@ -188,7 +145,6 @@ impl Driver for ChatDriver<'_> {
             )
         };
         if send_message(self.fetch, self.token, self.chat_id, &question).is_err() {
-            // The question never reached anyone, so nobody can answer it.
             return prompt.default_answer.clone();
         }
         self.wait_for_reply()
@@ -197,7 +153,6 @@ impl Driver for ChatDriver<'_> {
 }
 
 impl ChatDriver<'_> {
-    /// Long-poll until this chat says something, deferring other chats' messages.
     fn wait_for_reply(&self) -> Option<String> {
         for _ in 0..MAX_ANSWER_POLLS {
             let url = get_updates_url(self.token, self.cursor.get());
@@ -211,7 +166,6 @@ impl ChatDriver<'_> {
                 if reply.is_none() && update.chat_id == self.chat_id {
                     reply = Some(update.text);
                 } else {
-                    // Not an answer to this question — queue it, never drop it.
                     self.deferred.borrow_mut().push(update);
                 }
             }

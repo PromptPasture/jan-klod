@@ -1,8 +1,5 @@
-//! Drive provider `llm-provider.complete` vs live OpenAI endpoint.
-//! Instantiate `provider-world` with real `host-http`, issue completion, print chunks.
-//! Needs API-key env + network (real call).
+//! Drives `llm-provider.complete` against the live OpenAI endpoint; needs an API-key env var and network.
 
-// bindgen!-generated code; exempt from workspace lints
 #![allow(missing_docs, clippy::all, clippy::pedantic, clippy::nursery)]
 
 use jk_config::Config;
@@ -22,12 +19,10 @@ use exports::jan_klod::interfaces::llm_provider::{
 };
 use jan_klod::interfaces::{host_config, host_http, host_log};
 
-/// Minimal host backing `provider-world`
 struct ProbeHost {
     wasi: WasiCtx,
     table: ResourceTable,
     component_id: String,
-    /// Provider instance config section (env expanded).
     section: Value,
 }
 
@@ -127,7 +122,6 @@ fn main() -> Result<()> {
         .next()
         .unwrap_or_else(|| "Reply with exactly one word: pong".to_string());
 
-    // First enabled provider from config
     let config = Config::from_path(&config_path)?;
     let instance = config
         .enabled()

@@ -1,41 +1,9 @@
-//! `host-storage`, once, for every world that imports it.
-//!
-//! This was private to [`crate::interceptor_host`] until a tool needed it too
-//! (#215). It is lifted rather than copied for a reason specific to
-//! `bindgen!`: each world generates its **own** `host-storage` trait and its
-//! own `Entry` and `store-error` types, identical in shape and distinct to
-//! the compiler. So the logic cannot live under the trait if two worlds are
-//! to share it — it lives here over plain types, and each host writes a thin
-//! `impl` that converts.
-//!
-//! What that leaves in each host is mechanical: call the method, map the
-//! result. What lives here is the part worth having in one place — the
-//! namespace scoping that keeps one guest out of another's data.
-//!
-//! # The seam under it
-//!
-//! Durable storage is reached through [`Entries`], a trait, rather than
-//! through the session store directly (#180). The capability lives with the
-//! component host; the SQLite store lives in `jk-session`, below it; and
-//! neither should name the other. So this side declares what it needs — four
-//! calls over a [`Row`] — and the crate that owns a session supplies
-//! something that does them.
-//!
-//! The trait is written here, with the capability, rather than beside the
-//! store: a seam takes the shape of whichever side declares it, and the side
-//! that knows what is *needed* is this one. Written the other way round it
-//! would be the store's whole API with a `dyn` in front of it.
+//! `host-storage` logic shared by every world; durable storage is reached via the [`Entries`] seam so neither this crate nor `jk-session` names the other.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// One row as a backing store holds it: the scoped namespace it was written
-/// under, and no presentation applied.
-///
-/// Deliberately the same shape as a session store's own row, and deliberately
-/// not that type. Naming it would be the dependency this seam exists to
-/// avoid, and the duplication is five fields that have not changed since the
-/// store was written.
+/// One row as a backing store holds it: scoped namespace, no presentation applied.
 pub struct Row {
     /// The namespace as stored — scoped, not the one the guest asked for.
     pub namespace: String,
@@ -43,27 +11,13 @@ pub struct Row {
     pub key: String,
     /// The opaque value.
     pub value: String,
-    /// Creation time, in whatever clock the backing store keeps.
+    /// Creation time, in the backing store's clock.
     pub created_at: u64,
     /// Last write time.
     pub updated_at: u64,
 }
 
-/// What `host-storage` needs from a durable store, and nothing more.
-///
-/// Four calls. The store behind them has many more — an event log, session
-/// listing, fork points — and none of that is this capability's business: a
-/// guest that can reach `host-storage` must not thereby be able to read a
-/// transcript.
-///
-/// `&self` throughout, because the implementations share one store between
-/// every guest in a fleet and do their own locking. An `&mut self` here would
-/// make that sharing impossible to express.
-///
-/// `Send + Sync` because a `wasmtime::Store`'s data must be, and this ends up
-/// inside one. Not a new constraint — the handle this replaces was an
-/// `Arc<Mutex<_>>`, which is both — but it has to be said out loud now that
-/// the type is erased.
+/// What `host-storage` needs from a durable store and nothing more, so a guest cannot reach the rest.
 pub trait Entries: Send + Sync {
     /// Upsert `value` and return the row as stored.
     ///
@@ -74,15 +28,13 @@ pub trait Entries: Send + Sync {
     /// Fetch one row.
     ///
     /// # Errors
-    /// [`StorageFault::NotFound`] when there is no such row, or
-    /// [`StorageFault::Backend`].
+    /// [`StorageFault::NotFound`] when there is no such row, or [`StorageFault::Backend`].
     fn get(&self, namespace: &str, key: &str) -> Result<Row, StorageFault>;
 
     /// Remove one row.
     ///
     /// # Errors
-    /// [`StorageFault::NotFound`] when there is no such row, or
-    /// [`StorageFault::Backend`].
+    /// [`StorageFault::NotFound`] when there is no such row, or [`StorageFault::Backend`].
     fn delete(&self, namespace: &str, key: &str) -> Result<(), StorageFault>;
 
     /// The most recently written rows in a namespace, newest first.
@@ -92,7 +44,7 @@ pub trait Entries: Send + Sync {
     fn recent(&self, namespace: &str, limit: u32) -> Result<Vec<Row>, StorageFault>;
 }
 
-/// An entry as a guest sees it, before a world's own `Entry` is built from it.
+/// An entry as a guest sees it.
 pub struct StoredEntry {
     /// `<namespace>/<key>`, in the guest's own namespace.
     pub id: String,
@@ -102,13 +54,13 @@ pub struct StoredEntry {
     pub key: String,
     /// The opaque value.
     pub value: String,
-    /// Creation time, in whatever clock the backing store keeps.
+    /// Creation time, in the backing store's clock.
     pub created_at: u64,
     /// Last write time.
     pub updated_at: u64,
 }
 
-/// Why a storage call failed, in the two shapes the contract has.
+/// Why a storage call failed.
 #[derive(Debug)]
 pub enum StorageFault {
     /// No entry at that namespace and key.
@@ -117,30 +69,11 @@ pub enum StorageFault {
     Backend,
 }
 
-/// Where a guest's `host-storage` calls actually land.
-///
-/// Durability is opt-in per instance and the default is load-bearing:
-/// permission gates' standing grants are documented as dying with the
-/// process, and making every guest durable would quietly turn "always allow"
-/// into "allow forever".
-///
-/// Every namespace is prefixed with the owning component's id, so sharing one
-/// database does not let a guest name `session-abc` and read the transcript,
-/// or name a peer's namespace and read its decisions. The core's own
-/// namespaces contain no `/`, so nothing a guest can ask for collides with
-/// them.
+/// Where a guest's calls land; namespaces are prefixed with the component id so a guest cannot name a peer's.
 pub struct GuestStorage {
-    /// Where the entries live.
     backing: Backing,
-    /// Whether namespaces are additionally keyed by session (#215).
-    ///
-    /// Opt-in, and the default is not a detail: `interceptor-permission`'s
-    /// standing grants are deliberately run-scoped, so turning this on for
-    /// everything would silently narrow "always allow" to "always allow, in
-    /// this session".
+    /// Opt-in so "always allow" stays run-scoped.
     by_session: bool,
-    /// The session a call belongs to, bound by the conductor at the top of a
-    /// turn. `None` until something binds it.
     session: Option<String>,
 }
 
@@ -173,21 +106,16 @@ impl GuestStorage {
 
 /// Where a guest's entries actually live.
 pub enum Backing {
-    /// A private map, for when no store is open (unit tests, offline
-    /// harnesses).
+    /// A private map, for when no store is open (tests, offline harnesses).
     Ephemeral {
         /// (namespace, key) -> (value, created, updated).
         entries: HashMap<(String, String), (String, u64, u64)>,
         /// Monotonic clock, so timestamps order without a real clock.
         clock: u64,
     },
-    /// A durable store, namespaced to the owning component.
-    ///
-    /// Reached through [`Entries`] rather than held directly, so this crate
-    /// never names the crate that knows SQLite (#180).
+    /// A durable store scoped to the owning component, reached through [`Entries`].
     Durable {
-        /// Shared with the agent session that opened it, and with every
-        /// other guest in the fleet.
+        /// Shared with the agent session that opened it and every other guest.
         rows: Arc<dyn Entries>,
         /// The component id every namespace is prefixed with.
         owner: String,
@@ -195,14 +123,7 @@ pub enum Backing {
 }
 
 impl GuestStorage {
-    /// The namespace a guest request actually reaches.
-    ///
-    /// # Errors
-    /// [`StorageFault::Backend`] when this storage is session-scoped and
-    /// nothing has bound a session. **Fail closed rather than fall back to
-    /// the unscoped namespace**: the fallback would silently share one
-    /// guest's state across every session, which is the exact property
-    /// session scoping exists to prevent, and nothing would report it.
+    /// Fails closed when session-scoped with no session: an unscoped fallback would share state across sessions.
     fn scope(&self, namespace: &str) -> Result<String, StorageFault> {
         let within = match (&self.by_session, &self.session) {
             (false, _) => namespace.to_string(),
@@ -221,8 +142,6 @@ impl GuestStorage {
         })
     }
 
-    /// Undo [`Self::scope`], so a returned entry names the namespace the
-    /// guest asked for rather than what the host stored under.
     fn unscope(&self, namespace: &str) -> String {
         let outer = match &self.backing {
             Backing::Ephemeral { .. } => namespace,
@@ -239,7 +158,6 @@ impl GuestStorage {
         }
     }
 
-    /// Present a stored row under the namespace the guest asked for.
     fn present(&self, row: Row) -> StoredEntry {
         let namespace = self.unscope(&row.namespace);
         StoredEntry {
@@ -255,8 +173,7 @@ impl GuestStorage {
     /// Upsert `value`, returning the entry as stored.
     ///
     /// # Errors
-    /// [`StorageFault::Backend`] when the storage is session-scoped and no
-    /// session is bound, or when the backing store refuses.
+    /// [`StorageFault::Backend`] when session-scoped with no session bound, or the store refuses.
     pub fn set(
         &mut self,
         namespace: String,
@@ -291,9 +208,7 @@ impl GuestStorage {
     /// Fetch one entry.
     ///
     /// # Errors
-    /// [`StorageFault::Backend`] when the storage is session-scoped and no
-    /// session is bound, or when the backing store refuses; [`StorageFault::NotFound`]
-    /// when there is no such entry.
+    /// As [`Self::set`], plus [`StorageFault::NotFound`] when there is no such entry.
     pub fn get(&self, namespace: &str, key: &str) -> Result<StoredEntry, StorageFault> {
         let scoped = self.scope(namespace)?;
         match &self.backing {
@@ -318,9 +233,7 @@ impl GuestStorage {
     /// Remove one entry.
     ///
     /// # Errors
-    /// [`StorageFault::Backend`] when the storage is session-scoped and no
-    /// session is bound, or when the backing store refuses; [`StorageFault::NotFound`]
-    /// when there is no such entry.
+    /// As [`Self::set`], plus [`StorageFault::NotFound`] when there is no such entry.
     pub fn delete(&mut self, namespace: &str, key: &str) -> Result<(), StorageFault> {
         let scoped = self.scope(namespace)?;
         match &mut self.backing {
@@ -335,8 +248,7 @@ impl GuestStorage {
     /// Every entry in a namespace, unordered.
     ///
     /// # Errors
-    /// [`StorageFault::Backend`] when the storage is session-scoped and no
-    /// session is bound, or when the backing store refuses.
+    /// As [`Self::set`].
     pub fn entries_in(&self, namespace: &str) -> Result<Vec<StoredEntry>, StorageFault> {
         let scoped = self.scope(namespace)?;
         match &self.backing {
@@ -360,11 +272,10 @@ impl GuestStorage {
         }
     }
 
-    /// The most recently written entries in a namespace, newest first.
+    /// The most recently written entries, newest first.
     ///
     /// # Errors
-    /// [`StorageFault::Backend`] when the storage is session-scoped and no
-    /// session is bound, or when the backing store refuses.
+    /// As [`Self::set`].
     pub fn recent(&self, namespace: &str, limit: u32) -> Result<Vec<StoredEntry>, StorageFault> {
         let mut entries = self.entries_in(namespace)?;
         entries.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
@@ -385,8 +296,6 @@ mod tests {
         }
     }
 
-    /// The property the whole option exists for: one tool, two sessions, two
-    /// plans.
     #[test]
     fn two_sessions_do_not_share_a_session_scoped_namespace() {
         let mut first = GuestStorage::per_session(ephemeral());
@@ -395,8 +304,6 @@ mod tests {
             .set("plan".into(), "k".into(), "from s1".into())
             .expect("writes");
 
-        // Same storage, rebound — a fleet outlives a session, so this is the
-        // real sequence rather than two objects.
         first.bind_session("s2");
         assert!(
             matches!(first.get("plan", "k"), Err(StorageFault::NotFound)),
@@ -414,8 +321,6 @@ mod tests {
         );
     }
 
-    /// Unscoped storage is unchanged by any of this — the default a
-    /// permission gate's standing grants rely on.
     #[test]
     fn shared_storage_ignores_the_session_entirely() {
         let mut shared = GuestStorage::shared(ephemeral());
@@ -432,9 +337,6 @@ mod tests {
         );
     }
 
-    /// Fail closed. The tempting alternative — fall back to the unscoped
-    /// namespace — shares one guest's state across every session and reports
-    /// nothing, which is the exact failure session scoping prevents.
     #[test]
     fn session_scoped_storage_with_no_session_refuses() {
         let mut unbound = GuestStorage::per_session(ephemeral());
@@ -448,8 +350,6 @@ mod tests {
         ));
     }
 
-    /// A returned entry names the namespace the guest asked for, not the one
-    /// the host stored under — session prefix included.
     #[test]
     fn a_session_scoped_entry_is_presented_unscoped() {
         let mut storage = GuestStorage::per_session(ephemeral());

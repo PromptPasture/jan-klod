@@ -1,8 +1,4 @@
-//! `ext install` against real components. Refusals needing only bytes (no
-//! component, no manifest, already installed) are cheap unit tests in `core::ext`.
-//! Real components need: valid ones land and load, manifests disagreeing with
-//! actual imports refused. Both need imports to disagree about, fabricated
-//! bytes have none.
+//! `ext install` against real components: valid ones land and load, a manifest that disagrees with the real imports is refused.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,7 +7,6 @@ use jk_wasm::ext::{self, Declaration, ExtError};
 
 use crate::common;
 
-/// Scratch `ext/` and sources dir, removed on drop.
 pub struct Scratch {
     root: PathBuf,
     pub ext: PathBuf,
@@ -38,8 +33,6 @@ pub fn scratch(tag: &str) -> Scratch {
     }
 }
 
-/// Copy staged guest, manifest to `incoming`, return component path — the
-/// installable pair as released.
 pub fn offer(scratch: &Scratch, guest: &str) -> PathBuf {
     let staged = common::repo_root().join("ext");
     let component = scratch.incoming.join(format!("{guest}.wasm"));
@@ -52,19 +45,6 @@ pub fn offer(scratch: &Scratch, guest: &str) -> PathBuf {
     component
 }
 
-/// The SHA-256 of a file, **computed by something other than the code under
-/// test**.
-///
-/// `install` hashes with `sha2` and renders the digest with a hand-written hex
-/// helper. A test that produced its expected value the same way would agree
-/// with itself no matter how wrong that helper was — a mis-ordered or
-/// zero-padded encoding would be wrong *consistently*, so every comparison
-/// would still pass. So the expectation comes from the system's own tool, which
-/// shares no code with the host: `sha256sum` on Linux, `shasum -a 256` on
-/// macOS.
-///
-/// Returns `None` when neither exists, and the caller skips — a missing tool
-/// must not be reported as a digest failure.
 fn sha256_of(path: &Path) -> Option<String> {
     let candidates: [(&str, &[&str]); 2] = [("sha256sum", &[]), ("shasum", &["-a", "256"])];
     for (program, flags) in candidates {
@@ -82,17 +62,11 @@ fn sha256_of(path: &Path) -> Option<String> {
             path.display()
         );
         let text = String::from_utf8(output.stdout).expect("a digest is ASCII");
-        // Both tools print `<hex>  <path>`.
         return text.split_whitespace().next().map(str::to_ascii_lowercase);
     }
     None
 }
 
-/// An offer that is properly signed, plus the checks that accept it.
-///
-/// The default for every test about something *other* than signatures: signed
-/// is the installer's default, so a structural test that skipped it would be
-/// refused before reaching the check it cares about.
 fn signed_offer(scratch: &Scratch, guest: &str) -> (PathBuf, ext::Checks) {
     let component = offer(scratch, guest);
     let signer = crate::common::minisig::Signer::new();
@@ -106,11 +80,6 @@ fn signed_offer(scratch: &Scratch, guest: &str) -> (PathBuf, ext::Checks) {
     (component, checks)
 }
 
-/// Re-sign an offer whose files were edited after `signed_offer` signed them.
-///
-/// The structural tests rewrite a manifest *after* staging it, which invalidates
-/// its signature — so without this they would be refused for the wrong reason
-/// and would pass while proving nothing about the structural check.
 fn resign(scratch: &Scratch, guest: &str) -> ext::Checks {
     let signer = crate::common::minisig::Signer::new();
     signer.sign(&scratch.incoming.join(format!("{guest}.wasm")));
@@ -122,7 +91,6 @@ fn resign(scratch: &Scratch, guest: &str) -> ext::Checks {
     }
 }
 
-/// Every name in a directory, sorted — enough to assert "nothing landed".
 pub fn names(dir: &Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(dir)
         .expect("reads the directory")
@@ -149,34 +117,26 @@ fn a_valid_component_lands_with_its_manifest_and_is_then_loadable() {
         ext::install(&scratch.ext, &source, &checks).expect("a real component installs");
     assert_eq!(installed.name, "tool-fs");
 
-    // Both files, nothing else; staging cleaned.
     assert_eq!(
         names(&scratch.ext),
         ["tool-fs.manifest.toml", "tool-fs.wasm"],
         "the pair lands together and the staging directory is gone"
     );
 
-    // The declaration it reports is the one now on disk.
     let Declaration::Present(manifest) = &installed.declaration else {
         panic!("a component that installed has a readable manifest: {installed:?}")
     };
     assert_eq!(manifest.capabilities, ["host-fs"]);
 
-    // And `list` — a separate reader — agrees about what landed.
     let listed = ext::list(&scratch.ext).expect("lists");
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert_eq!(listed[0].declaration, installed.declaration);
 
-    // Worth more: installed is *loadable*. Install can't accept what runtime rejects.
     let engine = wasmtime::Engine::default();
     wasmtime::component::Component::from_file(&engine, scratch.ext.join("tool-fs.wasm"))
         .expect("what install accepted, the runtime can load");
 }
 
-/// The refusal that needs a real component: a manifest which does not admit to
-/// what the component imports. This is the check that makes an install worth
-/// more than a checksum — a component's declaration is what an operator reads
-/// before granting anything, so one that under-declares must not land.
 #[test]
 fn a_manifest_that_under_declares_is_refused_and_nothing_lands() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -185,7 +145,6 @@ fn a_manifest_that_under_declares_is_refused_and_nothing_lands() {
     let scratch = scratch("under-declared");
     let source = offer(&scratch, "tool-fs");
 
-    // tool-fs really imports `host-fs`; say it needs nothing.
     let manifest = scratch.incoming.join("tool-fs.manifest.toml");
     let text = std::fs::read_to_string(&manifest).expect("reads the manifest");
     assert!(
@@ -214,17 +173,6 @@ fn a_manifest_that_under_declares_is_refused_and_nothing_lands() {
     );
 }
 
-/// A stem naming no category is refused before a byte moves (#222).
-///
-/// Its control is `a_valid_component_lands_with_its_manifest_and_is_then_loadable`
-/// above: the same bytes under a `tool-` stem install and load, so this is
-/// about the name and not about the component.
-///
-/// Refused here rather than only at adoption because the stem is known
-/// before anything is copied. Left to adoption, the component lands in
-/// `ext/`, reports success, and is discovered to be uncallable a turn
-/// later — and on the self-extension path the name was the agent's own
-/// choice, so nothing upstream would have questioned it.
 #[test]
 fn a_component_whose_stem_names_no_category_is_refused_and_nothing_lands() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -232,8 +180,6 @@ fn a_component_whose_stem_names_no_category_is_refused_and_nothing_lands() {
     }
     let scratch = scratch("uncategorised");
     let signer = Signer::new();
-    // The same real component, renamed the way an agent might name what it
-    // just built.
     let staged = common::repo_root().join("ext");
     let source = scratch.incoming.join("self-built.wasm");
     std::fs::copy(staged.join("tool-fs.wasm"), &source).expect("copies the component");
@@ -262,13 +208,6 @@ fn a_component_whose_stem_names_no_category_is_refused_and_nothing_lands() {
     );
 }
 
-/// The digest check, against a real component: the right digest installs, and
-/// one tampered byte is refused with **both** digests named.
-///
-/// Tampering by flipping a byte rather than by writing junk, because junk would
-/// also fail to compile — and then the test would pass whether the digest was
-/// checked or not. A component that is still perfectly valid wasm, with one
-/// byte changed, can only be caught by the digest.
 #[test]
 fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -277,12 +216,9 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     let scratch = scratch("digest");
     let source = offer(&scratch, "tool-fs");
     let Some(digest) = sha256_of(&source) else {
-        // No independent hasher on this machine; asserting against our own
-        // would prove only that the code agrees with itself.
         return;
     };
 
-    // Right digest accepted.
     ext::install(
         &scratch.ext,
         &source,
@@ -295,7 +231,6 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     .expect("the component matches its own digest");
     ext::remove(&scratch.ext, "tool-fs").expect("removes it again");
 
-    // Uppercase same digest (release notes inconsistent).
     ext::install(
         &scratch.ext,
         &source,
@@ -308,7 +243,6 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     .expect("a digest is hex, and hex is case-insensitive");
     ext::remove(&scratch.ext, "tool-fs").expect("removes it again");
 
-    // Flip one byte: still component, not the one digest describes.
     let mut bytes = std::fs::read(&source).expect("reads the component");
     let middle = bytes.len() / 2;
     bytes[middle] ^= 0xff;
@@ -342,8 +276,6 @@ fn a_correct_digest_installs_and_a_tampered_byte_is_refused() {
     );
 }
 
-/// A manifest built against another interface package is refused too, and
-/// distinguishably — the same gate boot applies, reached through `install`.
 #[test]
 fn a_manifest_from_another_api_version_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -373,17 +305,8 @@ fn a_manifest_from_another_api_version_is_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-// ---- Signatures (box 4) ----
-//
-// `common::minisig` builds these fixtures from `ring` + `blake2` because there
-// is no `minisign` binary here; see that module for why a hand-built fixture is
-// sound. The first test below is what makes the rest meaningful: if a genuinely
-// valid signature were *not* accepted, every refusal below would pass for the
-// wrong reason.
-
 use crate::common::minisig::Signer;
 
-/// Sign both files of an offer with `signer`.
 fn sign_pair(scratch: &Scratch, guest: &str, signer: &Signer) {
     signer.sign(&scratch.incoming.join(format!("{guest}.wasm")));
     signer.sign(&scratch.incoming.join(format!("{guest}.manifest.toml")));
@@ -416,11 +339,6 @@ fn a_signature_from_a_trusted_key_over_both_files_installs() {
     );
 }
 
-/// The case the box exists for: signing the component but **not** the manifest
-/// must not be enough. A manifest carries no provenance of its own — it is
-/// trusted at boot purely for sitting beside the component — so a signature
-/// covering only the `.wasm` would verify the artefact while trusting an
-/// attacker's description of what it may ask the host for.
 #[test]
 fn a_signature_over_the_component_but_not_the_manifest_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -429,7 +347,7 @@ fn a_signature_over_the_component_but_not_the_manifest_is_refused() {
     let scratch = scratch("half-signed");
     let source = offer(&scratch, "tool-fs");
     let signer = Signer::new();
-    signer.sign(&source); // the component only
+    signer.sign(&source);
 
     let err = ext::install(&scratch.ext, &source, &signed_checks(&signer))
         .expect_err("half a signature must not be enough");
@@ -443,8 +361,6 @@ fn a_signature_over_the_component_but_not_the_manifest_is_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-/// A perfectly valid signature by a key nobody trusted is refused — which is
-/// the whole difference between "signed" and "signed by someone we chose".
 #[test]
 fn a_valid_signature_from_an_untrusted_key_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -465,9 +381,6 @@ fn a_valid_signature_from_an_untrusted_key_is_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-/// Tampering after signing is caught, and this is the test that would fail if
-/// the signature were being checked against the *source* bytes rather than the
-/// staged ones.
 #[test]
 fn bytes_changed_after_signing_are_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -492,12 +405,6 @@ fn bytes_changed_after_signing_are_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-/// The legacy format is refused rather than quietly accepted.
-///
-/// This is why the fixtures needed `BLAKE2b` at all: `verify(.., allow_legacy)`
-/// is passed `false`, so a legacy signature — Ed25519 over the raw file — is
-/// `UnexpectedAlgorithm`. Without this test, passing `true` would look
-/// identical from the outside.
 #[test]
 fn a_legacy_format_signature_is_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -517,7 +424,6 @@ fn a_legacy_format_signature_is_refused() {
     );
 }
 
-/// Unsigned installs need flag *and* digest; neither alone suffices.
 #[test]
 fn allow_unsigned_needs_a_digest_and_says_so() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -526,7 +432,6 @@ fn allow_unsigned_needs_a_digest_and_says_so() {
     let scratch = scratch("unsigned");
     let source = offer(&scratch, "tool-fs");
 
-    // No signature, no flag: refused for want of a signature.
     let err = ext::install(&scratch.ext, &source, &ext::Checks::default())
         .expect_err("signed is the default");
     assert!(
@@ -534,7 +439,6 @@ fn allow_unsigned_needs_a_digest_and_says_so() {
         "an unsigned component is refused by default: {err:?}"
     );
 
-    // The flag alone: refused, because then nothing at all would vouch for it.
     let err = ext::install(
         &scratch.ext,
         &source,
@@ -550,7 +454,6 @@ fn allow_unsigned_needs_a_digest_and_says_so() {
         "the two flags are paired: {err:?}"
     );
 
-    // Both: permitted.
     let Some(digest) = sha256_of(&source) else {
         return;
     };
@@ -570,7 +473,6 @@ fn allow_unsigned_needs_a_digest_and_says_so() {
     );
 }
 
-/// An empty `trusted-keys` list means nothing is trusted, not "skip the check".
 #[test]
 fn no_configured_keys_refuses_rather_than_accepting_anything() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -589,15 +491,6 @@ fn no_configured_keys_refuses_rather_than_accepting_anything() {
     assert_eq!(*keys, 0, "and the message says how many keys were tried");
 }
 
-/// Acceptance line 2 in full: what `install` accepted, **a real boot loads**.
-///
-/// The valid-install test above compiles the landed component, which is what
-/// the boot path does to load one — but compiling is not booting. A `Runtime`
-/// also resolves the instance against `config.yaml`, reads the manifest beside
-/// the component, cross-checks the declaration against the real imports, and
-/// refuses on any of those. So only this test can say the two ends agree: that
-/// an install is not merely well-formed but *accepted by the thing that will
-/// run it*.
 #[test]
 fn a_component_installed_here_is_loaded_by_a_real_boot() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -607,7 +500,6 @@ fn a_component_installed_here_is_loaded_by_a_real_boot() {
     let (source, checks) = signed_offer(&scratch, "tool-fs");
     ext::install(&scratch.ext, &source, &checks).expect("installs");
 
-    // Config enabling installed instance. `tool.fs` → `tool-fs.wasm`.
     let config = scratch.root.join("config.yaml");
     std::fs::write(
         &config,
@@ -641,15 +533,6 @@ extensions:
     );
 }
 
-// ---- Remote sources: the refusal, before any fetch (#92 box 1) ----
-
-/// A loopback URL is refused, and the server is never touched.
-///
-/// The sentinel is the whole assertion. `check_remote` returning `Err` only
-/// says it *decided* to refuse; what matters for an installer is that nothing
-/// went out on the wire first, and only the server can say that. It is
-/// `common::Countable` rather than a fresh listener because a negative
-/// assertion needs a counter that cannot lag — see that type for why.
 #[test]
 fn a_loopback_source_is_refused_before_anything_is_fetched() {
     let sentinel = common::Countable::start();
@@ -668,9 +551,6 @@ fn a_loopback_source_is_refused_before_anything_is_fetched() {
     sentinel.only_hit();
 }
 
-/// The address classes the policy exists for, none of which can host a
-/// sentinel — so these assert the decision, and the test above asserts that no
-/// connection accompanies it.
 #[test]
 fn private_link_local_and_metadata_sources_are_refused() {
     for url in [
@@ -688,11 +568,6 @@ fn private_link_local_and_metadata_sources_are_refused() {
     }
 }
 
-/// A path is a path, and so is every scheme that is not http(s).
-///
-/// `file:///etc/passwd` matters: treated as remote it would be a fetch the
-/// policy has no opinion about, and treated as a path it is simply a missing
-/// file. The second is the honest answer.
 #[test]
 fn only_http_and_https_count_as_remote() {
     for remote in [
@@ -714,14 +589,6 @@ fn only_http_and_https_count_as_remote() {
     }
 }
 
-// ---- Remote sources: the fetch (#92 box 2) ----
-
-/// Serve a set of files by URL, recording every URL asked for.
-///
-/// A canned `HttpFn` rather than a socket, and the URLs are `example.com` —
-/// public, so the policy permits them without widening anything. A loopback
-/// test server would have needed a grant, and granting one to test a fetch
-/// would have tested a policy nobody runs.
 pub fn canned_files(
     files: Vec<(&'static str, Vec<u8>)>,
 ) -> (jk_wasm::route::HttpFn, Arc<std::sync::Mutex<Vec<String>>>) {
@@ -742,7 +609,6 @@ pub fn canned_files(
     (http, asked)
 }
 
-/// Four files for signed remote install, from staged guest.
 pub fn published(scratch: &Scratch, guest: &str) -> (Vec<(&'static str, Vec<u8>)>, ext::Checks) {
     let component = offer(scratch, guest);
     let signer = crate::common::minisig::Signer::new();
@@ -771,7 +637,6 @@ pub fn published(scratch: &Scratch, guest: &str) -> (Vec<(&'static str, Vec<u8>)
     )
 }
 
-/// Signed remote install fetches four files, same verification as local.
 #[test]
 fn a_remote_install_fetches_the_pair_and_both_signatures() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -808,8 +673,6 @@ fn a_remote_install_fetches_the_pair_and_both_signatures() {
     );
 }
 
-/// Served bytes tampering refused like local (proves download has no weaker
-/// path).
 #[test]
 fn bytes_tampered_in_flight_are_refused() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -835,8 +698,6 @@ fn bytes_tampered_in_flight_are_refused() {
     assert_eq!(names(&scratch.ext), Vec::<String>::new(), "nothing landed");
 }
 
-/// Waived signature fetches two files only. 404 on `.minisig` doesn't fail
-/// unsigned install.
 #[test]
 fn an_unsigned_remote_install_does_not_fetch_signatures() {
     if !common::guests_staged(&["tool-fs.wasm"]) {
@@ -847,7 +708,6 @@ fn an_unsigned_remote_install_does_not_fetch_signatures() {
     let two = vec![files[0].clone(), files[1].clone()];
     let (http, asked) = canned_files(two);
 
-    // System hasher (code-computed expectation agrees with itself).
     let Some(digest) = sha256_of(&scratch.incoming.join("tool-fs.wasm")) else {
         return;
     };
@@ -867,7 +727,6 @@ fn an_unsigned_remote_install_does_not_fetch_signatures() {
     assert_eq!(asked.len(), 2, "no signature was requested: {asked:?}");
 }
 
-/// URL with query refused, not mangled silently.
 #[test]
 fn a_url_with_a_query_is_refused_rather_than_mangled() {
     let (http, asked) = canned_files(vec![]);
@@ -888,9 +747,6 @@ fn a_url_with_a_query_is_refused_rather_than_mangled() {
     );
 }
 
-/// `install_from_url` refuses denied destination before asking client.
-/// Box 1 tests `check_remote` directly; this tests installer calls it.
-/// Without this, dropping per-file check leaves tests green (all use permitted).
 #[test]
 fn a_refused_destination_is_not_even_requested() {
     let (http, asked) = canned_files(vec![]);
@@ -912,11 +768,6 @@ fn a_refused_destination_is_not_even_requested() {
     );
 }
 
-/// Redirect off permitted origin caught. Non-public URL refused before client
-/// asked (no test can host redirector at accepted URL). Installer given public
-/// URL; client performs request against loopback redirector. Policy permits
-/// redirector origin, not sentinel behind it. Proves: policy-bound client,
-/// redirect to refused destination ends install, destination never touched.
 #[test]
 fn a_redirect_to_a_refused_destination_ends_a_remote_install() {
     let scratch = scratch("remote-redirect");
@@ -926,7 +777,6 @@ fn a_redirect_to_a_refused_destination_ends_a_remote_install() {
         forbidden.port
     ));
 
-    // Permits redirector, not sentinel (asymmetry redirect exploits).
     let entry = format!("http://127.0.0.1:{redirect_port}/tool-fs.wasm");
     let policy = jk_wasm::egress::EgressPolicy::public_only()
         .allowing(&format!("http://127.0.0.1:{redirect_port}"));

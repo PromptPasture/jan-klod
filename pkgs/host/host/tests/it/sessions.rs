@@ -1,10 +1,4 @@
-//! Two sessions, two agents, two turns at the same time (#229).
-//!
-//! The property the registry exists for, and the one that cannot be
-//! faked: a slow turn in one session and a fast turn in another, started
-//! together, with the fast one finishing while the slow one is still
-//! going. With a single agent the fast turn waits — which is the
-//! behaviour Phase 20's gate was filed against.
+//! Two sessions run turns at the same time through the agent registry (#229).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,12 +9,6 @@ use jk_host::sessions::{Agents, Factory};
 
 use crate::common;
 
-/// A provider that takes its time when the message says to.
-///
-/// The delay is chosen by the *request*, not by the agent, so both
-/// sessions get an identical provider and the difference between them is
-/// only what they were asked to do. An agent-specific slow provider would
-/// prove nothing about concurrency.
 fn paced_factory(calls: &Arc<AtomicU32>) -> Factory {
     let calls = Arc::clone(calls);
     Arc::new(move || -> jk_wasm::route::HttpFn {
@@ -73,13 +61,6 @@ extensions:
     Some((guard, runtime))
 }
 
-/// The point of the slice: a turn in one session does not wait for a turn
-/// in another.
-///
-/// Asserted on **overlap**, not on ordering. "The fast one finished
-/// first" is satisfied by luck on a single agent if the slow turn happens
-/// to be queued second; "the fast one finished while the slow one was
-/// still running" is not.
 #[test]
 fn two_sessions_run_turns_at_the_same_time() {
     let Some((_guard, runtime)) = booted("concurrent") else {
@@ -106,9 +87,6 @@ fn two_sessions_run_turns_at_the_same_time() {
         let fast = agents.of("fast");
         let at = Arc::clone(&fast_done);
         scope.spawn(move || {
-            // Only once the slow turn is in flight, so finishing first means
-            // finishing *during* it. A fixed sleep stood in for this, and
-            // under load the slow turn could still be unstarted (#315).
             slow_running
                 .recv_timeout(Duration::from_secs(60))
                 .expect("the slow turn starts");
@@ -133,11 +111,6 @@ fn two_sessions_run_turns_at_the_same_time() {
     );
 }
 
-/// Its control: the same two turns against **one** agent serialise.
-///
-/// Without this, the test above passes on a machine fast enough to make
-/// any ordering look like overlap. This is the behaviour being replaced,
-/// asserted so that the replacement means something.
 #[test]
 fn one_agent_makes_the_same_two_turns_wait() {
     let Some((_guard, runtime)) = booted("serialised") else {
@@ -147,9 +120,6 @@ fn one_agent_makes_the_same_two_turns_wait() {
     let factory = paced_factory(&calls);
     let (jobs, queued) = jk_host::session_thread::queue::<AgentSession>();
 
-    // Both stamped inside the jobs, on the thread that serves them. Stamped
-    // by the callers after their answers, a slow caller descheduled under
-    // load could stamp after the fast one had finished (#315).
     let slow_ended: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let fast_started: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let (started, slow_running) = std::sync::mpsc::channel();
@@ -167,10 +137,6 @@ fn one_agent_makes_the_same_two_turns_wait() {
         let fast = jobs.clone();
         let at = Arc::clone(&fast_started);
         scope.spawn(move || {
-            // Queued only once the slow turn is running, so the queue order
-            // is the one the test means rather than whichever thread the
-            // scheduler ran first. Bounded so a boot failure below ends the
-            // test instead of hanging it.
             slow_running
                 .recv_timeout(Duration::from_secs(60))
                 .expect("the slow turn starts");
@@ -198,8 +164,6 @@ fn one_agent_makes_the_same_two_turns_wait() {
     );
 }
 
-/// Dropping the registry ends every thread, and waiting for them is what
-/// makes that observable.
 #[test]
 fn dropping_the_registry_stops_every_agent() {
     let Some((_guard, runtime)) = booted("shutdown") else {
@@ -215,25 +179,12 @@ fn dropping_the_registry_stops_every_agent() {
 
     drop(agents);
 
-    // The handle outlived the registry; its loop did not.
     assert!(
         kept.run(|_: &mut AgentSession| ()).is_err(),
         "a queue still answers after its registry was dropped"
     );
 }
 
-/// Two agents, one store — even with **no `storage.path` at all** (#233).
-///
-/// The configuration this is written against is the one that was wrong:
-/// with a path, several `Store::open` handles to one file agreed by luck
-/// and the bug was invisible. Without one, every agent used to get its
-/// own in-memory database, so a session had a transcript for the agent
-/// that wrote it and `[]` for every other — and the REST surface reads
-/// sessions through the *housekeeping* agent, so `GET /sessions` and
-/// `GET /session/{id}` reported nothing while the session worked.
-///
-/// Nothing errored, which is what made it worth a test rather than a
-/// comment.
 #[test]
 fn a_session_written_by_one_agent_is_visible_to_another() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -243,7 +194,6 @@ fn a_session_written_by_one_agent_is_visible_to_another() {
     std::fs::create_dir_all(&dir).expect("creates the temp dir");
     let _guard = common::TempDir(dir.clone());
     let config = dir.join("config.yaml");
-    // Deliberately no `storage:` block.
     std::fs::write(
         &config,
         "
@@ -268,7 +218,6 @@ extensions:
         })
         .expect("alpha's turn ran");
 
-    // The housekeeping agent is the one the REST surface reads through.
     let (transcript, listed) = agents
         .housekeeping()
         .run(|agent: &mut AgentSession| {

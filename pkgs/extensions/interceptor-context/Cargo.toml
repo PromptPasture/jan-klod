@@ -7,7 +7,6 @@ publish.workspace = true
 description = "select-context interceptor: trims conversation history to the model's token budget (char/4 estimate, drop oldest, keep system + most recent). Summarisation is a later refinement behind the same seam."
 
 [lib]
-# A reactor component: exports interceptor-world, no `main`.
 crate-type = ["cdylib"]
 
 [dependencies]

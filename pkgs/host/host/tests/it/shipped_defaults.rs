@@ -1,12 +1,4 @@
-//! Does the shipped product actually work? Most tests here build custom
-//! `config.yaml` and test doubles. That let boot defects slip through: empty
-//! `extensions.tool`, `start_all` failing, REST surface silently denying
-//! instead of asking. This file loads the real `config.yaml`, boots the real
-//! `Runtime` and REST surface, drives it with the real client library
-//! (`jk_tui`, what the TUI calls). Only provider HTTP and workspace
-//! root (temp dir) are faked.
-//!
-//! Skips when guests not staged in `ext/`.
+//! Boots the real shipped `config.yaml` and drives the real `Runtime` and REST surface; only provider HTTP and the workspace root are faked.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -23,9 +15,7 @@ use jk_wasm::route::HttpFn;
 use crate::common;
 use std::collections::HashMap;
 
-/// Stub env vars the shipped config expands (placeholder values; no provider HTTP uses them).
 fn stub_env() {
-    // Idempotent (all tests set these concurrently).
     #[allow(unsafe_code)]
     for key in [
         "OPENAI_API_KEY",
@@ -37,7 +27,7 @@ fn stub_env() {
     }
 }
 
-/// Shipped `config.yaml` with workspace root pointing at `dir` (test-only edit to avoid repo mutations).
+/// Shipped `config.yaml` with the workspace root set to `dir`, so the repo is never mutated.
 fn shipped_config_with_workspace(dir: &std::path::Path) -> String {
     let shipped = std::fs::read_to_string(common::repo_root().join("config.yaml"))
         .expect("the shipped config.yaml is readable");
@@ -60,7 +50,6 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("the shipped config boots");
 
-    // All enabled defaults must be staged (check state, not report string which always says "0 missing").
     let absent: Vec<&str> = runtime
         .extensions()
         .iter()
@@ -73,9 +62,6 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
         runtime.report()
     );
 
-    // Every default must instantiate and start (the neutral-linker bug failed this for months).
-    // Use `start_all_eager` not `start_all`: since #59 plain `start_all` is lazy for `tool-*`,
-    // but shipped tools must truly instantiate. Explicit dependency rather than dropped.
     let started = runtime
         .start_all_eager()
         .expect("every enabled extension starts");
@@ -92,10 +78,6 @@ fn every_extension_the_shipped_config_enables_boots_and_starts() {
     }
 }
 
-/// #59's boot-plan claim against real config: `start_all` (default) starts
-/// providers/interceptors but leaves `tool.*` lazy, while `start_all_eager`
-/// starts all. Same runtime, same config, different methods. Paired with the
-/// test above so regressions (eager `start_all` or lazy `start_all_eager`) fail.
 #[test]
 fn the_shipped_configs_tools_are_lazy_under_start_all_but_not_start_all_eager() {
     let ext_dir = common::repo_root().join("ext");
@@ -130,7 +112,6 @@ fn the_shipped_configs_tools_are_lazy_under_start_all_but_not_start_all_eager() 
         );
     }
 
-    // Same runtime forced eager proves the difference is `start_all`'s laziness, not config.
     let eager = runtime
         .start_all_eager()
         .expect("every enabled extension starts");
@@ -142,7 +123,6 @@ fn the_shipped_configs_tools_are_lazy_under_start_all_but_not_start_all_eager() 
     }
 }
 
-/// Mock provider: request file write on first call, report done on second.
 fn write_then_answer_http() -> HttpFn {
     let calls = Arc::new(AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -179,7 +159,6 @@ fn write_then_answer_http() -> HttpFn {
     })
 }
 
-/// POST answer to a pending confirmation (second connection, mid-turn).
 fn post_answer(port: u16, session: &str, answer: &str) -> String {
     let body = serde_json::json!({ "answer": answer }).to_string();
     let request = format!(
@@ -211,17 +190,11 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
 
     let runtime = Runtime::boot(&config, &ext_dir).expect("the shipped config boots");
     let factory = write_then_answer_http;
-    // This one both inspects an agent and serves: the fleet is asserted
-    // directly, then the turn goes through the surface. So it builds one
-    // to look at and hands the registry the same runtime.
-    // Built first, from a borrow: the registry takes the runtime by
-    // value afterwards, and a probe only needs to look at the fleet.
     let mut probe = runtime
         .build_agent(&factory)
         .expect("the shipped config builds an agent");
     let agents = Agents::new(runtime, std::sync::Arc::new(factory));
 
-    // Default tools must reach the model (or the "no tools" defect hides).
     let advertised = probe.tool_names();
     for expected in ["fs", "edit", "find"] {
         assert!(
@@ -234,7 +207,6 @@ fn a_fresh_install_asks_before_writing_and_writes_once_allowed() {
     let port = surface.port();
     let addr = format!("127.0.0.1:{port}");
 
-    // Real UI library (same as TUI).
     let (result, asked, answer) = surface.serve_while(&agents, HashMap::new(), move |_| {
         let mut asked = None;
         let mut answer = String::new();

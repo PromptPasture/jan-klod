@@ -1,70 +1,40 @@
 package jan-klod:interfaces@0.4.0;
 
-/// What a sandboxed extension may declare about a user interface it cannot see
-/// (Phase 24).
+/// What a sandboxed extension may declare about a user interface it cannot see.
 ///
-/// Clients are separate processes (L4). An extension cannot register a callback
-/// in one's address space, and until now its only channel to a person was
-/// `decision::ask` in `wit/interceptor.wit` — a question with fixed options.
-/// Everything else an extension might reasonably offer, a slash command, a
-/// status item, a small form, had nowhere to live.
+/// Clients are separate processes, so an extension cannot register a callback in one. Its only channel to a
+/// person was `decision::ask`, a fixed-option question. Slash commands, status items and small forms had nowhere to live.
 ///
 /// # Declaration, not drawing
 ///
-/// An extension declares *what* it offers; each client renders it in its own
-/// idiom — a slash command in the TUI, a menu item in a window, a button in a
-/// browser. No pixels, no layout, no toolkit crosses this boundary, because the
-/// extension does not know which client is attached, or whether one is.
+/// An extension declares *what* it offers; each client renders it in its own idiom. No pixels, layout or toolkit
+/// crosses this boundary, since the extension does not know which client, if any, is attached.
 ///
-/// Declarations travel to clients over `jk-protocol`: a notification at
-/// connect and another when the set changes, versioned with `PROTOCOL_VERSION`
-/// like everything else on that wire.
+/// Declarations travel to clients over `jk-protocol`: a notification at connect and another when the set changes.
 ///
 /// # Invocation is an export, not a phase
 ///
-/// The host calls `invoke` when a client asks for a contribution. It is a
-/// separate exported interface rather than a new `interceptor` phase: the
-/// `phase` enum is the loop's lifecycle points, and its own doc records why
-/// cases that were not real state transitions (`session-start`, `on-error`)
-/// were removed rather than kept. A command a user types is not a point in a
-/// turn. Nor is it a capability the guest calls: that would need a live guest
-/// holding state between turns, and a host polling it, where declarations are
-/// static and can be read once.
+/// The host calls `invoke` when a client asks. It is not an `interceptor` phase: a user's command is not a point in
+/// a turn. It is not a guest-initiated call either, because declarations are static and can be read once.
 ///
 /// # The host probes for this export; no world requires it
 ///
-/// A component must implement **every** export its world declares, so putting
-/// `client-surface` in `interceptor-world` or `tool-world` would oblige all
-/// nineteen shipped guests to carry a stub. Instead the host looks the
-/// interface up on the instance and treats its absence as "this component
-/// contributes nothing" — the same default-deny posture as the rest of the
-/// system, where nothing is implicit and the absence of a declaration is an
-/// answer rather than an error.
-///
-/// A guest that *does* contribute targets a world that includes its category
-/// world and adds this export — `interceptor-contributor-world` below is the
-/// first, for the interceptor category. Others follow when a guest in that
-/// category needs one; there is no value in writing them before that.
+/// A component must implement every export of its world, so putting this in `interceptor-world` or `tool-world` would
+/// force every shipped guest to stub it. The host looks the export up on the instance; absence means "contributes nothing".
+/// Contributing guests target `interceptor-contributor-world` below.
 ///
 /// # Contributed text is data
 ///
-/// Every string here is **attacker-influenced**. An MCP server's tool
-/// description reaches a guest, and a guest can put it in a `title`. Every
-/// renderer escapes these strings: no terminal escape sequences interpreted, no
-/// markup injected into a frame, no length a layout cannot survive. This rule
-/// lives here, in the contract both renderers read, rather than in either one.
+/// Every string is **attacker-influenced** (e.g. an MCP tool description a guest puts in a `title`). Renderers escape
+/// them: no terminal escapes, no markup, no layout-breaking length. The rule lives here, in the contract both sides read.
 ///
 /// # A client that renders none of this still works
 ///
-/// Contributions are additive. A client that ignores the notification runs
-/// turns exactly as before, the way `decision::ask`'s `default-answer` lets a
-/// headless driver proceed without a person. An extension may not assume any
+/// Contributions are additive. A client that ignores them runs turns as before. An extension must not assume a
 /// contribution was rendered, offered, or seen.
 interface client-surface {
     /// One argument a command takes.
-    ///
-    /// Shape only — a client decides whether that is a prompt, a field, or a
-    /// positional word after a slash command.
+    /// Shape only; the client decides whether it is a prompt, a field, or a positional word.
     record argument {
         /// Machine name, unique within the command.
         name: string,
@@ -86,8 +56,7 @@ interface client-surface {
         arguments: list<argument>,
     }
 
-    /// A short piece of state an extension wants visible — a mode, a count, a
-    /// connection. Read-only: a client shows it and does not ask about it.
+    /// Read-only state a client shows (a mode, a count, a connection).
     record status-item {
         /// Machine name, unique across this extension.
         name: string,
@@ -109,10 +78,7 @@ interface client-surface {
     }
 
     /// A small set of fields gathered in one go, then handed to a command.
-    ///
-    /// Deliberately not a dialog: no layout, no validation rules, no
-    /// conditional fields. A client that cannot render a form asks for the
-    /// fields one at a time, or uses the defaults.
+    /// Not a dialog: no layout, validation, or conditional fields. A client that cannot render a form asks one field at a time.
     record form {
         /// Machine name, unique across this extension, used by `invoke`.
         name: string,
@@ -121,8 +87,7 @@ interface client-surface {
         fields: list<field>,
     }
 
-    /// Everything one extension contributes. Read once at load, and again when
-    /// the host has reason to believe it changed.
+    /// Everything one extension contributes; read at load and whenever the host believes it changed.
     record contributions {
         commands: list<command>,
         status-items: list<status-item>,
@@ -146,49 +111,33 @@ interface client-surface {
     }
 
     /// What an invocation produced.
-    ///
-    /// Text, because a client renders in its own idiom and this contract does
-    /// not describe rendering. An extension with more to say says it through
-    /// the session, which is what the transcript is for.
+    /// Text only: rendering is the client's, and anything richer goes through the session transcript.
     record outcome {
         /// Shown to the user. Data, not markup.
         text: string,
-        /// Whether the contribution set changed as a result, so the host knows
-        /// to re-read it and notify clients rather than polling for changes.
+        /// Whether the contribution set changed, so the host re-reads it and notifies clients.
         contributions-changed: bool,
     }
 
     /// What this extension contributes. Called by the host; must not block.
     contribute: func() -> contributions;
 
-    /// Run a contributed command or form. Called by the host when a client
-    /// asks for it, never by the loop.
+    /// Run a contributed command or form, when a client asks for it; never by the loop.
     invoke: func(name: string, arguments: list<argument-value>) -> result<outcome, invoke-error>;
 }
 
 /// An interceptor that also contributes to the client surface.
-///
-/// A component implements every export of the world it is built against, so
-/// this exists rather than adding the export to `interceptor-world` and
-/// obliging every interceptor to stub it. The host probes for the export, so a
-/// guest built against `interceptor-world` stays valid and simply contributes
-/// nothing.
+/// Exists because a guest must implement every export of its world, so this adds the export without forcing it on all interceptors.
 world interceptor-contributor-world {
     include interceptor-world;
 
     export client-surface;
 }
 
-/// The host's *view* of a component that contributes — not a target a guest is
-/// authored against.
-///
-/// The host instantiates a guest against its category world (`interceptor-world`
-/// and friends), then reads this one off the same instance to see whether the
-/// export is there. One world with one export and no imports is what makes the
-/// probe typed: absent means the component contributes nothing, present means
-/// the generated bindings marshal the records rather than the host doing it by
-/// hand. A guest exports this by targeting `interceptor-contributor-world`
-/// above, never this world.
+/// The host's view of a component that contributes; not a world guests are authored against.
+/// The host instantiates a guest against its category world, then reads this export off the same instance.
+/// One world with one export and no imports makes the probe typed: absent means contributes nothing.
+/// Guests target `interceptor-contributor-world`, never this world.
 world client-surface-view {
     export client-surface;
 }

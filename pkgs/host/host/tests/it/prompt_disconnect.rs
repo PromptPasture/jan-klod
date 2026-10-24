@@ -1,25 +1,4 @@
-//! A dropped client does not hold the agent.
-//!
-//! `JK_ANSWER_TIMEOUT_SECS` is process-global; this test needs it long
-//! (heartbeat ends the wait, not the deadline) while `api_prompt.rs` needs it short.
-//! nextest's per-test isolation lets both set it independently.
-//!
-//! # What ends the wait, twice over
-//!
-//! The heartbeat used to be a *write to the socket*: a client that had
-//! gone looked fine until a write failed. Two slices moved that ground
-//! without moving this test. #225 took the socket away from the parked
-//! driver, and #224 replaced it with a channel — so the heartbeat is now
-//! a `send` that fails once `axum` drops the response stream, which it
-//! does when the connection closes.
-//!
-//! Same property, different mechanism, and the timing says which one is
-//! running: measured at **10.4 s against its own 120 s timeout**, which
-//! is about two heartbeats — the first still succeeds because the close
-//! has not been noticed yet, the second does not. A run that took 120 s
-//! would mean nothing noticed and the deadline did all the work, which
-//! is the failure this test exists to catch and the reason its bound is
-//! well under the timeout rather than just under it.
+//! A dropped client does not hold the agent: the heartbeat ends the wait in ~10 s, well before the 120 s deadline.
 
 use jk_wasm::route::HttpFn;
 
@@ -35,7 +14,6 @@ const GUESTS: [&str; 3] = [
     "interceptor-permission.wasm",
 ];
 
-/// Provider that calls a dangerous tool, parking the turn.
 fn tool_then_answer_http() -> HttpFn {
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     Box::new(move |_m, _u, _h, _b, _t| {
@@ -79,19 +57,11 @@ extensions:
     path
 }
 
-/// Client disconnection doesn't hold the agent.
-///
-/// A dropped connection may leave a *successful* write (bytes buffered, FIN
-/// not yet seen), unnoticed until the confirmation timeout. SSE heartbeats
-/// now surface a dead peer as a write error before the deadline.
-/// This test drops mid-prompt and asserts the turn finishes quickly;
-/// timeout is long so regressions show as slow tests, not silent passes.
 #[test]
 fn a_disconnected_client_does_not_hold_the_turn_open() {
     if !common::guests_staged(&GUESTS) {
         return;
     }
-    // Intentionally long: heartbeat (not deadline) should end the wait.
     std::env::set_var("JK_ANSWER_TIMEOUT_SECS", "120");
 
     let dir = std::env::temp_dir().join(format!("jk-gone-{}", std::process::id()));
@@ -120,7 +90,6 @@ fn a_disconnected_client_does_not_hold_the_turn_open() {
         for line in reader.lines() {
             let Ok(line) = line else { break };
             if line.starts_with("event: prompt") {
-                // Walk away without answering.
                 let _ = stream.shutdown(std::net::Shutdown::Both);
                 return;
             }

@@ -1,24 +1,9 @@
 #!/usr/bin/env sh
-# Check that `index.json` is a function of the staged components and nothing
-# else — and that this check can actually fail.
-#
-# Same shape as ext-new-selftest.sh: regenerate, compare, fail on a
-# difference. What is different here is what it compares against.
-# `ext/*.wasm` and `ext/*.manifest.toml` are
-# **not** committed (see .gitignore), and a Rust wasm build is not byte-stable
-# across machines, so a committed index.json would carry digests that differ per
-# clone and drift on every run. The property worth holding is therefore not
-# "matches what is committed" but **"two runs over one directory agree"**, which
-# is what an index published from a release needs to be reproducible at all.
-#
-# Two runs agreeing is necessary and not sufficient: an entry order taken from
-# the filesystem can agree twice by luck. So sortedness is asserted as a
-# property too, rather than left to the comparison to notice.
-#
-# And both checks are probed, because a checker that cannot fail is decoration:
-# a deliberately non-deterministic generator must be refused by the first, and a
-# deliberately unsorted index by the second. That is the same argument
-# manifests-selftest.sh makes about manifests-verify.sh.
+# Check that index.json is a function of the staged components, and that the
+# check can fail. Components are not committed and wasm builds are not
+# byte-stable, so the property is "two runs over one directory agree", not
+# "matches the committed index". Sortedness is asserted separately: two runs can
+# agree on an order that came from the filesystem by luck.
 #
 # Usage: registry-index-drift.sh <ext-dir> <base-url> <author>
 set -eu
@@ -42,10 +27,7 @@ command -v jaq >/dev/null 2>&1 || {
     exit 1
 }
 
-# Nothing staged is a legitimate state — a clone where nobody has run `make ext`
-# yet — so this skips rather than fails, exactly as manifests-selftest.sh does,
-# and with the same escape hatch: JK_REQUIRE_GUESTS=1 turns the skip into a
-# failure so a gate cannot go green on a check that quietly did nothing.
+# No manifests (a clone without `make ext`) skips. JK_REQUIRE_GUESTS=1 makes it fail.
 if ! ls "$EXT"/*.manifest.toml >/dev/null 2>&1; then
     if [ -n "${JK_REQUIRE_GUESTS:-}" ]; then
         echo "registry-index-drift: $EXT has no manifests and JK_REQUIRE_GUESTS is set" >&2
@@ -55,14 +37,8 @@ if ! ls "$EXT"/*.manifest.toml >/dev/null 2>&1; then
     exit 0
 fi
 
-# Run a generator twice and say whether the two outputs are identical. The
-# generator is a command taking the output path as its last argument, so the
-# probe below can pass a different one.
-#
-# The second run happens from another working directory. A generator that
-# resolved anything relative to where it was invoked would produce a different
-# index under `make` than under a release workflow, and that is exactly the kind
-# of difference a published artifact must not have.
+# Run a generator twice (output path last) and compare. The second run starts in
+# another directory, so a cwd-dependent generator fails here.
 twice_agrees() {
     rm -f "$WORK/first.json" "$WORK/second.json"
     "$@" "$WORK/first.json" >/dev/null || return 1
@@ -70,8 +46,6 @@ twice_agrees() {
     diff -u "$WORK/first.json" "$WORK/second.json" >"$WORK/diff" 2>&1
 }
 
-# Entries sorted by name, and no name twice. Two runs can agree on a wrong
-# order; nothing can agree on a duplicate.
 sorted_and_unique() {
     jaq -e '
         [.extensions[].name] as $names
@@ -79,8 +53,7 @@ sorted_and_unique() {
     ' "$1" >/dev/null 2>&1
 }
 
-# A function rather than a command string in a variable: the arguments are
-# paths, and a variable expanded unquoted would split one containing a space.
+# A function, not a command string: paths may contain spaces.
 real_generator() {
     sh "$ROOT/scripts/registry-index.sh" "$EXT" "$BASE_URL" "$AUTHOR" "$@"
 }
@@ -102,12 +75,8 @@ if ! sorted_and_unique "$WORK/first.json"; then
 fi
 echo "registry-index-drift: entries sorted by name, names unique"
 
-# --- The probes: each check above, shown failing on something that should fail.
-
-# A generator that answers differently every run. A counter file rather than a
-# timestamp: BSD `date` has no `%N`, so two runs inside one second would produce
-# the same string and the probe would pass by accident — which is precisely the
-# bug the probe exists to rule out.
+# Probes: each check must refuse a deliberately bad input.
+# A counter file, not a timestamp: same-second runs would otherwise match.
 cat >"$WORK/flaky.sh" <<'EOF'
 set -eu
 here="$(dirname -- "$0")"

@@ -1,25 +1,21 @@
-//! The memory itself: storing, recalling, and forgetting facts.
-//!
-//! Pure and host-testable. Each fact has a unique ID, timestamp, key, and value.
-//! Facts are stored via the host-storage interface in the "memory" namespace.
-//! This module handles the JSON serialization, parsing, and operations.
+//! Storing, recalling and forgetting facts: pure logic over the JSON array `lib.rs` stores.
 
 use chrono::Utc;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-/// A stored fact with metadata.
+/// A stored fact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fact {
-    /// Unique identifier for the fact.
+    /// Unique id.
     pub id: u64,
-    /// The key to store/recall the fact by.
+    /// The key the fact is stored and recalled by.
     pub key: String,
-    /// The fact value.
+    /// The fact's text.
     pub value: String,
-    /// ISO 8601 timestamp of creation.
+    /// ISO 8601 creation time.
     pub created_at: String,
-    /// ISO 8601 timestamp of last update.
+    /// ISO 8601 last-update time.
     pub updated_at: String,
 }
 
@@ -55,11 +51,11 @@ impl Fact {
 pub enum MemoryError {
     /// The arguments were not a recognised operation.
     BadArguments(String),
-    /// A key was required but not provided.
+    /// A required key was not provided.
     MissingKey,
-    /// The key was not found during forget or recall-specific.
+    /// The key names no stored fact.
     NotFound(String),
-    /// Invalid JSON in the operation arguments.
+    /// The operation arguments were not valid JSON.
     InvalidJson,
 }
 
@@ -74,18 +70,15 @@ impl std::fmt::Display for MemoryError {
     }
 }
 
-/// The in-memory facts store, keyed by their key.
+/// The facts store, keyed by fact key.
 #[derive(Debug, Clone, Default)]
 pub struct Memory {
-    /// All facts, keyed by their original key. Multiple facts can have the same key
-    /// if updated; we keep the most recent for each key.
     facts: BTreeMap<String, Fact>,
-    /// The next ID to assign.
     next_id: u64,
 }
 
 impl Memory {
-    /// Parse memory from stored JSON representation (or create empty if None).
+    /// Parses stored JSON, or an empty memory if `None`.
     #[must_use]
     pub fn parse(stored: Option<&str>) -> Self {
         stored.map_or_else(Self::default, |json_str| {
@@ -109,18 +102,17 @@ impl Memory {
         })
     }
 
-    /// Render memory as JSON array.
+    /// Renders the facts as a JSON array.
     #[must_use]
     pub fn render(&self) -> String {
         let items: Vec<Value> = self.facts.values().map(Fact::to_json).collect();
         serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string())
     }
 
-    /// Store a fact. Returns the stored fact.
+    /// Stores a fact and returns it.
     ///
     /// # Errors
-    ///
-    /// `MemoryError::BadArguments` when `key` is empty.
+    /// `MemoryError::BadArguments` if `key` is empty.
     pub fn store(&mut self, key: String, value: String) -> Result<Fact, MemoryError> {
         if key.is_empty() {
             return Err(MemoryError::BadArguments("key cannot be empty".to_string()));
@@ -147,16 +139,13 @@ impl Memory {
         Ok(fact)
     }
 
-    /// Recall facts. If key is provided, return that fact. Otherwise, return
-    /// the 10 most recent facts in reverse chronological order.
+    /// Recalls the fact for `key`, or the 10 most recent, newest first.
     ///
     /// # Errors
-    ///
-    /// `MemoryError::NotFound` when `key` names no stored fact.
+    /// `MemoryError::NotFound` if `key` names no stored fact.
     pub fn recall(&self, key: Option<String>) -> Result<Vec<Fact>, MemoryError> {
         key.map_or_else(
             || {
-                // Return up to 10 most recent facts (by updated_at, descending)
                 let mut all_facts: Vec<_> = self.facts.values().cloned().collect();
                 all_facts.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
                 Ok(all_facts.into_iter().take(10).collect())
@@ -170,11 +159,10 @@ impl Memory {
         )
     }
 
-    /// Forget a fact. Returns the forgotten fact's key.
+    /// Forgets a fact and returns its key.
     ///
     /// # Errors
-    ///
-    /// `MemoryError::NotFound` when `key` names no stored fact.
+    /// `MemoryError::NotFound` if `key` names no stored fact.
     pub fn forget(&mut self, key: String) -> Result<String, MemoryError> {
         if self.facts.remove(&key).is_some() {
             Ok(key)
@@ -183,14 +171,10 @@ impl Memory {
         }
     }
 
-    /// Apply an operation from JSON arguments.
+    /// Applies an operation from JSON arguments.
     ///
     /// # Errors
-    ///
-    /// `MemoryError::InvalidJson` when `arguments` is not JSON, `BadArguments`
-    /// when a required field is missing or `op` is unknown, and whatever the
-    /// operation itself returns (`NotFound` for `recall`/`forget` of an
-    /// absent key).
+    /// `MemoryError::InvalidJson`, `BadArguments` for a bad field or unknown `op`, or the operation's own error.
     pub fn apply(&mut self, arguments: &str) -> Result<String, MemoryError> {
         let args: Value = serde_json::from_str(arguments).map_err(|_| MemoryError::InvalidJson)?;
 
@@ -236,7 +220,6 @@ impl Memory {
     }
 }
 
-/// Get current timestamp in ISO 8601 format.
 fn chrono_now() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -249,7 +232,6 @@ mod tests {
     fn test_store_and_recall() {
         let mut memory = Memory::default();
 
-        // Store a fact
         let result = memory
             .apply(r#"{"op":"store","key":"foo","value":"bar"}"#)
             .expect("store should succeed");
@@ -257,7 +239,6 @@ mod tests {
         assert_eq!(stored.get("key").and_then(Value::as_str), Some("foo"));
         assert_eq!(stored.get("value").and_then(Value::as_str), Some("bar"));
 
-        // Recall the fact by key
         let result = memory
             .apply(r#"{"op":"recall","key":"foo"}"#)
             .expect("recall should succeed");
@@ -305,7 +286,6 @@ mod tests {
         let forgotten: Value = serde_json::from_str(&result).expect("result is JSON");
         assert_eq!(forgotten.get("key").and_then(Value::as_str), Some("target"));
 
-        // Verify the fact is gone
         let recall_result = memory.apply(r#"{"op":"recall","key":"target"}"#);
         assert!(recall_result.is_err());
     }
@@ -320,19 +300,15 @@ mod tests {
 
     #[test]
     fn test_memory_persistence_across_instantiation() {
-        // Simulate storing a fact and then re-instantiating the memory
         let mut memory1 = Memory::default();
         memory1
             .apply(r#"{"op":"store","key":"persist","value":"data"}"#)
             .expect("store should succeed");
 
-        // Serialize to storage format
         let serialized = memory1.render();
 
-        // Create new memory instance from serialized data
         let mut memory2 = Memory::parse(Some(&serialized));
 
-        // Verify the fact is still there
         let result = memory2
             .apply(r#"{"op":"recall","key":"persist"}"#)
             .expect("recall should succeed");
@@ -348,14 +324,12 @@ mod tests {
     fn test_update_preserves_created_at() {
         let mut memory = Memory::default();
 
-        // Store initial fact
         let result1 = memory
             .apply(r#"{"op":"store","key":"test_key","value":"initial"}"#)
             .expect("first store should succeed");
         let stored1: Value = serde_json::from_str(&result1).expect("result is JSON");
         let created_at1 = stored1.get("created_at").and_then(Value::as_str);
 
-        // Update the same fact with a new value
         let result2 = memory
             .apply(r#"{"op":"store","key":"test_key","value":"updated"}"#)
             .expect("second store should succeed");
@@ -363,7 +337,6 @@ mod tests {
         let created_at2 = stored2.get("created_at").and_then(Value::as_str);
         let updated_at2 = stored2.get("updated_at").and_then(Value::as_str);
 
-        // Verify created_at is preserved
         assert_eq!(
             created_at1, created_at2,
             "created_at should not change on update"
@@ -373,8 +346,6 @@ mod tests {
             Some("updated"),
             "value should be updated"
         );
-        // updated_at should be different (or at least it can be the same if executed in same millisecond,
-        // but conceptually it should represent the time of the last update)
         assert!(
             updated_at2.is_some(),
             "updated_at should be present in updated fact"

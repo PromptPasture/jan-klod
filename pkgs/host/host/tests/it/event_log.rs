@@ -1,11 +1,4 @@
-//! A turn writes its own history.
-//!
-//! Boots the real `Runtime`, runs a turn through `AgentSession`, then reads the
-//! `events` table back **through a second `Store` handle on the same file** —
-//! not through the session. That is deliberate: the assertion is about durability,
-//! and reading through the writer only proves the writer remembers.
-//!
-//! Skips (passes as a no-op) when the guests are not staged in `ext/`.
+//! A turn writes its own history. Events are read back through a second `Store`
 
 use jk_agent::Runtime;
 use jk_protocol::turn::Event;
@@ -16,8 +9,6 @@ use rusqlite::params;
 
 use crate::common;
 
-/// A config with a file-backed store, so the log outlives the session and a
-/// second handle can read it.
 fn config_with_store(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("config.yaml");
     std::fs::write(
@@ -79,17 +70,12 @@ fn a_turn_appends_its_events_in_order() {
         "every row belongs to the session that produced it"
     );
 
-    // The whole shape of a simple turn, pinned rather than described: its input,
-    // the assistant text, the outcome. `text-delta` being here proves acceptance
-    // line 2 holds against a real turn, not only unit tests — a delta reaches the
-    // log exactly as it was emitted, uncoalesced.
     assert_eq!(
         log.iter().map(|row| row.kind.as_str()).collect::<Vec<_>>(),
         vec![event_log::KIND_USER_MESSAGE, "text-delta", "done"],
         "the log of one simple turn"
     );
 
-    // The turn's own input opens the log, before anything the model said.
     assert_eq!(log[0].kind, event_log::KIND_USER_MESSAGE);
     assert!(
         log[0].payload.contains("hello"),
@@ -97,8 +83,6 @@ fn a_turn_appends_its_events_in_order() {
         log[0].payload
     );
 
-    // The turn's answer closes it. `Done` is the authoritative answer, so a
-    // log without it is a log of an unfinished turn.
     let last = log.last().expect("non-empty");
     assert_eq!(last.kind, "done", "the log ends with the turn's outcome");
     let Ok(Event::Done { text, .. }) = decode(&last.kind, &last.payload) else {
@@ -107,9 +91,6 @@ fn a_turn_appends_its_events_in_order() {
     assert_eq!(text, "pong", "and carries the answer the caller got");
 }
 
-/// Two sessions through one agent keep separate logs — the same guarantee the
-/// store's unit tests make, asserted here against a real turn because this is
-/// where the session id actually comes from.
 #[test]
 fn each_session_logs_only_its_own_turn() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
@@ -144,10 +125,6 @@ fn each_session_logs_only_its_own_turn() {
     );
 }
 
-/// The read surfaces are projections, so `transcript` and `list_sessions` must
-/// answer from the log, not the `entries` transcript. Asserted through the
-/// public API after a real turn (what `GET /session/:id` and `GET /sessions`
-/// serve).
 #[test]
 fn the_read_surfaces_answer_from_the_log() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
@@ -184,13 +161,6 @@ fn the_read_surfaces_answer_from_the_log() {
     );
 }
 
-/// Acceptance line 2: a fork at seq *N* runs its own turn without touching the
-/// parent's log.
-///
-/// Independence is asserted in **both** directions. A fork that shares the
-/// parent's history is the easy half; the half that actually breaks is a later
-/// turn in one of them leaking into the other, and a fork implemented as a
-/// branch pointer rather than a copy would pass the first check and fail this.
 #[test]
 fn a_fork_runs_its_own_turn_and_leaves_the_parent_alone() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-intent-router.wasm"]) {
@@ -217,7 +187,6 @@ fn a_fork_runs_its_own_turn_and_leaves_the_parent_alone() {
         .expect("the fork succeeds");
     assert_eq!(copied, at_seq, "the whole prefix was copied");
 
-    // The fork starts as the parent was.
     assert_eq!(
         agent
             .transcript("child")
@@ -231,7 +200,6 @@ fn a_fork_runs_its_own_turn_and_leaves_the_parent_alone() {
         "the fork opens with the parent's conversation"
     );
 
-    // Then each runs a turn of its own.
     agent.run("child", "only the child asks this");
     agent.run("parent", "only the parent asks this");
 
@@ -261,8 +229,6 @@ fn a_fork_runs_its_own_turn_and_leaves_the_parent_alone() {
     );
 }
 
-/// Forking a prefix that holds nothing is refused rather than producing a
-/// session that silently is not a fork of anything.
 #[test]
 fn forking_nothing_is_refused() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -288,21 +254,6 @@ fn forking_nothing_is_refused() {
     );
 }
 
-/// An install is in the session log, without an event type of its own.
-///
-/// #213 requires that "an install is an event, and it belongs in the session
-/// log". It already is one: `ext-install` is dispatched as a tool, and every
-/// tool call writes `tool-invoked` — carrying the **name and the arguments**
-/// — followed by `tool-result`. Together that is who asked, for what, and
-/// what happened, keyed by call id.
-///
-/// So this slice adds a test rather than an event kind. A second record for
-/// the same action would be two entries for one decision, and an operator
-/// auditing installs would then have to know which of them is authoritative.
-///
-/// The install is *refused* here, deliberately: the point is that the
-/// attempt is recorded. An install that fails and leaves no trace is the
-/// hole, not one that succeeds.
 #[test]
 fn an_attempted_install_is_recorded_in_the_session_log() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-tool-selector.wasm"]) {
@@ -381,12 +332,6 @@ extensions:
         "the install attempt is not in the log, so nothing records that it \
          happened: {decoded:?}"
     );
-    // Specifically the *install tool's* refusal, which names the source it
-    // could not find. Asserting only `failed` would pass with the tool
-    // disabled — the conductor answers an unknown name with "no tool named
-    // `ext-install`", which is also a failure and records nothing about an
-    // install. Checked by flipping `install-tool` to false and watching this
-    // line fail.
     let refusal = decoded.iter().find_map(|event| match event {
         Event::ToolResult(outcome) if outcome.failed => Some(outcome.content.clone()),
         _ => None,
@@ -405,7 +350,6 @@ fn an_edited_event_breaks_the_chain() {
     let dir = std::env::temp_dir().join(format!("jk-chain-edit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok();
 
-    // Create a simple store and add a few events
     let store = Store::open(dir.join("test.db")).expect("store opens");
     for i in 1..=5u64 {
         store
@@ -418,8 +362,6 @@ fn an_edited_event_breaks_the_chain() {
             .expect("event appends");
     }
 
-    // Now edit one event's payload directly in the database
-    // This simulates tampering that should be detected by verify_chain
     let conn = rusqlite::Connection::open(dir.join("test.db")).expect("connection opens");
     conn.execute(
         "UPDATE events SET payload = ? WHERE session = ? AND seq = ?",
@@ -429,11 +371,9 @@ fn an_edited_event_breaks_the_chain() {
     drop(conn);
     drop(store);
 
-    // Re-open and verify
     let store = Store::open(dir.join("test.db")).expect("store re-opens");
     let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
 
-    // The chain should be broken at event 4 (whose prev_digest now doesn't match event 3's actual digest)
     match result.status {
         ChainStatus::Intact => panic!("chain should be broken after payload edit"),
         ChainStatus::Broken { seq, .. } => {
@@ -449,7 +389,6 @@ fn a_reordered_pair_breaks_the_chain() {
     let dir = std::env::temp_dir().join(format!("jk-chain-reorder-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok();
 
-    // Create a simple store and add a few events
     let store = Store::open(dir.join("test.db")).expect("store opens");
     for i in 1..=5u64 {
         store
@@ -462,10 +401,8 @@ fn a_reordered_pair_breaks_the_chain() {
             .expect("event appends");
     }
 
-    // Now swap two events' rows in the database
     let conn = rusqlite::Connection::open(dir.join("test.db")).expect("connection opens");
     conn.execute("BEGIN TRANSACTION", []).ok();
-    // Get events 3 and 4
     let (_seq3, _ts3, _kind3, _payload3, _pd3) = conn
         .query_row(
             "SELECT seq, ts, kind, payload, prev_digest FROM events WHERE session = ? AND seq = ?",
@@ -497,7 +434,6 @@ fn a_reordered_pair_breaks_the_chain() {
         )
         .expect("row 4 retrieved");
 
-    // Swap them using a temporary seq value to avoid primary key conflict
     conn.execute(
         "UPDATE events SET seq = 999999 WHERE session = ? AND seq = ?",
         params!["test-session", 3i64],
@@ -517,16 +453,12 @@ fn a_reordered_pair_breaks_the_chain() {
     drop(conn);
     drop(store);
 
-    // Re-open and verify
     let store = Store::open(dir.join("test.db")).expect("store re-opens");
     let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
 
-    // The chain should be broken
     match result.status {
         ChainStatus::Intact => panic!("chain should be broken after reordering"),
         ChainStatus::Broken { seq, .. } => {
-            // After swapping, event 3 now has event 4's prev_digest (pointing to original event 3)
-            // but the actual previous event is original event 2, so the digests don't match
             assert!(
                 seq == 3 || seq == 4,
                 "chain breaks at one of the swapped events"
@@ -542,7 +474,6 @@ fn a_deleted_event_breaks_the_chain() {
     let dir = std::env::temp_dir().join(format!("jk-chain-delete-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok();
 
-    // Create a simple store and add a few events
     let store = Store::open(dir.join("test.db")).expect("store opens");
     for i in 1..=5u64 {
         store
@@ -555,7 +486,6 @@ fn a_deleted_event_breaks_the_chain() {
             .expect("event appends");
     }
 
-    // Now delete an event from the middle
     let conn = rusqlite::Connection::open(dir.join("test.db")).expect("connection opens");
     conn.execute(
         "DELETE FROM events WHERE session = ? AND seq = ?",
@@ -565,11 +495,9 @@ fn a_deleted_event_breaks_the_chain() {
     drop(conn);
     drop(store);
 
-    // Re-open and verify
     let store = Store::open(dir.join("test.db")).expect("store re-opens");
     let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
 
-    // The chain should be broken at event 4 (which now has prev_digest pointing to the deleted event 3)
     match result.status {
         ChainStatus::Intact => panic!("chain should be broken after deletion"),
         ChainStatus::Broken { seq, .. } => {
@@ -585,7 +513,6 @@ fn an_intact_chain_verifies_cleanly() {
     let dir = std::env::temp_dir().join(format!("jk-chain-intact-{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok();
 
-    // Create a simple store and add a few events
     let store = Store::open(dir.join("test.db")).expect("store opens");
     for i in 1..=5u64 {
         store
@@ -599,15 +526,11 @@ fn an_intact_chain_verifies_cleanly() {
     }
     drop(store);
 
-    // Re-open and verify without any tampering
     let store = Store::open(dir.join("test.db")).expect("store re-opens");
     let result = verify_chain(&store, "test-session").expect("verify_chain succeeds");
 
-    // The chain should be intact
     match result.status {
-        ChainStatus::Intact => {
-            // Success!
-        }
+        ChainStatus::Intact => {}
         ChainStatus::Broken { seq, kind, reason } => {
             panic!("chain should be intact but is broken at seq={seq}, kind={kind}: {reason}");
         }

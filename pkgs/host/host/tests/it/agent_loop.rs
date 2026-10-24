@@ -1,12 +1,4 @@
-//! Boots the real `Runtime` from a `config.yaml` and runs turns through the
-//! core conductor.
-//!
-//! Drives `Runtime::build_agent` -> `AgentSession::run`: enabled
-//! `interceptor.*` become the dispatcher, enabled `provider.*` the completer
-//! fallback chain. `host-http` is canned, so the loop runs with no network and
-//! no API key.
-//!
-//! Skips when guests aren't staged in `ext/`; build with `make ext`.
+//! Runs turns through the real `Runtime` with canned HTTP (no network or API key).
 
 use jk_agent::conductor::RunResult;
 use jk_agent::Runtime;
@@ -44,8 +36,6 @@ extensions:
     let factory = || common::canned_http("pong");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // A greeting: the intent router's heuristic tier classifies it `simple` and
-    // blocks the agentic loop; the core still answers inline via the provider.
     let greeting = agent.run("session-1", "hello");
     assert_eq!(
         greeting,
@@ -56,8 +46,6 @@ extensions:
         "a greeting short-circuits the agentic loop"
     );
 
-    // A multi-step English prompt passes the heuristics to the LLM classifier
-    // tier (safe-default `agentic` in v1) → the shaping + ReAct path runs.
     let task = agent.run(
         "session-1",
         "Refactor the auth module and run the whole test suite",

@@ -1,8 +1,4 @@
-//! An interceptor guest that verifies guests can read the optional principal field
-//! at the `before-loop` phase.
-//!
-//! Scenario (a): Reads the principal and logs it.
-//! Scenario (b): Does not read the principal (shows backwards compatibility).
+//! Probe: logs the optional principal at the `before-loop` phase.
 #[allow(
     unsafe_code,
     missing_docs,
@@ -42,17 +38,14 @@ impl Lifecycle for Component {
 
 impl Interceptor for Component {
     fn intercept(input: InterceptInput) -> Result<Decision, InterceptorError> {
-        // Only process the before-loop phase
         if input.phase != Phase::BeforeLoop {
             return Ok(Decision::Proceed);
         }
 
-        // Extract the user-turn state from the hook-state
         if let bindings::exports::jan_klod::interfaces::interceptor::HookState::BeforeLoop(
             user_turn,
         ) = &input.state
         {
-            // Scenario (a): Read the principal and log it
             if let Some(ref principal) = user_turn.principal {
                 let msg = format!("Principal is '{principal}'");
                 host_log::log(LogLevel::Info, "interceptor-principal-probe", &msg, &[]);

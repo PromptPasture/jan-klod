@@ -1,6 +1,4 @@
 //! Sessions must replay prior turns to the model, not just persist them.
-//! Asserts on what the provider wire received (store/transcript can look
-//! correct while model still sees isolation). Skips when guests not staged.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,7 +11,6 @@ use crate::common;
 
 const GUESTS: [&str; 1] = ["provider-openai.wasm"];
 
-/// Record every request to read the message list the model saw.
 fn recording_http(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> HttpFn {
     let seen = Arc::clone(seen);
     Box::new(move |_m, _u, _h, body: Option<&[u8]>, _t| {
@@ -36,7 +33,6 @@ fn recording_http(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> HttpFn {
     })
 }
 
-/// Config with durable store (sessions survive Runtime restart).
 fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -60,7 +56,6 @@ extensions:
     config
 }
 
-/// Extract message `content` from the last recorded request.
 fn last_messages(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> Vec<String> {
     let recorded = seen.lock().unwrap();
     let last = recorded.last().expect("the provider was called").clone();
@@ -91,7 +86,6 @@ fn a_later_turn_carries_what_was_said_earlier() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Turn 1: stands alone.
     assert!(matches!(
         agent.run("s-1", "read src/main.rs"),
         RunResult::Answered { .. }
@@ -102,7 +96,6 @@ fn a_later_turn_carries_what_was_said_earlier() {
         "a first turn stands alone"
     );
 
-    // Turn 2: carries prior exchange (oldest first).
     assert!(matches!(
         agent.run("s-1", "now add a test for that"),
         RunResult::Answered { .. }
@@ -113,7 +106,6 @@ fn a_later_turn_carries_what_was_said_earlier() {
         "the earlier exchange precedes the new message, oldest first"
     );
 
-    // Different session = different conversation.
     assert!(matches!(
         agent.run("s-2", "unrelated question"),
         RunResult::Answered { .. }
@@ -146,7 +138,6 @@ fn resuming_a_session_after_a_restart_carries_its_history() {
         agent.run("resumed", "remember the widget refactor");
     }
 
-    // Restart: fresh Runtime over same SQLite file.
     let recorded = Arc::clone(&seen);
     let factory = move || recording_http(&recorded);
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime reboots");
@@ -188,7 +179,6 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
     }
 
     let messages = last_messages(&seen);
-    // ≤41 messages: 20 replayed turns × (Q+A) + new message (capped, not full history).
     assert!(
         messages.len() <= 41,
         "replay is capped: {} messages",
@@ -204,7 +194,6 @@ fn replay_is_bounded_so_a_long_session_does_not_grow_without_limit() {
     );
 }
 
-/// Config with system-prompt interceptor (like shipped install).
 fn write_config_with_system(dir: &std::path::Path, prompt: &str) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -234,7 +223,6 @@ extensions:
     config
 }
 
-/// Extract message `role` from the last recorded request.
 fn last_roles(seen: &Arc<Mutex<Vec<serde_json::Value>>>) -> Vec<String> {
     let recorded = seen.lock().unwrap();
     let last = recorded.last().expect("the provider was called").clone();
@@ -264,7 +252,6 @@ fn the_model_is_told_what_it_is_before_anything_else() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&factory).expect("agent boots");
 
-    // Intent router sends prompt down agentic path (where this interceptor runs).
     agent.run("sys-1", "read src/main.rs and then add a test for it");
     assert_eq!(
         last_roles(&seen).first().map(String::as_str),
@@ -277,7 +264,6 @@ fn the_model_is_told_what_it_is_before_anything_else() {
         Some("you are a test agent")
     );
 
-    // Second turn must not duplicate the system message.
     agent.run("sys-1", "now also update the docs for it");
     let roles = last_roles(&seen);
     assert_eq!(
@@ -292,7 +278,6 @@ fn the_model_is_told_what_it_is_before_anything_else() {
     );
 }
 
-/// Config with tool fleet and interceptors advertising it (like shipped).
 fn write_config_with_tools(dir: &std::path::Path) -> std::path::PathBuf {
     let config = dir.join("config.yaml");
     std::fs::write(
@@ -328,8 +313,6 @@ workspace: {ws}
     config
 }
 
-/// Tool schemas on the wire (caught by reading request body). Canned providers
-/// return `tool_calls` blindly, missing requests with no schemas.
 #[test]
 fn the_model_is_actually_told_which_tools_exist() {
     if !common::guests_staged(&[
@@ -375,7 +358,6 @@ fn the_model_is_actually_told_which_tools_exist() {
         "the find tool is advertised: {names:?}"
     );
 
-    // Name alone isn't enough; model needs the argument schema.
     let find = tools
         .iter()
         .find(|t| t["function"]["name"] == "find")
@@ -391,7 +373,6 @@ fn the_model_is_actually_told_which_tools_exist() {
     );
 }
 
-/// Collect warnings like REST surface and TUI do.
 #[derive(Default)]
 struct WarningSink(Vec<String>);
 
@@ -404,7 +385,6 @@ impl jk_protocol::turn::EventSink for WarningSink {
     }
 }
 
-/// Truncated completion (`finish_reason: "length"`) is flagged as warning, not silent.
 #[test]
 fn a_truncated_answer_is_flagged_to_the_client() {
     if !common::guests_staged(&["provider-openai.wasm"]) {
@@ -416,7 +396,6 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     let _guard = common::TempDir(dir.clone());
     let config = write_config(&dir);
 
-    // Model ran out of room (like an endpoint reports).
     let http = || -> HttpFn {
         Box::new(move |_m, _u, _h, _b, _t| {
             let body = serde_json::json!({
@@ -436,7 +415,6 @@ fn a_truncated_answer_is_flagged_to_the_client() {
     let runtime = Runtime::boot(&config, &ext_dir).expect("runtime boots");
     let mut agent = runtime.build_agent(&http).expect("agent boots");
 
-    // Collect streamed events like REST surface and TUI do.
     let mut sink = WarningSink::default();
     let out = agent.run_streaming_headless(&mut sink, "trunc-1", "explain everything");
 
@@ -445,16 +423,12 @@ fn a_truncated_answer_is_flagged_to_the_client() {
         "the client is told the answer is incomplete: {:?}",
         sink.0
     );
-    // Partial text is still the answer (cut-off reply better than no reply).
     assert!(
         matches!(&out, RunResult::Answered { text, .. } if text.contains("first half")),
         "the partial answer still comes back: {out:?}"
     );
 }
 
-/// AGENTS.md reaches the model labelled as the project's instructions.
-/// Read host-side, passed to `interceptor-system` as config (not granting
-/// `host-fs` to every interceptor just to read one file).
 #[test]
 fn project_instructions_from_agents_md_reach_the_model() {
     if !common::guests_staged(&["provider-openai.wasm", "interceptor-system.wasm"]) {
@@ -523,7 +497,6 @@ extensions:
         requests.contains("cargo nextest run"),
         "the project's own instructions reach the model: {requests}"
     );
-    // Labelled: standing prompt vs project request; AGENTS.md can't claim sandbox authority.
     assert!(
         requests.contains("from AGENTS.md"),
         "and are marked as the project's rather than the runtime's: {requests}"

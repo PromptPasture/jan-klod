@@ -1,9 +1,4 @@
-//! Host adapter for `tool-*` extensions.
-//!
-//! Instantiates `tool-world` guest, satisfies imports (`host-log`,
-//! `host-config`, `host-http`, `host-fs`), exposes `tool-callable` exports
-//! (`meta`/`invoke`). `host-fs` backed by optional [`Workspace`]: default-deny
-//! without workspace.
+//! Host adapter for `tool-*` extensions; `host-fs` is default-deny without a [`Workspace`].
 
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
@@ -21,20 +16,9 @@ mod bind {
     });
 }
 
-/// How many times one tool call may ask before the host stops it.
-///
-/// Generous for a real question-and-answer exchange and far below
-/// "forever". The number matters less than where it lives: in the host, so
-/// a guest cannot raise it.
+/// Max asks per tool call; enforced by the host so a guest cannot raise it.
 const MAX_ASKS: usize = 8;
 
-/// The host's *view* of a tool that can also put a question to the user.
-///
-/// A separate `bindgen!` rather than a wider world, because no tool is
-/// required to ask: constructing this only looks up exports, so a component
-/// without `tool-askable` fails here and nowhere else. That is the probe
-/// `wit/tool-askable.wit` describes, and the same one `client-surface` uses
-/// (#175, #216).
 mod ask_bind {
     wasmtime::component::bindgen!({
         path: "../../../wit",
@@ -50,27 +34,15 @@ use bind::jan_klod::interfaces::host_process as g_proc;
 use bind::jan_klod::interfaces::host_secrets as g_secrets;
 use bind::jan_klod::interfaces::host_storage as g_storage;
 
-/// Host state for a tool guest.
 struct ToolHost {
     wasi: WasiCtx,
     table: ResourceTable,
     component_id: String,
-    /// The path-jailed workspace, or `None` for default-deny (`host-fs`).
     workspace: Option<Workspace>,
-    /// The bounded command runner (default-deny unless enabled) (`host-process`).
     process: ProcessRunner,
-    /// Outbound HTTP, or `None` for default-deny (`host-http`).
-    /// Interface imported ≠ egress granted; sandbox guards against file tools
-    /// making network calls.
     http: Option<crate::route::HttpFn>,
-    /// Session working memory (`host-storage`), shared with the interceptor
-    /// host's implementation — the namespace scoping that keeps one guest out
-    /// of another's data is the same scoping (#215).
     storage: crate::guest_storage::GuestStorage,
-    /// Long-lived children this instance started (#109). **Owned here (not
-    /// `ProcessRunner`) because `ToolHost` per-instance dies with its children.**
-    /// `LiveChild::Drop` runs on clean stop, error, or runtime crash. Runner is
-    /// `Clone`; a child in a clone belongs to nothing.
+    /// Owned here, not by `ProcessRunner`, so children die with this instance.
     children: crate::host_process::Children,
 }
 
@@ -119,7 +91,6 @@ impl g_http::Host for ToolHost {
         request: g_http::HttpRequest,
     ) -> Result<g_http::HttpResponse, g_http::HttpError> {
         let Some(client) = &self.http else {
-            // Default-deny: the tool was not granted egress.
             return Err(g_http::HttpError::Backend);
         };
         let headers: Vec<(String, String)> = request
@@ -251,7 +222,6 @@ impl g_storage::Host for ToolHost {
     }
 }
 
-/// This world's `entry`, from the world-neutral one.
 fn entry(stored: crate::guest_storage::StoredEntry) -> g_storage::Entry {
     g_storage::Entry {
         id: stored.id,
@@ -263,7 +233,6 @@ fn entry(stored: crate::guest_storage::StoredEntry) -> g_storage::Entry {
     }
 }
 
-/// This world's `store-error`, from the world-neutral one.
 const fn fault(err: &crate::guest_storage::StorageFault) -> g_storage::StoreError {
     match err {
         crate::guest_storage::StorageFault::NotFound => g_storage::StoreError::NotFound,
@@ -292,18 +261,11 @@ impl g_proc::Host for ToolHost {
         }
     }
 
-    // ── Long-lived children (Slice 18c-1, #109) ──────────────────────────────
-    // Every call goes through `self.children`, keyed by host-issued handles.
-    // Unknown handle = `Denied` (not panic/silent): guest can pass any integer.
-
     fn granted(&mut self) -> Vec<String> {
         self.process.long_lived_names()
     }
 
     fn spawn(&mut self, name: String) -> Result<u32, g_proc::ProcError> {
-        // Admission **before** spawn (not after). A spawn-then-check window is all
-        // a capability needs to break default-deny. `proc-error` carries no payload;
-        // reason goes to host log (same as `exec`).
         self.children
             .spawn(&self.process, &name)
             .map_err(to_gen_proc_error)
@@ -347,33 +309,26 @@ const fn to_gen_proc_error(err: ProcError) -> g_proc::ProcError {
     }
 }
 
-/// An instantiated, started `tool-*` extension, ready to `invoke`.
+/// An instantiated, started `tool-*` extension.
 pub struct ToolExtension {
     id: String,
     store: Store<ToolHost>,
     world: bind::ToolWorld,
-    /// Present only when the component also exports `tool-askable` (#216).
-    /// `None` is the ordinary case and not a degraded one.
     asking: Option<ask_bind::ToolAskableView>,
 }
 
 impl ToolExtension {
-    /// Tell this instance's `host-storage` which session it is serving.
-    ///
-    /// A tool instance outlives a session — the fleet is built once per agent
-    /// and a single agent runs many sessions — so this cannot be decided at
-    /// instantiation. It is set per turn instead (#215).
+    /// Bind the session for `host-storage`, per turn since an instance outlives sessions.
     pub fn bind_session(&mut self, session: &str) {
         self.store.data_mut().storage.bind_session(session);
     }
 }
 
 impl ToolExtension {
-    /// Instantiate `component` as a tool, satisfying its imports. `workspace` backs
-    /// `host-fs` (`None` = default-deny).
+    /// Instantiate `component` as a tool; `workspace` backs `host-fs`.
     ///
     /// # Errors
-    /// Returns a [`CoreError`] if wiring, instantiation, or lifecycle fails.
+    /// [`CoreError`] if wiring, instantiation or lifecycle fails.
     pub fn instantiate(
         engine: &Engine,
         id: &str,
@@ -384,18 +339,10 @@ impl ToolExtension {
         Self::instantiate_with_http(engine, id, component, workspace, process, None, None, false)
     }
 
-    /// Instantiate a tool with outbound HTTP granted (`http = Some(client)`).
-    ///
-    /// Separate from [`Self::instantiate`] so granting egress is opt-in per call
-    /// site rather than a default.
+    /// Like [`Self::instantiate`], with outbound HTTP granted.
     ///
     /// # Errors
-    /// Returns a [`CoreError`] if wiring, instantiation, or lifecycle fails.
-    // Eight, because a tool's bounds are eight separate operator decisions:
-    // workspace, process runner, egress, storage handle and session scoping
-    // are each granted or withheld on their own. A struct would make the
-    // count read as seven and hide which of them a call site forgot — the
-    // same trade `conductor::run_turn` records above its own list.
+    /// [`CoreError`] if wiring, instantiation or lifecycle fails.
     #[allow(clippy::too_many_arguments)]
     pub fn instantiate_with_http(
         engine: &Engine,
@@ -418,8 +365,6 @@ impl ToolExtension {
         g_storage::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(CoreError::linker)?;
 
         let host = ToolHost {
-            // `inherit_stderr` (not stdio): stdin would let guests read terminal,
-            // including permission prompt answers. stderr stays for diagnostics.
             wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             table: ResourceTable::new(),
             component_id: id.to_string(),
@@ -446,8 +391,6 @@ impl ToolExtension {
             children: crate::host_process::Children::default(),
         };
         let mut store = Store::new(engine, host);
-        // Instantiated once and viewed twice, as `interceptor_host` views a
-        // component that also contributes a client surface.
         let instance = linker
             .instantiate(&mut store, component)
             .map_err(|source| CoreError::instantiate(id, source))?;
@@ -471,20 +414,6 @@ impl ToolExtension {
         })
     }
 
-    /// Invoke, letting the tool ask the user first (#216).
-    ///
-    /// `None` when this component does not export `tool-askable`, so the
-    /// caller falls back to the ordinary `invoke` rather than treating an
-    /// ordinary tool as broken.
-    ///
-    /// # The loop is bounded, and the bound lives here
-    ///
-    /// A tool is re-invoked with each answer until it is done. A guest that
-    /// returned `asking` forever would suspend the turn forever, and a
-    /// person answering the same question repeatedly is the worst possible
-    /// way to discover that. `MAX_ASKS` is the host's limit, not the
-    /// guest's promise — a bound that depended on a component behaving is
-    /// not a bound.
     fn invoke_asking(
         &mut self,
         arguments: &str,
@@ -519,16 +448,16 @@ impl ToolExtension {
         )))
     }
 
-    /// This extension's instance id.
+    /// The instance id.
     #[must_use]
     pub fn id(&self) -> &str {
         &self.id
     }
 
-    /// The tool's advertised metadata (name / description / arguments schema).
+    /// The tool's advertised metadata.
     ///
     /// # Errors
-    /// Returns a trap description if the guest's `meta` call traps.
+    /// A trap description if the guest's `meta` call traps.
     pub fn meta(&mut self) -> Result<ToolMeta, String> {
         let tool = self.world.jan_klod_interfaces_tool_callable();
         match tool.call_meta(&mut self.store) {
@@ -541,10 +470,10 @@ impl ToolExtension {
         }
     }
 
-    /// Invoke the tool with JSON-encoded `arguments`, returning its JSON result.
+    /// Invoke with JSON `arguments`; returns the JSON result.
     ///
     /// # Errors
-    /// Returns a stringified `tool-error`, or a trap description.
+    /// A stringified `tool-error`, or a trap description.
     pub fn invoke(&mut self, arguments: &str) -> Result<String, String> {
         let tool = self.world.jan_klod_interfaces_tool_callable();
         match tool.call_invoke(&mut self.store, arguments) {
@@ -555,7 +484,7 @@ impl ToolExtension {
     }
 }
 
-/// A tool's advertised metadata (mirrors `tool-callable.tool-meta`).
+/// A tool's advertised metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolMeta {
     /// Tool name — the `tool-call` name the model emits.
@@ -567,16 +496,12 @@ pub struct ToolMeta {
 }
 
 /// Instantiated `tool-*` extensions, dispatched by name.
-///
-/// Implements [`ToolInvoker`](jk_protocol::intercept::ToolInvoker) so the loop can call
-/// tools by matching the model's `tool-call` name. Unknown names return `None`.
 pub struct ToolFleet {
-    /// (advertised metadata, extension), metadata resolved once via `meta`.
     tools: Vec<(ToolMeta, ToolExtension)>,
 }
 
 impl ToolFleet {
-    /// Bind `session` on every instance in the fleet.
+    /// Bind `session` on every instance.
     pub fn bind_session(&mut self, session: &str) {
         for (_, tool) in &mut self.tools {
             tool.bind_session(session);
@@ -617,7 +542,7 @@ impl ToolFleet {
             .collect()
     }
 
-    /// The advertised metadata for every tool (for `select-tools` advertising).
+    /// The advertised metadata for every tool.
     #[must_use]
     pub fn metas(&self) -> Vec<ToolMeta> {
         self.tools.iter().map(|(meta, _)| meta.clone()).collect()
@@ -634,10 +559,6 @@ impl jk_protocol::intercept::ToolInvoker for ToolFleet {
             .tools
             .iter_mut()
             .find(|(meta, _)| meta.name == call.name)?;
-        // `None` means this tool cannot ask, which is every tool today. Fall
-        // through to the ordinary path: returning `None` here would tell the
-        // conductor no such tool exists, and every existing tool would stop
-        // working the moment this method was added.
         let Some(outcome) = entry.1.invoke_asking(&call.arguments, driver) else {
             return self.invoke(call);
         };
@@ -661,8 +582,6 @@ impl jk_protocol::intercept::ToolInvoker for ToolFleet {
             .tools
             .iter_mut()
             .find(|(meta, _)| meta.name == call.name)?;
-        // A tool error is fed back to the model as the result, not an abort —
-        // but it is still, per #162, a failure the wire is told about.
         Some(match entry.1.invoke(&call.arguments) {
             Ok(content) => jk_protocol::intercept::ToolInvocation {
                 content,
@@ -676,11 +595,6 @@ impl jk_protocol::intercept::ToolInvoker for ToolFleet {
     }
 }
 
-// ─── LazyToolFleet ───────────────────────────────────────────────────────────
-
-/// One `tool-*` instance's compiled component and wiring, held uninstantiated.
-/// All cheap: `component` is a Wasmtime `Arc` handle (from `Runtime::boot`),
-/// and the rest are values the caller already built (`workspace`, `process`, `http`).
 struct PendingTool {
     id: String,
     component: Component,
@@ -691,31 +605,16 @@ struct PendingTool {
     per_session: bool,
 }
 
-/// Tool fleet with guests compiled but not yet instantiated (#59).
-///
-/// `Runtime::boot` still compiles every `tool-*` (unchanged, cheap). What moves:
-/// `Store` creation, linking, and `init`/`start` (allocates guest memory, runs setup)
-/// now happens on first use, not unconditionally in `build_agent`.
-///
-/// **Whole pending set resolves together, not just the tool asked for.** A model's
-/// `select-tools` advertisement is one JSON array for every enabled tool, so the
-/// first request for any needs all of it. There's no cheaper way because that answer
-/// (`tool-callable`'s `meta` export) is guest-authored; host can't derive it.
-/// Per-tool laziness needs static catalog (manifest/config) instead of guest code
-/// — a separate change with its own risk, noted in #59's PR.
+/// Tool fleet whose guests are compiled up front but instantiated on first use, all together.
 pub struct LazyToolFleet {
     engine: Engine,
     pending: Vec<PendingTool>,
     live: Option<ToolFleet>,
-    /// The session bound before the fleet was instantiated, replayed onto
-    /// each instance when it is. Without this a tool created lazily *after*
-    /// `bind_session` — which is every tool, since the fleet resolves on
-    /// first use — would never learn its session (#215).
     session: Option<String>,
 }
 
 impl LazyToolFleet {
-    /// An empty fleet, ready to receive pending tools via [`Self::push`].
+    /// An empty fleet, ready for [`Self::push`].
     #[must_use]
     pub const fn new(engine: Engine) -> Self {
         Self {
@@ -727,9 +626,6 @@ impl LazyToolFleet {
     }
 
     /// Register a compiled tool to be instantiated on first use.
-    // Mirrors `instantiate_with_http`'s list exactly, and deliberately: this
-    // is the deferred form of that call, so the two diverging would be the
-    // bug. See the reason on it.
     #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
@@ -752,15 +648,12 @@ impl LazyToolFleet {
         });
     }
 
-    /// Whether every pending tool has been instantiated. `false` until first
-    /// [`Self::metas`]/[`Self::tool_names`]/`invoke` call.
+    /// Whether the pending tools have been instantiated.
     #[must_use]
     pub const fn is_instantiated(&self) -> bool {
         self.live.is_some()
     }
 
-    /// Instantiate every pending tool once (memoized). Failures reported like
-    /// the eager path: [`CoreError`], just here instead of `build_agent`.
     fn ensure(&mut self) -> Result<&mut ToolFleet, CoreError> {
         if self.live.is_none() {
             let mut extensions = Vec::with_capacity(self.pending.len());
@@ -768,14 +661,11 @@ impl LazyToolFleet {
                 extensions.push(Self::instantiate_pending(&self.engine, pending)?);
             }
             let mut fleet = ToolFleet::new(extensions);
-            // Replay the bound session: the fleet resolves on first *use*,
-            // which is after the conductor bound it (#215).
             if let Some(session) = &self.session {
                 fleet.bind_session(session);
             }
             self.live = Some(fleet);
         }
-        // `if` above guarantees this; borrow checker cannot see through `is_none()`.
         Ok(self.live.as_mut().expect("just set above"))
     }
 
@@ -795,18 +685,18 @@ impl LazyToolFleet {
         )
     }
 
-    /// Advertised metadata for every tool, instantiating pending set on first call.
+    /// Advertised metadata for every tool, instantiating the pending set on first call.
     ///
     /// # Errors
-    /// Returns a [`CoreError`] if a pending tool fails to instantiate or start.
+    /// [`CoreError`] if a pending tool fails to instantiate or start.
     pub fn metas(&mut self) -> Result<Vec<ToolMeta>, CoreError> {
         Ok(self.ensure()?.metas())
     }
 
-    /// Advertised tool names, instantiating pending set on first call.
+    /// Advertised tool names, instantiating the pending set on first call.
     ///
     /// # Errors
-    /// Returns a [`CoreError`] if a pending tool fails to instantiate or start.
+    /// [`CoreError`] if a pending tool fails to instantiate or start.
     pub fn tool_names(&mut self) -> Result<Vec<String>, CoreError> {
         Ok(self.ensure()?.tool_names())
     }
@@ -827,8 +717,6 @@ impl jk_protocol::intercept::ToolInvoker for LazyToolFleet {
     ) -> Option<jk_protocol::intercept::ToolInvocation> {
         match self.ensure() {
             Ok(fleet) => fleet.invoke(call),
-            // Like live tools: error fed to model as result, not abort.
-            // Lazy failure costs one tool call, not the turn.
             Err(err) => Some(jk_protocol::intercept::ToolInvocation {
                 content: format!("tool fleet failed to instantiate: {err}"),
                 failed: true,

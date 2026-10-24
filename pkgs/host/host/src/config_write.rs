@@ -1,9 +1,4 @@
-//! Atomic write of `config.yaml` with hand-edit detection.
-//!
-//! This module provides mechanisms to:
-//! - Write `config.yaml` atomically using a temp file + rename pattern
-//! - Store a SHA256 digest of the written config to detect hand-edits
-//! - Check if the current `config.yaml` has been modified since the last setup run
+//! Atomic write of `config.yaml` (temp file + rename) with a SHA256 digest to detect hand-edits.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -68,9 +63,6 @@ impl std::fmt::Display for ConfigWriteError {
 
 impl std::error::Error for ConfigWriteError {}
 
-/// Calculate the SHA256 digest of a byte string.
-///
-/// Returns lowercase hex string, no trailing newline.
 fn calculate_digest(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content);
@@ -78,7 +70,6 @@ fn calculate_digest(content: &[u8]) -> String {
     format!("{digest:x}")
 }
 
-/// Digest file name (beside `config.yaml`).
 fn digest_path(config_path: &Path) -> PathBuf {
     let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
     let filename = config_path
@@ -87,7 +78,6 @@ fn digest_path(config_path: &Path) -> PathBuf {
     parent.join(format!("{}.setup-digest", filename.to_string_lossy()))
 }
 
-/// Temp file name (beside `config.yaml`).
 fn temp_path(config_path: &Path) -> PathBuf {
     let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
     let filename = config_path
@@ -96,77 +86,54 @@ fn temp_path(config_path: &Path) -> PathBuf {
     parent.join(format!(".{}.tmp", filename.to_string_lossy()))
 }
 
-/// Check if the config file has been hand-edited since the last setup run.
-///
-/// Returns `Ok(true)` if the file has not been edited (digest matches).
-/// Returns `Ok(false)` if the file has been edited or no digest exists.
+/// Whether `config.yaml` matches its last-setup digest; `Ok(false)` if edited or no digest exists.
 ///
 /// # Errors
-///
-/// Returns error if reading the config file or digest file fails.
+/// Reading the config or digest file fails.
 pub fn has_not_been_edited(config_path: &Path) -> Result<bool, ConfigWriteError> {
     let dpath = digest_path(config_path);
 
-    // If digest file doesn't exist, the file has been edited (or setup never ran).
     if !dpath.exists() {
         return Ok(false);
     }
 
-    // Read the stored digest.
     let stored_digest = fs::read_to_string(&dpath).map_err(|source| ConfigWriteError::Digest {
         path: dpath.display().to_string(),
         source,
     })?;
     let stored_digest = stored_digest.trim();
 
-    // Read and digest the current config file.
     let current_bytes = fs::read(config_path).map_err(|source| ConfigWriteError::Read {
         path: config_path.display().to_string(),
         source,
     })?;
     let current_digest = calculate_digest(&current_bytes);
 
-    // Compare.
     Ok(stored_digest == current_digest)
 }
 
-/// Atomically write config YAML to disk with hand-edit detection.
-///
-/// This function:
-/// 1. Serializes the config to YAML
-/// 2. Writes to a temp file `.config.yaml.tmp` in the same directory
-/// 3. Calculates SHA256 digest of the YAML bytes
-/// 4. Atomically renames the temp file to `config.yaml`
-/// 5. Writes the digest to `config.yaml.setup-digest`
-///
-/// If any step fails, `config.yaml` is left unchanged.
+/// Atomically write config YAML to disk with hand-edit detection; `config.yaml` is unchanged if any step fails.
 ///
 /// # Errors
-///
-/// Returns error if serialization, file write, rename, or digest write fails.
+/// Serialization, file write, rename, or digest write fails.
 pub fn write_config_atomically(
     config_path: &Path,
     config: &serde_json::Value,
 ) -> Result<(), ConfigWriteError> {
-    // Serialize to YAML. serde_yaml_ng uses IndexMap, ensuring deterministic key order.
     let yaml_bytes = serde_yaml_ng::to_string(config)
         .map_err(ConfigWriteError::Serialize)?
         .into_bytes();
 
     let tpath = temp_path(config_path);
 
-    // Write to temp file.
     fs::write(&tpath, &yaml_bytes).map_err(|source| ConfigWriteError::Write {
         path: tpath.display().to_string(),
         source,
     })?;
 
-    // Calculate digest before rename (of the bytes that will be in place).
     let digest = calculate_digest(&yaml_bytes);
 
-    // Atomic rename: if this fails, temp file is left and config.yaml is unchanged.
     fs::rename(&tpath, config_path).map_err(|source| {
-        // Clean up the temp file if rename fails.
         let _ = fs::remove_file(&tpath);
         ConfigWriteError::Write {
             path: config_path.display().to_string(),
@@ -174,7 +141,6 @@ pub fn write_config_atomically(
         }
     })?;
 
-    // Write digest file (best effort; if this fails, the config is already written).
     let dpath = digest_path(config_path);
     fs::write(&dpath, &digest).map_err(|source| ConfigWriteError::Digest {
         path: dpath.display().to_string(),
@@ -209,7 +175,6 @@ mod tests {
     fn test_digest_format() {
         let content = b"test";
         let digest = calculate_digest(content);
-        // Should be lowercase hex, exactly 64 chars for SHA256
         assert_eq!(digest.len(), 64);
         assert!(digest
             .chars()
@@ -232,16 +197,12 @@ mod tests {
             }
         });
 
-        // Write the config
         write_config_atomically(&config_path, &config).unwrap();
 
-        // Should not be marked as hand-edited
         assert!(has_not_been_edited(&config_path).unwrap());
 
-        // Manually edit the config
         fs::write(&config_path, b"manual edit").unwrap();
 
-        // Should now be marked as hand-edited
         assert!(!has_not_been_edited(&config_path).unwrap());
 
         let _ = fs::remove_dir_all(&temp_dir);
@@ -262,15 +223,12 @@ mod tests {
             }
         });
 
-        // Write once
         write_config_atomically(&config_path, &config).unwrap();
         let first_bytes = fs::read(&config_path).unwrap();
 
-        // Write again with same config
         write_config_atomically(&config_path, &config).unwrap();
         let second_bytes = fs::read(&config_path).unwrap();
 
-        // Should be byte-identical
         assert_eq!(first_bytes, second_bytes);
 
         let _ = fs::remove_dir_all(&temp_dir);
@@ -288,8 +246,8 @@ mod tests {
         assert!(dpath.exists());
 
         let digest_content = fs::read_to_string(&dpath).unwrap();
-        assert_eq!(digest_content.len(), 64); // SHA256 hex
-        assert!(!digest_content.ends_with('\n')); // No trailing newline
+        assert_eq!(digest_content.len(), 64);
+        assert!(!digest_content.ends_with('\n'));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
