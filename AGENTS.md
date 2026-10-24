@@ -15,6 +15,13 @@ Before any work, read `docs/index.md` for the current wiki state.
 - Update project-scoped documents in the same change if behavior they describe is affected.
 - Final response must state: what changed, what verification ran, and any residual risk.
 
+## Comments
+
+- Write no comments. Doc comments (`///`, `//!`) are the only exception.
+- Docs follow YAGNI: one line, only what the name, signature and body do not say. Required sections (`# Errors`, `# Panics`) take one line.
+- No narration, usage examples, history, issue numbers or restating the code. Put the reason in the commit message or an issue.
+- Tool directives (`shellcheck`, `yamllint`, `# syntax=`) and lint `reason = "..."` strings are not comments.
+
 ## Before Editing (Non-Trivial Changes)
 
 A change is non-trivial when it affects behavior, multiple files, shared interfaces, structure, dependencies, generated artifacts, or project docs.
