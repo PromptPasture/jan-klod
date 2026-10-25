@@ -2,7 +2,7 @@
 
 mod tui;
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::net::TcpStream;
 use std::process::ExitCode;
 use std::process::{Child, Command, Stdio};
@@ -16,10 +16,11 @@ use jk_tui::{gateway_bin, StreamEvent};
 const DEFAULT_ADDR: &str = "127.0.0.1:8787";
 
 const USAGE: &str = "\
-Usage: jan-klod [tui] [--addr <host:port>] [--ascii] [session]
+Usage: jan-klod [tui|repl] [--addr <host:port>] [--ascii] [session]
 
   session        session id, shared across the conversation (default: cli)
-  tui            full-screen terminal UI instead of the line REPL
+  tui            full-screen terminal UI; the default when stdin and stdout are terminals
+  repl           line REPL; the default otherwise
   --addr <addr>  drive a gateway running there; without it, one is spawned
   --ascii        draw with ASCII glyphs whatever the locale says
   --version      print the version
@@ -32,7 +33,8 @@ fn main() -> ExitCode {
         print!("{text}");
         return ExitCode::SUCCESS;
     }
-    let (mode, rest) = split_mode(&args);
+    let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
+    let (mode, rest) = split_mode(&args, terminal);
     let parsed = match parse_args(&rest) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -85,15 +87,18 @@ struct Args {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    /// The line REPL: the default, and the only one needing no terminal capability.
+    /// The line REPL: the default without a terminal, since it needs no terminal capability.
     Repl,
+    /// The full-screen UI: the default when stdin and stdout are both terminals.
     Tui,
 }
 
-/// Only the first argument selects the mode.
-fn split_mode(args: &[String]) -> (Mode, Vec<String>) {
+/// Only the first argument selects the mode; without one, `terminal` decides.
+fn split_mode(args: &[String], terminal: bool) -> (Mode, Vec<String>) {
     match args.split_first() {
         Some((first, rest)) if first == "tui" || first == "--tui" => (Mode::Tui, rest.to_vec()),
+        Some((first, rest)) if first == "repl" || first == "--repl" => (Mode::Repl, rest.to_vec()),
+        _ if terminal => (Mode::Tui, args.to_vec()),
         _ => (Mode::Repl, args.to_vec()),
     }
 }
@@ -125,7 +130,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             return Err(format!("jan-klod: unknown option `{arg}`"));
         } else if session.is_some() {
             return Err(format!(
-                "jan-klod: `{arg}` is a second session id. Usage: jan-klod [tui] \
+                "jan-klod: `{arg}` is a second session id. Usage: jan-klod [tui|repl] \
                  [--addr <host:port>] [--ascii] [session]"
             ));
         } else if looks_like_an_address(arg) {
@@ -290,7 +295,7 @@ mod tests {
 
     #[test]
     fn no_arguments_means_stdio_and_the_default_session() {
-        let (mode, rest) = split_mode(&args(&[]));
+        let (mode, rest) = split_mode(&args(&[]), false);
         assert_eq!(mode, Mode::Repl);
         let parsed = parse_args(&rest).expect("parses");
         assert_eq!(parsed.addr, None, "no address means spawn one");
@@ -299,7 +304,7 @@ mod tests {
 
     #[test]
     fn a_session_id_is_the_only_positional() {
-        let (_, rest) = split_mode(&args(&["my-session"]));
+        let (_, rest) = split_mode(&args(&["my-session"]), true);
         let parsed = parse_args(&rest).expect("parses");
         assert_eq!(parsed.addr, None);
         assert_eq!(parsed.session.as_deref(), Some("my-session"));
@@ -307,8 +312,13 @@ mod tests {
 
     #[test]
     fn the_mode_word_is_stripped_in_both_spellings() {
-        for (spelling, want) in [("tui", Mode::Tui), ("--tui", Mode::Tui)] {
-            let (mode, rest) = split_mode(&args(&[spelling, "s1"]));
+        for (spelling, want) in [
+            ("tui", Mode::Tui),
+            ("--tui", Mode::Tui),
+            ("repl", Mode::Repl),
+            ("--repl", Mode::Repl),
+        ] {
+            let (mode, rest) = split_mode(&args(&[spelling, "s1"]), true);
             assert_eq!(mode, want, "{spelling}");
             assert_eq!(
                 parse_args(&rest).expect("parses").session.as_deref(),
@@ -318,8 +328,29 @@ mod tests {
     }
 
     #[test]
+    fn a_terminal_opens_the_tui_without_a_mode_word() {
+        let (mode, rest) = split_mode(&args(&["s1"]), true);
+        assert_eq!(mode, Mode::Tui);
+        assert_eq!(rest, args(&["s1"]));
+    }
+
+    #[test]
+    fn without_a_terminal_the_default_is_the_repl() {
+        let (mode, rest) = split_mode(&args(&["s1"]), false);
+        assert_eq!(mode, Mode::Repl, "the TUI cannot draw on a pipe");
+        assert_eq!(rest, args(&["s1"]));
+    }
+
+    #[test]
+    fn the_repl_can_be_chosen_from_a_terminal() {
+        let (mode, rest) = split_mode(&args(&["repl", "s1"]), true);
+        assert_eq!(mode, Mode::Repl);
+        assert_eq!(rest, args(&["s1"]));
+    }
+
+    #[test]
     fn a_mode_word_that_is_not_first_is_not_a_mode() {
-        let (mode, rest) = split_mode(&args(&["s1", "--tui"]));
+        let (mode, rest) = split_mode(&args(&["s1", "--tui"]), false);
         assert_eq!(mode, Mode::Repl);
         let err = parse_args(&rest).expect_err("--tui is not an option");
         assert!(err.contains("--tui"), "{err}");

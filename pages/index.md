@@ -57,7 +57,7 @@ export OPENAI_API_KEY=sk-...
 jan-klod my-session
 ```
 
-`jan-klod` starts gateway auto if needed.
+`jan-klod` starts gateway auto if needed. On a terminal it opens the full-screen UI; `jan-klod repl my-session` gives the line REPL.
 
 See the [quickstart guide](https://github.com/PromptPasture/jan-klod/blob/main/docs/quickstart.md) for a full walkthrough.
 

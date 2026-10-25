@@ -96,6 +96,8 @@ jan-klod my-session
 
 `jan-klod` starts its own `jan-klod-gateway rpc` and talks over stdin/stdout — no port, no token, nothing left running on exit. The gateway uses the current directory as workspace, jailing file tools to it.
 
+From a terminal this opens the full-screen UI. With stdin or stdout not a terminal (a pipe, CI) it falls back to the line REPL; `jan-klod repl my-session` picks the REPL explicitly.
+
 The single argument is the **session id**. To drive a gateway that is already listening somewhere, name it with `--addr`:
 
 ```sh

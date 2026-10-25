@@ -45,11 +45,11 @@ jan-klod --addr 127.0.0.1:8787 my-session
 
 No paths: gateway finds `config.yaml` and `ext/` in CWD or install dir (lets you `cd` to any repo). Positional names work only in checkouts.
 
-Two surface modes (launch option, not install):
+Two surface modes (launch option, not install). From a terminal the full-screen UI opens; with stdin or stdout piped, the line REPL does:
 
 ```sh
-jan-klod my-session          # a line REPL
-jan-klod tui my-session      # the full-screen terminal UI
+jan-klod my-session          # the full-screen terminal UI (line REPL when not on a terminal)
+jan-klod repl my-session     # the line REPL, even on a terminal
 ```
 
 One-off answer, no server:

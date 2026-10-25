@@ -23,7 +23,7 @@ Hosted on **GitHub Pages**; self-hosted mode always supported.
 ```
 jan-klod-<version>-<os>-<arch>[-<distribution>]/
   jan-klod-gateway    ← the core binary (platform-specific)
-  jan-klod            ← the client: line REPL, or `tui`, by launch mode
+  jan-klod            ← the client: full-screen UI on a terminal, else the line REPL (`repl` forces it)
   config.yaml         ← pre-filled from selections
   ext/                ← provider/interceptor/tool guests (persistence, the REST
                         surface, telegram, and delegation are host-side in the core

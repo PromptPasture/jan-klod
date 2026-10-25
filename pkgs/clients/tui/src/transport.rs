@@ -251,7 +251,7 @@ impl Stdio {
             let where_to_look = match logs {
                 Logs::Inherit => "Its own explanation is above.",
                 Logs::Discard => {
-                    "Run the line REPL (`jan-klod`, without `tui`) to see why — the \
+                    "Run the line REPL (`jan-klod repl`) to see why — the \
                      full-screen UI hides the gateway's stderr because it would be drawn over."
                 }
             };
