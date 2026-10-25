@@ -20,7 +20,7 @@ struct Capabilities {
 }
 
 fn parse_capabilities(yaml_str: &str) -> Result<Capabilities, Box<dyn std::error::Error>> {
-    let root: serde_json::Value = serde_yaml_ng::from_str(yaml_str)?;
+    let root: serde_json::Value = serde_norway::from_str(yaml_str)?;
     let root_obj = root
         .as_object()
         .ok_or("capabilities root must be a mapping")?;

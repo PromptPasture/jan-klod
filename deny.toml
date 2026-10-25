@@ -1,9 +1,3 @@
-
-[advisories]
-ignore = [
-    "RUSTSEC-2024-0449",
-]
-
 [licenses]
 allow = [
     "Apache-2.0",

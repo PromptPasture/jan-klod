@@ -30,7 +30,7 @@ wasmtime = { version = "49", default-features = false, features = [
 wasmtime-wasi = { version = "49", default-features = false, features = ["p2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml_ng = "0.10"
+serde_norway = "0.9"
 thiserror = "2"
 
 [profile.dev]

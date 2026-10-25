@@ -182,7 +182,7 @@ pub fn audit(distribution: Option<&str>, config_path: &str, ext_dir: &str) -> Re
     let config_yaml =
         fs::read_to_string(config_path).map_err(|e| format!("Failed to read config: {e}"))?;
 
-    let config_raw: serde_json::Value = serde_yaml_ng::from_str(&config_yaml)
+    let config_raw: serde_json::Value = serde_norway::from_str(&config_yaml)
         .map_err(|e| format!("Failed to parse config YAML: {e}"))?;
 
     let dist_name = distribution.map_or_else(
