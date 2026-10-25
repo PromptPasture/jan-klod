@@ -23,7 +23,7 @@ pub enum ConfigWriteError {
         source: io::Error,
     },
     /// Failed to serialize config to YAML.
-    Serialize(serde_yaml_ng::Error),
+    Serialize(serde_norway::Error),
     /// The current config file has been hand-edited (digest doesn't match).
     HandEditDetected {
         /// Path to the config file.
@@ -120,7 +120,7 @@ pub fn write_config_atomically(
     config_path: &Path,
     config: &serde_json::Value,
 ) -> Result<(), ConfigWriteError> {
-    let yaml_bytes = serde_yaml_ng::to_string(config)
+    let yaml_bytes = serde_norway::to_string(config)
         .map_err(ConfigWriteError::Serialize)?
         .into_bytes();
 

@@ -145,7 +145,7 @@ impl Config {
             path: path.display().to_string(),
             source,
         })?;
-        let root: Value = serde_yaml_ng::from_str(&text)?;
+        let root: Value = serde_norway::from_str(&text)?;
         let Value::Object(root) = root else {
             return Err(ConfigError::RootNotMap);
         };
@@ -157,7 +157,7 @@ impl Config {
     /// # Errors
     /// [`ConfigError`] on invalid YAML, wrong structure, unset `${VAR}`, or multiple enabled stores.
     pub fn from_yaml(yaml: &str) -> Result<Self, ConfigError> {
-        let root: Value = serde_yaml_ng::from_str(yaml)?;
+        let root: Value = serde_norway::from_str(yaml)?;
         let Value::Object(mut root) = root else {
             return Err(ConfigError::RootNotMap);
         };
@@ -305,7 +305,7 @@ pub enum ConfigError {
     },
     /// The YAML could not be parsed.
     #[error("parsing config: {0}")]
-    Parse(#[from] serde_yaml_ng::Error),
+    Parse(#[from] serde_norway::Error),
     /// The document root is not a mapping.
     #[error("config root must be a mapping")]
     RootNotMap,
