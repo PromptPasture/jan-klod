@@ -47,7 +47,7 @@ fn main() -> ExitCode {
     let session = parsed.session.unwrap_or_else(|| "cli".to_string());
 
     let logs = if use_tui {
-        Logs::Discard
+        Logs::state_file()
     } else {
         Logs::Inherit
     };

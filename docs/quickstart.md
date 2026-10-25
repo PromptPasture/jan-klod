@@ -98,6 +98,8 @@ jan-klod my-session
 
 From a terminal this opens the full-screen UI. With stdin or stdout not a terminal (a pipe, CI) it falls back to the line REPL; `jan-klod repl my-session` picks the REPL explicitly.
 
+The full-screen UI owns the terminal, so the gateway's log goes to `~/.local/state/jan-klod/gateway.log` (`$XDG_STATE_HOME`) instead; the previous run's is kept as `gateway.log.1`. The REPL prints it to stderr.
+
 The single argument is the **session id**. To drive a gateway that is already listening somewhere, name it with `--addr`:
 
 ```sh

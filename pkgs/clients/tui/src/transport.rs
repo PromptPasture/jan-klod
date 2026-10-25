@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio as ChildIo};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -174,12 +174,52 @@ impl Transport for Rest {
 }
 
 /// Gateway log output handling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Logs {
     /// Inherit stderr: fine for the line REPL.
     Inherit,
     /// Discard stderr: the TUI owns the terminal, and logs would draw over it.
     Discard,
+    /// Write stderr to this file, keeping the previous run's as `<file>.1`; [`Logs::Discard`] if it cannot be opened.
+    File(PathBuf),
+}
+
+impl Logs {
+    /// `gateway.log` under `$XDG_STATE_HOME/jan-klod`, else `~/.local/state/jan-klod`; [`Logs::Discard`] with neither known.
+    #[must_use]
+    pub fn state_file() -> Self {
+        std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state"))
+            })
+            .map_or(Self::Discard, |dir| {
+                Self::File(dir.join("jan-klod/gateway.log"))
+            })
+    }
+
+    fn where_to_look(&self) -> String {
+        match self {
+            Self::Inherit => "Its own explanation is above.".to_owned(),
+            Self::Discard => "Run the line REPL (`jan-klod repl`) to see why — the full-screen UI \
+                              hides the gateway's stderr because it would be drawn over."
+                .to_owned(),
+            Self::File(path) => format!("Its log is {}.", path.display()),
+        }
+    }
+}
+
+fn open_log(path: &Path) -> std::io::Result<std::fs::File> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    if path.exists() {
+        let mut previous = path.as_os_str().to_owned();
+        previous.push(".1");
+        std::fs::rename(path, previous)?;
+    }
+    std::fs::File::create(path)
 }
 
 /// Spawned gateway, driven over stdin/stdout.
@@ -207,15 +247,20 @@ impl Stdio {
     /// # Errors
     /// As `spawn`.
     pub fn spawn_from(bin: &Path, args: &[&str], logs: Logs) -> Result<Self, String> {
+        let (stderr, logs) = match logs {
+            Logs::Inherit => (ChildIo::inherit(), Logs::Inherit),
+            Logs::Discard => (ChildIo::null(), Logs::Discard),
+            Logs::File(path) => open_log(&path).map_or_else(
+                |_| (ChildIo::null(), Logs::Discard),
+                |file| (ChildIo::from(file), Logs::File(path)),
+            ),
+        };
         let mut child = Command::new(bin)
             .arg("rpc")
             .args(args)
             .stdin(ChildIo::piped())
             .stdout(ChildIo::piped())
-            .stderr(match logs {
-                Logs::Inherit => ChildIo::inherit(),
-                Logs::Discard => ChildIo::null(),
-            })
+            .stderr(stderr)
             .spawn()
             .map_err(|err| {
                 format!(
@@ -236,26 +281,22 @@ impl Stdio {
         };
         match transport.handshake() {
             Ok(()) => Ok(transport),
-            Err(err) => Err(transport.explain(err, logs)),
+            Err(err) => Err(transport.explain(err, &logs)),
         }
     }
 
     /// If the gateway exited, its stderr says why, which a bare "connection closed" does not.
-    fn explain(&self, err: String, logs: Logs) -> String {
+    fn explain(&self, err: String, logs: &Logs) -> String {
         let exited = self
             .child
             .lock()
             .ok()
             .and_then(|mut child| child.try_wait().ok().flatten());
         exited.map_or(err, |status| {
-            let where_to_look = match logs {
-                Logs::Inherit => "Its own explanation is above.",
-                Logs::Discard => {
-                    "Run the line REPL (`jan-klod repl`) to see why — the \
-                     full-screen UI hides the gateway's stderr because it would be drawn over."
-                }
-            };
-            format!("the gateway exited before answering ({status}). {where_to_look}")
+            format!(
+                "the gateway exited before answering ({status}). {}",
+                logs.where_to_look()
+            )
         })
     }
 
@@ -663,6 +704,53 @@ mod tests {
             panic!("expected a Prompt event, got {event:?}")
         };
         assert_eq!(session, "the-turns-session");
+    }
+
+    /// Writes a stand-in gateway that prints `line` to stderr and exits without answering.
+    #[cfg(unix)]
+    fn failing_gateway(dir: &std::path::Path, line: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("jan-klod-gateway");
+        std::fs::write(&bin, format!("#!/bin/sh\necho '{line}' >&2\nexit 3\n")).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tui_logs_go_to_the_file_and_the_previous_run_is_kept() {
+        let dir = std::env::temp_dir().join(format!("jk-tui-log-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("state/jan-klod/gateway.log");
+
+        let bin = failing_gateway(&dir, "first run");
+        assert!(Stdio::spawn_from(&bin, &[], Logs::File(log.clone())).is_err());
+        let first = std::fs::read_to_string(&log).expect("the log file was created");
+        assert!(
+            first.contains("first run"),
+            "stderr reached the file: {first:?}"
+        );
+
+        let bin = failing_gateway(&dir, "second run");
+        assert!(Stdio::spawn_from(&bin, &[], Logs::File(log.clone())).is_err());
+        let second = std::fs::read_to_string(&log).unwrap();
+        let previous = std::fs::read_to_string(dir.join("state/jan-klod/gateway.log.1"))
+            .expect("the previous log was kept");
+        assert!(
+            second.contains("second run") && !second.contains("first run"),
+            "{second:?}"
+        );
+        assert!(previous.contains("first run"), "{previous:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_gateway_that_exits_points_at_its_log_file() {
+        let path = std::path::PathBuf::from("/state/jan-klod/gateway.log");
+        let advice = Logs::File(path).where_to_look();
+        assert!(advice.contains("/state/jan-klod/gateway.log"), "{advice}");
+        assert!(!advice.contains("repl"), "no rerun needed: {advice}");
     }
 
     #[test]
