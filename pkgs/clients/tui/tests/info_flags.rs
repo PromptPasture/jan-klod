@@ -1,5 +1,5 @@
 #![allow(missing_docs)]
-//! `--version` and `--help` against the built binary: both exit 0 without starting a gateway.
+//! `--version`/`-V` and `--help`/`-h` against the built binary: both exit 0 without starting a gateway.
 use std::process::Command;
 
 fn run(flag: &str) -> String {
@@ -24,4 +24,10 @@ fn help_prints_the_usage() {
     let help = run("--help");
     assert!(help.starts_with("Usage: jan-klod"), "{help}");
     assert!(help.contains("--addr"), "{help}");
+}
+
+#[test]
+fn the_short_forms_answer_as_the_long_ones_do() {
+    assert_eq!(run("-V"), run("--version"));
+    assert_eq!(run("-h"), run("--help"));
 }

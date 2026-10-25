@@ -32,8 +32,8 @@ Commands:
   acp                           serve ACP on stdio
 
 Options:
-  --version                     print the version
-  --help                        print this help
+  -V, --version                 print the version
+  -h, --help                    print this help
 ";
 
 /// The working directory wins (a coding agent works in *your* repository), else the installed copy.
@@ -177,11 +177,11 @@ fn main() -> ExitCode {
         Some("ext") => ext(&args[1..]),
         Some("mcp") => mcp(),
         Some("acp") => acp(),
-        Some("--version") => {
+        Some("--version" | "-V") => {
             println!("jan-klod-gateway {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Some("--help") => {
+        Some("--help" | "-h") => {
             print!("{USAGE}");
             ExitCode::SUCCESS
         }
@@ -1161,7 +1161,7 @@ fn telegram(args: &[String]) -> ExitCode {
 }
 
 fn setup(args: &[String]) -> ExitCode {
-    if args.iter().any(|arg| arg == "--help") {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("Usage: jan-klod-gateway setup [distribution] [config-path] [ext-dir]");
         println!();
         println!("Audit the environment and distribution state without writing files.");
@@ -1172,7 +1172,7 @@ fn setup(args: &[String]) -> ExitCode {
         println!("  ext-dir        Path to the extensions directory (default: ext)");
         println!();
         println!("Options:");
-        println!("  --help         Show this help message");
+        println!("  -h, --help     Show this help message");
         return ExitCode::SUCCESS;
     }
 

@@ -1,4 +1,4 @@
-//! `jan-klod-gateway --version` and `--help` answer and exit 0 instead of falling through to the boot plan.
+//! `jan-klod-gateway --version`/`-V` and `--help`/`-h` answer and exit 0 instead of falling through to the boot plan.
 
 use std::process::Command;
 
@@ -35,4 +35,10 @@ fn help_lists_every_subcommand() {
             "missing `{command}`:\n{help}"
         );
     }
+}
+
+#[test]
+fn the_short_forms_answer_as_the_long_ones_do() {
+    assert_eq!(run("-V"), run("--version"));
+    assert_eq!(run("-h"), run("--help"));
 }

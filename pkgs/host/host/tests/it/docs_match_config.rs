@@ -522,6 +522,7 @@ fn every_documented_command_exists() {
                     }
                     let present = if verify {
                         main_rs.contains(&format!("Some(\"{word}\")"))
+                            || main_rs.contains(&format!("Some(\"{word}\" |"))
                     } else {
                         makefile.contains(&format!("\n{word}:"))
                             || makefile.contains(&format!("\n{word} "))

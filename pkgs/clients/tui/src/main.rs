@@ -23,8 +23,8 @@ Usage: jan-klod [tui|repl] [--addr <host:port>] [--ascii] [session]
   repl           line REPL; the default otherwise
   --addr <addr>  drive a gateway running there; without it, one is spawned
   --ascii        draw with ASCII glyphs whatever the locale says
-  --version      print the version
-  --help         print this help
+  -V, --version  print the version
+  -h, --help     print this help
 ";
 
 fn main() -> ExitCode {
@@ -105,8 +105,8 @@ fn split_mode(args: &[String], terminal: bool) -> (Mode, Vec<String>) {
 
 fn info(args: &[String]) -> Option<String> {
     match args.first().map(String::as_str) {
-        Some("--version") => Some(format!("jan-klod {}\n", env!("CARGO_PKG_VERSION"))),
-        Some("--help") => Some(USAGE.to_string()),
+        Some("--version" | "-V") => Some(format!("jan-klod {}\n", env!("CARGO_PKG_VERSION"))),
+        Some("--help" | "-h") => Some(USAGE.to_string()),
         _ => None,
     }
 }
@@ -362,6 +362,8 @@ mod tests {
         assert_eq!(version, format!("jan-klod {}\n", env!("CARGO_PKG_VERSION")));
         let help = info(&args(&["--help"])).expect("--help is answered");
         assert!(help.starts_with("Usage: jan-klod"), "{help}");
+        assert_eq!(info(&args(&["-V"])), Some(version), "-V is --version");
+        assert_eq!(info(&args(&["-h"])), Some(help), "-h is --help");
         assert!(info(&args(&["my-session"])).is_none());
     }
 
