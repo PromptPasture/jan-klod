@@ -109,19 +109,31 @@ cd - > /dev/null
 # Install the whole bundle: binaries alone boot with no extensions or tools.
 tar -xzf "${TMP}/${BUNDLE}" -C "${TMP}"
 EXTRACTED="${TMP}/jan-klod-${TAG}-${OS}-${ARCH}-${DIST}"
-DATA_DIR="${DATA_DIR:-$(dirname "${INSTALL_DIR}")/share/jan-klod}"
+# XDG base directories: the gateway looks for config.yaml and ext/ in the same places.
+CONFIG_DIR="${CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/jan-klod}"
+DATA_DIR="${DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/jan-klod}"
 
-mkdir -p "${INSTALL_DIR}" "${DATA_DIR}"
+mkdir -p "${INSTALL_DIR}" "${CONFIG_DIR}" "${DATA_DIR}"
 cp "${EXTRACTED}/jan-klod" "${INSTALL_DIR}/jan-klod"
 cp "${EXTRACTED}/jan-klod-gateway" "${INSTALL_DIR}/jan-klod-gateway"
 chmod +x "${INSTALL_DIR}/jan-klod" "${INSTALL_DIR}/jan-klod-gateway"
-cp "${EXTRACTED}/config.yaml" "${DATA_DIR}/config.yaml"
 rm -rf "${DATA_DIR}/ext"
 cp -R "${EXTRACTED}/ext" "${DATA_DIR}/ext"
 
+# Earlier installs kept config.yaml beside ext/; it moves rather than being replaced.
+if [ ! -e "${CONFIG_DIR}/config.yaml" ] && [ -e "${DATA_DIR}/config.yaml" ]; then
+  mv "${DATA_DIR}/config.yaml" "${CONFIG_DIR}/config.yaml"
+fi
+if [ -e "${CONFIG_DIR}/config.yaml" ]; then
+  echo "Kept:      ${CONFIG_DIR}/config.yaml (the shipped one is not copied over it)"
+else
+  cp "${EXTRACTED}/config.yaml" "${CONFIG_DIR}/config.yaml"
+  echo "Installed: ${CONFIG_DIR}/config.yaml"
+fi
+
 echo "Installed: ${INSTALL_DIR}/jan-klod"
 echo "Installed: ${INSTALL_DIR}/jan-klod-gateway"
-echo "Installed: ${DATA_DIR}/ (config.yaml + $(ls "${DATA_DIR}/ext" | wc -l | tr -d " ") components)"
+echo "Installed: ${DATA_DIR}/ext/ ($(ls "${DATA_DIR}/ext" | wc -l | tr -d " ") components)"
 
 if ! "${INSTALL_DIR}/jan-klod-gateway" verify > /dev/null 2>&1; then
   echo "" >&2

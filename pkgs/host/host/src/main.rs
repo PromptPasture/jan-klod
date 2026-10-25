@@ -38,17 +38,42 @@ Options:
 
 /// The working directory wins (a coding agent works in *your* repository), else the installed copy.
 fn resolve_default(name: &str) -> String {
-    let in_cwd = PathBuf::from(name);
-    if in_cwd.exists() {
+    if Path::new(name).exists() {
         return name.to_string();
     }
-    let installed = std::env::current_exe()
+    installed_candidates(name)
+        .into_iter()
+        .find(|path| path.exists())
+        .map_or_else(
+            || name.to_string(),
+            |path| path.to_string_lossy().into_owned(),
+        )
+}
+
+/// `config.yaml` in the XDG config dir, anything else in the XDG data dir, then beside the binary.
+fn installed_candidates(name: &str) -> Vec<PathBuf> {
+    let xdg = if name == "config.yaml" {
+        xdg_home("XDG_CONFIG_HOME", ".config")
+    } else {
+        xdg_home("XDG_DATA_HOME", ".local/share")
+    };
+    let beside_exe = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(INSTALLED_DATA).join(name)));
-    match installed {
-        Some(path) if path.exists() => path.to_string_lossy().into_owned(),
-        _ => name.to_string(),
-    }
+        .and_then(|exe| exe.parent().map(|dir| dir.join(INSTALLED_DATA)));
+    [xdg, beside_exe]
+        .into_iter()
+        .flatten()
+        .map(|dir| dir.join(name))
+        .collect()
+}
+
+/// `$<var>/jan-klod`, else `$HOME/<fallback>/jan-klod`; a relative `$<var>` is ignored, as the spec requires.
+fn xdg_home(var: &str, fallback: &str) -> Option<PathBuf> {
+    let base = std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(fallback)))?;
+    Some(base.join("jan-klod"))
 }
 
 fn init_tracing(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {

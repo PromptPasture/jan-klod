@@ -9,6 +9,17 @@ updated: 2026-09-18T00:00:00Z
 
 `config.yaml` declares which extensions run and how. The **core** loads it and turns it into **extension instances**; everything domain-specific is opaque and handed to the instance through [`host-config`](../../../../docs/concepts/contracts.md#host-provided-interfaces).
 
+## Where the files live
+
+With no path on the command line, `jan-klod-gateway` takes the first that exists:
+
+| File | 1. Working directory | 2. XDG | 3. Beside the binary |
+|---|---|---|---|
+| `config.yaml` | `./config.yaml` | `$XDG_CONFIG_HOME/jan-klod/config.yaml` (default `~/.config/jan-klod/`) | `<bin>/../share/jan-klod/config.yaml` |
+| `ext/` | `./ext` | `$XDG_DATA_HOME/jan-klod/ext` (default `~/.local/share/jan-klod/ext`) | `<bin>/../share/jan-klod/ext` |
+
+The working directory wins so a checkout uses its own files. `scripts/install.sh` writes to the XDG column and keeps an existing `config.yaml`.
+
 ## File shape
 
 Extensions are grouped by **category** (`provider`, `interceptor`, `registry`, `tool`). `agent` is accepted structurally but currently **inert** — `Runtime::build_agent` never instantiates it and no `agent-*` component is built, so an enabled entry resolves to a `.wasm` that doesn't exist. There is no `store` category — persistence is host-side, configured by the top-level `storage:` block, not an extension. There is no `api`/`chat` category either — the inbound REST surface and Telegram are host-side, started with `jan-klod-gateway serve`/`jan-klod-gateway telegram`, not extensions. Each *named* entry is one **instance**:

@@ -24,22 +24,30 @@ impl Drop for Gateway {
 }
 
 fn install_into(prefix: &Path) -> PathBuf {
-    let bin = prefix.join("bin");
     let data = prefix.join("share/jan-klod");
-    std::fs::create_dir_all(&bin).unwrap();
-    std::fs::create_dir_all(&data).unwrap();
+    stage_payload(&data, &data);
+    install_binary(prefix)
+}
 
+fn install_binary(prefix: &Path) -> PathBuf {
+    let bin = prefix.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
     let built = PathBuf::from(env!("CARGO_BIN_EXE_jan-klod-gateway"));
     let installed = bin.join("jan-klod-gateway");
     std::fs::copy(&built, &installed).expect("the gateway binary is copied");
+    installed
+}
 
+/// Copies the shipped `config.yaml` into `config_dir` and the staged guests into `data_dir/ext`.
+fn stage_payload(config_dir: &Path, data_dir: &Path) {
+    std::fs::create_dir_all(config_dir).unwrap();
     std::fs::copy(
         common::repo_root().join("config.yaml"),
-        data.join("config.yaml"),
+        config_dir.join("config.yaml"),
     )
     .expect("the shipped config is copied");
     let ext_src = common::repo_root().join("ext");
-    let ext_dst = data.join("ext");
+    let ext_dst = data_dir.join("ext");
     std::fs::create_dir_all(&ext_dst).unwrap();
     for entry in std::fs::read_dir(&ext_src)
         .expect("ext/ is readable")
@@ -53,7 +61,17 @@ fn install_into(prefix: &Path) -> PathBuf {
             std::fs::copy(&path, ext_dst.join(name)).expect("a guest is copied");
         }
     }
-    installed
+}
+
+/// Points `HOME` and the XDG directories into `prefix`, so the user's own install never answers.
+fn command(gateway: &Path, prefix: &Path) -> Command {
+    let mut command = Command::new(gateway);
+    command
+        .env("HOME", prefix.join("home"))
+        .env("XDG_CONFIG_HOME", prefix.join("xdg/config"))
+        .env("XDG_DATA_HOME", prefix.join("xdg/data"))
+        .env("XDG_STATE_HOME", prefix.join("xdg/state"));
+    command
 }
 
 fn free_port() -> u16 {
@@ -105,7 +123,7 @@ fn an_installed_gateway_serves_from_a_directory_that_is_not_a_checkout() {
     let port = free_port();
     let addr = format!("127.0.0.1:{port}");
 
-    let child = Command::new(&gateway)
+    let child = command(&gateway, &prefix)
         .args(["serve", "--bind", &addr])
         .current_dir(&work)
         .env("OPENAI_API_KEY", "test-placeholder")
@@ -141,7 +159,7 @@ fn an_installed_gateway_verifies_its_own_components_from_anywhere() {
     let gateway = install_into(&prefix);
     let work = elsewhere(&prefix);
 
-    let output = Command::new(&gateway)
+    let output = command(&gateway, &prefix)
         .arg("verify")
         .current_dir(&work)
         .env("OPENAI_API_KEY", "test-placeholder")
@@ -164,6 +182,39 @@ fn an_installed_gateway_verifies_its_own_components_from_anywhere() {
 }
 
 #[test]
+fn an_installed_gateway_reads_config_and_ext_from_the_xdg_directories() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let prefix = std::env::temp_dir().join(format!("jk-installed-xdg-{}", std::process::id()));
+    let _guard = common::TempDir(prefix.clone());
+    stage_payload(
+        &prefix.join("xdg/config/jan-klod"),
+        &prefix.join("xdg/data/jan-klod"),
+    );
+    let gateway = install_binary(&prefix);
+    let work = elsewhere(&prefix);
+
+    let output = command(&gateway, &prefix)
+        .arg("verify")
+        .current_dir(&work)
+        .env("OPENAI_API_KEY", "test-placeholder")
+        .output()
+        .expect("verify runs");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "verify failed with nothing beside the binary:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("0 missing"),
+        "ext/ came from $XDG_DATA_HOME: {stdout}"
+    );
+}
+
+#[test]
 fn a_gateway_with_no_data_directory_beside_it_fails_and_says_why() {
     if !common::guests_staged(&GUESTS) {
         return;
@@ -176,7 +227,7 @@ fn a_gateway_with_no_data_directory_beside_it_fails_and_says_why() {
     std::fs::copy(env!("CARGO_BIN_EXE_jan-klod-gateway"), &lone).unwrap();
     let work = elsewhere(&prefix);
 
-    let output = Command::new(&lone)
+    let output = command(&lone, &prefix)
         .arg("verify")
         .current_dir(&work)
         .env("OPENAI_API_KEY", "test-placeholder")
@@ -244,7 +295,7 @@ extensions:
     )
     .unwrap();
 
-    let output = Command::new(&gateway)
+    let output = command(&gateway, &prefix)
         .args(["ask", "what", "does", "this", "repo", "do?"])
         .current_dir(&work)
         .stdin(Stdio::null())
@@ -298,7 +349,7 @@ extensions:
     )
     .unwrap();
 
-    let offline = Command::new(&gateway)
+    let offline = command(&gateway, &prefix)
         .arg("verify")
         .current_dir(&work)
         .output()
@@ -309,7 +360,7 @@ extensions:
         String::from_utf8_lossy(&offline.stderr)
     );
 
-    let live = Command::new(&gateway)
+    let live = command(&gateway, &prefix)
         .args(["verify", "--live"])
         .current_dir(&work)
         .output()

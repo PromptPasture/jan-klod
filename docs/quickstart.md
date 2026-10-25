@@ -47,7 +47,7 @@ curl -sSL https://raw.githubusercontent.com/PromptPasture/jan-klod/main/scripts/
 
 [What each one carries](concepts/configurator.md#distributions).
 
-That installs `jan-klod` (TUI) and `jan-klod-gateway` (server) to `~/.local/bin`. Add to your PATH if needed:
+That installs `jan-klod` (TUI) and `jan-klod-gateway` (server) to `~/.local/bin`, `config.yaml` to `~/.config/jan-klod/` (`$XDG_CONFIG_HOME`; an existing one is kept), and `ext/` to `~/.local/share/jan-klod/` (`$XDG_DATA_HOME`). A `config.yaml` in the current directory takes precedence — see [where the files live](../pkgs/host/config/docs/configuration.md#where-the-files-live). Add to your PATH if needed:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
