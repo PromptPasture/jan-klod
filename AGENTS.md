@@ -10,23 +10,12 @@ Before any work, read `docs/index.md` for the current wiki state.
 
 ## Repository Behavior
 
-- Repo is source of truth. Verify memory and prior notes against it before acting.
-- Limit to minimum. No refactor/reformat/improve unrelated code without approval.
 - Update project-scoped documents in the same change if behavior they describe is affected.
-- Final response must state: what changed, what verification ran, and any residual risk.
 
 ## Comments
 
-- Write no comments. Doc comments (`///`, `//!`) are the only exception.
-- Docs follow YAGNI: one line, only what the name, signature and body do not say. Required sections (`# Errors`, `# Panics`) take one line.
-- No narration, usage examples, history, issue numbers or restating the code. Put the reason in the commit message or an issue.
-- Tool directives (`shellcheck`, `yamllint`, `# syntax=`) and lint `reason = "..."` strings are not comments.
-
-## Before Editing (Non-Trivial Changes)
-
-A change is non-trivial when it affects behavior, multiple files, shared interfaces, structure, dependencies, generated artifacts, or project docs.
-
-State: outcome, scope, assumptions, approach, verification, ambiguity. If ambiguity affects scope, ask first.
+- Doc comments (`///`, `//!`): one line, only what the name, signature and body do not say. Required sections (`# Errors`, `# Panics`) take one line.
+- Put the reason in the commit message or an issue, not in a comment.
 
 ## Track Work in GitHub Issues
 
@@ -51,9 +40,6 @@ gh issue create --title "..." --body-file body.md --label "bug,P2"
 
 - Every artifact must be complete, actionable, internally consistent, and specific enough to verify.
 - No placeholders, TODOs, unsupported claims, or missing required sections unless the user requests a draft.
-- Every section, example, and abstraction must contribute to the outcome. Remove anything that does not.
+- Every section and example must contribute to the outcome. Remove anything that does not.
 - Examples must be narrow, direct, complete, and consistent with actual repo interfaces.
-- Introduce abstractions only when they reduce real complexity or follow an established pattern.
-- No speculative features, unused extension points, or unrequested configurability.
-- KISS: prefer the simplest complete solution. If an implementation grows beyond what the problem requires, simplify before finalizing.
 - Self-review every non-trivial artifact for placeholders, contradictions, scope drift, and missing verification. Fix issues before presenting.
