@@ -20,6 +20,8 @@ With no path on the command line, `jan-klod-gateway` takes the first that exists
 
 The working directory wins so a checkout uses its own files. `scripts/install.sh` writes to the XDG column and keeps an existing `config.yaml`.
 
+A relative `storage.path` (the shipped `./jan-klod.db`) resolves against the directory of the `config.yaml` in use — except for an installed one (columns 2 and 3), where it resolves under `$XDG_STATE_HOME/jan-klod/` (default `~/.local/state/jan-klod/`), created if missing. Session history then survives replacing the install. A store an earlier install left in `~/.local/share/jan-klod/` moves there on first start. An absolute `storage.path` is used as written.
+
 ## File shape
 
 Extensions are grouped by **category** (`provider`, `interceptor`, `registry`, `tool`). `agent` is accepted structurally but currently **inert** — `Runtime::build_agent` never instantiates it and no `agent-*` component is built, so an enabled entry resolves to a `.wasm` that doesn't exist. There is no `store` category — persistence is host-side, configured by the top-level `storage:` block, not an extension. There is no `api`/`chat` category either — the inbound REST surface and Telegram are host-side, started with `jan-klod-gateway serve`/`jan-klod-gateway telegram`, not extensions. Each *named* entry is one **instance**:

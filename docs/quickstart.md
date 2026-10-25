@@ -206,7 +206,7 @@ Signed is the default; `--allow-unsigned` deliberately bypasses it and requires 
 
 ## 7. Resume a session
 
-Sessions persist across restarts (SQLite store). The REST API:
+Sessions persist across restarts in a SQLite store: `jan-klod.db` beside a `config.yaml` in the current directory, or `~/.local/state/jan-klod/jan-klod.db` (`$XDG_STATE_HOME`) for an installed one. The REST API:
 
 ```sh
 # List past sessions

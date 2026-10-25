@@ -57,14 +57,17 @@ fn installed_candidates(name: &str) -> Vec<PathBuf> {
     } else {
         xdg_home("XDG_DATA_HOME", ".local/share")
     };
-    let beside_exe = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(INSTALLED_DATA)));
-    [xdg, beside_exe]
+    [xdg, beside_exe()]
         .into_iter()
         .flatten()
         .map(|dir| dir.join(name))
         .collect()
+}
+
+fn beside_exe() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(INSTALLED_DATA)))
 }
 
 /// `$<var>/jan-klod`, else `$HOME/<fallback>/jan-klod`; a relative `$<var>` is ignored, as the spec requires.
@@ -74,6 +77,63 @@ fn xdg_home(var: &str, fallback: &str) -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(fallback)))?;
     Some(base.join("jan-klod"))
+}
+
+/// A relative `storage.path` resolves against an installed config's XDG state dir, else the config's own dir; a store earlier installs left in the data dir moves there.
+fn store_dir(config_path: &str) -> io::Result<PathBuf> {
+    let config_dir = Path::new(config_path)
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let installed = installed_candidates("config.yaml")
+        .iter()
+        .any(|candidate| candidate == Path::new(config_path));
+    let state = match xdg_home("XDG_STATE_HOME", ".local/state") {
+        Some(state) if installed => state,
+        _ => return Ok(config_dir),
+    };
+    std::fs::create_dir_all(&state)?;
+
+    let relative = Config::from_path(config_path)
+        .ok()
+        .and_then(|config| {
+            config
+                .agent
+                .get("storage")?
+                .get("path")?
+                .as_str()
+                .map(PathBuf::from)
+        })
+        .filter(|path| path.is_relative());
+    let Some(relative) = relative else {
+        return Ok(state);
+    };
+    let current = state.join(&relative);
+    let legacy_dir = [xdg_home("XDG_DATA_HOME", ".local/share"), beside_exe()]
+        .into_iter()
+        .flatten()
+        .find(|dir| dir.join(&relative).is_file());
+    if let (Some(legacy_dir), false) = (legacy_dir, current.exists()) {
+        let legacy = legacy_dir.join(&relative);
+        if let Some(parent) = current.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if let Err(err) = std::fs::rename(&legacy, &current) {
+            eprintln!(
+                "jan-klod: keeping the session store at {}: cannot move it to {}: {err}",
+                legacy.display(),
+                current.display()
+            );
+            return Ok(legacy_dir);
+        }
+    }
+    Ok(state)
+}
+
+fn boot(config_path: &str, ext_dir: &str) -> Result<Runtime, jk_wasm::CoreError> {
+    let store_dir = store_dir(config_path).map_err(|err| jk_wasm::CoreError::Store {
+        message: format!("cannot prepare the session store directory: {err}"),
+    })?;
+    Runtime::boot_with_store_dir(config_path, ext_dir, &store_dir)
 }
 
 fn init_tracing(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -138,7 +198,7 @@ fn acp() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+    let runtime = match boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("jan-klod: boot failed: {err}");
@@ -181,7 +241,7 @@ fn mcp() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+    let runtime = match boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("jan-klod: boot failed: {err}");
@@ -481,7 +541,7 @@ fn ask(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+    let runtime = match boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("jan-klod: boot failed: {err}");
@@ -563,7 +623,7 @@ fn verify(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+    let runtime = match boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("jan-klod: boot failed: {err}");
@@ -619,17 +679,19 @@ fn verify_event_chain(config_path: &str, session_id: Option<String>) -> ExitCode
         }
     };
 
+    let store_dir = match store_dir(config_path) {
+        Ok(dir) => dir,
+        Err(err) => {
+            eprintln!("jan-klod: cannot prepare the session store directory: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     let store_path = config
         .agent
         .get("storage")
         .and_then(|storage| storage.get("path"))
         .and_then(serde_json::Value::as_str)
-        .map(|path| {
-            let config_dir = Path::new(config_path)
-                .parent()
-                .unwrap_or_else(|| Path::new("."));
-            config_dir.join(path)
-        });
+        .map(|path| store_dir.join(path));
 
     let store = match store_path {
         Some(path) => match Store::open(&path) {
@@ -785,7 +847,7 @@ fn boot_plan(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+    let runtime = match boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("jan-klod: boot failed: {err}");
@@ -819,7 +881,7 @@ fn rpc(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+    let runtime = match boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("jan-klod: boot failed: {err}");
@@ -949,7 +1011,7 @@ fn serve(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+    let runtime = match boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("jan-klod: boot failed: {err}");
@@ -1034,7 +1096,7 @@ fn telegram(args: &[String]) -> ExitCode {
         }
     };
 
-    let runtime = match Runtime::boot(&config_path, &ext_dir) {
+    let runtime = match boot(&config_path, &ext_dir) {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("jan-klod: boot failed: {err}");

@@ -31,8 +31,20 @@ impl Runtime {
             .as_ref()
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        Self::boot_with_store_dir(config_path, ext_dir, &config_dir)
+    }
+
+    /// As [`Self::boot`], but a relative `storage.path` resolves against `store_dir`.
+    ///
+    /// # Errors
+    /// As [`Self::boot`].
+    pub fn boot_with_store_dir(
+        config_path: impl AsRef<Path>,
+        ext_dir: impl AsRef<Path>,
+        store_dir: &Path,
+    ) -> Result<Self, CoreError> {
         let components = jk_wasm::Runtime::boot(config_path, ext_dir)?;
-        let store = Self::open_store(components.agent_config(), &config_dir)?;
+        let store = Self::open_store(components.agent_config(), store_dir)?;
         Ok(Self { components, store })
     }
 
@@ -146,13 +158,13 @@ impl Runtime {
     /// Storage is not an extension: a store guest would need `host-fs` and see the transcript.
     fn open_store(
         agent: &serde_json::Value,
-        config_dir: &Path,
+        store_dir: &Path,
     ) -> Result<Arc<Mutex<store::Store>>, CoreError> {
         let sqlite_path = agent
             .get("storage")
             .and_then(|storage| storage.get("path"))
             .and_then(serde_json::Value::as_str)
-            .map(|path| config_dir.join(path));
+            .map(|path| store_dir.join(path));
         let store = sqlite_path
             .map_or_else(store::Store::open_in_memory, store::Store::open)
             .map_err(|source| CoreError::Store {

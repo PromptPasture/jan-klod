@@ -375,3 +375,74 @@ extensions:
         "and names the endpoint and the cause: {stderr}"
     );
 }
+
+#[test]
+fn an_installed_config_keeps_sessions_in_the_xdg_state_directory() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let prefix = std::env::temp_dir().join(format!("jk-state-{}", std::process::id()));
+    let _guard = common::TempDir(prefix.clone());
+    let gateway = install_into(&prefix);
+    let work = elsewhere(&prefix);
+
+    let output = command(&gateway, &prefix)
+        .arg("verify")
+        .current_dir(&work)
+        .env("OPENAI_API_KEY", "test-placeholder")
+        .output()
+        .expect("verify runs");
+
+    assert!(
+        output.status.success(),
+        "verify failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        prefix.join("xdg/state/jan-klod/jan-klod.db").is_file(),
+        "the store is created under $XDG_STATE_HOME"
+    );
+    assert!(
+        !prefix.join("share/jan-klod/jan-klod.db").exists(),
+        "and not beside the replaceable payload"
+    );
+}
+
+#[test]
+fn a_store_left_beside_the_payload_moves_to_the_state_directory() {
+    if !common::guests_staged(&GUESTS) {
+        return;
+    }
+    let prefix = std::env::temp_dir().join(format!("jk-state-move-{}", std::process::id()));
+    let _guard = common::TempDir(prefix.clone());
+    let gateway = install_into(&prefix);
+    let work = elsewhere(&prefix);
+    let legacy = prefix.join("share/jan-klod/jan-klod.db");
+    jk_session::store::Store::open(&legacy)
+        .expect("a legacy store opens")
+        .set("probe", "upgrade", "kept")
+        .expect("a legacy entry is written");
+
+    let output = command(&gateway, &prefix)
+        .arg("verify")
+        .current_dir(&work)
+        .env("OPENAI_API_KEY", "test-placeholder")
+        .output()
+        .expect("verify runs");
+
+    assert!(
+        output.status.success(),
+        "verify failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!legacy.exists(), "the legacy store was moved, not copied");
+    let moved = jk_session::store::Store::open(prefix.join("xdg/state/jan-klod/jan-klod.db"))
+        .expect("the moved store opens");
+    assert_eq!(
+        moved
+            .get("probe", "upgrade")
+            .expect("the entry survived")
+            .value,
+        "kept"
+    );
+}
